@@ -5,6 +5,7 @@ use crate::context::Context;
 use crate::host::{RamOffer, free_gib, total_ram};
 use crate::iso::any_iso_maker;
 use crate::library::INSTALL_ROOM_GIB;
+use crate::linux::amd::amd_cards;
 use crate::linux::driver_versions::{branch_refusal, branch_refusal_among, untested_warning};
 use crate::machine::MIN_RAM_GIB;
 use crate::usb::sysfs_text;
@@ -157,6 +158,29 @@ fn check_kvm(context: &Context) -> Check {
     Check::ok(TITLE, format!("{kvm} can be opened."))
 }
 
+/// The daemon hands a guest's memory to an AMD card through this device, pinned once. Without it the
+/// card still gets the memory, by its address, and every submission pays for all of it. So this never
+/// fails a PC, and a PC with no AMD card isn't asked.
+fn check_amd_memory(context: &Context) -> Option<Check> {
+    const TITLE: &str = "AMD card's guest memory";
+    const SLOWER: &str = "Windows on the AMD card works without it, only slower.";
+    if amd_cards(context).is_empty() {
+        return None;
+    }
+    let device = context.udmabuf.display();
+    if !context.udmabuf.exists() {
+        let fix = format!("Load the kernel's udmabuf module. {SLOWER}");
+        return Some(Check::new(TITLE, CheckState::Warning, format!("{device} does not exist."), fix));
+    }
+    if access(&context.udmabuf, Access::READ_OK | Access::WRITE_OK).is_err() {
+        let fix = format!(
+            "It usually belongs to the kvm group: run sudo usermod -aG kvm $USER, then log in again. {SLOWER}"
+        );
+        return Some(Check::new(TITLE, CheckState::Warning, format!("This user cannot open {device}."), fix));
+    }
+    Some(Check::ok(TITLE, format!("{device} can be opened.")))
+}
+
 fn check_qemu(context: &Context) -> Check {
     const TITLE: &str = "Patched QEMU";
     let qemu = &context.paths.qemu;
@@ -291,16 +315,16 @@ fn check_disk(context: &Context) -> Check {
 }
 
 pub fn check_pc(context: &Context) -> Vec<Check> {
-    vec![
-        check_card(context),
-        check_host_driver(context),
-        check_kvm(context),
+    let mut checks = vec![check_card(context), check_host_driver(context), check_kvm(context)];
+    checks.extend(check_amd_memory(context));
+    checks.extend([
         check_qemu(context),
         check_tools(context, &TOOLS),
         check_ubuntu(context, &UBUNTU_TOOLS),
         check_ram(context),
         check_disk(context),
-    ]
+    ]);
+    checks
 }
 
 /// The branches the NVIDIA backend has a profile for, which a Windows guest can run on. Linux guests
@@ -332,6 +356,7 @@ pub fn check_host(context: &Context) -> HostReport {
     let mut deciding = vec![check_card(context), check_host_driver(context), check_kvm(context)];
     deciding.extend(check_driver_branch(context));
     let gpu = deciding.iter().all(|check| check.state != CheckState::Failed);
+    deciding.extend(check_amd_memory(context));
     deciding.extend([check_ram(context), check_disk(context)]);
     HostReport { checks: deciding, gpu }
 }
@@ -339,6 +364,7 @@ pub fn check_host(context: &Context) -> HostReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linux::amd::stand_in::fake_render_node;
     use crate::setup::cards::stand_in::{NAMES, fake_pci};
     use crate::testing::{Scratch, scratch_context};
     use std::fs;
@@ -426,6 +452,38 @@ mod tests {
         );
         let warning = driver_warning(&context).unwrap();
         assert!(warning.contains("600.1") && warning.contains(TESTED_DRIVER));
+    }
+
+    #[test]
+    fn an_amd_card_is_told_when_its_guest_memory_goes_the_slow_way() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.udmabuf = scratch.path("udmabuf");
+        assert_eq!(check_amd_memory(&context), None, "a PC with no AMD card isn't asked");
+        fake_render_node(&scratch, 128, "0000:03:00.0", "0x1002", 0x7550);
+        let found = check_amd_memory(&context).unwrap();
+        assert!(found.state == CheckState::Warning && found.fix.contains("module"));
+        fs::write(&context.udmabuf, "").unwrap();
+        fs::set_permissions(&context.udmabuf, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(check_amd_memory(&context).unwrap().state, CheckState::Ok);
+        fs::set_permissions(&context.udmabuf, fs::Permissions::from_mode(0o000)).unwrap();
+        let found = check_amd_memory(&context).unwrap();
+        assert!(
+            rustix::process::geteuid().is_root()
+                || (found.state == CheckState::Warning && found.fix.contains("usermod"))
+        );
+    }
+
+    #[test]
+    fn a_closed_udmabuf_does_not_take_the_gpu_from_a_pc() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.udmabuf = scratch.path("udmabuf");
+        let before = check_host(&context).gpu;
+        fake_render_node(&scratch, 128, "0000:03:00.0", "0x1002", 0x7550);
+        let report = check_host(&context);
+        assert_eq!(report.gpu, before);
+        assert!(report.checks.iter().any(|check| check.title == "AMD card's guest memory"));
     }
 
     #[test]

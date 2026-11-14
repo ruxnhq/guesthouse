@@ -49,6 +49,8 @@ pub struct Context {
     /// The DRM class in sysfs, where each render node links to its PCI device.
     pub drm_class: PathBuf,
     pub kvm: PathBuf,
+    /// Makes a dma-buf of a guest's memory. An AMD card takes the memory faster that way.
+    pub udmabuf: PathBuf,
     pub driver_version_file: PathBuf,
     pub meminfo: PathBuf,
     /// Makes a GPU guest's memory and claims its RAM. A test has no gigabytes to spare.
@@ -84,6 +86,7 @@ impl Context {
             nvidia_cards: "/proc/driver/nvidia/gpus".into(),
             drm_class: "/sys/class/drm".into(),
             kvm: "/dev/kvm".into(),
+            udmabuf: "/dev/udmabuf".into(),
             driver_version_file: "/sys/module/nvidia/version".into(),
             meminfo: "/proc/meminfo".into(),
             reserve_memory: GuestMemory::claim,

@@ -35,6 +35,8 @@ On an RX 9070 XT, Superposition at 720p Low reaches 65% of the same card on the 
 2. In the app, make a new Windows machine and pick the AMD card. When there's no AMD driver yet, the dialog asks for the installer and unpacks it for you.
 3. Install as usual. Windows comes up with AMD's driver.
 
+For full speed your user has to be able to open `/dev/udmabuf`. The daemon gives the guest's memory to the card through it. On most distros it belongs to the `kvm` group, so `sudo usermod -aG kvm $USER` and a new login do it. The app's checks and the installer tell you when it can't be opened. Without it Windows still runs, only slower.
+
 A machine made for AMD stays on AMD. It can move to another AMD card while it's off, but an NVIDIA card needs a new machine, and the other way round.
 
 ## Other AMD cards

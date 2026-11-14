@@ -503,11 +503,11 @@ fn ampere_takes_the_30_series_sm_version_and_refuses_the_ga100s() {
 
 #[test]
 fn a_chip_with_an_sm_version_nobody_has_reported_is_refused() {
-    let card = FakeCard { sm_version: 0x705, ..FAKE_TURING };
+    let card = FakeCard { sm_version: 0x701, ..FAKE_TURING };
     let Err(refusal) = start_on_card(FakeRm::new(), &card, card.device as u16) else {
-        panic!("0x705 has no shader set");
+        panic!("0x701 has no shader set");
     };
-    assert!(refusal.0.contains("SM 0x705"), "{}", refusal.0);
+    assert!(refusal.0.contains("SM 0x701"), "{}", refusal.0);
 }
 
 #[test]

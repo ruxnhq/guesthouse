@@ -425,6 +425,13 @@ mod tests {
     }
 
     #[test]
+    fn each_turing_sm_version_has_its_own_shader_set() {
+        assert_eq!(shader_set(&TURING, 0x703).ok(), Some(0x6000));
+        assert_eq!(shader_set(&TURING, 0x705).ok(), Some(0x6001));
+        assert!(shader_set(&TURING, 0x700).is_err());
+    }
+
+    #[test]
     fn an_sm_version_nobody_has_run_refuses() {
         assert!(shader_set(&BLACKWELL, BLACKWELL.shader_sets[0].0).is_ok());
         assert!(shader_set(&BLACKWELL, 0xFFF).is_err());

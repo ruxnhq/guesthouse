@@ -241,7 +241,8 @@ pub const AMPERE: Generation = Generation {
 };
 
 /// Turing, the 20 and 16 series. Experimental. Each SM version needs its own row in `shader_sets`, so
-/// a chip that reports another one is refused. The TU117's encoder has another class, 0xB4B7, which
+/// a chip that reports another one is refused. A GTX 1660 SUPER reports SM 0x703 and an RTX 2080
+/// 0x705, and each has the set NVIDIA's Windows driver gives a card of that version. The TU117's encoder has another class, 0xB4B7, which
 /// makes no difference while encoders take no context.
 pub const TURING: Generation = Generation {
     name: "Turing",
@@ -264,7 +265,7 @@ pub const TURING: Generation = Generation {
         (ChannelObject::Graphics, TURING_A),
         (ChannelObject::TwoD, FERMI_TWOD_A),
     ],
-    shader_sets: &[(0x703, 0x6000)],
+    shader_sets: &[(0x703, 0x6000), (0x705, 0x6001)],
     nodes: TURING_NODES,
     copy_node_flags: None,
     video_record_flags: NO_VIDEO_FLAGS,

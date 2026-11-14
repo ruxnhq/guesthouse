@@ -153,11 +153,11 @@ fn a_card_with_no_profile_or_an_unknown_sm_is_refused_by_name() {
     assert!(reason.contains("0x140"), "{reason}");
     assert!(!findings.classes.is_empty(), "the classes are still listed");
 
-    let odd_sm = FakeCard { sm_version: 0x705, ..FAKE_TURING };
+    let odd_sm = FakeCard { sm_version: 0x701, ..FAKE_TURING };
     let findings = findings_on(&odd_sm);
     assert_eq!(findings.shader_set, None);
     let Verdict::Refused(reason) = &findings.verdict else { panic!("{:?}", findings.verdict) };
-    assert!(reason.contains("SM 0x705"), "{reason}");
+    assert!(reason.contains("SM 0x701"), "{reason}");
 }
 
 #[test]

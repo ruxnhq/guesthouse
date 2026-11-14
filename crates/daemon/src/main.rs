@@ -91,7 +91,9 @@ fn serve_amd(
     let run_folder = slot.run_folder(&project);
     let (ram, cap) = (env::var("GUESTHOUSE_RAM").ok(), env::var("GUESTHOUSE_VRAM").ok());
     let memory = SharedMemory::from_environment(slot, guest_ram(ram.as_deref()))?;
-    let needs = Needs::of_amd_card(slot, &project, &setup.driver_folder, node);
+    let memory_device = PathBuf::from(guesthouse_backend_amd::Udmabuf::DEVICE);
+    let memory_device = memory_device.exists().then_some(memory_device);
+    let needs = Needs::of_amd_card(slot, &project, &setup.driver_folder, node, memory_device);
     needs.prepare()?;
     let locked = lock_files(&needs)?;
     let backend: AmdBackend = start_backend(&setup)?;

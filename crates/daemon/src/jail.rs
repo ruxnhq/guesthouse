@@ -95,17 +95,20 @@ pub fn gpu_devices(devices: &Path, render_nodes: &Path) -> Vec<PathBuf> {
 #[cfg(feature = "amd")]
 impl Needs {
     /// What the AMD daemon of this slot needs. Only the one render node is granted, so the other
-    /// cards' device files are not reachable from this process.
+    /// cards' device files are not reachable from this process. `memory_device` is the device that
+    /// makes a dma-buf of the guest's memory, on a PC that has it: a rule can't name a file that
+    /// isn't there, and the backend does without it.
     pub fn of_amd_card(
         slot: crate::slot::Slot,
         project: &Path,
         driver_folder: &Path,
         render_node: PathBuf,
+        memory_device: Option<PathBuf>,
     ) -> Self {
         Self {
             run_folder: slot.run_folder(project),
             shared_files: Vec::new(),
-            devices: vec![render_node],
+            devices: std::iter::once(render_node).chain(memory_device).collect(),
             driver_folder: Some(driver_folder.to_owned()),
         }
     }
@@ -223,6 +226,26 @@ mod tests {
             found.iter().map(|path| path.strip_prefix(&folder).unwrap().display().to_string()).collect();
         assert_eq!(names, ["nvidia-uvm", "nvidia0", "nvidiactl", "dri/renderD128"]);
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[cfg(feature = "amd")]
+    #[test]
+    fn an_amd_daemon_reaches_its_render_node_and_the_memory_device_where_there_is_one() {
+        let devices_of = |memory_device: Option<&str>| {
+            let slot = crate::slot::Slot::parse(Some("2")).unwrap();
+            let node = PathBuf::from("/dev/dri/renderD129");
+            let needs = Needs::of_amd_card(
+                slot,
+                Path::new("/project"),
+                Path::new("/store/driver"),
+                node,
+                memory_device.map(PathBuf::from),
+            );
+            let granted = needs.plan().paths.into_iter().filter(|(grant, _)| *grant == Grant::Device);
+            granted.map(|(_, path)| path.display().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(devices_of(Some("/dev/udmabuf")), ["/dev/dri/renderD129", "/dev/udmabuf"]);
+        assert_eq!(devices_of(None), ["/dev/dri/renderD129"]);
     }
 
     #[test]

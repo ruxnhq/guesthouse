@@ -68,6 +68,9 @@ pub struct Udmabuf {
 }
 
 impl Udmabuf {
+    /// The device's file. A daemon that jails itself has to be let through to it before it opens.
+    pub const DEVICE: &str = DEVICE;
+
     /// Opens the device. Without it nothing is lost but speed, so that is all the log says.
     pub fn open() -> Self {
         let device = OpenOptions::new().read(true).write(true).open(DEVICE);

@@ -105,6 +105,13 @@ pub fn memory_kind(rule: DepthKinds, usage: u8, format: u8, attributes: u32) -> 
         return MemoryKind::PLAIN;
     }
     let chosen = match (stated(attributes), rule) {
+        // OpenGL makes a big float depth buffer from pieces, and one of them can come with a word
+        // that reads as fixed point. A piece of the wrong kind faults the depth unit, so the format
+        // decides when the two disagree on float.
+        (Some(bits), _) if format_bits.is_some_and(|known| known & Z_FLOAT != bits & Z_FLOAT) => {
+            log::debug!("a depth surface's attributes {attributes:#x} disagree with its format {format:#x}");
+            format_bits
+        }
         (Some(bits), _) => Some(bits),
         (None, DepthKinds::Always) => format_bits,
         (None, DepthKinds::AsStated) => None,
@@ -223,6 +230,18 @@ mod tests {
             assert_eq!(memory_kind(Always, NO_USAGE, format, BLOCK_LINEAR), MemoryKind(kind));
             assert_eq!(memory_kind(AsStated, DEPTH_STENCIL, format, BLOCK_LINEAR), MemoryKind::PLAIN);
         }
+    }
+
+    #[test]
+    fn a_float_format_wins_over_a_word_that_says_fixed_point() {
+        // As an RTX 2080's OpenGL log has it: the first piece of a float depth buffer.
+        const OPENGL_PIECE: u32 = 0x80_0004;
+        let float = Z_FLOAT | packed(PACKING_Z32) | DEPTH_32;
+        for rule in [AsStated, Always] {
+            assert_eq!(memory_kind(rule, DEPTH_STENCIL, FORMAT_Z32_FLOAT, OPENGL_PIECE), MemoryKind(float));
+        }
+        let fixed = packed(PACKING_S8Z24) | DEPTH_32;
+        assert_eq!(memory_kind(Always, DEPTH_STENCIL, FORMAT_S8Z24, float), MemoryKind(fixed));
     }
 
     #[test]

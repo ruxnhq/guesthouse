@@ -1187,13 +1187,43 @@ mod mappings {
         // The driver says what the image is, sets a range aside for it, then maps the heap there.
         allocate(&mut session, of_kind(0x1_0000, 5));
         let image = reserve(&mut session, 0x3_0000);
+        let next = reserve(&mut session, 0x2_0000);
+        allocate(&mut session, private(0x1_0000));
         let other = reserve(&mut session, 0x2_0000);
         update(&mut session, sync, 0, &[protected(image, 0x1_0000, heap, 0, 1)]);
         update(&mut session, sync, 1, &[protected(image + 0x1_0000, 0x1_0000, heap, 0x1_0000, 1)]);
-        update(&mut session, sync, 2, &[protected(other, 0x1_0000, heap, 0x2_0000, 1)]);
+        update(&mut session, sync, 2, &[protected(next, 0x1_0000, heap, 0x2_0000, 1)]);
+        update(&mut session, sync, 3, &[protected(other, 0x1_0000, heap, 0x3_0000, 1)]);
         assert_eq!(mapped_with(&mut session, image), Some(0x0501));
         assert_eq!(mapped_with(&mut session, image + 0x1_0000), Some(0x0501), "every piece of it");
-        assert_eq!(mapped_with(&mut session, other), Some(1), "the next range is not the image's");
+        assert_eq!(mapped_with(&mut session, next), Some(0x0501), "ranges up to the next allocation");
+        assert_eq!(mapped_with(&mut session, other), Some(1), "a range after another allocation");
+    }
+
+    #[test]
+    fn a_description_destroyed_before_its_range_still_describes_it() {
+        let mut session = session();
+        let (_, heap) = allocate(&mut session, private(0x20_0000));
+        let (sync, _, _) = create_fence(&mut session, 0);
+        let (resource, description) = allocate(&mut session, of_kind(0x1_0000, 5));
+        destroy(&mut session, resource, &[description]);
+        let image = reserve(&mut session, 0x3_0000);
+        update(&mut session, sync, 0, &[protected(image, 0x1_0000, heap, 0, 1)]);
+        assert_eq!(mapped_with(&mut session, image), Some(0x0501));
+    }
+
+    #[test]
+    fn a_description_from_another_process_describes_the_next_range() {
+        const DESCRIBING_PROCESS: u32 = 0x4000_3000;
+        let mut session = session();
+        let (_, heap) = allocate(&mut session, private(0x20_0000));
+        let (sync, _, _) = create_fence(&mut session, 0);
+        let mut request = create_message(0, &[of_kind(0x1_0000, 5)]);
+        set_u32(&mut request, 8, DESCRIBING_PROCESS);
+        assert_eq!(status_of(&send(&mut session, &request)), SUCCESS);
+        let image = reserve(&mut session, 0x3_0000);
+        update(&mut session, sync, 0, &[protected(image, 0x1_0000, heap, 0, 1)]);
+        assert_eq!(mapped_with(&mut session, image), Some(0x0501));
     }
 
     #[test]

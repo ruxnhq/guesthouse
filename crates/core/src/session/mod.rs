@@ -190,6 +190,8 @@ pub struct Session<B, M> {
     /// The last allocation each process made, if its memory has a kind of its own and nothing has
     /// mapped it yet: the process, then the handle and the kind. See `described_surface`.
     pub(crate) described_surfaces: HashMap<u32, (u32, MemoryKind)>,
+    /// The same for the newest allocation in the whole session: the process, the handle and the kind.
+    pub(crate) newest_description: Option<(u32, u32, MemoryKind)>,
     /// The sizes of the ranges a process set aside for a described surface, and the surface's kind.
     /// A probe, see `described_surface`.
     pub(crate) surface_range_sizes: HashMap<(u32, u64), MemoryKind>,
@@ -260,6 +262,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             mapped_so_far: 0,
             reserved_addresses: Vec::new(),
             described_surfaces: HashMap::new(),
+            newest_description: None,
             surface_range_sizes: HashMap::new(),
             copies: VecDeque::new(),
             next_copy: 0,

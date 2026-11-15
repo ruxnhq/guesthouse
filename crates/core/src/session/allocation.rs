@@ -176,7 +176,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                 allocation.size = size;
             }
             log::debug!(
-                "allocation {handle:#x}: {:#x} bytes, guest backed {guest_backed}, primary {}",
+                "allocation {handle:#x} in process {owner:#x}: {:#x} bytes, guest backed {guest_backed}, primary {}",
                 allocation.size,
                 allocation.primary
             );
@@ -209,9 +209,15 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             self.resources.get_mut(&resource).expect("made above").push(handle);
             // Only the newest allocation can be the description of the range asked for next.
             match shape.kind {
-                MemoryKind::PLAIN => self.described_surfaces.remove(&owner),
-                kind => self.described_surfaces.insert(owner, (handle, kind)),
-            };
+                MemoryKind::PLAIN => {
+                    self.described_surfaces.remove(&owner);
+                    self.newest_description = None;
+                }
+                kind => {
+                    self.described_surfaces.insert(owner, (handle, kind));
+                    self.newest_description = Some((owner, handle, kind));
+                }
+            }
         }
         CreateAllocationAnswer::finish(out);
         Ok(())
@@ -252,6 +258,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.run_deferred();
         for handle in handles {
             self.allocation_going(handle);
+            if self.newest_description.is_some_and(|(_, described, _)| described == handle) {
+                // Its kind stays for the ranges asked for next, which the description was made for.
+                log::debug!("the description {handle:#x} is destroyed before the next allocation");
+            }
             let Some(allocation) = self.allocations.remove(&handle) else { continue };
             self.leave_resource(allocation.resource, handle);
             let Some(memory) = allocation.memory else { continue };

@@ -79,21 +79,30 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         Some((self.place(base, size), true))
     }
 
-    /// The kind of the surface a process described just before it asked for a range, or plain.
+    /// The kind of the surface described just before a range was asked for, or plain.
     ///
     /// NVIDIA's Vulkan driver makes a depth image in three steps: a small allocation that says what
     /// the image is and is never mapped, a range set aside for it, and maps of a plain heap into
     /// that range. Nothing in the maps says the pages are depth, so the range has to remember it.
-    /// An allocation that was mapped, or made before another one, is not such a description.
+    /// An allocation that was mapped, or made before another one, is not such a description. The
+    /// driver may destroy it before it asks for the range, and may ask for several ranges after
+    /// one, so it counts for every range until the next allocation.
+    ///
+    /// Testers' logs show a description with a range right after it and no link made in the same
+    /// process, so the newest description in the session counts too, whichever process made it.
     ///
     /// The driver describes an image once and may make more like it with no new description. Until
     /// it is known what marks those, a range of the same size as a described one, in the same
     /// process, is taken to be for the same kind of surface. Small ranges are left out, as buffers
     /// of a few pages come in the same sizes as small images.
     fn described_surface(&mut self, process: u32, size: u64) -> MemoryKind {
-        let described = self.described_surfaces.remove(&process).and_then(|(handle, kind)| {
-            let unmapped = self.allocations.get(&handle)?.mappings.is_empty();
-            unmapped.then_some(kind)
+        let own = self.described_surfaces.get(&process).map(|&(_, kind)| kind);
+        let described = own.or_else(|| {
+            let (owner, handle, kind) = self.newest_description?;
+            log::debug!(
+                "a range in process {process:#x} takes the kind of {handle:#x}, described in process {owner:#x}"
+            );
+            Some(kind)
         });
         match described {
             Some(kind) if size >= SIZE_TELLS_FROM => {
@@ -140,7 +149,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         });
         let address = found.map_or(NO_ADDRESS, |range| range.address);
         log::debug!(
-            "reservation {request:x?} got {address:#x}, protection {protection:#x}, driver protection {driver_protection:#x}"
+            "reservation in process {process:#x} {request:x?} got {address:#x}, protection {protection:#x}, \
+             driver protection {driver_protection:#x}"
         );
         if view.surface != MemoryKind::PLAIN {
             log::debug!("the range at {address:#x} is for a surface of kind {:#x}", view.surface.0);

@@ -164,6 +164,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             // It has an address of its own, so it describes no range to come.
             self.described_surfaces.remove(&allocation.owner);
         }
+        if self.newest_description.is_some_and(|(_, described, _)| described == handle) {
+            self.newest_description = None;
+        }
         if allocation.first_mapped.is_none() {
             allocation.first_mapped = Some(self.mapped_so_far);
             self.mapped_so_far += 1;

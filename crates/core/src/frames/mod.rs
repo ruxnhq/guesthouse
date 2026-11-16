@@ -20,6 +20,7 @@ pub use ring::ViewerFacts;
 pub(crate) use ring::{LiveRing, RING_SLOTS, ScreenFrames, SlotInFlight, SlotMemory};
 pub use slots::{NotTheViewers, Slots};
 
+use guesthouse_backend::RingTiling;
 use guesthouse_messages::indirect::{CursorMove, Look};
 use std::os::fd::BorrowedFd;
 
@@ -43,6 +44,8 @@ pub struct Frame {
     pub look: Look,
     /// What the guest said about this frame's brightness, if it said anything.
     pub light: Option<FrameLight>,
+    /// The tiles the frame is laid out in, or `None` for rows.
+    pub tiling: Option<RingTiling>,
 }
 
 /// What became of something offered to a sink.

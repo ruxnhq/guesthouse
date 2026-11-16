@@ -346,6 +346,20 @@ pub struct SlotCopy {
     pub height: u32,
     /// The daemon's own address space, where the two addresses above are.
     pub own_space: SpaceId,
+    /// The slot's block height, as [`SurfaceShape::tiling`] has it, when the slot is laid out in the
+    /// card's tiles rather than in rows. See [`RingTiling`].
+    pub slot_tiling: Option<u32>,
+}
+
+/// A tiled layout the backend can lay a viewer's frames out in, for a compositor that can't take
+/// them in rows. NVIDIA's EGL takes 10-bit frames in rows only as external images, which GNOME can't
+/// draw, but takes its own tiles as plain textures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingTiling {
+    /// The DRM format modifier that names the layout to the viewer and its compositor.
+    pub modifier: u64,
+    /// The block height, as [`SurfaceShape::tiling`] has it.
+    pub block: u32,
 }
 
 /// A frame to copy to a staging surface.

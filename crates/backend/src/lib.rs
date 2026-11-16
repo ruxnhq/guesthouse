@@ -269,6 +269,12 @@ pub trait Backend: Sized {
     fn tiled_bytes(&self, _surface: &SurfaceShape, _x: u64, _y: u64) -> Option<u64> {
         None
     }
+
+    /// The tiles this backend can copy a viewer's frames into, if any. A slot laid out this way is
+    /// plain video memory, filled by [`Backend::start_slot_copy`].
+    fn ring_tiling(&self) -> Option<RingTiling> {
+        None
+    }
 }
 
 /// What a backend may ask of the host while it works.

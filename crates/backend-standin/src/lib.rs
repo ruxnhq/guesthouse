@@ -16,8 +16,8 @@ mod random_messages;
 use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, CardLabel, Doorbell, DriverFound, DriverSurvey,
     GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard, RangeView, Refusal,
-    RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, StandardSurface,
-    Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
+    RegistryName, RegistryValue, RingTiling, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart,
+    StandardSurface, Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
 };
 pub use memory::SparseMemory;
 pub use random_messages::RandomMessages;
@@ -77,6 +77,8 @@ pub struct StandIn {
     pub memory_starts: HashMap<MemoryId, Vec<u8>>,
     /// Set to make every export fail.
     pub refuse_exports: bool,
+    /// The tiles a viewer's frames can be laid out in, for a test to set. `None` is a card with none.
+    pub ring_tiling: Option<RingTiling>,
     /// Set to refuse every allocation's, context's and queue's private data, as a vendor's driver
     /// would refuse data it can't read.
     pub refuse_private_data: bool,
@@ -164,6 +166,7 @@ impl StandIn {
             slot_copy_status: Status::SUCCESS,
             memory_starts: HashMap::new(),
             refuse_exports: false,
+            ring_tiling: None,
             refuse_private_data: false,
             standard_data: None,
             standard_shape: None,
@@ -551,6 +554,10 @@ impl Backend for StandIn {
     }
 
     /// Anything that is a file will do, as nothing here has pixels.
+    fn ring_tiling(&self) -> Option<RingTiling> {
+        self.ring_tiling
+    }
+
     fn export_memory(&mut self, _memory: MemoryId, _size: u64) -> Result<OwnedFd, BackendError> {
         if self.refuse_exports {
             return Err(BackendError::new("the stand-in was told to refuse"));

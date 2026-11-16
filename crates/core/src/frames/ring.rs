@@ -9,7 +9,7 @@ use super::Cursor;
 use super::IndirectRing;
 use super::Registering;
 use super::{Picture, Slots};
-use guesthouse_backend::{MemoryId, SpaceId, SurfaceShape};
+use guesthouse_backend::{MemoryId, RingTiling, SpaceId, SurfaceShape};
 use guesthouse_messages::indirect::{Look, RingName};
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
@@ -40,6 +40,8 @@ pub(crate) struct LiveRing {
     pub slot_size: u64,
     pub space: SpaceId,
     pub memory: Vec<SlotMemory>,
+    /// The tiles the viewer's own slots in `memory` are laid out in. `None` for rows.
+    pub tiling: Option<RingTiling>,
     pub slots: Slots,
     /// The buffers, until the sink has taken them.
     pub unsent: Option<Vec<OwnedFd>>,
@@ -84,6 +86,10 @@ pub struct ViewerFacts {
     pub peak_nits: u32,
     /// Its screen is on another GPU, so it wants its frames in memory here.
     pub wants_memory: bool,
+    /// It takes frames laid out in the card's tiles, as [`Backend::ring_tiling`] names them.
+    ///
+    /// [`Backend::ring_tiling`]: guesthouse_backend::Backend::ring_tiling
+    pub takes_ring_tiling: bool,
 }
 
 /// See the module documentation.
@@ -107,6 +113,8 @@ pub(crate) struct ScreenFrames {
     pub sequence: u64,
     /// A picture no ring could be made for, which isn't worth trying again.
     pub refused: Option<Picture>,
+    /// The card's tiles failed a viewer once, so every viewer gets its frames in rows.
+    pub tiles_failed: bool,
     /// One complaint for each ring is enough.
     pub complained: bool,
     pub counts: FrameCounts,
@@ -214,6 +222,7 @@ mod tests {
             slot_size: 0x10000,
             space: SpaceId(1),
             memory: Vec::new(),
+            tiling: None,
             slots: Slots::new(RING_SLOTS),
             unsent: None,
         }

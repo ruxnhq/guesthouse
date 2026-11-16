@@ -49,6 +49,13 @@ fn can_show(hello: &Hello) -> bool {
     hello.formats.contains(&SDR_FORMAT)
 }
 
+/// Whether the viewer takes every picture the ring may carry in these tiles: the SDR desktop, and
+/// HDR too if it shows HDR at all. A ring keeps its layout when Windows switches between them.
+fn takes_tiles(hello: &Hello, modifier: u64, shows_hdr: bool) -> bool {
+    let takes = |format: Format| hello.formats.contains(&Format { modifier, ..format });
+    takes(SDR_FORMAT) && (!shows_hdr || takes(HDR_FORMAT))
+}
+
 impl ViewerPort {
     /// Listens in `run_folder`, replacing a socket a previous daemon left behind.
     pub fn bind(run_folder: &Path) -> io::Result<Self> {
@@ -124,13 +131,21 @@ impl ViewerPort {
                     hello.formats.len(),
                     if hello.wants_memory { ", and wants its frames in memory" } else { "" }
                 );
+                let shows_hdr = hello.formats.contains(&HDR_FORMAT);
+                let takes_ring_tiling = session
+                    .ring_tiling()
+                    .is_some_and(|tiling| takes_tiles(&hello, tiling.modifier, shows_hdr));
+                if takes_ring_tiling {
+                    log::info!("the viewer takes the card's tiles, so its frames are copied into them");
+                }
                 viewer.greeted = true;
                 session.viewer_arrived();
                 session.viewer_described(ViewerFacts {
-                    shows_hdr: hello.formats.contains(&HDR_FORMAT),
+                    shows_hdr,
                     refresh_millihertz: hello.refresh_millihertz,
                     peak_nits: hello.peak_nits,
                     wants_memory: hello.wants_memory,
+                    takes_ring_tiling,
                 });
                 true
             }
@@ -239,7 +254,10 @@ impl FrameSink for ViewerPort {
             height: picture.height,
             stride: picture.pitch,
             offset: 0,
-            format: Format { fourcc: look.fourcc, modifier: LINEAR },
+            format: Format {
+                fourcc: look.fourcc,
+                modifier: frame.tiling.map_or(LINEAR, |tiling| tiling.modifier),
+            },
             colour: Colour {
                 primaries: look.primaries,
                 transfer: look.transfer,
@@ -250,5 +268,33 @@ impl FrameSink for ViewerPort {
         let frame =
             Frame { generation: frame.generation, slot: frame.slot, sequence: frame.sequence, descriptor };
         self.send(&Message::Frame(frame), &[])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TILES: u64 = 0x0300_0000_0060_6014;
+
+    fn hello(formats: &[Format]) -> Hello {
+        Hello { formats: formats.to_vec(), refresh_millihertz: 0, peak_nits: 0, wants_memory: false }
+    }
+
+    fn tiled(format: Format) -> Format {
+        Format { modifier: TILES, ..format }
+    }
+
+    #[test]
+    fn an_sdr_viewer_needs_only_the_desktop_in_tiles() {
+        assert!(takes_tiles(&hello(&[SDR_FORMAT, tiled(SDR_FORMAT)]), TILES, false));
+        assert!(!takes_tiles(&hello(&[SDR_FORMAT]), TILES, false));
+    }
+
+    #[test]
+    fn an_hdr_viewer_needs_both_pictures_in_tiles() {
+        let both = [SDR_FORMAT, HDR_FORMAT, tiled(SDR_FORMAT), tiled(HDR_FORMAT)];
+        assert!(takes_tiles(&hello(&both), TILES, true));
+        assert!(!takes_tiles(&hello(&both[..3]), TILES, true), "HDR would arrive in rows it can't take");
     }
 }

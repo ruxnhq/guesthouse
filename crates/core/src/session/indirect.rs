@@ -9,7 +9,9 @@ use super::{Handled, HeldReply, Session, services};
 use crate::frames::{
     Cursor, FrameLight, GuestSlot, IndirectRing, Landing, LiveRing, Picture, Registering, ReplyWaiting, Slots,
 };
-use guesthouse_backend::{Backend, BackendError, GuestMemory, SlotCopy, SpaceId, StagingStart, SurfaceShape};
+use guesthouse_backend::{
+    Backend, BackendError, GuestMemory, RingTiling, SlotCopy, SpaceId, StagingStart, SurfaceShape,
+};
 use guesthouse_messages::Status;
 use guesthouse_messages::adapter::DisplayMode;
 use guesthouse_messages::indirect::{FrameDone, Look, Outcome, Register, Reply, Request, STAMP_SIZE, Stamp};
@@ -194,6 +196,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             slot_size,
             space,
             memory: Vec::new(),
+            tiling: None,
             slots: states,
             unsent: None,
         });
@@ -363,6 +366,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                 return;
             }
             let copied = !reached || !in_memory || self.copy_to_memory_slot(slot) == Status::SUCCESS;
+            // In rows the frame is the viewer's as it lies in the guest's slot, with no copy.
+            let tiled = self.frames.ring.as_ref().is_some_and(|ring| ring.tiling.is_some());
+            let copied = copied || (tiled && self.fall_back_to_rows());
             let frames = &mut self.frames;
             let (Some(indirect), Some(ring)) = (frames.indirect.as_mut(), frames.ring.as_mut()) else {
                 return;
@@ -370,7 +376,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             let Some(landing) = indirect.landing.pop_front() else { return };
             if reached && !copied {
                 ring.slots.abandoned(landing.slot);
-                frames.complain("a frame couldn't be copied for a viewer on another GPU");
+                frames.complain("a frame couldn't be copied into the viewer's own slot");
             } else if reached {
                 frames.sequence += 1;
                 let replaced = ring.slots.finished(landing.slot, frames.sequence);
@@ -404,8 +410,18 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             return;
         }
         if self.frames.viewer_facts.wants_memory {
-            self.make_memory_slots();
+            self.make_viewer_slots(None);
             return;
+        }
+        // NVIDIA's EGL takes 10-bit frames in rows only as external images, which GNOME can't draw. A
+        // viewer that takes the card's tiles gets slots of its own laid out in them, and a copy of
+        // each frame as it lands.
+        let tiles_wanted = self.frames.viewer_facts.takes_ring_tiling && !self.frames.tiles_failed;
+        if let Some(tiling) = self.backend.ring_tiling().filter(|_| tiles_wanted) {
+            if self.make_viewer_slots(Some(tiling)) {
+                return;
+            }
+            self.give_up_on_tiles("its slots couldn't be made");
         }
         let Some(indirect) = self.frames.indirect.as_ref() else { return };
         let slots = indirect.slots.clone();
@@ -425,56 +441,91 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
     }
 
-    /// Slots in memory here, one for each of the guest's, for a viewer whose screen is on another
-    /// GPU. That GPU can't take the card's buffers, so each frame is copied over as it lands. A frame
-    /// that's already waiting is copied now, as a still desktop sends no more.
-    fn make_memory_slots(&mut self) {
+    /// Slots of the viewer's own, one for each of the guest's, which each frame is copied into as it
+    /// lands. They're in memory here for a viewer whose screen is on another GPU, which can't take the
+    /// card's buffers, or on the card in `tiling`. A frame that's already waiting is copied now, as a
+    /// still desktop sends no more.
+    ///
+    /// Says whether the viewer has them. Slots in memory that can't be made leave it with nothing,
+    /// as there's no other way to it. Tiled ones leave the caller to send the frames in rows.
+    fn make_viewer_slots(&mut self, tiling: Option<RingTiling>) -> bool {
         let (Some(indirect), Some(ring)) = (self.frames.indirect.as_ref(), self.frames.ring.as_ref()) else {
-            return;
+            return false;
         };
         let sizes: Vec<u64> = indirect.slots.iter().map(|slot| slot.size).collect();
-        let space = ring.space;
+        let (space, picture) = (ring.space, ring.picture);
         let mut memory = Vec::new();
         let mut buffers = Vec::new();
         for size in sizes {
-            match self.make_host_slot(size, space) {
+            let made = match tiling {
+                Some(tiling) => self.make_tiled_slot(picture, tiling, space),
+                None => self.make_host_slot(size, space),
+            };
+            match made {
                 Ok((slot, buffer)) => {
                     memory.push(slot);
                     buffers.push(buffer);
                 }
                 Err(error) => {
-                    log::warn!("no slots in memory for the viewer: {error}");
+                    log::warn!("no slots of its own for the viewer: {error}");
                     memory.iter().for_each(|slot| self.free_slot(slot, space));
-                    if let Some(indirect) = self.frames.indirect.as_mut() {
+                    if let Some(indirect) = self.frames.indirect.as_mut().filter(|_| tiling.is_none()) {
                         indirect.export_refused = true;
                     }
-                    return;
+                    return false;
                 }
             }
         }
-        let (Some(indirect), Some(ring)) = (self.frames.indirect.as_mut(), self.frames.ring.as_mut()) else {
-            return;
+        let Some(ring) = self.frames.ring.as_mut() else {
+            memory.iter().for_each(|slot| self.free_slot(slot, space));
+            return false;
         };
         ring.memory = memory;
-        ring.unsent = Some(buffers);
-        indirect.needs_export = false;
+        ring.tiling = tiling;
         let waiting = ring.slots.pending().map(|(slot, _)| slot);
         if let Some(slot) = waiting
             && self.copy_to_memory_slot(slot) != Status::SUCCESS
-            && let Some(ring) = self.frames.ring.as_mut()
         {
-            ring.slots.abandoned(slot);
+            if tiling.is_some() {
+                self.drop_memory_slots();
+                return false;
+            }
+            if let Some(ring) = self.frames.ring.as_mut() {
+                ring.slots.abandoned(slot);
+            }
         }
+        if let (Some(indirect), Some(ring)) = (self.frames.indirect.as_mut(), self.frames.ring.as_mut()) {
+            ring.unsent = Some(buffers);
+            indirect.needs_export = false;
+        }
+        true
     }
 
-    /// The viewer's slots in memory go. Copies here are waited for, so none is writing them.
+    /// The card's tiles didn't work out, so this viewer and every later one gets its frames in
+    /// rows, as a viewer that never asked for tiles does. It's said once, for a report.
+    fn give_up_on_tiles(&mut self, why: &str) {
+        log::warn!("no frames in the card's tiles from here on, as {why}: they go in rows");
+        self.frames.tiles_failed = true;
+    }
+
+    /// A copy into a tiled slot failed with the viewer already holding the tiled buffers. They go,
+    /// and it gets the guest's own in rows under a new generation, as a new viewer would.
+    fn fall_back_to_rows(&mut self) -> bool {
+        self.give_up_on_tiles("a frame couldn't be copied into them");
+        self.drop_memory_slots();
+        self.keep_ring_for_next_viewer();
+        true
+    }
+
+    /// The viewer's own slots go. Copies here are waited for, so none is writing them.
     pub(super) fn drop_memory_slots(&mut self) {
         let Some(ring) = self.frames.ring.as_mut() else { return };
+        ring.tiling = None;
         let (memory, space) = (std::mem::take(&mut ring.memory), ring.space);
         memory.iter().for_each(|slot| self.free_slot(slot, space));
     }
 
-    /// Copies the frame in one of the guest's slots to the viewer's slot in memory. It has the copy
+    /// Copies the frame in one of the guest's slots to the viewer's own slot. It has the copy
     /// engine to itself, and waits, as a frame is one short copy.
     fn copy_to_memory_slot(&mut self, slot: u32) -> Status {
         let (Some(indirect), Some(ring)) = (self.frames.indirect.as_ref(), self.frames.ring.as_ref()) else {
@@ -484,8 +535,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         else {
             return Status::UNSUCCESSFUL;
         };
-        let (allocation, slot_address, picture, own_space) =
-            (guest.allocation, host.address, ring.picture, ring.space);
+        let (allocation, slot_address, picture, own_space, tiling) =
+            (guest.allocation, host.address, ring.picture, ring.space, ring.tiling);
         let Ok(source_address) = self.surface_address(allocation) else { return Status::UNSUCCESSFUL };
         let source = SurfaceShape {
             width: picture.width,
@@ -505,6 +556,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             width: picture.width,
             height: picture.height,
             own_space,
+            slot_tiling: tiling.map(|tiling| tiling.block),
         };
         match self.backend.start_slot_copy(&mut services!(self), &copy) {
             StagingStart::Running => self.wait_for_copy(),

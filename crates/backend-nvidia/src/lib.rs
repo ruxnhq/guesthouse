@@ -43,8 +43,8 @@ use encode_sessions::EncodeSessions;
 use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, Doorbell, DriverSurvey, GpuRange, GuestBooks,
     HostServices, MapRequest, MemoryId, MemoryKind, PciCard, RangeView, Refusal, RegistryName, RegistryValue,
-    Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, StandardSurface, Status, SurfaceShape, UnmapRequest,
-    VendorQuery, Work, WorkStart,
+    RingTiling, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, StandardSurface, Status, SurfaceShape,
+    UnmapRequest, VendorQuery, Work, WorkStart,
 };
 use inf::{INF_NAME, Inf, read_infs};
 use profile::{
@@ -191,6 +191,7 @@ impl<R: Rm> NvidiaBackend<R> {
         let failed = |error: RmError| Refusal(format!("Reading the card failed: {error}"));
         let mut card = CardReader::new(&mut device);
         let generation = card_generation(&mut card)?;
+        log::info!("the card is of the {} generation", generation.name);
         if !generation.run_on_guest_branches.contains(&guest.name) {
             log::warn!(
                 "{} cards have not been run with guest driver branch {}. This is a try, and it may fail.",
@@ -639,6 +640,18 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
             return None;
         }
         tiling::surface_bytes(surface.pitch, surface.height, surface.tiling?)
+    }
+
+    /// On every generation. The tiles are only in how the copy engine and the importer address the
+    /// bytes, so plain memory holds them. Where page table entries carry a kind, the RM gives plain
+    /// memory the generic one whatever its layout (`memmgrChooseKind_TU102` in the open kernel
+    /// module, for an image with no compression), and that is the kind the modifier names. Only
+    /// Blackwell has been seen to work.
+    fn ring_tiling(&self) -> Option<RingTiling> {
+        Some(RingTiling {
+            modifier: tiling::block_linear_modifier(tiling::RING_BLOCK),
+            block: tiling::RING_BLOCK,
+        })
     }
 }
 

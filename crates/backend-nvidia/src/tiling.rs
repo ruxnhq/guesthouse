@@ -29,9 +29,50 @@ pub fn origin_fits(x: u64, y: u64) -> bool {
     x < ORIGIN_LIMIT && y < ORIGIN_LIMIT
 }
 
+/// The block height of the frame ring's tiles: sixteen GOBs, 128 rows.
+pub const RING_BLOCK: u32 = 4;
+
+// The parts of a DRM format modifier for NVIDIA's 2D block-linear layout, from the kernel's
+// `drm_fourcc.h` (DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D).
+const MODIFIER_VENDOR_NVIDIA: u64 = 0x03 << 56;
+const MODIFIER_2D: u64 = 0x10;
+const MODIFIER_KIND_SHIFT: u32 = 12;
+const MODIFIER_GOB_KIND_SHIFT: u32 = 20;
+const MODIFIER_SECTOR_LAYOUT_SHIFT: u32 = 22;
+/// The page kind of plain block-linear memory, from Turing on.
+const KIND_GENERIC: u64 = 0x06;
+/// GOBs as Turing and every later generation lay them out.
+const GOB_KIND_TURING: u64 = 2;
+/// Desktop GPUs' sector layout, as against Tegra's.
+const SECTOR_LAYOUT_DESKTOP: u64 = 1;
+
+/// The modifier that names uncompressed block-linear memory of this block height to EGL and a
+/// compositor.
+pub fn block_linear_modifier(block: u32) -> u64 {
+    MODIFIER_VENDOR_NVIDIA
+        | MODIFIER_2D
+        | u64::from(block)
+        | KIND_GENERIC << MODIFIER_KIND_SHIFT
+        | GOB_KIND_TURING << MODIFIER_GOB_KIND_SHIFT
+        | SECTOR_LAYOUT_DESKTOP << MODIFIER_SECTOR_LAYOUT_SHIFT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rings_tiles_are_named_as_nvidias_egl_names_them() {
+        // From eglQueryDmaBufModifiersEXT for XB30 on an RTX 5090 with driver 620.70.06.
+        assert_eq!(block_linear_modifier(RING_BLOCK), 0x0300_0000_0060_6014);
+        assert_eq!(block_linear_modifier(5), 0x0300_0000_0060_6015);
+    }
+
+    #[test]
+    fn a_4k_slot_in_the_rings_tiles_ends_on_a_whole_block() {
+        let rows = 2160u64.div_ceil(GOB_HEIGHT << RING_BLOCK) * (GOB_HEIGHT << RING_BLOCK);
+        assert_eq!(surface_bytes(15360, 2160, RING_BLOCK), Some(15360 * rows));
+    }
 
     #[test]
     fn a_surface_fills_whole_blocks_in_both_directions() {

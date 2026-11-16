@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::{Delivery, Frame, FrameRing, FrameSink, ViewerFacts};
+use guesthouse_backend::RingTiling;
 use guesthouse_messages::adapter::{AdapterQuery, DisplayMode};
 use guesthouse_messages::indirect::as_the_driver_sends as driver;
 use guesthouse_messages::indirect::{FrameDone, Look, Mastering, Register, RingName, Stamp};
@@ -20,8 +21,13 @@ const STATUS_STALE: u32 = 1;
 const STATUS_REFUSED: u32 = 2;
 const ESCAPE_SIZE_AT: usize = HEADER_SIZE + 16;
 const ESCAPE_HEADER: usize = HEADER_SIZE + 24;
-const HDR_VIEWER: ViewerFacts =
-    ViewerFacts { shows_hdr: true, refresh_millihertz: 240_000, peak_nits: 1000, wants_memory: false };
+const HDR_VIEWER: ViewerFacts = ViewerFacts {
+    shows_hdr: true,
+    refresh_millihertz: 240_000,
+    peak_nits: 1000,
+    wants_memory: false,
+    takes_ring_tiling: false,
+};
 
 #[derive(Default)]
 struct Sink {
@@ -362,6 +368,90 @@ fn a_viewer_on_another_gpu_gets_each_frame_copied_into_memory_here() {
     assert_eq!(session.memory().host_buffers.len(), SLOTS as usize);
     session.guest_reset();
     assert!(session.memory().host_buffers.is_empty());
+}
+
+const TILES: RingTiling = RingTiling { modifier: 0x0300_0000_0060_6014, block: 4 };
+const TILE_VIEWER: ViewerFacts = ViewerFacts {
+    shows_hdr: false,
+    refresh_millihertz: 60_000,
+    peak_nits: 0,
+    wants_memory: false,
+    takes_ring_tiling: true,
+};
+
+/// A session whose card has tiles, with one frame waiting and a viewer that takes them.
+fn with_a_tile_viewer() -> (TestSession, u32) {
+    let (mut session, first) = registered();
+    session.backend_mut().ring_tiling = Some(TILES);
+    frame(&mut session, Some(first));
+    let _ = session.poll(Instant::now());
+    session.viewer_arrived();
+    session.viewer_described(TILE_VIEWER);
+    (session, first)
+}
+
+#[test]
+fn a_viewer_that_takes_the_cards_tiles_gets_its_frames_copied_into_them() {
+    let (mut session, _) = with_a_tile_viewer();
+    let mut sink = Sink::default();
+    turn(&mut session, &mut sink);
+    turn(&mut session, &mut sink);
+    assert_eq!((sink.rings.len(), sink.frames.len()), (1, 1));
+    assert_eq!(sink.frames[0].tiling, Some(TILES));
+    assert_eq!(session.backend().slot_copies.last().unwrap().slot_tiling, Some(TILES.block));
+}
+
+#[test]
+fn tiled_slots_that_cant_be_made_leave_the_viewer_its_frames_in_rows() {
+    let (mut session, first) = with_a_tile_viewer();
+    session.backend_mut().fail_next_allocation = true;
+    let mut sink = Sink::default();
+    turn(&mut session, &mut sink);
+    turn(&mut session, &mut sink);
+    assert_eq!((sink.rings.len(), sink.frames.len()), (1, 1), "the viewer still has a picture");
+    assert_eq!((sink.frames[0].slot, sink.frames[0].tiling), (first, None));
+    assert!(session.backend().slot_copies.is_empty());
+
+    session.viewer_left();
+    session.viewer_arrived();
+    session.viewer_described(TILE_VIEWER);
+    let mut next = Sink::default();
+    turn(&mut session, &mut next);
+    turn(&mut session, &mut next);
+    assert_eq!(next.frames[0].tiling, None, "the tiles aren't tried again on this card");
+    assert!(session.backend().slot_copies.is_empty());
+}
+
+#[test]
+fn a_first_copy_into_the_tiles_that_fails_leaves_the_viewer_its_frames_in_rows() {
+    let (mut session, first) = with_a_tile_viewer();
+    session.backend_mut().slot_copy_status = Status::UNSUCCESSFUL;
+    let mut sink = Sink::default();
+    turn(&mut session, &mut sink);
+    turn(&mut session, &mut sink);
+    assert_eq!((sink.rings.len(), sink.frames.len()), (1, 1));
+    assert_eq!((sink.frames[0].slot, sink.frames[0].tiling), (first, None));
+    assert!(session.frames.ring.as_ref().unwrap().memory.is_empty(), "the tiled slots went");
+}
+
+#[test]
+fn a_later_copy_into_the_tiles_that_fails_moves_the_viewer_to_rows() {
+    let (mut session, _) = with_a_tile_viewer();
+    let mut sink = Sink::default();
+    turn(&mut session, &mut sink);
+    turn(&mut session, &mut sink);
+    assert_eq!(sink.frames[0].tiling, Some(TILES));
+
+    session.backend_mut().slot_copy_status = Status::UNSUCCESSFUL;
+    let next = frame(&mut session, None).1.expect("a free slot");
+    frame(&mut session, Some(next));
+    turn(&mut session, &mut sink);
+    turn(&mut session, &mut sink);
+    assert_eq!(sink.rings.len(), 2, "the guest's own buffers, as a new ring");
+    assert!(sink.rings[1].generation > sink.rings[0].generation, "the tiled ring's releases can't touch it");
+    let last = sink.frames.last().unwrap();
+    assert_eq!((last.generation, last.slot, last.tiling), (sink.rings[1].generation, next, None));
+    assert!(session.frames.ring.as_ref().unwrap().memory.is_empty());
 }
 
 #[test]

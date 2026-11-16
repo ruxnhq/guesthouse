@@ -190,6 +190,7 @@ mod tests {
             width,
             height,
             own_space: SpaceId(1),
+            slot_tiling: None,
         }
     }
 

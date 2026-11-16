@@ -161,28 +161,33 @@ impl<R: Rm> NvidiaBackend<R> {
 
     fn slot_batch_for(channel: &mut CopyChannel, copy: &SlotCopy) -> Option<Vec<u32>> {
         let width = copy.width.checked_mul(COPY_PIXEL_BYTES)?;
-        let rows = |source_pitch| Rows {
+        // A tiled side is given from the surface's corner with no pitch, as in `copy_side`.
+        let source = copy.source.tiling.map(|block| TiledSide {
+            x: 0,
+            y: 0,
+            surface_width: copy.source.pitch,
+            surface_height: copy.source.height,
+            block,
+        });
+        let target = copy.slot_tiling.map(|block| TiledSide {
+            x: 0,
+            y: 0,
+            surface_width: copy.slot_pitch,
+            surface_height: copy.height,
+            block,
+        });
+        let rows = Rows {
             source: copy.source_address,
             target: copy.slot_address,
-            source_pitch,
-            target_pitch: copy.slot_pitch,
+            source_pitch: if source.is_some() { 0 } else { copy.source.pitch },
+            target_pitch: if target.is_some() { 0 } else { copy.slot_pitch },
             width,
             count: copy.height,
         };
-        match copy.source.tiling {
-            None => Some(channel.rows(&rows(copy.source.pitch))),
-            Some(block) => channel.tiled(&Tiled {
-                rows: rows(0),
-                source: Some(TiledSide {
-                    x: 0,
-                    y: 0,
-                    surface_width: copy.source.pitch,
-                    surface_height: copy.source.height,
-                    block,
-                }),
-                target: None,
-            }),
+        if source.is_none() && target.is_none() {
+            return Some(channel.rows(&rows));
         }
+        channel.tiled(&Tiled { rows, source, target })
     }
 
     pub(crate) fn start_frame_copy(&mut self, host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
@@ -328,6 +333,7 @@ mod tests {
             width: 100,
             height: 50,
             own_space: SpaceId(1),
+            slot_tiling: None,
         }
     }
 
@@ -449,6 +455,24 @@ mod tests {
         assert_eq!(words[7..11], [0, 512, 400, 50], "the engine works out the source's own pitch");
         assert_eq!(words[17..19], [512, 50]);
         assert_eq!(words[21], 0);
+    }
+
+    #[test]
+    fn a_tiled_slot_is_written_from_its_corner_at_the_slots_own_size() {
+        let copy = SlotCopy { slot_tiling: Some(4), ..slot_copy(None) };
+        let words = NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &copy).unwrap();
+        assert_eq!(words[7..11], [512, 0, 400, 50], "the engine works out the slot's own pitch");
+        assert_eq!(words[17..19], [512, 50], "the slot is as high as the picture");
+        let read_tiled =
+            NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &slot_copy(Some(4))).unwrap();
+        assert_ne!(words.last(), read_tiled.last(), "writing tiles is another launch than reading them");
+    }
+
+    #[test]
+    fn tiles_on_both_sides_are_one_batch() {
+        let copy = SlotCopy { slot_tiling: Some(4), ..slot_copy(Some(3)) };
+        let words = NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &copy).unwrap();
+        assert_eq!(words[7..11], [0, 0, 400, 50]);
     }
 
     fn staging_copy(right: i32, bottom: i32, tiling: Option<u32>) -> StagingCopy {

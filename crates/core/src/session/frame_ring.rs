@@ -11,8 +11,8 @@ use crate::frames::{Delivery, Frame, FrameCounts, FrameRing, FrameSink, Picture,
 use crate::frames::{LiveRing, RING_SLOTS, SlotInFlight, SlotMemory};
 use crate::gpu_addresses::{ALLOCATION_ALIGN, AddressUse};
 use guesthouse_backend::{
-    Backend, BackendError, GuestMemory, MapRequest, MemoryId, MemoryKind, SlotCopy, SpaceId, StagingCopy,
-    StagingStart, Status, SurfaceShape, UnmapRequest,
+    Backend, BackendError, GuestMemory, MapRequest, MemoryId, MemoryKind, RingTiling, SlotCopy, SpaceId,
+    StagingCopy, StagingStart, Status, SurfaceShape, UnmapRequest,
 };
 use guesthouse_messages::indirect::Look;
 use guesthouse_messages::wire::align_up;
@@ -46,6 +46,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.frames.cursor.send_again();
     }
 
+    /// The tiles this card can lay a viewer's frames out in, for a viewer that says it takes them.
+    pub fn ring_tiling(&self) -> Option<RingTiling> {
+        self.backend.ring_tiling()
+    }
+
     /// What the viewer that has just arrived can do.
     pub fn viewer_described(&mut self, facts: ViewerFacts) {
         self.frames.viewer_facts = facts;
@@ -70,7 +75,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     /// The guest's memory stays, so the same slots go to the next viewer under a new generation, and
     /// a release from this one can't touch them.
-    fn keep_ring_for_next_viewer(&mut self) {
+    pub(super) fn keep_ring_for_next_viewer(&mut self) {
         self.frames.generation = self.frames.generation.wrapping_add(1);
         let generation = self.frames.generation;
         if let (Some(indirect), Some(ring)) = (self.frames.indirect.as_mut(), self.frames.ring.as_mut()) {
@@ -163,8 +168,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let Some(ring) = self.frames.ring.as_mut() else { return Delivery::NotNow };
         let Some((slot, sequence)) = ring.slots.pending() else { return Delivery::NotNow };
         let light = self.frames.indirect.as_ref().and_then(|indirect| indirect.light[slot as usize]);
-        let (generation, picture, look) = (ring.generation, ring.picture, ring.look);
-        let frame = Frame { generation, slot, sequence, picture, look, light };
+        let (generation, picture, look, tiling) = (ring.generation, ring.picture, ring.look, ring.tiling);
+        let frame = Frame { generation, slot, sequence, picture, look, light, tiling };
         let delivery = sink.frame_ready(&frame);
         if delivery == Delivery::Sent {
             ring.slots.sent(slot);
@@ -228,6 +233,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             slot_size: size,
             space,
             memory,
+            tiling: None,
             slots,
             unsent: Some(buffers),
         })
@@ -240,6 +246,34 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if self.frames.viewer_facts.wants_memory {
             return self.make_host_slot(size, space);
         }
+        self.make_card_slot(size, space)
+    }
+
+    /// A slot in the card's memory, laid out in its tiles, for a picture of this shape.
+    pub(super) fn make_tiled_slot(
+        &mut self,
+        picture: Picture,
+        tiling: RingTiling,
+        space: SpaceId,
+    ) -> Result<(SlotMemory, OwnedFd), BackendError> {
+        let shape = SurfaceShape {
+            width: picture.width,
+            height: picture.height,
+            format: 0,
+            pitch: picture.pitch,
+            tiling: Some(tiling.block),
+            refresh: (0, 1),
+            samples: (1, 0),
+            colour: 0,
+        };
+        let Some(size) = self.backend.tiled_bytes(&shape, 0, 0) else {
+            return Err(BackendError::new("the card has no size for a tiled slot of this picture"));
+        };
+        self.make_card_slot(align_up(size, SLOT_GRAIN), space)
+    }
+
+    /// A slot in the card's memory, exported for the viewer.
+    fn make_card_slot(&mut self, size: u64, space: SpaceId) -> Result<(SlotMemory, OwnedFd), BackendError> {
         let (memory, given) = self.backend.allocate_video_memory(size, MemoryKind::PLAIN)?;
         if given < size {
             self.backend.release_memory(memory);
@@ -411,6 +445,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             width: ring.picture.width,
             height: ring.picture.height,
             own_space,
+            slot_tiling: ring.tiling.map(|tiling| tiling.block),
         };
         let flight = SlotInFlight { generation: ring.generation, slot };
         match self.backend.start_slot_copy(&mut services!(self), &copy) {

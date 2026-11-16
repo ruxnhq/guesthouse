@@ -7,6 +7,7 @@ mod cursor_layer;
 mod dbus_frames;
 mod display_attach;
 mod display_surface;
+mod dmabuf_feedback;
 mod forwarded_frames;
 mod frames;
 mod guest_cursor;
@@ -14,10 +15,13 @@ mod import;
 mod input;
 mod monitors;
 mod overlay;
+mod own_screen;
+mod own_surface;
 mod pointer_lock;
 mod ring;
 mod screen;
 mod screen_frame;
+mod slot_hold;
 mod socket_frames;
 
 use crate::common::in_background;
@@ -37,6 +41,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+pub use own_screen::own_surface_takes_hdr;
 pub use socket_frames::takes_hdr_frames;
 
 pub const FULLSCREEN_KEYS: &str = "Ctrl+Alt+Return";
@@ -132,9 +137,16 @@ impl ScreenPage {
         };
         let (route, overlay, direct) = {
             let machine = self.0.machine.borrow();
-            (FrameRoute::of(&machine), machine.overlay, machine.direct_frames)
+            (FrameRoute::of(&machine), machine.overlay, machine.direct_frames())
         };
-        let screen = Screen::new(self.run_folder(), route, self.memory_frames(), overlay, direct, on_capture);
+        let context = self.0.window.context();
+        // What the screen does with the frames, for a report. A log that can't be written is no
+        // reason to stop showing them.
+        let log = move |text: &str| {
+            let _ = write_log(&context, text);
+        };
+        let screen =
+            Screen::new(self.run_folder(), route, self.memory_frames(), overlay, direct, on_capture, log);
         self.0.toolbar.set_content(Some(screen.widget()));
         *self.0.screen.borrow_mut() = Some(screen);
     }
@@ -276,6 +288,9 @@ impl ScreenPage {
     }
 
     fn on_shown(&self) {
+        if let Some(screen) = self.screen() {
+            screen.page_shown();
+        }
         self.show_hint(None);
         let machine = self.0.machine.borrow().clone();
         if machine.clipboard {
@@ -328,6 +343,9 @@ impl ScreenPage {
 
     /// The frame is still there now, and it's gone once the page is hidden.
     fn on_hiding(&self) {
+        if let Some(screen) = self.screen() {
+            screen.page_leaving();
+        }
         if let Some(source) = self.0.thumbnail_source.borrow_mut().take() {
             source.remove();
         }
@@ -353,7 +371,7 @@ impl ScreenPage {
         let Some(screen) = self.screen() else { return };
         if let Some(status) = status {
             screen.set_memory_frames(self.memory_frames());
-            screen.set_direct_frames(self.0.machine.borrow().direct_frames);
+            screen.set_direct_frames(self.0.machine.borrow().direct_frames());
             screen.follow_machine(self.run_folder(), FrameRoute::now(&self.0.machine.borrow(), status));
         }
         let hint = match status {

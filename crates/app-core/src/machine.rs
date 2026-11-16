@@ -84,6 +84,11 @@ fn is_off(setting: &bool) -> bool {
     !setting
 }
 
+/// Reads a setting that's no longer used, whatever it holds.
+fn any_value<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<(), D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| ())
+}
+
 fn default_on() -> bool {
     true
 }
@@ -146,10 +151,15 @@ pub struct Machine {
     /// The performance overlay in the viewer.
     #[serde(default)]
     pub overlay: bool,
-    /// The viewer hands the guest's frames to the compositor as they are, rather than drawing them
-    /// into its window. Off until it has been tried on more desktops and cards.
-    #[serde(default)]
-    pub direct_frames: bool,
+    /// The viewer draws the guest's frames into its window, rather than handing them to the
+    /// compositor as they are. The user's choice when the picture goes wrong. Left out of the file
+    /// when off, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub direct_frames_off: bool,
+    /// The same setting from when it was off unless turned on. Old files have it, and it isn't
+    /// used: the frames are handed over unless the setting above says not to.
+    #[serde(default, rename = "direct_frames", skip_serializing, deserialize_with = "any_value")]
+    pub was_direct_frames: (),
     #[serde(default)]
     pub network_mode: Mode,
     /// NAT through passt, if it's installed. It gives the guest a second adapter.
@@ -216,7 +226,8 @@ impl Machine {
             vram_gib: 0,
             tpm: false,
             overlay: false,
-            direct_frames: false,
+            direct_frames_off: false,
+            was_direct_frames: (),
             network_mode: Mode::Nat,
             passt: false,
             mac: String::new(),
@@ -261,6 +272,11 @@ impl Machine {
     /// The name of the account the install makes.
     pub fn account(&self) -> &str {
         if self.user.is_empty() { account::default_user(self.kind) } else { &self.user }
+    }
+
+    /// Whether the viewer hands the guest's frames to the compositor as they are.
+    pub fn direct_frames(&self) -> bool {
+        !self.direct_frames_off
     }
 
     pub fn has_gpu(&self) -> bool {
@@ -507,6 +523,16 @@ mod tests {
         let allowed = serde_json::to_string(&Machine { start_without_jail: true, ..sample() }).unwrap();
         let read: Machine = serde_json::from_str(&allowed).unwrap();
         assert!(read.start_without_jail);
+    }
+
+    #[test]
+    fn direct_frames_are_on_whatever_an_old_file_says_and_off_only_when_turned_off() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("direct_frames"), "an older build reads this as off: {text}");
+        let old_file = text.replacen('{', r#"{"direct_frames":false,"#, 1);
+        assert!(serde_json::from_str::<Machine>(&old_file).unwrap().direct_frames());
+        let turned_off = serde_json::to_string(&Machine { direct_frames_off: true, ..sample() }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().direct_frames());
     }
 
     #[test]

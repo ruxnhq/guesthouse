@@ -5,9 +5,23 @@ use gtk::gdk;
 use gtk::prelude::*;
 use guesthouse_app_core::machine::Machine;
 use guesthouse_app_core::tasks::Status;
-use guesthouse_frame_socket::CursorMove;
+use guesthouse_frame_socket::{CursorMove, Descriptor};
+use std::os::fd::OwnedFd;
+use std::sync::Arc;
 
 const BYTES_PER_PIXEL: usize = 4;
+
+/// A frame as the slot it's in, for a viewer that shows the buffer itself rather than a GTK texture.
+pub struct SlotFrame {
+    pub file: Arc<OwnedFd>,
+    pub descriptor: Descriptor,
+    /// Which ring and which of its slots, which name the buffer made from it.
+    pub generation: u32,
+    pub slot: u32,
+    /// Gives the slot back to the producer. It must run once the frame is off the screen, and only
+    /// then, or the producer writes over a picture still showing.
+    pub release: Box<dyn FnOnce() + Send>,
+}
 
 /// Where a machine's own frames come from, besides QEMU's display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +62,11 @@ pub trait FrameSource {
     /// A new texture of the newest frame, if there's a new one. A still screen has none to give. It's
     /// always a new texture, because GTK can keep a copy of one that's reused and go on showing it.
     fn newest(&mut self) -> Option<gdk::Texture>;
+    /// The newest frame as its slot, if this source has slots. One that hasn't gives `None`, and its
+    /// frames still come through `newest`.
+    fn newest_slot(&mut self) -> Option<SlotFrame> {
+        None
+    }
     /// Whether frames can still come. One that has gone is dropped, and looked for again.
     fn alive(&self) -> bool;
     /// How often the source has heard each kind of call, by name, for the page checks.

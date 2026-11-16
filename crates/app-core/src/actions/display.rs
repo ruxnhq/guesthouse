@@ -7,8 +7,8 @@ use super::desktop::{
 };
 use crate::agent::guest_script;
 use crate::display::{
-    DisplayState, Driver, DriverPackage, PACKAGE_FILES, RunningScreen, SUPPORT_FILES, ScreenHdr, read_state,
-    ring_in, screen_hdr, write_state,
+    DisplayState, Driver, DriverPackage, PACKAGE_FILES, RunningScreen, SUPPORT_FILES, read_state, ring_in,
+    screen_hdr, write_state,
 };
 use crate::driver_modes::{DriverModes, SETTINGS_FILE, with_rate};
 use crate::failure::Result;
@@ -111,7 +111,7 @@ impl Wanted {
             height: height.parse().unwrap_or_default(),
             hz: machine.refresh_hz,
             hdr: machine.hdr
-                && screen_hdr(task.context) == ScreenHdr::Shows
+                && screen_hdr(task.context).shows(machine.direct_frames())
                 && !memory_frames(task.context, machine),
         }
     }
@@ -140,7 +140,7 @@ impl Wanted {
         if memory_frames(task.context, &task.machine) {
             return MEMORY_FRAMES_SDR.to_owned();
         }
-        screen_hdr(task.context).sdr_reason().unwrap_or_default().to_owned()
+        screen_hdr(task.context).sdr_reason(task.machine.direct_frames()).unwrap_or_default().to_owned()
     }
 }
 

@@ -88,12 +88,12 @@ impl Screen {
     }
 
     fn frame_width(&self) -> (i32, i32) {
-        let size = self.0.latest.borrow().as_ref().map_or(0, |texture| texture.width());
+        let size = self.frame_size().map_or(0, |(width, _)| width);
         (size, self.0.picture.width())
     }
 
     fn frame_height(&self) -> (i32, i32) {
-        let size = self.0.latest.borrow().as_ref().map_or(0, |texture| texture.height());
+        let size = self.frame_size().map_or(0, |(_, height)| height);
         (size, self.0.picture.height())
     }
 

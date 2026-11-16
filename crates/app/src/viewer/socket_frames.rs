@@ -1,7 +1,7 @@
 //! Frames from the frame socket. A slot is this side's from its frame until its release, and a release
 //! goes when GTK has let go of the texture, which it can do on any thread.
 
-use super::frames::FrameSource;
+use super::frames::{FrameSource, SlotFrame};
 use super::guest_cursor::{CursorPicture, no_pointer};
 use super::import::texture;
 use super::ring::Buffers;
@@ -14,7 +14,7 @@ use std::io;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-const LINEAR: u64 = 0;
+pub(super) const LINEAR: u64 = 0;
 /// What a copy can show, so the producer always has something it can send.
 const COPYABLE: [u32; 2] = [u32::from_le_bytes(*b"XR24"), u32::from_le_bytes(*b"AR24")];
 /// What an HDR desktop is. A guest only sends it to a viewer that offers it, and a build with no way to
@@ -40,7 +40,11 @@ pub struct SocketFrames {
 /// What this display can show, in the producer's order of preference. The message holds a limited
 /// number and a display can offer hundreds, so the formats a guest's desktop uses go first. Frames
 /// in memory are copied, which only works for the copyable formats.
-fn formats(display: &gdk::Display, in_memory: bool) -> Vec<Format> {
+///
+/// Without `tiles` only layouts in rows are offered, so the producer sends rows. Frames in a card's
+/// tiles are for a compositor that can't take its 10-bit rows, and a picture that comes out
+/// scrambled or not at all in them still shows in rows.
+fn formats(display: &gdk::Display, in_memory: bool, tiles: bool) -> Vec<Format> {
     if in_memory {
         return COPYABLE.map(|fourcc| Format { fourcc, modifier: LINEAR }).to_vec();
     }
@@ -49,20 +53,28 @@ fn formats(display: &gdk::Display, in_memory: bool) -> Vec<Format> {
         let (fourcc, modifier) = dmabuf.format(index);
         Format { fourcc, modifier }
     });
-    in_order(offered.collect())
+    in_order(layouts(offered.collect(), tiles))
+}
+
+/// What's offered, or only its layouts in rows.
+fn layouts(offered: Vec<Format>, tiles: bool) -> Vec<Format> {
+    offered.into_iter().filter(|format| tiles || format.modifier == LINEAR).collect()
 }
 
 /// Whether this build and this display can take an HDR frame at all. A machine whose frames come in
 /// memory can't, which its start sees to.
 pub fn takes_hdr_frames(display: &gdk::Display) -> bool {
-    formats(display, false).contains(&HDR_FORMAT)
+    formats(display, false, false).contains(&HDR_FORMAT)
 }
 
-/// HDR is only offered if the display has it, and it comes early, as the list can be cut short.
+/// HDR is only offered if the display has it, and it comes early, as the list can be cut short. Its
+/// other layouts come with the desktop's, as the producer may lay out both in the card's tiles.
 fn in_order(offered: Vec<Format>) -> Vec<Format> {
     let hdr = (cfg!(feature = "hdr") && offered.contains(&HDR_FORMAT)).then_some(HDR_FORMAT);
-    let (usual, others): (Vec<Format>, Vec<Format>) =
-        offered.into_iter().partition(|format| COPYABLE.contains(&format.fourcc));
+    let desktop = |format: &Format| {
+        COPYABLE.contains(&format.fourcc) || (hdr.is_some() && format.fourcc == HDR_FORMAT.fourcc)
+    };
+    let (usual, others): (Vec<Format>, Vec<Format>) = offered.into_iter().partition(desktop);
     let linear = COPYABLE.map(|fourcc| Format { fourcc, modifier: LINEAR });
     let mut all = linear.to_vec();
     all.extend(hdr);
@@ -73,16 +85,18 @@ fn in_order(offered: Vec<Format>) -> Vec<Format> {
 
 impl SocketFrames {
     /// Fails if nothing is offering frames yet. `in_memory` asks for frames in memory here, for a
-    /// screen on another GPU than the guest's card.
+    /// screen on another GPU than the guest's card. `tiles` lets the producer lay frames out in
+    /// the card's tiles.
     pub fn connect(
         run_folder: &Path,
         display: &gdk::Display,
         refresh_millihertz: u32,
         in_memory: bool,
+        tiles: bool,
     ) -> io::Result<Self> {
         let socket = FrameSocket::connect(&run_folder.join(SOCKET_NAME))?;
         let hello = Hello {
-            formats: formats(display, in_memory),
+            formats: formats(display, in_memory, tiles),
             refresh_millihertz,
             peak_nits: 0,
             wants_memory: in_memory,
@@ -161,6 +175,11 @@ impl SocketFrames {
 
 impl FrameSource for SocketFrames {
     fn newest(&mut self) -> Option<gdk::Texture> {
+        let frame = self.newest_slot()?;
+        texture(&self.display, frame.file, &frame.descriptor, frame.release)
+    }
+
+    fn newest_slot(&mut self) -> Option<SlotFrame> {
         self.send_releases();
         let frame = self.take_messages()?;
         let Some(file) = self.buffers.as_ref().and_then(|buffers| buffers.slot(&frame)) else {
@@ -169,10 +188,11 @@ impl FrameSource for SocketFrames {
         };
         let finished = self.finished.clone();
         let released = Release { generation: frame.generation, slot: frame.slot };
-        let on_release = Box::new(move || {
+        let release = Box::new(move || {
             let _ = finished.send(released);
         });
-        texture(&self.display, file, &frame.descriptor, on_release)
+        let (generation, slot) = (frame.generation, frame.slot);
+        Some(SlotFrame { file, descriptor: frame.descriptor, generation, slot, release })
     }
 
     fn alive(&self) -> bool {
@@ -231,7 +251,23 @@ mod tests {
     }
 
     #[test]
+    fn tiled_layouts_are_left_out_when_they_arent_wanted() {
+        let offered = vec![format(b"XR24", 7), HDR_FORMAT, format(b"XB30", 7)];
+        assert_eq!(layouts(offered.clone(), true), offered);
+        assert_eq!(layouts(offered, false), vec![HDR_FORMAT]);
+    }
+
+    #[test]
     fn hdr_with_a_tiled_layout_is_not_enough() {
         assert!(!in_order(vec![format(b"XB30", 7)]).contains(&HDR_FORMAT));
+    }
+
+    #[test]
+    #[cfg(feature = "hdr")]
+    fn hdr_in_tiles_comes_before_formats_no_desktop_uses() {
+        let found = in_order(vec![format(b"NV12", 0), format(b"XB30", 7), HDR_FORMAT]);
+        let tiled = found.iter().position(|found| *found == format(b"XB30", 7));
+        let video = found.iter().position(|found| *found == format(b"NV12", 0));
+        assert!(tiled < video);
     }
 }

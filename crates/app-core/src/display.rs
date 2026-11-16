@@ -151,6 +151,9 @@ pub fn screen_text(state: &DisplayState, ring: Option<ScreenNote>) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenHdr {
     Shows,
+    /// The screen is in HDR, and only the viewer's own surface can pass HDR frames on to it. That
+    /// surface is what a machine's Direct frames setting turns on.
+    ShowsDirect,
     Cannot,
     CantTell,
     /// The screen is in HDR, but GTK won't pass HDR frames on to the compositor, so they'd be
@@ -159,8 +162,9 @@ pub enum ScreenHdr {
 }
 
 impl ScreenHdr {
-    const WORDS: [(Self, &'static str); 4] = [
+    const WORDS: [(Self, &'static str); 5] = [
         (Self::Shows, "shows"),
+        (Self::ShowsDirect, "shows-direct"),
         (Self::Cannot, "cannot"),
         (Self::CantTell, "cant-tell"),
         (Self::ToolkitCant, "toolkit-cant"),
@@ -170,10 +174,23 @@ impl ScreenHdr {
         Self::WORDS.iter().find(|(answer, _)| *answer == self).map_or("", |(_, word)| word)
     }
 
+    /// Whether a machine's HDR frames reach the screen as HDR.
+    pub fn shows(self, direct_frames: bool) -> bool {
+        match self {
+            Self::Shows => true,
+            Self::ShowsDirect => direct_frames,
+            Self::Cannot | Self::CantTell | Self::ToolkitCant => false,
+        }
+    }
+
     /// Why Windows stays in SDR, if it does.
-    pub fn sdr_reason(self) -> Option<&'static str> {
+    pub fn sdr_reason(self, direct_frames: bool) -> Option<&'static str> {
         match self {
             Self::Shows => None,
+            Self::ShowsDirect if direct_frames => None,
+            Self::ShowsDirect => {
+                Some("This desktop only shows HDR with Direct frames on, so Windows stays in SDR.")
+            }
             Self::Cannot => Some("This screen can't show HDR, so Windows stays in SDR."),
             Self::CantTell => {
                 Some("Guesthouse can't tell if this desktop's screen shows HDR, so Windows stays in SDR.")

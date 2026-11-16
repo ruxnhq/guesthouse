@@ -7,6 +7,7 @@
 //! Like the pointer lock, this lives on GTK's own connection with a queue of its own. GTK goes on
 //! reading the socket for everyone, and `catch_up` takes in what landed on this queue.
 
+use crate::viewer::own_surface_takes_hdr;
 use gdk_wayland::prelude::*;
 use gdk_wayland::{WaylandDisplay, WaylandMonitor};
 use gtk::gdk;
@@ -28,9 +29,10 @@ use wayland_protocols::wp::color_management::v1::client::wp_image_description_v1
     self, WpImageDescriptionV1,
 };
 
-/// Version 1 has all this needs. Later ones say `ready2` where 1 says `ready`, and both are handled.
-const OLDEST_VERSION: u32 = 1;
-const NEWEST_VERSION: u32 = 3;
+/// The version GTK 4.24 binds, so that this is told what GTK is told. A compositor answers each
+/// version in its own terms: Mutter 51 names sRGB's transfer function to version 1 and the compound
+/// power curve in its place to version 2, and GTK looks for the first.
+const GTK_VERSION: u32 = 1;
 /// An output's description takes two round trips: one for it to be ready, one for what it says.
 const ROUND_TRIPS_TO_SETTLE: usize = 3;
 
@@ -82,6 +84,7 @@ struct Offered {
     parametric: bool,
     set_primaries: bool,
     srgb_transfer: bool,
+    pq_transfer: bool,
     srgb_primaries: bool,
     perceptual: bool,
 }
@@ -95,6 +98,22 @@ impl Offered {
             && self.srgb_transfer
             && (self.srgb_primaries || self.set_primaries)
             && self.perceptual
+    }
+
+    /// The viewer's own surface describes HDR frames itself, as PQ in parametric terms.
+    fn own_surface_could_take_it(self) -> bool {
+        self.parametric && self.pq_transfer && self.perceptual
+    }
+
+    /// What becomes of a screen's answer on the way through the toolkit. `own_surface` is whether
+    /// the viewer's own surface is there to pass HDR on, as far as anyone has seen.
+    fn passed_on(self, answer: ScreenHdr, own_surface: bool) -> ScreenHdr {
+        match answer {
+            ScreenHdr::Shows if self.gtk_takes_it() => ScreenHdr::Shows,
+            ScreenHdr::Shows if own_surface && self.own_surface_could_take_it() => ScreenHdr::ShowsDirect,
+            ScreenHdr::Shows => ScreenHdr::ToolkitCant,
+            answer => answer,
+        }
     }
 }
 
@@ -156,6 +175,9 @@ impl Dispatch<WpColorManagerV1, ()> for Outputs {
             }
             wp_color_manager_v1::Event::SupportedTfNamed { tf: WEnum::Value(TransferFunction::Srgb) } => {
                 offered.srgb_transfer = true;
+            }
+            wp_color_manager_v1::Event::SupportedTfNamed { tf: WEnum::Value(TransferFunction::St2084Pq) } => {
+                offered.pq_transfer = true;
             }
             wp_color_manager_v1::Event::SupportedPrimariesNamed {
                 primaries: WEnum::Value(Primaries::Srgb),
@@ -252,7 +274,7 @@ impl OutputColours {
         let backend = display.wl_display()?.backend().upgrade()?;
         let connection = Connection::from_backend(backend);
         let (globals, queue) = registry_queue_init::<Outputs>(&connection).ok()?;
-        let manager = globals.bind(&queue.handle(), OLDEST_VERSION..=NEWEST_VERSION, ()).ok()?;
+        let manager = globals.bind(&queue.handle(), GTK_VERSION..=GTK_VERSION, ()).ok()?;
         Some(Self { manager, queue: RefCell::new(queue), outputs: RefCell::default() })
     }
 
@@ -312,10 +334,7 @@ impl OutputColours {
     pub fn answer(&self, on: &[gdk::Monitor]) -> ScreenHdr {
         let outputs = self.outputs.borrow();
         let shown = outputs.list.iter().filter(|output| on.is_empty() || on.contains(&output.monitor));
-        match answer_from(shown.map(|output| output.seen)) {
-            ScreenHdr::Shows if !outputs.offered.gtk_takes_it() => ScreenHdr::ToolkitCant,
-            answer => answer,
-        }
+        outputs.offered.passed_on(answer_from(shown.map(|output| output.seen)), own_surface_takes_hdr())
     }
 }
 
@@ -344,6 +363,24 @@ mod tests {
         assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((508, 265)))), Seen::Hdr);
         // The same monitor with its SDR brightness at the peak has no room left.
         assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((400, 400)))), Seen::Sdr);
+    }
+
+    #[test]
+    fn hdr_gtk_cant_pass_on_needs_the_own_surface() {
+        let kwin = Offered {
+            parametric: true,
+            set_primaries: true,
+            pq_transfer: true,
+            perceptual: true,
+            ..Offered::default()
+        };
+        assert_eq!(kwin.passed_on(ScreenHdr::Shows, true), ScreenHdr::ShowsDirect);
+        assert_eq!(kwin.passed_on(ScreenHdr::Shows, false), ScreenHdr::ToolkitCant, "refused, or kept off");
+        let no_pq = Offered { pq_transfer: false, ..kwin };
+        assert_eq!(no_pq.passed_on(ScreenHdr::Shows, true), ScreenHdr::ToolkitCant);
+        let mutter = Offered { srgb_transfer: true, ..kwin };
+        assert_eq!(mutter.passed_on(ScreenHdr::Shows, false), ScreenHdr::Shows, "GTK passes it on itself");
+        assert_eq!(kwin.passed_on(ScreenHdr::Cannot, true), ScreenHdr::Cannot);
     }
 
     #[test]

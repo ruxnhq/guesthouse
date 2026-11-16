@@ -22,7 +22,7 @@ const MOST_LOST: f64 = 0.01;
 const STEPS_LOST: f64 = 2.0;
 
 /// Where the picture goes, in the frame's own logical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Placement {
     pub x: f32,
     pub y: f32,
@@ -129,6 +129,8 @@ mod imp {
         pub laid_out_at: Cell<(f64, (f64, f64))>,
         /// The window's clock, and the check on it while the frame is realized.
         pub watching: RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>,
+        /// Where the picture was put, for the bars beside it.
+        pub picture_at: Cell<Placement>,
     }
 
     #[glib::object_subclass]
@@ -166,6 +168,31 @@ mod imp {
             let placed = place(width, height, self.ratio.get(), scale, origin);
             let transform = gsk::Transform::new().translate(&graphene::Point::new(placed.x, placed.y));
             child.allocate(placed.width, placed.height, -1, Some(transform));
+            self.picture_at.set(placed);
+        }
+
+        /// The bars beside a picture of another shape are black, and only the bars: the picture's
+        /// own place is left alone, so a surface under the window can show through it.
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let widget = self.obj();
+            let (width, height) = (widget.width() as f32, widget.height() as f32);
+            let at = self.picture_at.get();
+            let (left, top) = (at.x, at.y);
+            let (right, bottom) = (at.x + at.width as f32, at.y + at.height as f32);
+            let black = gtk::gdk::RGBA::BLACK;
+            for (x, y, w, h) in [
+                (0.0, 0.0, width, top),
+                (0.0, bottom, width, height - bottom),
+                (0.0, top, left, bottom - top),
+                (right, top, width - right, bottom - top),
+            ] {
+                if w > 0.0 && h > 0.0 {
+                    snapshot.append_color(&black, &graphene::Rect::new(x, y, w, h));
+                }
+            }
+            if let Some(child) = self.child.upgrade() {
+                widget.snapshot_child(&child, snapshot);
+            }
         }
     }
 }

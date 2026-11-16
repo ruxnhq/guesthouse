@@ -8,8 +8,11 @@ use super::dbus_frames::DbusFrames;
 use super::forwarded_frames::ForwardedFrames;
 use super::frames::{FrameRoute, FrameSource, thumbnail};
 use super::overlay::PerformanceOverlay;
+use super::own_screen::{ShownBy, add_see_through_style};
+use super::own_surface::OwnSurface;
 use super::pointer_lock::{PointerLock, pointer_lock};
 use super::screen_frame::ScreenFrame;
+use super::slot_hold::HeldFrame;
 use super::socket_frames::SocketFrames;
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -18,7 +21,7 @@ use guesthouse_app_core::input::{Guest, INPUT_SOCKET, MOUSE, TABLET};
 use guesthouse_app_core::vm_args::{DISPLAY_SOCKET, FORWARDED_INPUT_SOCKET};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -28,6 +31,8 @@ const POLL: Duration = Duration::from_millis(1);
 const FOLLOW_GUEST: Duration = Duration::from_secs(1);
 const SPINNER_SIZE: i32 = 48;
 const FIRST_RATIO: f64 = 16.0 / 9.0;
+/// What the page checks are told is on screen while the app's own surface shows the frames.
+const OWN_SURFACE_KIND: &str = "OwnSurface";
 /// No focus ring on the picture: it would be drawn over the frame, and the screen has the keys
 /// whenever the window does anyway.
 const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
@@ -76,6 +81,27 @@ pub(super) struct Inner {
     pub(super) overlay_wanted: Cell<bool>,
     pub(super) overlay: RefCell<Option<PerformanceOverlay>>,
     pub(super) poll_source: RefCell<Option<glib::SourceId>>,
+    /// The app's own surface for the frames, while it's in use.
+    pub(super) own: RefCell<Option<OwnSurface>>,
+    /// The machine's Direct frames setting: the own surface where it can be made, GTK's offload
+    /// where it can't.
+    pub(super) direct_frames: Cell<bool>,
+    /// The own surface can't be made on this display.
+    pub(super) own_impossible: Cell<bool>,
+    /// The page has stopped moving, which the own surface waits for.
+    pub(super) page_settled: Cell<bool>,
+    /// A frame in the card's tiles reached neither the compositor nor GTK, so rows are asked for.
+    pub(super) tiles_failed: Cell<bool>,
+    /// Whether the connection there is now offered the producer the card's tiles.
+    pub(super) tiles_offered: Cell<bool>,
+    /// Who shows the frames, as the log last had it.
+    pub(super) shown_by: Cell<Option<ShownBy>>,
+    /// Writes a line in the app's log.
+    pub(super) log: Box<dyn Fn(&str)>,
+    /// The frame on the own surface, for GTK to show if the surface has to go.
+    pub(super) on_own_surface: RefCell<Option<HeldFrame>>,
+    /// The frame GTK is showing because the own surface couldn't take it yet, to hand over once it can.
+    pub(super) handover: RefCell<Option<HeldFrame>>,
     pub(super) followed_at: Cell<Instant>,
 }
 
@@ -92,6 +118,7 @@ impl Screen {
         show_overlay: bool,
         direct_frames: bool,
         capture_changed: impl Fn() + 'static,
+        log: impl Fn(&str) + 'static,
     ) -> Self {
         let picture = gtk::Picture::builder()
             .content_fit(gtk::ContentFit::Fill)
@@ -102,7 +129,7 @@ impl Screen {
         // Always there, so the setting can change while the machine runs. Turned off, GTK draws the
         // picture just as it would without it.
         let offload = gtk::GraphicsOffload::new(Some(&picture));
-        offload.set_enabled(offload_mode(direct_frames));
+        offload.set_enabled(gtk::GraphicsOffloadEnabled::Disabled);
         // Otherwise the black bars beside a frame of another shape are GTK's to draw, and the
         // compositor can't put the frame straight on the display.
         #[cfg(feature = "hdr")]
@@ -125,6 +152,7 @@ impl Screen {
             &style,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        add_see_through_style(&WidgetExt::display(&root));
         let lock = pointer_lock(&WidgetExt::display(&root));
         let this = Self(Rc::new(Inner {
             root,
@@ -157,6 +185,16 @@ impl Screen {
             overlay_wanted: Cell::new(show_overlay),
             overlay: RefCell::default(),
             poll_source: RefCell::default(),
+            own: RefCell::default(),
+            direct_frames: Cell::new(direct_frames),
+            own_impossible: Cell::new(false),
+            page_settled: Cell::new(false),
+            tiles_failed: Cell::new(false),
+            tiles_offered: Cell::new(false),
+            shown_by: Cell::new(None),
+            log: Box::new(log),
+            handover: RefCell::default(),
+            on_own_surface: RefCell::default(),
             followed_at: Cell::new(Instant::now()),
         }));
         this.add_input();
@@ -174,7 +212,15 @@ impl Screen {
     }
 
     pub fn has_frames(&self) -> bool {
-        self.0.latest.borrow().is_some()
+        self.0.latest.borrow().is_some() || self.0.on_own_surface.borrow().is_some()
+    }
+
+    /// The size of the frame on screen in the guest's pixels, whoever shows it.
+    pub(super) fn frame_size(&self) -> Option<(i32, i32)> {
+        if let Some(frame) = self.0.on_own_surface.borrow().as_ref() {
+            return Some(frame.size());
+        }
+        self.0.latest.borrow().as_ref().map(|texture| (texture.width(), texture.height()))
     }
 
     pub fn has_input(&self) -> bool {
@@ -208,10 +254,14 @@ impl Screen {
             *self.0.input_socket.borrow_mut() = socket;
             self.close_guest();
             self.follow_guest();
+            // The own surface is only for some routes.
+            self.follow_direct_frames();
         }
     }
 
     fn forget_picture(&self) {
+        self.0.handover.borrow_mut().take();
+        self.0.on_own_surface.borrow_mut().take();
         self.0.latest.borrow_mut().take();
         self.0.picture.set_paintable(None::<&gdk::Paintable>);
         self.0.spinner.set_visible(true);
@@ -242,12 +292,14 @@ impl Screen {
         });
         *self.0.poll_source.borrow_mut() = Some(source);
         self.follow_overlay();
+        self.follow_direct_frames();
     }
 
     fn on_unrealize(&self) {
         if let Some(source) = self.0.poll_source.borrow_mut().take() {
             source.remove();
         }
+        self.stop_own_surface();
         self.0.overlay.borrow_mut().take();
         self.let_go();
         self.close_guest();
@@ -257,11 +309,13 @@ impl Screen {
     }
 
     fn poll(&self) {
+        self.follow_tiles();
         self.follow_capture();
         if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
             guest.flush();
         }
-        if !self.0.waiting.get()
+        if !self.show_on_own_surface()
+            && !self.0.waiting.get()
             && let Some(texture) = self.next_texture()
         {
             self.show(texture);
@@ -339,7 +393,7 @@ impl Screen {
 
     /// A point in the guest's pixels as a point on the screen widget, and the scale between them.
     fn on_widget(&self, x: i32, y: i32) -> Option<(f64, f64, f64)> {
-        let width = self.0.latest.borrow().as_ref()?.width();
+        let (width, _) = self.frame_size()?;
         let bounds = self.0.picture.compute_bounds(&self.0.root)?;
         let scale = f64::from(bounds.width()) / f64::from(width.max(1));
         Some((
@@ -362,11 +416,15 @@ impl Screen {
 
     /// The newest frame as a small PNG, or `None` if nothing has been shown.
     pub fn thumbnail(&self, width: usize) -> Option<Vec<u8>> {
-        Some(thumbnail(self.0.latest.borrow().as_ref()?, width))
+        let texture = self.own_surface_texture().or_else(|| self.0.latest.borrow().clone())?;
+        Some(thumbnail(&texture, width))
     }
 
     /// What kind of texture is on screen, for the page checks.
     pub fn texture_kind(&self) -> String {
+        if self.0.on_own_surface.borrow().is_some() {
+            return OWN_SURFACE_KIND.to_owned();
+        }
         self.0.latest.borrow().as_ref().map_or_else(String::new, |texture| texture.type_().name().to_owned())
     }
 
@@ -391,7 +449,7 @@ impl Screen {
     }
 
     /// Picks up the guest's frames once they're on offer, and a restarted daemon's.
-    fn follow_gpu(&self) {
+    pub(super) fn follow_gpu(&self) {
         let mut gpu = self.0.gpu.borrow_mut();
         if gpu.as_ref().is_some_and(|source| !source.alive()) {
             *gpu = None;
@@ -400,21 +458,26 @@ impl Screen {
             let (folder, display) = (self.0.run_folder.borrow(), WidgetExt::display(&self.0.root));
             *gpu = match self.0.route.get() {
                 FrameRoute::QemuDisplay => None,
-                FrameRoute::FrameSocket => {
-                    SocketFrames::connect(
-                        &folder,
-                        &display,
-                        self.monitor_refresh(),
-                        self.0.memory_frames.get(),
-                    )
-                }
-                .ok()
-                .map(|source| Box::new(source) as Box<dyn FrameSource>),
+                FrameRoute::FrameSocket => self.connect_to_daemon(&folder, &display),
                 FrameRoute::Forwarded => ForwardedFrames::connect(&folder, &display)
                     .ok()
                     .map(|source| Box::new(source) as Box<dyn FrameSource>),
             };
         }
+    }
+
+    /// The daemon's frames, if it's offering any yet. What was asked of it goes in the log.
+    fn connect_to_daemon(&self, folder: &Path, display: &gdk::Display) -> Option<Box<dyn FrameSource>> {
+        let (in_memory, tiles) = (self.0.memory_frames.get(), self.wants_tiles());
+        let source = SocketFrames::connect(folder, display, self.monitor_refresh(), in_memory, tiles).ok()?;
+        self.0.tiles_offered.set(tiles);
+        let layout = match (in_memory, tiles) {
+            (true, _) => "in memory",
+            (false, true) => "with the card's tiles on offer",
+            (false, false) => "in rows only",
+        };
+        (self.0.log)(&format!("frames: connected to the daemon, {layout}"));
+        Some(Box::new(source))
     }
 
     /// An Ubuntu guest's session takes its input down its own port. A Linux the user installed has no
@@ -479,10 +542,13 @@ impl Screen {
         self.follow_overlay();
     }
 
-    /// Whether GTK may hand frames to the compositor. GTK still draws any it can't hand over, such as
-    /// frames in memory, or all of them on X11.
+    /// The machine's Direct frames setting, which can change while the screen is open. On, the
+    /// frames go to the compositor as they are: on the app's own surface, or through GTK's offload
+    /// on a display where that surface can't be made. GTK still draws any that can't be handed over,
+    /// such as frames in memory, or all of them on X11.
     pub fn set_direct_frames(&self, wanted: bool) {
-        self.0.offload.set_enabled(offload_mode(wanted));
+        self.0.direct_frames.set(wanted);
+        self.follow_direct_frames();
     }
 
     /// Only a realized screen has one, as nothing else would stop it again.
@@ -495,8 +561,4 @@ impl Screen {
             overlay.take();
         }
     }
-}
-
-fn offload_mode(wanted: bool) -> gtk::GraphicsOffloadEnabled {
-    if wanted { gtk::GraphicsOffloadEnabled::Enabled } else { gtk::GraphicsOffloadEnabled::Disabled }
 }

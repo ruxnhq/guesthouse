@@ -137,8 +137,9 @@ new_test() {
 
 # The whole filesystem read-only, the test's folder writable, and these few things faked.
 sandbox() {
+    # Some distros, CachyOS for one, keep /etc/os-release as a file of its own, not a link.
     local options=(--ro-bind / / --dev-bind /dev /dev --bind "$T" "$T" --tmpfs /run
-        --ro-bind "$T/os-release" /usr/lib/os-release)
+        --ro-bind "$T/os-release" /usr/lib/os-release --ro-bind "$T/os-release" /etc/os-release)
     [ "$OSTREE" = no ] || options+=(--ro-bind "$T/os-release" /run/ostree-booted)
     [ "$KVM_CLOSED" = no ] || options+=(--ro-bind "$T/closed-kvm" /dev/kvm)
     mkdir -p "$T/firmware"

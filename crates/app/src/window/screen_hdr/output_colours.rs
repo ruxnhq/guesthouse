@@ -1,6 +1,8 @@
 //! What the compositor says each monitor expects, through the Wayland colour management protocol. A
-//! monitor in HDR expects PQ, the transfer function HDR10 is sent in. KWin, Mutter 48 and others offer
-//! it, so this works on any desktop that has it, where Mutter's D-Bus only works on GNOME.
+//! monitor in HDR either expects PQ, the transfer function HDR10 is sent in, or has room above SDR
+//! white: KWin 6.8 describes an HDR monitor as gamma 2.2 in BT.2020 with its peak above its reference
+//! white. KWin, Mutter 48 and others offer the protocol, so this works on any desktop that has it,
+//! where Mutter's D-Bus only works on GNOME.
 //!
 //! Like the pointer lock, this lives on GTK's own connection with a queue of its own. GTK goes on
 //! reading the socket for everyone, and `catch_up` takes in what landed on this queue.
@@ -41,11 +43,22 @@ enum Seen {
     Failed,
 }
 
-/// What a whole description says. One that names no transfer function is an ICC profile's, and those
-/// are for SDR screens.
-fn seen_in(transfer: Option<WEnum<TransferFunction>>) -> Seen {
-    match transfer {
+/// What a description has said so far.
+#[derive(Debug, Clone, Copy, Default)]
+struct Reading {
+    transfer: Option<WEnum<TransferFunction>>,
+    /// The peak and the reference white, in cd/m².
+    luminances: Option<(u32, u32)>,
+}
+
+/// What a whole description says. One that names no transfer function and no luminances is an ICC
+/// profile's, and those are for SDR screens. A peak at the reference white leaves HDR no room, which is
+/// how a monitor in HDR looks with its SDR brightness all the way up.
+fn seen_in(reading: Reading) -> Seen {
+    let headroom = reading.luminances.is_some_and(|(peak, reference)| peak > reference);
+    match reading.transfer {
         Some(WEnum::Value(TransferFunction::St2084Pq)) => Seen::Hdr,
+        _ if headroom => Seen::Hdr,
         _ => Seen::Sdr,
     }
 }
@@ -70,8 +83,8 @@ struct Output {
     key: OutputKey,
     monitor: gdk::Monitor,
     colour: WpColorManagementOutputV1,
-    /// The transfer function of the description being read now.
-    reading: Option<WEnum<TransferFunction>>,
+    /// The description being read now.
+    reading: Reading,
     seen: Option<Seen>,
 }
 
@@ -140,7 +153,7 @@ impl Dispatch<WpImageDescriptionV1, OutputKey> for Outputs {
         match event {
             wp_image_description_v1::Event::Ready { .. } | wp_image_description_v1::Event::Ready2 { .. } => {
                 if let Some(output) = outputs.get(*key) {
-                    output.reading = None;
+                    output.reading = Reading::default();
                 }
                 description.get_information(handle, *key);
             }
@@ -167,8 +180,13 @@ impl Dispatch<WpImageDescriptionInfoV1, OutputKey> for Outputs {
     ) {
         let Some(output) = outputs.get(*key) else { return };
         match event {
-            wp_image_description_info_v1::Event::TfNamed { tf } => output.reading = Some(tf),
-            wp_image_description_info_v1::Event::Done => output.seen = Some(seen_in(output.reading.take())),
+            wp_image_description_info_v1::Event::TfNamed { tf } => output.reading.transfer = Some(tf),
+            wp_image_description_info_v1::Event::Luminances { max_lum, reference_lum, .. } => {
+                output.reading.luminances = Some((max_lum, reference_lum));
+            }
+            wp_image_description_info_v1::Event::Done => {
+                output.seen = Some(seen_in(std::mem::take(&mut output.reading)));
+            }
             _ => {}
         }
     }
@@ -213,7 +231,13 @@ impl OutputColours {
             outputs.next_key += 1;
             let colour = self.manager.get_output(&wayland, &handle, key);
             colour.get_image_description(&handle, key);
-            outputs.list.push(Output { key, monitor: monitor.clone(), colour, reading: None, seen: None });
+            outputs.list.push(Output {
+                key,
+                monitor: monitor.clone(),
+                colour,
+                reading: Reading::default(),
+                seen: None,
+            });
         }
         let _ = queue.flush();
     }
@@ -249,14 +273,27 @@ impl OutputColours {
 mod tests {
     use super::*;
 
+    fn named(transfer: TransferFunction, luminances: Option<(u32, u32)>) -> Reading {
+        Reading { transfer: Some(WEnum::Value(transfer)), luminances }
+    }
+
     #[test]
-    fn pq_is_hdr_and_anything_else_is_not() {
-        assert_eq!(seen_in(Some(WEnum::Value(TransferFunction::St2084Pq))), Seen::Hdr);
+    fn pq_is_hdr_and_anything_else_without_headroom_is_not() {
+        assert_eq!(seen_in(named(TransferFunction::St2084Pq, None)), Seen::Hdr);
         for other in [TransferFunction::Gamma22, TransferFunction::Srgb, TransferFunction::Hlg] {
-            assert_eq!(seen_in(Some(WEnum::Value(other))), Seen::Sdr, "{other:?}");
+            assert_eq!(seen_in(named(other, None)), Seen::Sdr, "{other:?}");
+            assert_eq!(seen_in(named(other, Some((80, 80)))), Seen::Sdr, "{other:?}");
         }
-        assert_eq!(seen_in(Some(WEnum::Unknown(99))), Seen::Sdr);
-        assert_eq!(seen_in(None), Seen::Sdr);
+        assert_eq!(seen_in(Reading { transfer: Some(WEnum::Unknown(99)), luminances: None }), Seen::Sdr);
+        assert_eq!(seen_in(Reading::default()), Seen::Sdr);
+    }
+
+    #[test]
+    fn kwins_hdr_monitor_is_gamma_22_with_room_above_sdr_white() {
+        // As KWin 6.8 describes a monitor with HDR on: BT.2020, gamma 2.2, peak 508, reference 265.
+        assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((508, 265)))), Seen::Hdr);
+        // The same monitor with its SDR brightness at the peak has no room left.
+        assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((400, 400)))), Seen::Sdr);
     }
 
     #[test]

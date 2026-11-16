@@ -146,6 +146,10 @@ pub struct Machine {
     /// The performance overlay in the viewer.
     #[serde(default)]
     pub overlay: bool,
+    /// The viewer hands the guest's frames to the compositor as they are, rather than drawing them
+    /// into its window. Off until it has been tried on more desktops and cards.
+    #[serde(default)]
+    pub direct_frames: bool,
     #[serde(default)]
     pub network_mode: Mode,
     /// NAT through passt, if it's installed. It gives the guest a second adapter.
@@ -212,6 +216,7 @@ impl Machine {
             vram_gib: 0,
             tpm: false,
             overlay: false,
+            direct_frames: false,
             network_mode: Mode::Nat,
             passt: false,
             mac: String::new(),

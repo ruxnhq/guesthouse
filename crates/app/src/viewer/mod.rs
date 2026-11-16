@@ -129,11 +129,11 @@ impl ScreenPage {
                 ScreenPage(parts).on_capture_changed();
             }
         };
-        let (route, overlay) = {
+        let (route, overlay, direct) = {
             let machine = self.0.machine.borrow();
-            (FrameRoute::of(&machine), machine.overlay)
+            (FrameRoute::of(&machine), machine.overlay, machine.direct_frames)
         };
-        let screen = Screen::new(self.run_folder(), route, self.memory_frames(), overlay, on_capture);
+        let screen = Screen::new(self.run_folder(), route, self.memory_frames(), overlay, direct, on_capture);
         self.0.toolbar.set_content(Some(screen.widget()));
         *self.0.screen.borrow_mut() = Some(screen);
     }
@@ -352,6 +352,7 @@ impl ScreenPage {
         let Some(screen) = self.screen() else { return };
         if let Some(status) = status {
             screen.set_memory_frames(self.memory_frames());
+            screen.set_direct_frames(self.0.machine.borrow().direct_frames);
             screen.follow_machine(self.run_folder(), FrameRoute::now(&self.0.machine.borrow(), status));
         }
         let hint = match status {

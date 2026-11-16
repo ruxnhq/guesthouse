@@ -26,6 +26,8 @@ const DRIVER_IN: &str = "In Windows. It was signed on this machine with a certif
 const DRIVER_NEXT: &str = "Goes into Windows by itself at the next start. It's signed there with a certificate \
                            made for this machine, which Windows then trusts as a root. Its private key is deleted \
                            before the install.";
+const DIRECT_NOTE: &str = "Hands the guest's frames to your desktop as they are, so they can reach the display \
+                           sooner. Being tried on more desktops and cards; turn it off if the screen goes wrong.";
 const DRIVER_NONE: &str = "This build has no display driver, so Windows stays on its basic display.";
 
 struct Parts {
@@ -107,6 +109,17 @@ impl Display {
             saving.save();
         });
         group.add(&overlay);
+        let direct = adw::SwitchRow::builder()
+            .title("Direct frames")
+            .active(shared.machine.borrow().direct_frames)
+            .subtitle(DIRECT_NOTE)
+            .build();
+        let saving = shared.clone();
+        direct.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().direct_frames = row.is_active();
+            saving.save();
+        });
+        group.add(&direct);
     }
 
     fn connect(&self) {

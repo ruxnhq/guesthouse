@@ -34,6 +34,8 @@ const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
 pub(super) struct Inner {
     pub(super) root: gtk::Overlay,
     pub(super) picture: gtk::Picture,
+    /// Lets GTK hand the picture's frames to the compositor instead of drawing them itself.
+    pub(super) offload: gtk::GraphicsOffload,
     pub(super) aspect: gtk::AspectFrame,
     pub(super) spinner: gtk::Spinner,
     /// The guest's cursor as the host's pointer, once it has one.
@@ -84,6 +86,7 @@ impl Screen {
         route: FrameRoute,
         memory_frames: bool,
         show_overlay: bool,
+        direct_frames: bool,
         capture_changed: impl Fn() + 'static,
     ) -> Self {
         let picture = gtk::Picture::builder()
@@ -91,7 +94,15 @@ impl Screen {
             .can_shrink(true)
             .focusable(true)
             .build();
-        let aspect = gtk::AspectFrame::builder().child(&picture).obey_child(false).ratio(FIRST_RATIO).build();
+        // Always there, so the setting can change while the machine runs. Turned off, GTK draws the
+        // picture just as it would without it.
+        let offload = gtk::GraphicsOffload::new(Some(&picture));
+        offload.set_enabled(offload_mode(direct_frames));
+        // Otherwise the black bars beside a frame of another shape are GTK's to draw, and the
+        // compositor can't put the frame straight on the display.
+        #[cfg(feature = "hdr")]
+        offload.set_black_background(true);
+        let aspect = gtk::AspectFrame::builder().child(&offload).obey_child(false).ratio(FIRST_RATIO).build();
         let spinner = gtk::Spinner::builder().spinning(true).build();
         spinner.set_size_request(SPINNER_SIZE, SPINNER_SIZE);
         spinner.set_halign(gtk::Align::Center);
@@ -113,6 +124,7 @@ impl Screen {
         let this = Self(Rc::new(Inner {
             root,
             picture,
+            offload,
             aspect,
             spinner,
             guest_pointer: RefCell::default(),
@@ -462,6 +474,12 @@ impl Screen {
         self.follow_overlay();
     }
 
+    /// Whether GTK may hand frames to the compositor. GTK still draws any it can't hand over, such as
+    /// frames in memory, or all of them on X11.
+    pub fn set_direct_frames(&self, wanted: bool) {
+        self.0.offload.set_enabled(offload_mode(wanted));
+    }
+
     /// Only a realized screen has one, as nothing else would stop it again.
     fn follow_overlay(&self) {
         let wanted = self.0.overlay_wanted.get() && self.0.root.is_realized();
@@ -472,4 +490,8 @@ impl Screen {
             overlay.take();
         }
     }
+}
+
+fn offload_mode(wanted: bool) -> gtk::GraphicsOffloadEnabled {
+    if wanted { gtk::GraphicsOffloadEnabled::Enabled } else { gtk::GraphicsOffloadEnabled::Disabled }
 }

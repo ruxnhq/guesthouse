@@ -19,7 +19,7 @@ use wayland_protocols::wp::color_management::v1::client::wp_color_management_out
     self, WpColorManagementOutputV1,
 };
 use wayland_protocols::wp::color_management::v1::client::wp_color_manager_v1::{
-    TransferFunction, WpColorManagerV1,
+    self, Feature, Primaries, RenderIntent, TransferFunction, WpColorManagerV1,
 };
 use wayland_protocols::wp::color_management::v1::client::wp_image_description_info_v1::{
     self, WpImageDescriptionInfoV1,
@@ -76,6 +76,28 @@ fn answer_from(seen: impl IntoIterator<Item = Option<Seen>>) -> ScreenHdr {
     if any_said { ScreenHdr::Cannot } else { ScreenHdr::CantTell }
 }
 
+/// What the compositor's colour manager says it can do, as far as GTK's choice depends on it.
+#[derive(Debug, Clone, Copy, Default)]
+struct Offered {
+    parametric: bool,
+    set_primaries: bool,
+    srgb_transfer: bool,
+    srgb_primaries: bool,
+    perceptual: bool,
+}
+
+impl Offered {
+    /// GTK uses the compositor's colour management only with all of these, and without it, it turns
+    /// HDR frames into SDR itself (`gdk_wayland_color_set_color_manager`'s checks in GTK 4.24's
+    /// gdkwaylandcolor.c). KWin 6.8 has no named sRGB transfer function, so GTK goes without there.
+    fn gtk_takes_it(self) -> bool {
+        self.parametric
+            && self.srgb_transfer
+            && (self.srgb_primaries || self.set_primaries)
+            && self.perceptual
+    }
+}
+
 /// Tells one output's objects from another's. A plain number, as the protocol's objects carry it.
 type OutputKey = u32;
 
@@ -92,6 +114,7 @@ struct Output {
 struct Outputs {
     list: Vec<Output>,
     next_key: OutputKey,
+    offered: Offered,
 }
 
 impl Outputs {
@@ -112,16 +135,40 @@ impl Dispatch<WlRegistry, GlobalListContents> for Outputs {
     }
 }
 
-/// The manager only lists what the compositor supports, and outputs don't need any of it.
+/// The manager lists what the compositor supports, which says whether GTK will use it.
 impl Dispatch<WpColorManagerV1, ()> for Outputs {
     fn event(
-        _: &mut Self,
+        outputs: &mut Self,
         _: &WpColorManagerV1,
-        _: <WpColorManagerV1 as Proxy>::Event,
+        event: wp_color_manager_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let offered = &mut outputs.offered;
+        match event {
+            wp_color_manager_v1::Event::SupportedFeature { feature: WEnum::Value(feature) } => {
+                match feature {
+                    Feature::Parametric => offered.parametric = true,
+                    Feature::SetPrimaries => offered.set_primaries = true,
+                    _ => {}
+                }
+            }
+            wp_color_manager_v1::Event::SupportedTfNamed { tf: WEnum::Value(TransferFunction::Srgb) } => {
+                offered.srgb_transfer = true;
+            }
+            wp_color_manager_v1::Event::SupportedPrimariesNamed {
+                primaries: WEnum::Value(Primaries::Srgb),
+            } => {
+                offered.srgb_primaries = true;
+            }
+            wp_color_manager_v1::Event::SupportedIntent {
+                render_intent: WEnum::Value(RenderIntent::Perceptual),
+            } => {
+                offered.perceptual = true;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -265,7 +312,10 @@ impl OutputColours {
     pub fn answer(&self, on: &[gdk::Monitor]) -> ScreenHdr {
         let outputs = self.outputs.borrow();
         let shown = outputs.list.iter().filter(|output| on.is_empty() || on.contains(&output.monitor));
-        answer_from(shown.map(|output| output.seen))
+        match answer_from(shown.map(|output| output.seen)) {
+            ScreenHdr::Shows if !outputs.offered.gtk_takes_it() => ScreenHdr::ToolkitCant,
+            answer => answer,
+        }
     }
 }
 
@@ -294,6 +344,21 @@ mod tests {
         assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((508, 265)))), Seen::Hdr);
         // The same monitor with its SDR brightness at the peak has no room left.
         assert_eq!(seen_in(named(TransferFunction::Gamma22, Some((400, 400)))), Seen::Sdr);
+    }
+
+    #[test]
+    fn gtk_goes_without_on_kwin_68() {
+        // What KWin 6.8 offers: parametric, set_primaries, perceptual, but no named sRGB transfer.
+        let kwin = Offered {
+            parametric: true,
+            set_primaries: true,
+            srgb_primaries: true,
+            perceptual: true,
+            ..Default::default()
+        };
+        assert!(!kwin.gtk_takes_it());
+        assert!(Offered { srgb_transfer: true, ..kwin }.gtk_takes_it());
+        assert!(!Offered { srgb_transfer: true, perceptual: false, ..kwin }.gtk_takes_it());
     }
 
     #[test]

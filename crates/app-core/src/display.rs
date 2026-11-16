@@ -153,11 +153,18 @@ pub enum ScreenHdr {
     Shows,
     Cannot,
     CantTell,
+    /// The screen is in HDR, but GTK won't pass HDR frames on to the compositor, so they'd be
+    /// flattened to SDR on the way.
+    ToolkitCant,
 }
 
 impl ScreenHdr {
-    const WORDS: [(Self, &'static str); 3] =
-        [(Self::Shows, "shows"), (Self::Cannot, "cannot"), (Self::CantTell, "cant-tell")];
+    const WORDS: [(Self, &'static str); 4] = [
+        (Self::Shows, "shows"),
+        (Self::Cannot, "cannot"),
+        (Self::CantTell, "cant-tell"),
+        (Self::ToolkitCant, "toolkit-cant"),
+    ];
 
     pub fn word(self) -> &'static str {
         Self::WORDS.iter().find(|(answer, _)| *answer == self).map_or("", |(_, word)| word)
@@ -171,6 +178,9 @@ impl ScreenHdr {
             Self::CantTell => {
                 Some("Guesthouse can't tell if this desktop's screen shows HDR, so Windows stays in SDR.")
             }
+            Self::ToolkitCant => Some(
+                "This screen is in HDR, but GTK can't pass HDR on to this desktop yet, so Windows stays in SDR.",
+            ),
         }
     }
 }

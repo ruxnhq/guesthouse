@@ -6,7 +6,7 @@
 
 That's Godot on Vulkan, in Windows, in a VM on Fedora. Nothing is passed through. The host keeps the card, and my desktop keeps running on it.
 
-> **Status:** early. 0.5.2 is out. It runs well on my RTX 5090, and testers have run Windows on NVIDIA and AMD cards of their own, [listed below](#cards). AMD is newer and experimental.
+> **Status:** early. 0.6.0 is out. It runs well on my RTX 5090, and testers have run Windows on NVIDIA and AMD cards of their own, [listed below](#cards). AMD is newer and experimental.
 
 ## Install
 

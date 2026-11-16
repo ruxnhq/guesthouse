@@ -8,7 +8,7 @@ use crate::daemon::{self, DaemonStart};
 use crate::failure::{Failure, Result};
 use crate::machine::{Kind, Machine};
 use crate::network::Mode;
-use crate::setup::checks::gpu_warning;
+use crate::setup::checks::machine_gpu_warning;
 use crate::start_checks::start_problems;
 use crate::text::shell_quote;
 use crate::vm_args::{Boot, VmPlan, memory_files_in};
@@ -122,9 +122,7 @@ fn qemu_steps(plan: &VmPlan) -> Vec<String> {
 /// Why the machine may not start on this PC, said as notes. The command still prints.
 fn notes(context: &Context, machine: &Machine) -> Vec<String> {
     let mut found = Vec::new();
-    if machine.kind == Kind::Windows {
-        found.extend(gpu_warning(context));
-    }
+    found.extend(machine_gpu_warning(context, machine));
     match start_problems(context, machine) {
         Ok(problems) => found.extend(problems),
         Err(failure) => found.push(failure.0),

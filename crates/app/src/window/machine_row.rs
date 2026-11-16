@@ -4,8 +4,8 @@ use super::Window;
 use crate::application::APP_ID;
 use crate::rows::{confirm, on_yes, question};
 use adw::prelude::*;
-use guesthouse_app_core::machine::{Kind, Machine};
-use guesthouse_app_core::setup::checks::{card_warning, gpu_warning};
+use guesthouse_app_core::machine::Machine;
+use guesthouse_app_core::setup::checks::{card_warning, machine_gpu_warning};
 use guesthouse_app_core::start_checks::SECOND_INSTANCE_REFUSAL;
 use guesthouse_app_core::tasks::{State, Status, no_slot_text};
 use std::cell::RefCell;
@@ -206,11 +206,7 @@ impl MachineRow {
     }
 
     fn on_start(&self) {
-        let warning = if self.machine.borrow().kind == Kind::Windows {
-            gpu_warning(&self.window.context())
-        } else {
-            None
-        };
+        let warning = machine_gpu_warning(&self.window.context(), &self.machine.borrow());
         let Some(warning) = warning else {
             self.start();
             return;

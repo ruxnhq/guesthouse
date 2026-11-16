@@ -15,7 +15,7 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::log::read_log;
 use crate::machine::{Kind, Machine, load_all};
-use crate::setup::checks::gpu_warning;
+use crate::setup::checks::machine_gpu_warning;
 use crate::slots;
 use crate::tasks::{State, Status, launch, status};
 use args::{Command, parse};
@@ -225,9 +225,7 @@ fn start(context: &Context, machine: &Machine, wait: bool, out: &mut dyn Write) 
             return Err(Failure(format!("{name} is {}.", before.state.name().to_lowercase())));
         }
     }
-    if machine.kind == Kind::Windows
-        && let Some(warning) = gpu_warning(context)
-    {
+    if let Some(warning) = machine_gpu_warning(context, machine) {
         writeln!(out, "Note: {warning}")?;
     }
     let Some(found) = run_task(context, machine, "start", wait, out)? else {

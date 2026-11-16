@@ -1,13 +1,13 @@
 //! Looks at this PC. Nothing here changes anything.
 
-use super::cards::{Card, Support, card_in_use, find_cards};
+use super::cards::{Card, Support, amd_support, card_in_use, find_cards};
 use crate::context::Context;
 use crate::host::{RamOffer, free_gib, total_ram};
 use crate::iso::any_iso_maker;
 use crate::library::INSTALL_ROOM_GIB;
 use crate::linux::amd::amd_cards;
 use crate::linux::driver_versions::{branch_refusal, branch_refusal_among, untested_warning};
-use crate::machine::MIN_RAM_GIB;
+use crate::machine::{Kind, MIN_RAM_GIB, Machine};
 use crate::usb::sysfs_text;
 use crate::vm_args::on_path;
 use guesthouse_backend_nvidia::profile::BRANCHES;
@@ -15,14 +15,15 @@ use rustix::fs::{Access, access};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const TOOLS: [&str; 4] = ["7z", "genisoimage", "qemu-img", "swtpm"];
 /// `nvidia-smi` gives the card's clocks to the record builder.
-const TOOLS: [&str; 5] = ["7z", "genisoimage", "qemu-img", "swtpm", "nvidia-smi"];
+const NVIDIA_TOOL: &str = "nvidia-smi";
 /// What an Ubuntu guest's install takes, beyond what any machine does.
 const UBUNTU_TOOLS: [&str; 6] = ["isoinfo", "genisoimage", "openssl", "ssh-keygen", "setarch", "bwrap"];
 const ISO_TOOL: &str = "genisoimage";
 const TOOLS_FIX: &str = "On Fedora: sudo dnf install 7zip genisoimage qemu-img swtpm edk2-ovmf. On Debian or \
                          Ubuntu: sudo apt install 7zip genisoimage qemu-utils swtpm ovmf. On Arch: sudo pacman -S \
-                         7zip cdrtools qemu-img swtpm edk2-ovmf. nvidia-smi comes with NVIDIA's driver.";
+                         7zip cdrtools qemu-img swtpm edk2-ovmf.";
 const UBUNTU_TOOLS_FIX: &str = "On Fedora: sudo dnf install genisoimage openssl openssh-clients bubblewrap. On \
                                 Debian or Ubuntu: sudo apt install genisoimage openssl openssh-client bubblewrap. \
                                 On Arch: sudo pacman -S cdrtools openssl openssh bubblewrap.";
@@ -31,11 +32,18 @@ const QEMU_LIBRARIES_FIX: &str = "On Fedora: sudo dnf install pixman libslirp li
                                   Debian or Ubuntu: sudo apt install libpixman-1-0 libslirp0 libfdt1 libusb-1.0-0 \
                                   libpipewire-0.3-0. On Arch: sudo pacman -S pixman libslirp dtc libusb pipewire.";
 const BRANCH_FIX: &str = "GPU machines stay off until the branches match. Plain VMs still run.";
-const CARD_FIX: &str = "GPU-PV needs an RTX 5090. Other consumer RTX 50, 40, 30 and 20 series cards, and the \
-                        16 series, are experimental.";
-const EXPERIMENTAL_FIX: &str = "Only the RTX 5090 has been tested, so this card may not work.";
-/// The Linux driver this has been run on. The guest's graphics depend on the exact version.
-pub const TESTED_DRIVER: &str = "615.78.08";
+const CARD_FIX: &str = "GPU-PV needs an NVIDIA RTX 50, 40, 30 or 20 series or GTX 16 series card on the open \
+                        kernel modules, or an AMD card from the RX 5000 series on, or RDNA2 or newer graphics in a \
+                        Ryzen, on amdgpu.";
+const EXPERIMENTAL_FIX: &str =
+    "Nobody has run Windows on this card yet. Others on the same chip work, so it likely does too.";
+const AMD_UNSUPPORTED_FIX: &str = "Windows on AMD needs an RDNA card: the RX 5000 series and newer, or RDNA2 or \
+                                   newer graphics in a Ryzen. Older cards like Polaris and Vega aren't handled.";
+/// What setup does on a PC whose only cards are AMD's: nothing, as that driver comes with a machine.
+pub const AMD_NEEDS_NO_SETUP: &str = "This PC's card is AMD's, and it needs no setup. AMD's driver is asked for \
+                                      when you make a Windows machine.";
+/// The Linux drivers Windows has run on, newest first. The guest's graphics depend on the exact version.
+pub const TESTED_DRIVERS: [&str; 2] = ["620.70.06", "615.78.08"];
 /// What setup keeps of the installer, and room to swap it for a new copy.
 pub const DRIVER_ROOM_GIB: u64 = 4;
 /// What a new Windows machine gets by default.
@@ -56,15 +64,54 @@ pub struct Check {
     pub state: CheckState,
     pub text: String,
     pub fix: String,
+    /// Whose GPU the check is about. A failed check about the PC stops both makers' cards.
+    pub part: Part,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    Pc,
+    Nvidia,
+    Amd,
+}
+
+/// Which makers' cards a GPU machine can run on, as far as the checks can say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GpuVerdict {
+    pub nvidia: bool,
+    pub amd: bool,
+}
+
+impl GpuVerdict {
+    pub fn any(self) -> bool {
+        self.nvidia || self.amd
+    }
+}
+
+/// A maker's cards can run a GPU machine when the PC has one, and nothing about them or the PC failed.
+pub fn gpu_verdict(checks: &[Check]) -> GpuVerdict {
+    let fine = |part| {
+        checks.iter().filter(|check| check.part == part).all(|check| check.state != CheckState::Failed)
+    };
+    let found = |part| checks.iter().any(|check| check.part == part);
+    let pc = fine(Part::Pc);
+    GpuVerdict {
+        nvidia: pc && found(Part::Nvidia) && fine(Part::Nvidia),
+        amd: pc && found(Part::Amd) && fine(Part::Amd),
+    }
 }
 
 impl Check {
     fn new(title: &str, state: CheckState, text: impl Into<String>, fix: impl Into<String>) -> Self {
-        Self { title: title.to_owned(), state, text: text.into(), fix: fix.into() }
+        Self { title: title.to_owned(), state, text: text.into(), fix: fix.into(), part: Part::Pc }
     }
 
     fn ok(title: &str, text: impl Into<String>) -> Self {
         Self::new(title, CheckState::Ok, text, "")
+    }
+
+    fn about(self, part: Part) -> Self {
+        Self { part, ..self }
     }
 }
 
@@ -74,11 +121,22 @@ fn card_judged(context: &Context) -> Option<Card> {
     card_in_use(context).or_else(|| find_cards(context).into_iter().next())
 }
 
-fn check_card(context: &Context) -> Check {
+/// A check for each maker's card this PC has, or one failure if it has neither.
+fn check_cards(context: &Context) -> Vec<Check> {
+    let checks: Vec<Check> = [check_card(context), check_amd_card(context)].into_iter().flatten().collect();
+    if checks.is_empty() {
+        let text = "No NVIDIA or AMD card was found.";
+        return vec![Check::new("Graphics card", CheckState::Failed, text, CARD_FIX)];
+    }
+    checks
+}
+
+fn check_card(context: &Context) -> Option<Check> {
+    Some(judge_card(context, &card_judged(context)?).about(Part::Nvidia))
+}
+
+fn judge_card(context: &Context, card: &Card) -> Check {
     const TITLE: &str = "NVIDIA card";
-    let Some(card) = card_judged(context) else {
-        return Check::new(TITLE, CheckState::Failed, "No NVIDIA card was found.", CARD_FIX);
-    };
     // With one card the name says which. With more the address does.
     let name = if find_cards(context).len() > 1 {
         format!("{} at {}", card.name, card.pci)
@@ -99,6 +157,33 @@ fn check_card(context: &Context) -> Check {
     }
 }
 
+/// The best of this PC's AMD cards, as a Windows machine can run on any of them.
+fn check_amd_card(context: &Context) -> Option<Check> {
+    const TITLE: &str = "AMD card";
+    let cards = amd_cards(context);
+    let (card, support) =
+        cards.iter().map(|card| (card, amd_support(context, card))).min_by_key(|(_, support)| *support)?;
+    let name = if cards.len() > 1 { format!("{} at {}", card.name, card.pci) } else { card.name.clone() };
+    let check = match support {
+        Support::Tested => Check::new(
+            TITLE,
+            CheckState::Ok,
+            format!("{name}. Tested."),
+            "Windows on AMD is experimental, and AMD's driver is asked for when you make the machine.",
+        ),
+        Support::Experimental => Check::new(
+            TITLE,
+            CheckState::Warning,
+            format!("{name}. Experimental."),
+            format!("{EXPERIMENTAL_FIX} AMD's driver is asked for when you make the machine."),
+        ),
+        Support::Unsupported => {
+            Check::new(TITLE, CheckState::Failed, format!("{name}. Not supported."), AMD_UNSUPPORTED_FIX)
+        }
+    };
+    Some(check.about(Part::Amd))
+}
+
 /// Says if the card GPU machines run on is only experimental.
 pub fn card_warning(context: &Context) -> Option<String> {
     let card = card_judged(context).filter(|card| card.support == Support::Experimental)?;
@@ -112,35 +197,63 @@ pub fn gpu_warning(context: &Context) -> Option<String> {
     (!warnings.is_empty()).then(|| warnings.join(" "))
 }
 
+/// What a person should hear before this machine starts: only a Windows machine on the NVIDIA card is
+/// about NVIDIA's card and driver.
+pub fn machine_gpu_warning(context: &Context, machine: &Machine) -> Option<String> {
+    (machine.kind == Kind::Windows && machine.amd_gpu.is_empty()).then(|| gpu_warning(context)).flatten()
+}
+
 /// Says if the host's driver isn't the one this was tested on.
 pub fn driver_warning(context: &Context) -> Option<String> {
     let version = sysfs_text(&context.driver_version_file);
     if version.is_empty() {
         return Some("The NVIDIA driver does not seem to be loaded on this PC.".to_owned());
     }
-    (version != TESTED_DRIVER).then(|| {
+    (!TESTED_DRIVERS.contains(&version.as_str())).then(|| {
         format!(
-            "This PC has NVIDIA driver {version}, and the VM was tested on {TESTED_DRIVER}. \
-             The guest's graphics depend on the exact version, so they may not work."
+            "This PC has NVIDIA driver {version}, and the VM was tested on {}. The guest's graphics depend \
+             on the exact version, so they may not work.",
+            tested_drivers()
         )
     })
+}
+
+fn tested_drivers() -> String {
+    TESTED_DRIVERS.join(" and ")
+}
+
+/// Only a PC with an NVIDIA card is asked about NVIDIA's driver and tool.
+fn nvidia_checks(context: &Context) -> Vec<Check> {
+    if find_cards(context).is_empty() {
+        return Vec::new();
+    }
+    let mut checks = vec![check_host_driver(context)];
+    if !tool_here(NVIDIA_TOOL) {
+        let text = format!("{NVIDIA_TOOL} is missing.");
+        checks.push(Check::new("NVIDIA tool", CheckState::Failed, text, "It comes with NVIDIA's driver."));
+    }
+    checks.into_iter().map(|check| check.about(Part::Nvidia)).collect()
 }
 
 fn check_host_driver(context: &Context) -> Check {
     const TITLE: &str = "Host NVIDIA driver";
     let version = sysfs_text(&context.driver_version_file);
     if version.is_empty() {
-        let fix = format!("Install NVIDIA's driver {TESTED_DRIVER} for Linux and start this PC again.");
+        let fix = format!("Install NVIDIA's driver {} for Linux and start this PC again.", TESTED_DRIVERS[0]);
         return Check::new(TITLE, CheckState::Failed, "The NVIDIA driver is not loaded.", fix);
     }
-    if version == TESTED_DRIVER {
+    if TESTED_DRIVERS.contains(&version.as_str()) {
         return Check::ok(TITLE, format!("{version}. Tested."));
     }
+    let tested = tested_drivers();
     Check::new(
         TITLE,
         CheckState::Warning,
-        format!("{version}, and this was tested on {TESTED_DRIVER}."),
-        format!("The guest's graphics depend on the exact version. Install {TESTED_DRIVER} if they fail."),
+        format!("{version}, and this was tested on {tested}."),
+        format!(
+            "The guest's graphics depend on the exact version. Install {} if they fail.",
+            TESTED_DRIVERS[0]
+        ),
     )
 }
 
@@ -245,6 +358,12 @@ fn check_ubuntu(context: &Context, tools: &[&str]) -> Check {
         return Check::new(TITLE, CheckState::Warning, text, UBUNTU_TOOLS_FIX);
     }
     let version = sysfs_text(&context.driver_version_file);
+    if find_cards(context).is_empty() && !amd_cards(context).is_empty() {
+        return Check::ok(
+            TITLE,
+            "They install by themselves, with Mesa on the AMD card. The GPU is a preview.",
+        );
+    }
     let refused = if version.is_empty() {
         Some("The NVIDIA driver is not loaded.".to_owned())
     } else {
@@ -315,7 +434,9 @@ fn check_disk(context: &Context) -> Check {
 }
 
 pub fn check_pc(context: &Context) -> Vec<Check> {
-    let mut checks = vec![check_card(context), check_host_driver(context), check_kvm(context)];
+    let mut checks = check_cards(context);
+    checks.extend(nvidia_checks(context));
+    checks.push(check_kvm(context));
     checks.extend(check_amd_memory(context));
     checks.extend([
         check_qemu(context),
@@ -341,21 +462,25 @@ fn check_driver_branch(context: &Context) -> Option<Check> {
     let refusal = Some(version)
         .filter(|text| !text.is_empty())
         .and_then(|text| branch_refusal_among(&text, &windows_host_branches()))?;
-    Some(Check::new(TITLE, CheckState::Failed, refusal, BRANCH_FIX))
+    Some(Check::new(TITLE, CheckState::Failed, refusal, BRANCH_FIX).about(Part::Nvidia))
 }
 
 /// What an installer asks before it has put anything on this PC: only what no install can bring, so no
 /// tools and no QEMU. The checks for room say what a machine will need, and don't decide.
 pub struct HostReport {
     pub checks: Vec<Check>,
-    /// Whether this PC can run a GPU machine, as far as the host can say.
+    /// Whether this PC can run a GPU machine on either maker's card, as far as the host can say.
     pub gpu: bool,
 }
 
 pub fn check_host(context: &Context) -> HostReport {
-    let mut deciding = vec![check_card(context), check_host_driver(context), check_kvm(context)];
-    deciding.extend(check_driver_branch(context));
-    let gpu = deciding.iter().all(|check| check.state != CheckState::Failed);
+    let mut deciding = check_cards(context);
+    if !find_cards(context).is_empty() {
+        deciding.push(check_host_driver(context).about(Part::Nvidia));
+    }
+    deciding.push(check_kvm(context));
+    deciding.extend(check_driver_branch(context).filter(|_| !find_cards(context).is_empty()));
+    let gpu = gpu_verdict(&deciding).any();
     deciding.extend(check_amd_memory(context));
     deciding.extend([check_ram(context), check_disk(context)]);
     HostReport { checks: deciding, gpu }
@@ -364,7 +489,7 @@ pub fn check_host(context: &Context) -> HostReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linux::amd::stand_in::fake_render_node;
+    use crate::linux::amd::stand_in::{fake_graphics, fake_render_node};
     use crate::setup::cards::stand_in::{NAMES, fake_pci};
     use crate::testing::{Scratch, scratch_context};
     use std::fs;
@@ -401,21 +526,85 @@ mod tests {
         let mut context = scratch_context(&scratch);
         context.pci_devices = scratch.path("pci");
         context.pci_names = scratch.write("pci.ids", NAMES);
-        let found = check_card(&context);
+        context.drm_class = scratch.path("drm");
+        assert_eq!(check_card(&context), None);
+        let found = check_cards(&context);
         assert!(
-            found.state == CheckState::Failed
-                && found.text.contains("No NVIDIA card")
-                && !found.fix.is_empty()
+            found.len() == 1
+                && found[0].state == CheckState::Failed
+                && found[0].text.contains("No NVIDIA or AMD card")
+                && found[0].fix.contains("AMD")
         );
+        assert!(!gpu_verdict(&found).any());
         fake_pci(&scratch, "0000:01:00.0", 0x2BB1, "0x10de", "0x030000");
-        let found = check_card(&context);
+        let found = check_card(&context).unwrap();
         assert!(found.state == CheckState::Failed && found.text.contains("Not supported"));
-        fake_pci(&scratch, "0000:02:00.0", 0x2C02, "0x10de", "0x030000");
-        let found = check_card(&context);
+        assert_eq!(found.part, Part::Nvidia);
+        fake_pci(&scratch, "0000:02:00.0", 0x2C05, "0x10de", "0x030000");
+        let found = check_card(&context).unwrap();
         assert_eq!(found.state, CheckState::Warning);
         assert!(found.text.contains("Experimental") && found.text.contains("GB203") && !found.fix.is_empty());
         fake_pci(&scratch, "0000:03:00.0", 0x2B85, "0x10de", "0x030000");
-        assert_eq!(check_card(&context).state, CheckState::Ok);
+        assert_eq!(check_card(&context).unwrap().state, CheckState::Ok);
+    }
+
+    #[test]
+    fn the_cards_testers_ran_are_tested() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.pci_devices = scratch.path("pci");
+        context.pci_names = scratch.write("pci.ids", NAMES);
+        for device in [0x2C02, 0x2704, 0x2204, 0x21C4] {
+            fake_pci(&scratch, "0000:01:00.0", device, "0x10de", "0x030000");
+            let found = check_card(&context).unwrap();
+            assert_eq!(found.state, CheckState::Ok, "{device:04x}: {}", found.text);
+        }
+    }
+
+    #[test]
+    fn an_amd_card_is_judged_by_its_graphics_generation() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.pci_devices = scratch.path("pci");
+        context.drm_class = scratch.path("drm");
+        fake_render_node(&scratch, 128, "0000:7c:00.0", "0x1002", 0x67DF);
+        let found = check_cards(&context);
+        assert_eq!(found.len(), 1, "an AMD card alone is no failure of NVIDIA's");
+        assert!(found[0].state == CheckState::Failed && found[0].fix.contains("Polaris"), "{found:?}");
+        fake_graphics(&scratch, "0000:7c:00.0", 9);
+        assert_eq!(check_cards(&context)[0].state, CheckState::Failed, "Vega is before RDNA");
+        fake_graphics(&scratch, "0000:7c:00.0", 11);
+        let found = check_cards(&context);
+        assert!(found[0].state == CheckState::Warning && found[0].text.contains("Experimental"));
+        assert_eq!(gpu_verdict(&found), GpuVerdict { nvidia: false, amd: true });
+        fake_render_node(&scratch, 129, "0000:03:00.0", "0x1002", 0x7550);
+        fake_graphics(&scratch, "0000:03:00.0", 12);
+        let found = check_cards(&context);
+        assert!(found[0].state == CheckState::Ok && found[0].text.contains("at 0000:03:00.0"), "{found:?}");
+    }
+
+    #[test]
+    fn one_makers_failure_leaves_the_other_makers_card() {
+        let check = |state, part| Check { part, ..Check::new("x", state, "", "") };
+        let both = [check(CheckState::Failed, Part::Nvidia), check(CheckState::Warning, Part::Amd)];
+        assert_eq!(gpu_verdict(&both), GpuVerdict { nvidia: false, amd: true });
+        let pc_failed = [check(CheckState::Ok, Part::Nvidia), check(CheckState::Failed, Part::Pc)];
+        assert!(!gpu_verdict(&pc_failed).any());
+    }
+
+    #[test]
+    fn a_pc_with_only_an_amd_card_is_not_asked_about_nvidia() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.pci_devices = scratch.path("pci");
+        context.drm_class = scratch.path("drm");
+        context.driver_version_file = scratch.path("nothing");
+        fake_render_node(&scratch, 128, "0000:7c:00.0", "0x1002", 0x13C0);
+        fake_graphics(&scratch, "0000:7c:00.0", 10);
+        assert!(nvidia_checks(&context).is_empty());
+        let report = check_host(&context);
+        assert!(report.checks.iter().all(|check| !check.title.contains("NVIDIA")), "{:?}", report.checks);
+        assert_eq!(check_ubuntu(&context, &["sh"]).state, CheckState::Ok);
     }
 
     #[test]
@@ -424,11 +613,11 @@ mod tests {
         let mut context = scratch_context(&scratch);
         context.pci_devices = scratch.path("pci");
         context.pci_names = scratch.write("pci.ids", NAMES);
-        context.driver_version_file = scratch.write("version", format!("{TESTED_DRIVER}\n"));
+        context.driver_version_file = scratch.write("version", format!("{}\n", TESTED_DRIVERS[0]));
         assert_eq!(gpu_warning(&context), None);
-        fake_pci(&scratch, "0000:01:00.0", 0x2704, "0x10de", "0x030000");
+        fake_pci(&scratch, "0000:01:00.0", 0x2C05, "0x10de", "0x030000");
         let said = gpu_warning(&context).unwrap();
-        assert!(said.contains("GeForce RTX 4080 is experimental"), "{said}");
+        assert!(said.contains("card 2c05 is experimental"), "{said}");
         fake_pci(&scratch, "0000:00:01.0", 0x2B85, "0x10de", "0x030000");
         assert_eq!(gpu_warning(&context), None);
     }
@@ -440,18 +629,20 @@ mod tests {
         context.driver_version_file = scratch.path("nothing");
         assert_eq!(check_host_driver(&context).state, CheckState::Failed);
         assert!(driver_warning(&context).unwrap().contains("not seem to be loaded"));
-        context.driver_version_file = scratch.write("version", format!("{TESTED_DRIVER}\n"));
-        assert_eq!(check_host_driver(&context).state, CheckState::Ok);
-        assert_eq!(driver_warning(&context), None);
+        for tested in TESTED_DRIVERS {
+            context.driver_version_file = scratch.write("version", format!("{tested}\n"));
+            assert_eq!(check_host_driver(&context).state, CheckState::Ok);
+            assert_eq!(driver_warning(&context), None);
+        }
         fs::write(&context.driver_version_file, "600.1\n").unwrap();
         let found = check_host_driver(&context);
         assert!(
             found.state == CheckState::Warning
                 && found.text.contains("600.1")
-                && found.fix.contains(TESTED_DRIVER)
+                && found.fix.contains(TESTED_DRIVERS[0])
         );
         let warning = driver_warning(&context).unwrap();
-        assert!(warning.contains("600.1") && warning.contains(TESTED_DRIVER));
+        assert!(warning.contains("600.1") && warning.contains("620.70.06 and 615.78.08"), "{warning}");
     }
 
     #[test]

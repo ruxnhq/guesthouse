@@ -18,6 +18,8 @@ const RENDER_PREFIX: &str = "renderD";
 const DRM_DEVICE_LINK: &str = "device";
 /// Where the render nodes are, which the DRM class names.
 const RENDER_NODES: &str = "/dev/dri";
+/// Under the card's PCI device, the major version of its first graphics block.
+const GRAPHICS_VERSION: &str = "ip_discovery/die/0/GC/0/major";
 /// Written in the machine's folder when the guest said native context failed, and why.
 const FALLBACK_FILE: &str = "amd-fallback";
 
@@ -78,6 +80,14 @@ pub fn amd_cards(context: &Context) -> Vec<AmdCard> {
     cards
 }
 
+/// The major version of the card's graphics block, from amdgpu's IP discovery: 10 for RDNA and RDNA2, 11
+/// for RDNA3 and 12 for RDNA4. Cards from before RDNA have no IP discovery, or a version under 10.
+pub fn graphics_major(context: &Context, card: &AmdCard) -> Option<u32> {
+    let node = card.render_node.file_name()?;
+    let version = context.drm_class.join(node).join(DRM_DEVICE_LINK).join(GRAPHICS_VERSION);
+    sysfs_text(&version).parse().ok()
+}
+
 /// The card at this address, if it's still in this PC.
 pub fn amd_card(context: &Context, pci: &str) -> Option<AmdCard> {
     amd_cards(context).into_iter().find(|card| card.pci == pci)
@@ -128,6 +138,11 @@ pub mod stand_in {
         let folder = scratch.path(&format!("drm/renderD{node}"));
         std::fs::create_dir_all(&folder).unwrap();
         symlink(scratch.path(&format!("pci/{pci}")), folder.join("device")).unwrap();
+    }
+
+    /// What amdgpu's IP discovery says of the card's graphics block, 10 and up being RDNA.
+    pub fn fake_graphics(scratch: &Scratch, pci: &str, major: u32) {
+        scratch.write(&format!("pci/{pci}/ip_discovery/die/0/GC/0/major"), format!("{major}\n"));
     }
 }
 

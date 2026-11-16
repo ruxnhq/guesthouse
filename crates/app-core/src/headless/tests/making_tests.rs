@@ -5,7 +5,7 @@ use crate::machine::load;
 use crate::settings::driver_folder;
 use crate::settings::read_setup;
 use crate::setup::cards::stand_in::{NAMES, fake_pci};
-use crate::setup::checks::{Check, CheckState};
+use crate::setup::checks::{Check, CheckState, Part};
 use crate::setup::driver::stand_in::good_installer;
 use crate::setup::driver::{WINDOWS_DRIVER, driver_problem};
 use setup::setup_after;
@@ -141,7 +141,13 @@ fn a_machine_whose_disk_is_elsewhere_is_only_forgotten() {
 }
 
 fn passing(title: &str) -> Check {
-    Check { title: title.into(), state: CheckState::Ok, text: "fine".into(), fix: String::new() }
+    Check {
+        title: title.into(),
+        state: CheckState::Ok,
+        text: "fine".into(),
+        fix: String::new(),
+        part: Part::Pc,
+    }
 }
 
 fn with_cards(scratch: &Scratch, cards: &[(&str, u32)]) -> Context {
@@ -164,6 +170,20 @@ fn setup_stops_at_a_check_that_failed_and_says_which() {
     assert!(result.unwrap_err().0.starts_with("Windows with GPU-PV cannot run yet."));
     let said = String::from_utf8(out).unwrap();
     assert_eq!(said, "ok       KVM: fine\nfailed   NVIDIA card: fine\n         Plug one in.\n");
+}
+
+#[test]
+fn setup_on_a_pc_with_only_an_amd_card_has_nothing_to_do() {
+    let scratch = Scratch::new();
+    let mut context = with_cards(&scratch, &[]);
+    context.drm_class = scratch.path("drm");
+    crate::linux::amd::stand_in::fake_render_node(&scratch, 128, "0000:7c:00.0", "0x1002", 0x13C0);
+    let amd = Check { part: Part::Amd, ..passing("AMD card") };
+    let mut out = Vec::new();
+    setup_after(&context, &[passing("KVM"), amd.clone()], None, None, &mut out).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("needs no setup"));
+    let old = Check { state: CheckState::Failed, ..amd };
+    assert!(setup_after(&context, &[passing("KVM"), old], None, None, &mut Vec::new()).is_err());
 }
 
 #[test]

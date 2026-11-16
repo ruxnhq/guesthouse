@@ -12,7 +12,7 @@ use crate::host::{RamField, physical_cores};
 use crate::iso::read_iso;
 use crate::library::{NewMachine, create, delete, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
-use crate::setup::checks::gpu_warning;
+use crate::setup::checks::machine_gpu_warning;
 use crate::tasks::{State, status};
 use std::io::Write;
 
@@ -140,9 +140,7 @@ pub(super) fn install(context: &Context, machine: &Machine, wait: bool, out: &mu
     if before.state != State::Off {
         return Err(Failure(format!("{name} is {}.", before.state.name().to_lowercase())));
     }
-    if machine.kind == Kind::Windows
-        && let Some(warning) = gpu_warning(context)
-    {
+    if let Some(warning) = machine_gpu_warning(context, machine) {
         writeln!(out, "Note: {warning}")?;
     }
     let Some(found) = run_task(context, machine, "install", wait, out)? else {

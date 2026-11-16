@@ -3,6 +3,7 @@
 
 use crate::context::Context;
 use crate::failure::{Failure, Result};
+use crate::linux::amd::{AmdCard, graphics_major};
 use crate::machine::sorted_names;
 use crate::settings::{CARD_MEMORY_FIELD, read_setup, write_setup};
 use crate::usb::sysfs_text;
@@ -15,8 +16,15 @@ use std::process::{Command, Stdio};
 const NVIDIA_VENDOR: &str = "0x10de";
 const NVIDIA_NAMES_START: &str = "\n10de  ";
 const DISPLAY_CLASS: &str = "0x03";
-/// The card this has been run on.
-const TESTED_CARDS: [u32; 1] = [0x2B85];
+/// The cards Windows has run on, here or on a tester's PC: RTX 5090, 5080, 4080, 3090, 3050 Laptop, GTX
+/// 1660 SUPER, RTX A1000 Laptop and A5500 Laptop.
+const TESTED_CARDS: [u32; 8] = [0x2B85, 0x2C02, 0x2704, 0x2204, 0x25A2, 0x21C4, 0x25B9, 0x2438];
+/// The AMD cards Windows has run on: Radeon 610M, RX 9070 XT, RX 7900 XTX, RX 6900 XT, RX 6700 XT and
+/// RX 6700, and RX 6600 XT. Each id covers the other cards on its chip too, as pci.ids says.
+const TESTED_AMD_CARDS: [u32; 6] = [0x13C0, 0x7550, 0x744C, 0x73BF, 0x73DF, 0x73FF];
+/// RDNA's graphics block starts at version 10. AMD's driver package for older cards is another one,
+/// which the guest side doesn't handle.
+const FIRST_RDNA_GRAPHICS: u32 = 10;
 /// Consumer 50, 40, 30, 20 and 16 series, desktop and laptop, from pci.ids, which may be used under the 3-clause BSD licence. The workstation cards on these
 /// chips don't count, as nothing says their answers are the same, except the ones in `CHECKED_WORKSTATION_CARDS`.
 const CONSUMER_CARDS: [(&str, &[u32]); 20] = [
@@ -165,6 +173,19 @@ fn support_of(device: u32) -> Support {
         Support::Tested
     } else if chip_of(device).is_empty() {
         Support::Unsupported
+    } else {
+        Support::Experimental
+    }
+}
+
+/// How far an AMD card is known to work, from its graphics block's version: RDNA and newer is
+/// experimental, and older cards, or a card whose version the kernel doesn't give, aren't handled.
+pub fn amd_support(context: &Context, card: &AmdCard) -> Support {
+    let rdna = graphics_major(context, card).is_some_and(|major| major >= FIRST_RDNA_GRAPHICS);
+    if !rdna {
+        Support::Unsupported
+    } else if TESTED_AMD_CARDS.contains(&card.device) {
+        Support::Tested
     } else {
         Support::Experimental
     }
@@ -336,7 +357,7 @@ mod tests {
         let scratch = Scratch::new();
         let context = context(&scratch);
         fake_pci(&scratch, "0000:01:00.0", 0x2BB1, NVIDIA, DISPLAY);
-        fake_pci(&scratch, "0000:02:00.0", 0x2C02, NVIDIA, DISPLAY);
+        fake_pci(&scratch, "0000:02:00.0", 0x2C05, NVIDIA, DISPLAY);
         fake_pci(&scratch, "0000:03:00.0", 0x2B85, NVIDIA, DISPLAY);
         let cards = find_cards(&context);
         let found: Vec<(Support, &str)> =
@@ -347,12 +368,12 @@ mod tests {
         );
         assert_eq!(
             (cards[0].name.as_str(), cards[1].name.as_str()),
-            ("NVIDIA GeForce RTX 5090", "NVIDIA GeForce RTX 5080")
+            ("NVIDIA GeForce RTX 5090", "NVIDIA card 2c05")
         );
     }
 
     #[test]
-    fn the_40_and_16_series_are_experimental_and_named_as_pci_ids_has_them() {
+    fn the_4080_and_1660_super_testers_ran_are_tested_and_named_as_pci_ids_has_them() {
         let scratch = Scratch::new();
         let context = context(&scratch);
         fake_pci(&scratch, "0000:01:00.0", 0x2704, NVIDIA, DISPLAY);
@@ -363,18 +384,20 @@ mod tests {
         assert_eq!(
             found,
             [
-                (Support::Experimental, "AD103", "NVIDIA GeForce RTX 4080"),
-                (Support::Experimental, "TU116", "NVIDIA GeForce GTX 1660 SUPER"),
+                (Support::Tested, "AD103", "NVIDIA GeForce RTX 4080"),
+                (Support::Tested, "TU116", "NVIDIA GeForce GTX 1660 SUPER"),
             ]
         );
     }
 
     #[test]
-    fn the_30_series_and_its_laptops_are_experimental() {
-        assert_eq!((chip_of(0x2204), support_of(0x2204)), ("GA102", Support::Experimental));
-        assert_eq!((chip_of(0x25A2), support_of(0x25A2)), ("GA107", Support::Experimental));
-        assert_eq!((chip_of(0x25B9), support_of(0x25B9)), ("GA107", Support::Experimental));
-        assert_eq!((chip_of(0x2438), support_of(0x2438)), ("GA103", Support::Experimental));
+    fn the_30_series_cards_testers_ran_are_tested_and_the_rest_experimental() {
+        assert_eq!((chip_of(0x2204), support_of(0x2204)), ("GA102", Support::Tested));
+        assert_eq!((chip_of(0x25A2), support_of(0x25A2)), ("GA107", Support::Tested));
+        assert_eq!((chip_of(0x25B9), support_of(0x25B9)), ("GA107", Support::Tested));
+        assert_eq!((chip_of(0x2438), support_of(0x2438)), ("GA103", Support::Tested));
+        assert_eq!((chip_of(0x2208), support_of(0x2208)), ("GA102", Support::Experimental));
+        assert_eq!((chip_of(0x2684), support_of(0x2684)), ("AD102", Support::Experimental));
         assert_eq!(support_of(0x2230), Support::Unsupported, "an RTX A6000 hasn't been checked");
     }
 

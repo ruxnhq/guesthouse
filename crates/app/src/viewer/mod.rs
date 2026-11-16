@@ -17,6 +17,7 @@ mod overlay;
 mod pointer_lock;
 mod ring;
 mod screen;
+mod screen_frame;
 mod socket_frames;
 
 use crate::common::in_background;

@@ -9,6 +9,7 @@ use super::forwarded_frames::ForwardedFrames;
 use super::frames::{FrameRoute, FrameSource, thumbnail};
 use super::overlay::PerformanceOverlay;
 use super::pointer_lock::{PointerLock, pointer_lock};
+use super::screen_frame::ScreenFrame;
 use super::socket_frames::SocketFrames;
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -26,8 +27,11 @@ use std::time::{Duration, Instant};
 const POLL: Duration = Duration::from_millis(1);
 const FOLLOW_GUEST: Duration = Duration::from_secs(1);
 const SPINNER_SIZE: i32 = 48;
-const FIRST_RATIO: f32 = 16.0 / 9.0;
+const FIRST_RATIO: f64 = 16.0 / 9.0;
+/// No focus ring on the picture: it would be drawn over the frame, and the screen has the keys
+/// whenever the window does anyway.
 const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
+.guest-picture { outline: none; }
 .performance-overlay { background: rgba(0, 0, 0, 0.65); color: white; padding: 6px 10px; border-radius: 6px;
   font-size: smaller; font-feature-settings: \"tnum\"; }";
 
@@ -36,7 +40,7 @@ pub(super) struct Inner {
     pub(super) picture: gtk::Picture,
     /// Lets GTK hand the picture's frames to the compositor instead of drawing them itself.
     pub(super) offload: gtk::GraphicsOffload,
-    pub(super) aspect: gtk::AspectFrame,
+    pub(super) aspect: ScreenFrame,
     pub(super) spinner: gtk::Spinner,
     /// The guest's cursor as the host's pointer, once it has one.
     pub(super) guest_pointer: RefCell<Option<gdk::Cursor>>,
@@ -93,6 +97,7 @@ impl Screen {
             .content_fit(gtk::ContentFit::Fill)
             .can_shrink(true)
             .focusable(true)
+            .css_classes(["guest-picture"])
             .build();
         // Always there, so the setting can change while the machine runs. Turned off, GTK draws the
         // picture just as it would without it.
@@ -102,7 +107,7 @@ impl Screen {
         // compositor can't put the frame straight on the display.
         #[cfg(feature = "hdr")]
         offload.set_black_background(true);
-        let aspect = gtk::AspectFrame::builder().child(&offload).obey_child(false).ratio(FIRST_RATIO).build();
+        let aspect = ScreenFrame::new(&offload, FIRST_RATIO);
         let spinner = gtk::Spinner::builder().spinning(true).build();
         spinner.set_size_request(SPINNER_SIZE, SPINNER_SIZE);
         spinner.set_halign(gtk::Align::Center);
@@ -346,7 +351,7 @@ impl Screen {
 
     fn show(&self, texture: gdk::Texture) {
         self.0.picture.set_paintable(Some(&texture));
-        self.0.aspect.set_ratio(texture.width() as f32 / texture.height() as f32);
+        self.0.aspect.set_ratio(f64::from(texture.width()) / f64::from(texture.height()));
         self.0.spinner.set_visible(false);
         // One that takes the place of a frame still waiting to be drawn isn't one more on screen.
         if !self.0.waiting.replace(true) {

@@ -49,6 +49,8 @@ Not handled: older AMD cards like Polaris, GTX 10 series and older NVIDIA cards,
 
 If something doesn't work on your card, or your card isn't in the table and works, please open an issue.
 
+There's a [Discord server](https://discord.gg/rN3VARayZV) for questions and chat. Bugs still go in the issues, so they don't get lost.
+
 ## Why
 
 A real GPU in a Windows VM on Linux usually means passing the whole card through with VFIO, so the host loses it, or paying for a datacenter card and a vGPU licence.

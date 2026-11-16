@@ -150,7 +150,7 @@ sandbox() {
     [ "$WITHOUT_NAMESPACE" = no ] || wrapper=()
     env -i HOME="$H" PATH="$T/bin" XDG_RUNTIME_DIR="$T/runtime" STAND_IN_LOG="$T/log" \
         FAKE_RELEASES="$T/releases" FAKE_LIBRARIES="$T/libraries" LIBRARIES_PRESENT="${LIBRARIES_PRESENT:-}" \
-        FAKE_FIRMWARE="$T/firmware" SUDO_FAILS="${SUDO_FAILS:-}" FAKE_GPU_REFUSED="${FAKE_GPU_REFUSED:-}" FAKE_AMD="${FAKE_AMD:-}" FAKE_GTK="${FAKE_GTK-4.20}" \
+        DBUS_SESSION_BUS_ADDRESS="${FAKE_SESSION_BUS:-}" FAKE_FIRMWARE="$T/firmware" SUDO_FAILS="${SUDO_FAILS:-}" FAKE_GPU_REFUSED="${FAKE_GPU_REFUSED:-}" FAKE_AMD="${FAKE_AMD:-}" FAKE_GTK="${FAKE_GTK-4.20}" \
         "${wrapper[@]}" "$@"
 }
 

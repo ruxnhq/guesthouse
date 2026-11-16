@@ -321,15 +321,28 @@ refresh_icons() {
     theme=$DATA_HOME/icons/hicolor
     awk -F "$TAB" -v prefix="$theme/" '$1 == "file" && index($3, prefix) == 1 { found = 1 }
         END { exit !found }' "$MANIFEST" || return 0
-    [ -d "$theme" ] || return 0
-    touch "$theme" 2>/dev/null || true
-    [ -f "$theme/icon-theme.cache" ] || return 0
+    # The last icons going can take the folder with them, and Plasma still has to hear of it.
+    if [ -d "$theme" ]; then
+        touch "$theme" 2>/dev/null || true
+        update_icon_cache "$theme"
+    fi
+    tell_kde_about_icons
+}
+
+update_icon_cache() {
+    [ -f "$1/icon-theme.cache" ] || return 0
     for tool in gtk-update-icon-cache gtk4-update-icon-cache; do
         if command -v "$tool" >/dev/null 2>&1; then
-            "$tool" -q -t -f "$theme" >/dev/null 2>&1 || true
+            "$tool" -q -t -f "$1" >/dev/null 2>&1 || true
             return 0
         fi
     done
+}
+
+# As install.sh: Plasma keeps the icons it looked up until it's told they changed.
+tell_kde_about_icons() {
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-send >/dev/null 2>&1 || return 0
+    dbus-send --session --type=signal /KIconLoader org.kde.KIconLoader.iconChanged int32:0 >/dev/null 2>&1 || true
 }
 
 remove_program() {

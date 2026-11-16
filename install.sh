@@ -952,13 +952,25 @@ refresh_icons() {
     theme=$ICON_FOLDER/hicolor
     [ -d "$theme" ] || return 0
     touch "$theme" 2>/dev/null || true
-    [ -f "$theme/icon-theme.cache" ] || return 0
+    update_icon_cache "$theme"
+    tell_kde_about_icons
+}
+
+update_icon_cache() {
+    [ -f "$1/icon-theme.cache" ] || return 0
     for tool in gtk-update-icon-cache gtk4-update-icon-cache; do
         if command -v "$tool" >/dev/null 2>&1; then
-            "$tool" -q -t -f "$theme" >/dev/null 2>&1 || true
+            "$tool" -q -t -f "$1" >/dev/null 2>&1 || true
             return 0
         fi
     done
+}
+
+# Plasma keeps the icons it looked up until it's told they changed, so a new app shows with no icon in
+# the launcher until the next login. This is the signal KDE's own settings send. Nothing else listens.
+tell_kde_about_icons() {
+    [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-send >/dev/null 2>&1 || return 0
+    dbus-send --session --type=signal /KIconLoader org.kde.KIconLoader.iconChanged int32:0 >/dev/null 2>&1 || true
 }
 
 # Until this one step, the old version is what runs.

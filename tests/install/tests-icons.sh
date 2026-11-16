@@ -107,3 +107,38 @@ t_uninstall_refreshes_the_icons_and_leaves_the_cache() {
     check_gone "$H/$ICON_THEME/scalable/apps/io.github.xnixy.Guesthouse.svg"
     check_theme_touched
 }
+
+give_dbus_send() {
+    ln -s "$HERE/stand-ins/dbus-send" "$T/bin/dbus-send"
+}
+
+KDE_ICON_SIGNAL="dbus-send --session --type=signal /KIconLoader org.kde.KIconLoader.iconChanged int32:0"
+
+t_plasma_is_told_the_icons_changed() {
+    release 1.0
+    give_everything
+    give_dbus_send
+    FAKE_SESSION_BUS=unix:path=/nowhere install_version 1.0
+    check_exit 0
+    check_log "$KDE_ICON_SIGNAL"
+}
+
+t_with_no_session_bus_nothing_is_sent() {
+    release 1.0
+    give_everything
+    give_dbus_send
+    install_version 1.0
+    check_exit 0
+    check_not_log "dbus-send"
+}
+
+t_uninstall_tells_plasma_too() {
+    release 1.0
+    give_everything
+    give_dbus_send
+    install_version 1.0
+    : >"$T/log"
+    FAKE_SESSION_BUS=unix:path=/nowhere answering 'yes\n' "$SHELL_UNDER_TEST" "$(uninstaller)"
+    check_exit 0
+    check_log "$KDE_ICON_SIGNAL"
+}

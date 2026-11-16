@@ -6,6 +6,7 @@
 //! queue of a guest, so the first one any queue sets is kept, and the pools given here use it.
 
 use crate::pushbuffer::Header;
+use guesthouse_backend::SpaceId;
 use std::collections::HashMap;
 
 /// The compute class is the second object on a graphics channel, so it is subchannel 1.
@@ -14,6 +15,12 @@ pub(crate) const COMPUTE_SUBCHANNEL: u32 = 1;
 pub(crate) const SET_LOCAL_MEMORY_ADDRESS: u32 = 0x790;
 pub(crate) const SET_LOCAL_MEMORY_WINDOW: u32 = 0x7B0;
 const SET_LOCAL_MEMORY_WINDOW_LOWER: u32 = SET_LOCAL_MEMORY_WINDOW + 4;
+const SET_LOCAL_MEMORY_ADDRESS_LOWER: u32 = SET_LOCAL_MEMORY_ADDRESS + 4;
+/// The pool's size for each unit.
+pub(crate) const SET_LOCAL_MEMORY_SIZE: u32 = 0x2E4;
+const SET_LOCAL_MEMORY_SIZE_LOWER: u32 = SET_LOCAL_MEMORY_SIZE + 4;
+/// How many units the pool is split between, at most.
+pub(crate) const SET_LOCAL_MEMORY_UNITS: u32 = 0x2EC;
 
 const MODE_INCREASING: u32 = 1;
 const MODE_NON_INCREASING: u32 = 3;
@@ -67,11 +74,26 @@ pub(crate) struct LocalMemorySeen {
     pub(crate) sets_own_pool: bool,
     upper: Option<u32>,
     lower: Option<u32>,
+    address: [Option<u32>; 2],
+    per_unit: [Option<u32>; 2],
+    units: Option<u32>,
+    /// A pool method came in the last read.
+    touched: bool,
+}
+
+/// A shader local-memory pool, as the methods name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GuestPool {
+    pub(crate) address: u64,
+    pub(crate) per_unit: u64,
+    pub(crate) units: u32,
+    pub(crate) window: u64,
 }
 
 impl LocalMemorySeen {
     /// Reads one buffer of commands. A window split across buffers of the same queue still counts.
     pub(crate) fn read(&mut self, words: &[u32]) {
+        self.touched = false;
         let mut at = 0;
         while at < words.len() {
             let header = Header::parse(words[at]);
@@ -89,12 +111,95 @@ impl LocalMemorySeen {
             SET_LOCAL_MEMORY_ADDRESS => self.sets_own_pool = true,
             SET_LOCAL_MEMORY_WINDOW => self.upper = Some(value),
             SET_LOCAL_MEMORY_WINDOW_LOWER => self.lower = Some(value),
+            _ => {}
+        }
+        match method {
+            SET_LOCAL_MEMORY_ADDRESS => self.address[0] = Some(value),
+            SET_LOCAL_MEMORY_ADDRESS_LOWER => self.address[1] = Some(value),
+            SET_LOCAL_MEMORY_SIZE => self.per_unit[0] = Some(value),
+            SET_LOCAL_MEMORY_SIZE_LOWER => self.per_unit[1] = Some(value),
+            SET_LOCAL_MEMORY_UNITS => self.units = Some(value),
+            SET_LOCAL_MEMORY_WINDOW | SET_LOCAL_MEMORY_WINDOW_LOWER => {}
             _ => return,
         }
+        self.touched = true;
         if let (Some(upper), Some(lower)) = (self.upper, self.lower) {
             let window = u64::from(upper) << 32 | u64::from(lower);
             self.window = (window != 0).then_some(window);
         }
+    }
+}
+
+impl LocalMemorySeen {
+    /// The whole pool, once every part of it has come and none is zero. A zero is a driver
+    /// clearing it, which isn't a pool to pass on.
+    pub(crate) fn pool(&self) -> Option<GuestPool> {
+        let long = |[upper, lower]: [Option<u32>; 2]| Some(u64::from(upper?) << 32 | u64::from(lower?));
+        let pool = GuestPool {
+            address: long(self.address)?,
+            per_unit: long(self.per_unit)?,
+            units: self.units?,
+            window: self.window?,
+        };
+        (pool.address != 0 && pool.per_unit != 0 && pool.units != 0).then_some(pool)
+    }
+}
+
+/// The pools the guest's compute drivers set themselves, passed on to the context's other graphics
+/// channels. On Windows a context's channels share one graphics context, so the driver sets its
+/// pool on one channel and counts on the rest seeing it. Here each channel is its own, and one
+/// left on our small pool runs the guest's bigger per-unit size past its end.
+#[derive(Debug, Default)]
+pub(crate) struct PoolMirror {
+    seen: HashMap<u32, LocalMemorySeen>,
+    /// The newest pool for each address space and kind of context, and how many there have been.
+    pools: HashMap<(SpaceId, u32), (GuestPool, u32)>,
+    /// Which of those each queue runs with.
+    given: HashMap<u32, u32>,
+}
+
+impl PoolMirror {
+    /// Reads a submission's commands, which come before it runs. `key` is its address space and
+    /// what its context is for.
+    pub(crate) fn read(&mut self, key: (SpaceId, u32), queue: u32, words: &[u32]) {
+        let seen = self.seen.entry(queue).or_default();
+        seen.read(words);
+        if !seen.touched {
+            return;
+        }
+        let Some(pool) = seen.pool() else { return };
+        let generation = match self.pools.get(&key) {
+            Some((known, generation)) if *known == pool => *generation,
+            known => {
+                let generation = known.map_or(1, |(_, generation)| generation + 1);
+                log::info!(
+                    "queue {queue:#x} set its own shader local pool {pool:x?}, which goes to the rest"
+                );
+                self.pools.insert(key, (pool, generation));
+                generation
+            }
+        };
+        self.given.insert(queue, generation);
+    }
+
+    /// The pool this queue has to be pointed at ahead of its next submission, if it isn't yet.
+    pub(crate) fn owed(&mut self, key: (SpaceId, u32), queue: u32) -> Option<GuestPool> {
+        let (pool, generation) = *self.pools.get(&key)?;
+        let given = self.given.entry(queue).or_default();
+        (*given < generation).then(|| {
+            *given = generation;
+            pool
+        })
+    }
+
+    pub(crate) fn forget(&mut self, queue: u32) {
+        self.seen.remove(&queue);
+        self.given.remove(&queue);
+    }
+
+    /// An address space has gone.
+    pub(crate) fn forget_space(&mut self, space: SpaceId) {
+        self.pools.retain(|(known, _), _| *known != space);
     }
 }
 
@@ -205,5 +310,64 @@ mod tests {
         let seen = seen(&words);
         assert!(seen.sets_own_pool);
         assert_eq!(seen.window, None);
+    }
+
+    const SPACE: SpaceId = SpaceId(1);
+    const CUDA: (SpaceId, u32) = (SPACE, 5);
+
+    fn pool_words(address: u64, per_unit: u64, units: u32) -> Vec<u32> {
+        vec![
+            increasing(1, SET_LOCAL_MEMORY_ADDRESS, 2),
+            (address >> 32) as u32,
+            address as u32,
+            increasing(1, SET_LOCAL_MEMORY_SIZE, 2),
+            (per_unit >> 32) as u32,
+            per_unit as u32,
+            increasing(1, SET_LOCAL_MEMORY_UNITS, 1),
+            units,
+            increasing(1, SET_LOCAL_MEMORY_WINDOW, 2),
+            (WINDOW >> 32) as u32,
+            WINDOW as u32,
+        ]
+    }
+
+    #[test]
+    fn a_whole_pool_is_read() {
+        let pool = seen(&pool_words(0x5_0580_0000, 0x3F_0000, 0x55)).pool();
+        assert_eq!(
+            pool,
+            Some(GuestPool { address: 0x5_0580_0000, per_unit: 0x3F_0000, units: 0x55, window: WINDOW })
+        );
+    }
+
+    #[test]
+    fn a_cleared_pool_is_no_pool() {
+        assert_eq!(seen(&pool_words(0, 0, 0x100)).pool(), None);
+    }
+
+    #[test]
+    fn a_pool_goes_to_the_other_queues_once_and_not_back_to_its_own() {
+        let mut mirror = PoolMirror::default();
+        assert_eq!(mirror.owed(CUDA, 2), None);
+        mirror.read(CUDA, 1, &pool_words(0x5_0580_0000, 0x3F_0000, 0x55));
+        assert_eq!(mirror.owed(CUDA, 1), None);
+        assert_eq!(mirror.owed(CUDA, 2).map(|pool| pool.address), Some(0x5_0580_0000));
+        assert_eq!(mirror.owed(CUDA, 2), None);
+        assert_eq!(mirror.owed((SPACE, 3), 3), None, "another kind of context keeps its own");
+        assert_eq!(mirror.owed((SpaceId(2), 5), 3), None, "another process keeps its own");
+    }
+
+    #[test]
+    fn a_pool_that_grows_goes_out_again() {
+        let mut mirror = PoolMirror::default();
+        mirror.read(CUDA, 1, &pool_words(0x5_0580_0000, 0x3F_0000, 0x55));
+        mirror.owed(CUDA, 2);
+        mirror.read(CUDA, 1, &[0]);
+        assert_eq!(mirror.owed(CUDA, 2), None, "commands without pool methods change nothing");
+        mirror.read(CUDA, 1, &pool_words(0x5_1AA0_0000, 0xD0_0000, 0x55));
+        assert_eq!(mirror.owed(CUDA, 2).map(|pool| pool.per_unit), Some(0xD0_0000));
+        mirror.forget_space(SPACE);
+        mirror.forget(2);
+        assert_eq!(mirror.owed(CUDA, 2), None);
     }
 }

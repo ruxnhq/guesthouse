@@ -163,6 +163,8 @@ pub struct NvidiaBackend<R> {
     pub(crate) ring_moves: RingMoves,
     /// Where shaders' local addresses sit, from the first queue that set it.
     pub(crate) local_window: local_window::LocalWindow,
+    /// Compute drivers' own pools, for their contexts' other channels.
+    pub(crate) pool_mirror: local_window::PoolMirror,
     /// The memory made last, which the private data finished next belongs to.
     last_memory: Option<MemoryId>,
     /// The host's live readings, if it has any.
@@ -267,6 +269,7 @@ impl<R: Rm> NvidiaBackend<R> {
             guest_rings: HashMap::new(),
             ring_moves: RingMoves::default(),
             local_window: local_window::LocalWindow::default(),
+            pool_mirror: local_window::PoolMirror::default(),
             last_memory: None,
             sensors: None,
             card_uuid,
@@ -424,6 +427,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     }
 
     fn destroy_address_space(&mut self, space: SpaceId) {
+        self.pool_mirror.forget_space(space);
         if let Some(space) = self.spaces.remove(&space)
             && let Err(error) = self.device.destroy_address_space(&space)
         {

@@ -114,6 +114,14 @@ impl LiveQueue {
     }
 }
 
+/// The kinds of context whose driver sets a pool on one channel for all of them: OpenCL and CUDA.
+/// Others aren't read, so games pay nothing for it.
+const POOL_SHARING_HINTS: [u32; 2] = [3, 5];
+
+fn mirrors_pool(work: &Work<'_>) -> bool {
+    POOL_SHARING_HINTS.contains(&work.client_hint)
+}
+
 fn word(data: &[u8], at: usize) -> u32 {
     data.get(at..at + 4).map_or(0, |bytes| u32::from_le_bytes(bytes.try_into().expect("four bytes")))
 }
@@ -267,6 +275,37 @@ impl<R: Rm> NvidiaBackend<R> {
         }
         for words in command_buffers(host, work.space, listing) {
             self.local_window.read(work.queue, &words);
+        }
+    }
+
+    /// Reads a compute context's graphics submission for a pool its driver sets itself.
+    fn watch_guest_pool(&mut self, host: &dyn HostServices, work: &Work<'_>, listing: &[u8]) {
+        if !mirrors_pool(work) || self.engine_for(work) != Engine::Graphics {
+            return;
+        }
+        for words in command_buffers(host, work.space, listing) {
+            self.pool_mirror.read((work.space, work.client_hint), work.queue, &words);
+        }
+    }
+
+    /// Points a queue's graphics channel at the pool its context's driver set on another channel,
+    /// ahead of this submission.
+    fn give_guest_pool(&mut self, work: &Work<'_>) {
+        if !mirrors_pool(work) {
+            return;
+        }
+        let Some(queue) = self.queues.get_mut(&work.queue) else { return };
+        let channel = match &mut queue.channel {
+            QueueChannel::Ring { channel, .. } => channel,
+            QueueChannel::List(list) => &mut list.channel,
+            QueueChannel::Unusable => return,
+        };
+        if channel.engine() != Engine::Graphics {
+            return;
+        }
+        if let Some(pool) = self.pool_mirror.owed((work.space, work.client_hint), work.queue) {
+            log::debug!("queue {:#x} gets its context's own shader local pool {pool:x?}", work.queue);
+            channel.add_late_pool_methods(&pool);
         }
     }
 
@@ -448,13 +487,16 @@ impl<R: Rm> NvidiaBackend<R> {
     ) -> Result<u32, WorkStart> {
         self.settle_move(host, work.queue, Instant::now())?;
         let first = end.saturating_sub(entries);
-        if self.video_engine(work).is_none() && self.local_window.window().is_none() {
+        let mirrored = self.engine_for(work) == Engine::Graphics && mirrors_pool(work);
+        if self.video_engine(work).is_none() && (self.local_window.window().is_none() || mirrored) {
             let ring = self.queue_ring(work.queue).unwrap_or(ring_address);
             let listing = Self::ring_listing(host, work.space, ring, entries, end);
             self.watch_local_window(host, work, &listing);
+            self.watch_guest_pool(host, work, &listing);
         }
         self.ring_channel(host, work, ring_address, first);
         self.give_late_local_memory(host, work.queue);
+        self.give_guest_pool(work);
         if let Some(old_ring) = self.queue_ring(work.queue).filter(|known| *known != ring_address) {
             // This submission still ends on the old ring. The move goes with its doorbell.
             self.begin_ring_move(host, work, old_ring, ring_address, entries, end)?;
@@ -614,11 +656,13 @@ impl<R: Rm> NvidiaBackend<R> {
     ) -> Result<u32, WorkStart> {
         if self.engine_for(work) == Engine::Graphics {
             self.watch_local_window(host, work, listing);
+            self.watch_guest_pool(host, work, listing);
         }
         if !self.list_channel(host, work) {
             return Err(WorkStart::Finished);
         }
         self.give_late_local_memory(host, work.queue);
+        self.give_guest_pool(work);
         // A fence that can't be read counts as nothing finished, which only holds work back.
         let finished = host.fence_value(work.fence).unwrap_or(0);
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
@@ -794,6 +838,7 @@ impl<R: Rm> NvidiaBackend<R> {
     pub(crate) fn close(&mut self, handle: u32) {
         self.guest_rings.remove(&handle);
         self.local_window.forget(handle);
+        self.pool_mirror.forget(handle);
         let Some(queue) = self.queues.remove(&handle) else { return };
         if let Some(space) = self.spaces.get(&queue.space)
             && let Err(error) = queue.channel.close(&mut self.device, space)

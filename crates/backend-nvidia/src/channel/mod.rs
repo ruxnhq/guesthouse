@@ -13,7 +13,10 @@ pub use area::Area;
 pub use copy::{COPY_AREA_EXTRA, COPY_WINDOW, CopyChannel};
 pub use list::{LIST_AREA, ListChannel, ListFull};
 
-use crate::local_window::{COMPUTE_SUBCHANNEL, SET_LOCAL_MEMORY_ADDRESS, SET_LOCAL_MEMORY_WINDOW};
+use crate::local_window::{
+    COMPUTE_SUBCHANNEL, GuestPool, SET_LOCAL_MEMORY_ADDRESS, SET_LOCAL_MEMORY_SIZE, SET_LOCAL_MEMORY_UNITS,
+    SET_LOCAL_MEMORY_WINDOW,
+};
 use crate::profile::{Generation, HostBranch};
 use crate::pushbuffer::{increasing, ring_entry};
 use crate::rm::classes::{
@@ -91,10 +94,9 @@ const SCHEDULE_ENABLED: [u8; 3] = [1, 0, 0];
 pub const LOCAL_MEMORY_BYTES: u64 = 32 << 20;
 /// The pool's GPU address is aligned to this.
 pub const LOCAL_MEMORY_ALIGN: u64 = 2 << 20;
-/// How many SMs share the pool. The guest replaces this when it sends its own count.
+/// The most units the pool is split between. The size the GPU is given is per unit (a TPC, as in
+/// the open class headers and Mesa's NVK), so each unit gets the pool over this.
 const LOCAL_MEMORY_SMS: u32 = 0x100;
-const SET_LOCAL_MEMORY_SIZE: u32 = 0x2E4;
-const SET_LOCAL_MEMORY_SMS: u32 = 0x2EC;
 /// A pool given to a channel that is already running goes here, with its own cache invalidate
 /// after it. Well past the prelude, which is a few dozen words.
 const LATE_POOL: usize = PRELUDE + 0x800;
@@ -325,6 +327,22 @@ impl Channel {
         Ok(())
     }
 
+    /// Points a running channel at a pool the guest's driver made, ahead of its next submission.
+    /// Comes after a pool of ours that hasn't gone yet, so the guest's wins.
+    pub(crate) fn add_late_pool_methods(&mut self, pool: &GuestPool) {
+        if self.engine != Engine::Graphics {
+            return;
+        }
+        let mut words = match self.late_pool_words {
+            Some(count) => self.area.load_words(LATE_POOL, count as usize),
+            None => Vec::new(),
+        };
+        words.extend(local_memory_methods(pool));
+        words.extend(l2_invalidate_words());
+        self.area.store_words(LATE_POOL, &words);
+        self.late_pool_words = Some(words.len() as u32);
+    }
+
     /// Allocates and maps the pool, and gives the methods that name it. `None` if this channel
     /// takes no pool.
     fn map_local_memory<R: Rm>(
@@ -356,7 +374,13 @@ impl Channel {
         }
         self.local_memory = Some((handle, address, given));
         log::info!("shader local memory {given:#x} bytes at {address:#x}");
-        Ok(Some(local_memory_methods(address, given, window)))
+        let pool = GuestPool {
+            address,
+            per_unit: given / u64::from(LOCAL_MEMORY_SMS),
+            units: LOCAL_MEMORY_SMS,
+            window,
+        };
+        Ok(Some(local_memory_methods(&pool)))
     }
 
     /// Whether this channel has a pool, in its prelude or still to come.
@@ -466,18 +490,24 @@ impl Channel {
     }
 }
 
-/// The compute methods that point a channel at its local-memory pool.
-fn local_memory_methods(address: u64, size: u64, window: u64) -> Vec<u32> {
+/// The compute methods that point a channel at a local-memory pool. The size is per unit, so the
+/// GPU takes `per_unit` times the units it has, up to `units`.
+pub(crate) fn local_memory_methods(pool: &GuestPool) -> Vec<u32> {
     let subchannel = COMPUTE_SUBCHANNEL;
+    let GuestPool { address, per_unit, units, window } = *pool;
     let mut words = Vec::with_capacity(11);
     words.extend([
         increasing(subchannel, SET_LOCAL_MEMORY_ADDRESS, 2),
         (address >> 32) as u32,
         address as u32,
     ]);
-    words.extend([increasing(subchannel, SET_LOCAL_MEMORY_SIZE, 2), (size >> 32) as u32, size as u32]);
+    words.extend([
+        increasing(subchannel, SET_LOCAL_MEMORY_SIZE, 2),
+        (per_unit >> 32) as u32,
+        per_unit as u32,
+    ]);
     words.extend([increasing(subchannel, SET_LOCAL_MEMORY_WINDOW, 2), (window >> 32) as u32, window as u32]);
-    words.extend([increasing(subchannel, SET_LOCAL_MEMORY_SMS, 1), LOCAL_MEMORY_SMS]);
+    words.extend([increasing(subchannel, SET_LOCAL_MEMORY_UNITS, 1), units]);
     words
 }
 
@@ -620,6 +650,39 @@ mod tests {
         assert!(words.ends_with(&l2_invalidate_words()), "the late pool still drops the L2");
         channel.entry_ahead_placed();
         assert_eq!(channel.entry_ahead(), invalidate);
+        channel.close(&mut device, &space).unwrap();
+    }
+
+    #[test]
+    fn our_pool_is_split_between_its_units() {
+        let (mut device, space) = device();
+        let mut channel = channel(&mut device, &space, Engine::Graphics);
+        channel.add_late_local_memory(&mut device, &space, 0x5000_0000, WINDOW).unwrap();
+        let ahead = RingEntry::parse(channel.entry_ahead().to_le_bytes());
+        let words = channel.area().load_words((ahead.address - AREA_ADDRESS) as usize, ahead.length as usize);
+        let per_unit = LOCAL_MEMORY_BYTES / u64::from(LOCAL_MEMORY_SMS);
+        let size = [increasing(COMPUTE_SUBCHANNEL, SET_LOCAL_MEMORY_SIZE, 2), 0, per_unit as u32];
+        assert!(words.windows(3).any(|three| three == size), "{words:x?}");
+        let units = [increasing(COMPUTE_SUBCHANNEL, SET_LOCAL_MEMORY_UNITS, 1), LOCAL_MEMORY_SMS];
+        assert!(words.windows(2).any(|two| two == units), "{words:x?}");
+        channel.close(&mut device, &space).unwrap();
+    }
+
+    #[test]
+    fn a_guest_pool_goes_after_ours_and_before_the_invalidate() {
+        let (mut device, space) = device();
+        let mut channel = channel(&mut device, &space, Engine::Graphics);
+        channel.add_late_local_memory(&mut device, &space, 0x5000_0000, WINDOW).unwrap();
+        let pool = GuestPool { address: 0x5_0580_0000, per_unit: 0x3F_0000, units: 0x55, window: WINDOW };
+        channel.add_late_pool_methods(&pool);
+        let ahead = RingEntry::parse(channel.entry_ahead().to_le_bytes());
+        let words = channel.area().load_words((ahead.address - AREA_ADDRESS) as usize, ahead.length as usize);
+        let theirs = local_memory_methods(&pool);
+        let at =
+            words.windows(theirs.len()).rposition(|run| run == theirs.as_slice()).expect("the guest's pool");
+        assert!(at > 0, "ours comes first");
+        assert!(words[at + theirs.len()..].ends_with(&l2_invalidate_words()));
+        channel.entry_ahead_placed();
         channel.close(&mut device, &space).unwrap();
     }
 

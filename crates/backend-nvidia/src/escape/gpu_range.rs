@@ -3,7 +3,7 @@
 //! The runtime treats it as set aside already and places things there without asking, so the host
 //! must keep its own hand-outs clear of it.
 
-use super::put;
+use super::{put, put_long};
 use guesthouse_backend::GpuRange;
 
 /// Everything from 512 MiB up to the 4 GiB line.
@@ -31,12 +31,6 @@ pub(super) fn answer(data: &mut [u8]) {
     put(data, UNEXPLAINED, UNEXPLAINED_VALUE);
     put_long(data, BASE, RUNTIME_GPU_RANGE.start);
     put_long(data, LAST, RUNTIME_GPU_RANGE.end - 1);
-}
-
-fn put_long(data: &mut [u8], at: usize, value: u64) {
-    if let Some(field) = data.get_mut(at..at + 8) {
-        field.copy_from_slice(&value.to_le_bytes());
-    }
 }
 
 #[cfg(test)]

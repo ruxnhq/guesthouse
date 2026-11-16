@@ -8,6 +8,8 @@ That's Godot on Vulkan, in Windows, in a VM on Fedora. Nothing is passed through
 
 > **Status:** early. 0.5.2 is out. It runs well on my RTX 5090, and testers have run Windows on NVIDIA and AMD cards of their own, [listed below](#cards). AMD is newer and experimental.
 
+**[Join the Discord](https://discord.gg/rN3VARayZV)** for questions and chat. Bugs still go in the [issues](https://github.com/xnixy/guesthouse/issues), so they don't get lost.
+
 ## Install
 
 ```sh
@@ -48,8 +50,6 @@ Nobody has tried these yet. They should work, most likely first:
 Not handled: older AMD cards like Polaris, GTX 10 series and older NVIDIA cards, and datacentre cards like the A100.
 
 If something doesn't work on your card, or your card isn't in the table and works, please open an issue.
-
-There's a [Discord server](https://discord.gg/rN3VARayZV) for questions and chat. Bugs still go in the issues, so they don't get lost.
 
 ## Why
 

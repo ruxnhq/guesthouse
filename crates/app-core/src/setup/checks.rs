@@ -386,6 +386,12 @@ fn judge_ram(offer: &RamOffer) -> Check {
     let text = offer.explanation(least);
     if offer.limit_gib() < least {
         Check::new(TITLE, CheckState::Failed, text, "A GPU machine can't start on this PC.")
+    } else if offer.tight(least) {
+        let fix = format!(
+            "Give the machine {least} GiB, and close other programs before it starts. It won't start while the \
+             PC is using too much."
+        );
+        Check::new(TITLE, CheckState::Warning, text, fix)
     } else if offer.limit_gib() < WANTED_RAM_GIB {
         let fix = format!(
             "A new Windows machine gets {WANTED_RAM_GIB} GiB unless it's given less, so give it {} GiB or less.",
@@ -746,7 +752,13 @@ mod tests {
 
     #[test]
     fn the_ram_is_judged_by_what_a_gpu_machine_could_have() {
-        for (total_gib, state) in [(8, CheckState::Failed), (16, CheckState::Warning), (32, CheckState::Ok)] {
+        let states = [
+            (8, CheckState::Failed),
+            (11, CheckState::Warning),
+            (16, CheckState::Warning),
+            (32, CheckState::Ok),
+        ];
+        for (total_gib, state) in states {
             let found = judge_ram(&RamOffer::new(total_gib * crate::host::GIB, 0));
             assert_eq!(found.state, state, "{total_gib}");
             assert!(found.text.contains(&format!("This PC has {total_gib} GiB of RAM")), "{}", found.text);

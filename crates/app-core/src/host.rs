@@ -4,7 +4,7 @@ use crate::context::Context;
 use crate::failure::Result;
 use crate::guest_memory::NO_ROOM_WORDS;
 use crate::held_memory::used_by_others;
-use crate::machine::{Machine, sorted_names};
+use crate::machine::{MIN_RAM_GIB, Machine, sorted_names};
 use guesthouse_daemon::slot::Slot;
 use rustix::fs::statvfs;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +21,10 @@ pub const IO_SPACE_GIB: u64 = 2;
 const HOST_SHARE_DIVISOR: u64 = 4;
 /// A desktop with a browser and Steam open, and the viewer and the daemon beside them.
 pub const HOST_KEEPS_LEAST_GIB: u64 = 6;
+/// What the host can get by on, with little open beside the viewer and the daemon. It keeps this little
+/// only when keeping its share would leave no room for a GPU machine of the least size, and the start
+/// still checks what is free then.
+pub const HOST_KEEPS_FLOOR_GIB: u64 = 3;
 /// What the host always kept, which on a large PC is plenty.
 pub const HOST_KEEPS_MOST_GIB: u64 = 16;
 /// What has to stay free when a GPU machine starts, beside its RAM and IO space, so the host isn't left
@@ -99,9 +103,25 @@ impl RamOffer {
         Self { total, keeps: host_keeps(total), others }
     }
 
-    /// The most RAM a GPU machine can have, in GiB.
+    /// The most RAM a GPU machine can have, in GiB. On a PC that's short of its share, that's still
+    /// the least a machine runs on, if the host can keep its floor beside it.
     pub fn limit_gib(&self) -> u64 {
-        self.total.saturating_sub(self.keeps + IO_SPACE_GIB * GIB + self.others) / GIB
+        let least = u64::from(MIN_RAM_GIB);
+        let comfortable = self.after_keeping(self.keeps);
+        if comfortable < least && self.tight(least) { least } else { comfortable }
+    }
+
+    /// What's left for a GPU machine, in GiB, when the host keeps `keeps` bytes.
+    fn after_keeping(&self, keeps: u64) -> u64 {
+        self.total.saturating_sub(keeps + IO_SPACE_GIB * GIB + self.others) / GIB
+    }
+
+    /// Whether a machine of `least` GiB fits only by the host keeping less than its share. Not while other
+    /// VMs hold RAM: stopping one is the better way to make room.
+    pub fn tight(&self, least: u64) -> bool {
+        self.others < GIB / 2
+            && self.after_keeping(self.keeps) < least
+            && self.after_keeping(HOST_KEEPS_FLOOR_GIB * GIB) >= least
     }
 
     /// Where the RAM goes, as a sentence.
@@ -120,6 +140,14 @@ impl RamOffer {
     /// What a RAM setting says under it, for a machine that needs at least `least` GiB.
     pub fn explanation(&self, least: u64) -> String {
         let limit = self.limit_gib();
+        if self.tight(least) {
+            let keeps = self.total / GIB - least - IO_SPACE_GIB;
+            return format!(
+                "{least} GiB, the least a GPU machine runs on. This PC has {} GiB of RAM, so it keeps only about \
+                 {keeps} GiB for itself while the machine runs, not the {HOST_KEEPS_LEAST_GIB} GiB it would like.",
+                self.total / GIB
+            );
+        }
         if limit >= least {
             return format!("Up to {limit} GiB. {}", self.reasons());
         }
@@ -332,6 +360,20 @@ mod tests {
         let fine = RamOffer::new(30 * GIB, 0).explanation(4);
         assert!(fine.starts_with("Up to 20 GiB. This PC has 30 GiB of RAM and keeps 8 GiB"), "{fine}");
         assert!(!fine.contains("/dev/shm"), "{fine}");
+    }
+
+    #[test]
+    fn a_pc_short_of_its_share_keeps_less_so_the_least_machine_fits() {
+        let issue_197 = RamOffer::new(11 * GIB + GIB / 2, 0);
+        assert!(issue_197.tight(4));
+        assert_eq!(issue_197.limit_gib(), 4);
+        let said = issue_197.explanation(4);
+        assert!(said.starts_with("4 GiB, the least") && said.contains("keeps only about 5 GiB"), "{said}");
+        let field = RamField::new(issue_197.limit_gib(), 4, 16, said);
+        assert_eq!((field.fits, field.value), (true, 4));
+        assert!(!RamOffer::new(sold_with(8), 0).tight(4), "an 8 GB PC can't keep its floor beside 4 GiB");
+        assert!(!RamOffer::new(sold_with(16), 0).tight(4), "a 16 GB PC has room with its share");
+        assert!(!RamOffer::new(16 * GIB, 6 * GIB).tight(4), "another VM's RAM still counts");
     }
 
     #[test]

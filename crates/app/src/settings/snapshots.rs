@@ -4,10 +4,11 @@ use super::{Shared, is_off};
 use crate::common::in_background;
 use crate::rows::{boxed_rows, confirm, icon_button, on_yes, question, row_button};
 use adw::prelude::*;
-use chrono::{Local, TimeZone};
 use guesthouse_app_core::machine::Kind;
 use guesthouse_app_core::snapshots::{Snapshot, list_snapshots};
 use guesthouse_app_core::tasks::Status;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -15,8 +16,10 @@ const NOT_INSTALLED: &str = "Windows has not finished installing.";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 
 fn taken_text(snapshot: &Snapshot) -> String {
-    let time = Local.timestamp_opt(snapshot.taken, 0).single();
-    time.map_or_else(String::new, |time| time.format("%-d %B %Y, %H:%M").to_string())
+    let time = Timestamp::from_second(snapshot.taken).ok();
+    time.map_or_else(String::new, |time| {
+        time.to_zoned_datetime(TimeZone::system()).strftime("%-d %B %Y, %H:%M").to_string()
+    })
 }
 
 struct Parts {

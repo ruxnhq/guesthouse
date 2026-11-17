@@ -3,7 +3,7 @@
 //! The table comes from Unicode's public CLDR data, under the Unicode License v3: `data/windows-zones.txt`
 //! says where. Anything it can't place stays on UTC, which is also what the answer file's template says.
 
-use chrono::{Datelike, Local};
+use jiff::ZonedDateTime;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -57,7 +57,7 @@ pub fn windows_zone(zone: &str) -> String {
     if let Some((_, name)) = table.iter().find(|(known, _)| *known == zone) {
         return (*name).to_owned();
     }
-    let year = Local::now().year() + 1;
+    let year = i32::from(ZonedDateTime::now().year()) + 1;
     let Some(wanted) = offsets(zone, year) else { return FALLBACK.to_owned() };
     let same = table.iter().find(|(known, _)| offsets(known, year).as_ref() == Some(&wanted));
     same.map_or_else(|| FALLBACK.to_owned(), |(_, name)| (*name).to_owned())

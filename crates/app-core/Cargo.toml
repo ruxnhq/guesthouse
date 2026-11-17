@@ -37,7 +37,7 @@ guesthouse-jail.workspace = true
 # The host card's readings, which the daemon's sensor thread publishes and the overlay shows.
 guesthouse-sensors.workspace = true
 # Local time for the log and for snapshot dates. The standard library has no time zones.
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+jiff = { version = "1", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 # Reading C headers for the tables a guest's modules are built with.
 regex = "1"
 # Safe calls for statvfs, flock, kill, access, getxattr and a send that never waits, which keeps `unsafe` out of this crate.

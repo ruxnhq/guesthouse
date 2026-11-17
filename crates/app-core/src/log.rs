@@ -1,7 +1,7 @@
 //! The app's log, which holds the whole story of a failure.
 
 use crate::context::Context;
-use chrono::Local;
+use jiff::ZonedDateTime;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
@@ -10,7 +10,7 @@ pub const MOST_LOG_BYTES: u64 = 1 << 18;
 
 /// The time at the start of each line.
 pub fn clock_text() -> String {
-    Local::now().format("%H:%M:%S").to_string()
+    ZonedDateTime::now().strftime("%H:%M:%S").to_string()
 }
 
 pub fn open_for_appending(context: &Context) -> io::Result<File> {

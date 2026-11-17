@@ -2,7 +2,7 @@
 
 use crate::share::anchored::Info;
 use crate::share::inside::quote;
-use chrono::DateTime;
+use jiff::Timestamp;
 
 /// File times Windows sets, and is told it has, which it needs to finish a copy.
 const WINDOWS_TIMES: [&str; 4] =
@@ -10,8 +10,9 @@ const WINDOWS_TIMES: [&str; 4] =
 const XML_HEADER: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
 
 pub fn http_date(seconds: i64) -> String {
-    let time = DateTime::from_timestamp(seconds, 0).unwrap_or_default();
-    time.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+    // A time jiff can't hold is none a file has, so it becomes the start of 1970.
+    let time = Timestamp::from_second(seconds).unwrap_or(Timestamp::UNIX_EPOCH);
+    time.strftime("%a, %d %b %Y %H:%M:%S GMT").to_string()
 }
 
 fn escape(text: &str) -> String {
@@ -60,4 +61,21 @@ pub fn lock_body(token: &str) -> String {
          <D:timeout>Second-3600</D:timeout><D:locktoken><D:href>{token}</D:href></D:locktoken>\
          </D:activelock></D:lockdiscovery></D:prop>"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_date_is_written_the_way_http_wants_it() {
+        // The example date from the HTTP standard.
+        assert_eq!(http_date(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+
+    #[test]
+    fn a_time_too_far_off_to_hold_becomes_the_start_of_1970() {
+        assert_eq!(http_date(i64::MAX), "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
 }

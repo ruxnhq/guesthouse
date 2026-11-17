@@ -1,7 +1,7 @@
 //! Just enough HTTP/1.1 for one client on a pipe.
 
 use crate::share::listing::http_date;
-use chrono::Utc;
+use jiff::Timestamp;
 use std::io::{self, BufRead, Read, Write, sink};
 
 const SERVER: &str = "Guesthouse";
@@ -101,7 +101,7 @@ fn reason(code: u16) -> &'static str {
 /// The status line and headers.
 pub fn headers(output: &mut impl Write, code: u16, fields: &[(&str, &str)]) -> io::Result<()> {
     write!(output, "HTTP/1.1 {code} {}\r\n", reason(code))?;
-    write!(output, "Server: {SERVER}\r\nDate: {}\r\n", http_date(Utc::now().timestamp()))?;
+    write!(output, "Server: {SERVER}\r\nDate: {}\r\n", http_date(Timestamp::now().as_second()))?;
     for (name, value) in fields {
         write!(output, "{name}: {value}\r\n")?;
     }

@@ -2,8 +2,10 @@
 
 use crate::context::Context;
 use jiff::ZonedDateTime;
+use std::backtrace::Backtrace;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::panic;
 
 /// How much of the end of the log is shown, as it can grow for months.
 pub const MOST_LOG_BYTES: u64 = 1 << 18;
@@ -25,6 +27,19 @@ pub fn write_log(context: &Context, text: &str) -> io::Result<()> {
     writeln!(open_for_appending(context)?, "{} {}", clock_text(), text.trim_end())
 }
 
+/// Writes any panic to the log too, with where it happened and how it got there, as the terminal
+/// that shows it by default is rarely there when the app was opened from a desktop. The default
+/// message still goes to the terminal as well.
+pub fn log_panics(context: &Context) {
+    let context = context.clone();
+    let earlier = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let trace = Backtrace::force_capture();
+        let _ = write_log(&context, &format!("panic: {info}\n{trace}"));
+        earlier(info);
+    }));
+}
+
 /// The end of the log.
 pub fn read_log(context: &Context) -> String {
     let Ok(mut file) = File::open(context.paths.log_file()) else { return String::new() };
@@ -42,6 +57,20 @@ pub fn read_log(context: &Context) -> String {
 mod tests {
     use super::*;
     use crate::testing::{Scratch, scratch_context};
+
+    #[test]
+    fn a_panic_ends_up_in_the_log() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        log_panics(&context);
+        let caught = panic::catch_unwind(|| panic!("the planted panic"));
+        // Back to the default, so other tests' panics don't land in this one's log.
+        let _ = panic::take_hook();
+        assert!(caught.is_err());
+        let log = read_log(&context);
+        assert!(log.contains("panic: ") && log.contains("the planted panic"), "{log}");
+        assert!(log.contains("log.rs"), "it says where");
+    }
 
     #[test]
     fn only_the_end_of_a_long_log_is_read() {

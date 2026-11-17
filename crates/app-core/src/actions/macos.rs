@@ -1,23 +1,55 @@
 //! Starting a macOS guest. It runs on reims-vgpu's QEMU, with no daemon and no forwarding: the
-//! guest's own drivers draw through the device, and the device draws on the host's Vulkan.
+//! guest's own drivers draw through the device, and the device draws on the host's Vulkan. Its QEMU
+//! opens the card itself, so it only starts jailed, as a GPU machine's does.
 
 use super::{Task, plan_for};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
+use crate::jailing::choose;
+use crate::linux::amd::amd_card;
+use crate::linux::card::forwarded_card;
 use crate::machine::Machine;
 use crate::start_checks::start_problems;
-use crate::vm_args::{Boot, MACOS_QEMU, MACOS_ROM, MacosBoot};
+use crate::vm_args::{Boot, MACOS_QEMU, MACOS_ROM, MacosBoot, MacosCard, UDMABUF};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The firmware OpenCore was made for, which is kept beside its image.
 const FIRMWARE_CODE: &str = "OVMF_CODE.fd";
+/// The jailed QEMU's home, in the machine's folder: see [`MacosBoot::home`].
+const HOME_FOLDER: &str = "gpu-cache";
 const NO_MACOS_PART: &str = "This install has no macOS part, which a macOS machine starts with.";
 const NO_UDMABUF: &str = "/dev/udmabuf can't be opened. A macOS machine's memory reaches the GPU through \
                           it. Add yourself to the group that owns it, usually kvm, and log in again.";
-const UDMABUF: &str = "/dev/udmabuf";
+const NO_CARD: &str = "This PC has no GPU a macOS machine can use. It needs an NVIDIA or AMD card with \
+                       its driver loaded.";
+/// The PCI device a DRM node belongs to, and its number there.
+const DEVICE_NUMBER: &str = "device/device";
+
+/// A card's PCI device number, from its render node's folder in the DRM class.
+fn device_number(context: &Context, render_node: &str) -> Option<u32> {
+    let text = fs::read_to_string(context.drm_class.join(render_node).join(DEVICE_NUMBER)).ok()?;
+    u32::from_str_radix(text.trim().trim_start_matches("0x"), 16).ok()
+}
+
+/// The card the device draws on: the AMD card chosen for the machine, or else the NVIDIA card.
+fn card_of(context: &Context, machine: &Machine) -> Result<MacosCard> {
+    if !machine.amd_gpu.is_empty() {
+        let card = amd_card(context, &machine.amd_gpu).ok_or_else(|| {
+            Failure(format!(
+                "The AMD card at {} isn't in this PC now. Choose the GPU again in the machine's settings.",
+                machine.amd_gpu
+            ))
+        })?;
+        return Ok(MacosCard::amd(&card));
+    }
+    let card = forwarded_card(context).ok_or_else(|| Failure::new(NO_CARD))?;
+    let device = card.render_node.as_deref().and_then(|node| device_number(context, node));
+    Ok(MacosCard::nvidia(&card, device))
+}
 
 /// What this machine boots from, or what is missing.
-fn boot_of(context: &Context, machine: &Machine) -> Result<MacosBoot> {
+fn boot_of(context: &Context, machine: &Machine, card: MacosCard) -> Result<MacosBoot> {
     let opencore = PathBuf::from(&machine.opencore);
     let firmware_code = opencore.parent().unwrap_or(Path::new("")).join(FIRMWARE_CODE);
     let rom = context.paths.helper(MACOS_ROM);
@@ -29,18 +61,21 @@ fn boot_of(context: &Context, machine: &Machine) -> Result<MacosBoot> {
     if !rom.exists() || !context.paths.helper(MACOS_QEMU).exists() {
         return Err(Failure::new(NO_MACOS_PART));
     }
-    Ok(MacosBoot { opencore, firmware_code, installer: machine.iso.clone(), rom })
+    let home = machine.folder(context).join(HOME_FOLDER);
+    fs::create_dir_all(&home)?;
+    Ok(MacosBoot { opencore, firmware_code, installer: machine.iso.clone(), rom, card, home })
 }
 
 fn can_open(device: &str) -> bool {
-    std::fs::OpenOptions::new().read(true).write(true).open(device).is_ok()
+    fs::OpenOptions::new().read(true).write(true).open(device).is_ok()
 }
 
 pub fn start(task: &mut Task) -> Result<()> {
     if let Some(problem) = start_problems(task.context, &task.machine)?.into_iter().next() {
         return Err(Failure(problem));
     }
-    let boot = boot_of(task.context, &task.machine)?;
+    let card = card_of(task.context, &task.machine)?;
+    let boot = boot_of(task.context, &task.machine, card)?;
     if !can_open(UDMABUF) {
         return Err(Failure::new(NO_UDMABUF));
     }
@@ -48,6 +83,9 @@ pub fn start(task: &mut Task) -> Result<()> {
     plan.qemu = task.context.paths.helper(MACOS_QEMU);
     // Its QEMU finds its own files beside itself.
     plan.qemu_files = None;
+    let choice = choose(task.context, &task.machine, &plan, &(task.context.jail_offer)(&plan))?;
+    plan.jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
+    plan.jail_note = choice.note;
     task.step("Starting the VM");
     task.host.start(&plan, &task.machine)
 }
@@ -57,7 +95,6 @@ mod tests {
     use super::*;
     use crate::machine::Kind;
     use crate::testing::{Scratch, scratch_context};
-    use std::fs;
 
     fn mac(context: &Context) -> Machine {
         let folder = context.paths.machines.join("mac");
@@ -87,10 +124,11 @@ mod tests {
         let context = scratch_context(&scratch);
         with_macos_part(&context);
         let machine = mac(&context);
-        let boot = boot_of(&context, &machine).unwrap();
+        let boot = boot_of(&context, &machine, MacosCard::default()).unwrap();
         assert_eq!(boot.firmware_code, machine.folder(&context).join(FIRMWARE_CODE));
         assert_eq!(boot.rom, context.paths.helper(MACOS_ROM));
         assert_eq!(boot.installer, "");
+        assert!(boot.home.is_dir() && boot.home.starts_with(machine.folder(&context)));
     }
 
     #[test]
@@ -98,10 +136,10 @@ mod tests {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let machine = mac(&context);
-        assert_eq!(boot_of(&context, &machine).unwrap_err().to_string(), NO_MACOS_PART);
+        assert_eq!(boot_of(&context, &machine, MacosCard::default()).unwrap_err().to_string(), NO_MACOS_PART);
         with_macos_part(&context);
         fs::remove_file(machine.folder(&context).join(FIRMWARE_CODE)).unwrap();
-        let said = boot_of(&context, &machine).unwrap_err().to_string();
+        let said = boot_of(&context, &machine, MacosCard::default()).unwrap_err().to_string();
         assert!(said.ends_with("OVMF_CODE.fd is missing."), "{said}");
     }
 }

@@ -6,9 +6,13 @@
 //! it gets a plain machine's, and the keyboard and pointer are QEMU's.
 
 use super::arguments::{MONITOR_SOCKETS, words};
+use super::forwarding_jail::{DEVICES, gpu_nodes};
 use super::{Boot, VmPlan};
+use crate::linux::amd::AmdCard;
+use crate::linux::card::ForwardedCard;
 use crate::text::qemu_value;
-use std::path::PathBuf;
+use guesthouse_jail::{Grant, Plan};
+use std::path::{Path, PathBuf};
 
 /// Where the program folder keeps reims-vgpu's QEMU and the device's option ROM.
 pub const MACOS_QEMU: &str = "macos/qemu/bin/qemu-system-x86_64";
@@ -23,6 +27,44 @@ const CPU: &str = "Skylake-Client-noTSX-IBRS,kvm=on,vendor=GenuineIntel,+invtsc,
 const SMC: &str = "isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc";
 const LOG_VARIABLE: &str = "REIMS_VGPU_LOG";
 const LOG_LEVEL: &str = "warn";
+const HOME_VARIABLE: &str = "HOME";
+/// The guest's memory reaches the GPU through this, whatever the card.
+pub const UDMABUF: &str = "/dev/udmabuf";
+/// Mesa's and the Vulkan loader's settings for which card to use, which the device's library obeys.
+const MESA_CARD_VARIABLE: &str = "MESA_VK_DEVICE_SELECT";
+const LOADER_CARD_VARIABLE: &str = "VK_LOADER_DEVICE_SELECT";
+/// libdrm finds a card's nodes by listing this folder.
+const RENDER_NODES: &str = "dri";
+/// NVIDIA's Vulkan driver opens this beside the card's own nodes.
+const NVIDIA_MODESET: &str = "nvidia-modeset";
+const NVIDIA_VENDOR: &str = "10de";
+const AMD_VENDOR: &str = "1002";
+
+/// The card the device draws on.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MacosCard {
+    /// Its device files, which are all of a GPU's a jailed QEMU may open.
+    pub nodes: Vec<PathBuf>,
+    /// Its PCI vendor and device numbers, as `10de:2b85`, if sysfs says.
+    pub numbers: Option<String>,
+}
+
+impl MacosCard {
+    /// An NVIDIA card, with its PCI device number if sysfs gave one.
+    pub fn nvidia(card: &ForwardedCard, device: Option<u32>) -> Self {
+        let devices = Path::new(DEVICES);
+        let mut nodes = gpu_nodes(devices, card);
+        nodes.extend(Some(devices.join(NVIDIA_MODESET)).filter(|node| node.exists()));
+        Self { nodes, numbers: device.map(|device| format!("{NVIDIA_VENDOR}:{device:04x}")) }
+    }
+
+    pub fn amd(card: &AmdCard) -> Self {
+        Self {
+            nodes: vec![card.render_node.clone()],
+            numbers: Some(format!("{AMD_VENDOR}:{:04x}", card.device)),
+        }
+    }
+}
 
 /// What a macOS guest boots from beside its disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,10 +76,15 @@ pub struct MacosBoot {
     /// Apple's installer as a disk, or empty once macOS is installed.
     pub installer: String,
     pub rom: PathBuf,
+    pub card: MacosCard,
+    /// A folder of the machine's that a jailed QEMU has for a home. The device's library and the
+    /// card's driver keep compiled shaders under it, and with nowhere to keep them every start
+    /// compiles them again.
+    pub home: PathBuf,
 }
 
 impl VmPlan {
-    fn macos_boot(&self) -> Option<&MacosBoot> {
+    pub(super) fn macos_boot(&self) -> Option<&MacosBoot> {
         match &self.boot {
             Boot::Macos(boot) => Some(boot),
             _ => None,
@@ -173,13 +220,43 @@ impl VmPlan {
         arguments.extend(self.macos_network());
         arguments.extend(self.macos_devices(boot));
         arguments.extend(self.macos_outputs());
+        arguments.extend(self.qemu_sandbox_arguments());
         Some(arguments)
+    }
+
+    /// What a macOS guest's QEMU may reach beyond what any jailed QEMU does. The device's library
+    /// opens the card itself, so it gets that card's nodes and no other card's.
+    pub(super) fn grant_macos(&self, plan: &mut Plan) {
+        let Some(boot) = self.macos_boot() else { return };
+        // OpenCore keeps its settings in its own image.
+        plan.grant(Grant::Write, &boot.opencore).grant(Grant::Read, &boot.rom);
+        if !boot.installer.is_empty() {
+            plan.grant(Grant::Read, &boot.installer);
+        }
+        plan.grant(Grant::Own, &boot.home);
+        plan.grant(Grant::Device, UDMABUF);
+        for node in &boot.card.nodes {
+            plan.grant(Grant::Device, node);
+            if let Some(folder) = node.parent().filter(|folder| folder.ends_with(RENDER_NODES)) {
+                plan.grant(Grant::List, folder);
+            }
+        }
     }
 
     /// The device's library says what goes wrong on QEMU's output, where a failed start is read from.
     pub(super) fn macos_environment(&self) -> Vec<(String, String)> {
-        let log = (LOG_VARIABLE.to_owned(), LOG_LEVEL.to_owned());
-        self.macos_boot().map(|_| log).into_iter().collect()
+        let Some(boot) = self.macos_boot() else { return Vec::new() };
+        let mut environment = vec![(LOG_VARIABLE.to_owned(), LOG_LEVEL.to_owned())];
+        // Outside a jail it has the user's own home, as any program does.
+        if self.jail.is_some() {
+            environment.push((HOME_VARIABLE.to_owned(), boot.home.display().to_string()));
+        }
+        if let Some(numbers) = &boot.card.numbers {
+            let (vendor, device) = numbers.split_once(':').unwrap_or((numbers, ""));
+            environment.push((MESA_CARD_VARIABLE.to_owned(), numbers.clone()));
+            environment.push((LOADER_CARD_VARIABLE.to_owned(), format!("0x{vendor}:0x{device}")));
+        }
+        environment
     }
 }
 
@@ -189,6 +266,7 @@ mod tests {
     use crate::machine::{Kind, Machine};
     use crate::slots;
     use crate::testing::{Scratch, scratch_context};
+    use crate::vm_args::QemuJail;
 
     fn boot(installer: &str) -> Boot {
         Boot::Macos(MacosBoot {
@@ -196,6 +274,11 @@ mod tests {
             firmware_code: "/m/mac/OVMF_CODE.fd".into(),
             installer: installer.to_owned(),
             rom: "/p/macos/ReimsGraphics.rom".into(),
+            card: MacosCard {
+                nodes: vec!["/dev/nvidiactl".into(), "/dev/nvidia0".into(), "/dev/dri/renderD129".into()],
+                numbers: Some("10de:2b85".into()),
+            },
+            home: "/m/mac/gpu-cache".into(),
         })
     }
 
@@ -263,10 +346,63 @@ mod tests {
     #[test]
     fn only_a_macos_guest_gets_the_line_and_the_librarys_log() {
         let mac = plan(boot(""));
-        assert_eq!(mac.qemu_environment(), [(LOG_VARIABLE.to_owned(), LOG_LEVEL.to_owned())]);
+        let set = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        assert_eq!(
+            mac.qemu_environment(),
+            [
+                set(LOG_VARIABLE, LOG_LEVEL),
+                set(MESA_CARD_VARIABLE, "10de:2b85"),
+                set(LOADER_CARD_VARIABLE, "0x10de:0x2b85")
+            ]
+        );
         let plain = plan(Boot::Plain { iso: String::new() });
         assert!(plain.macos_arguments().is_none());
         assert!(plain.qemu_environment().is_empty());
         assert!(!plain.qemu_arguments().iter().any(|word| word.contains("reims")));
+    }
+
+    fn jail() -> QemuJail {
+        QemuJail {
+            launcher: "/p/guesthouse-jail".into(),
+            namespaces: true,
+            qemu_sandbox: true,
+            sound_socket: None,
+            backing_files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn its_jail_has_its_own_files_the_cards_nodes_and_udmabuf() {
+        let mac = VmPlan {
+            qemu: "/p/macos/qemu/bin/qemu-system-x86_64".into(),
+            ..plan(boot("/m/mac/installer.img"))
+        };
+        let rules = mac.qemu_jail_plan(&jail());
+        let has = |grant: Grant, path: &str| rules.paths.contains(&(grant, PathBuf::from(path)));
+        assert!(has(Grant::Write, "/m/mac/opencore.qcow2") && has(Grant::Write, "/m/mac/disk.qcow2"));
+        assert!(has(Grant::Write, "/m/mac/OVMF_VARS.fd") && has(Grant::Read, "/m/mac/OVMF_CODE.fd"));
+        assert!(has(Grant::Read, "/m/mac/installer.img") && has(Grant::Read, "/p/macos/ReimsGraphics.rom"));
+        assert!(has(Grant::Run, "/p/macos/qemu"), "its own QEMU's tree");
+        assert!(has(Grant::Device, UDMABUF));
+        assert!(has(Grant::Own, "/m/mac/gpu-cache"), "somewhere to keep compiled shaders");
+        for node in ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/renderD129"] {
+            assert!(has(Grant::Device, node), "{node}");
+        }
+        assert!(has(Grant::List, "/dev/dri"));
+        let devices: Vec<&PathBuf> =
+            rules.paths.iter().filter(|(grant, _)| *grant == Grant::Device).map(|(_, path)| path).collect();
+        assert!(!devices.iter().any(|path| path.ends_with("nvidia1")), "no other card's");
+    }
+
+    #[test]
+    fn a_jailed_one_has_qemus_own_filter_and_starts_behind_the_launcher() {
+        let mac = VmPlan { jail: Some(jail()), ..plan(boot("")) };
+        let arguments = mac.qemu_arguments();
+        assert_eq!(value_after(&arguments, "-sandbox"), "on,obsolete=deny,spawn=allow,resourcecontrol=deny");
+        assert!(mac.qemu_command().iter().any(|word| word == "/p/guesthouse-jail"));
+        let home = (HOME_VARIABLE.to_owned(), "/m/mac/gpu-cache".to_owned());
+        assert!(mac.qemu_environment().contains(&home));
+        assert!(!plan(boot("")).qemu_environment().contains(&home), "its user's own, with no jail");
+        assert!(!plan(boot("")).qemu_arguments().iter().any(|word| word == "-sandbox"));
     }
 }

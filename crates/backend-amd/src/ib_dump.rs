@@ -139,8 +139,13 @@ impl Keeper {
     ) {
         let run = Run { facts, at: now.saturating_duration_since(self.started), ibs: copy_run(listed, read) };
         self.held += run.bytes();
-        self.queues.entry(facts.queue).or_default().push_back(run);
-        let queue = &mut self.queues.get_mut(&facts.queue).expect("just added");
+        let queue = self.queues.entry(facts.queue).or_default();
+        // A run the card had no room for comes again, and is held once.
+        if queue.back().is_some_and(|last| last.facts == facts) {
+            let again = queue.pop_back().expect("just looked");
+            self.held -= again.bytes();
+        }
+        queue.push_back(run);
         if queue.len() > RUNS_PER_QUEUE {
             let old = queue.pop_front().expect("longer than the limit");
             self.held -= old.bytes();
@@ -386,6 +391,17 @@ mod tests {
         assert_eq!(runs.len(), RUNS_PER_QUEUE);
         assert_eq!(runs[0].facts.fence, 20 - RUNS_PER_QUEUE as u64 + 1);
         assert_eq!(keeper.held, RUNS_PER_QUEUE * 64);
+    }
+
+    #[test]
+    fn a_run_that_comes_again_is_held_once() {
+        let mut keeper = Keeper::new(&folder("again"), Instant::now(), "card".into());
+        let mut read = |ib: &Ib| Some(vec![0; ib.bytes as usize]);
+        for _ in 0..2 {
+            keeper.note_run(facts(1, 5), &[Ib { address: 0x1000, bytes: 64 }], Instant::now(), &mut read);
+        }
+        assert_eq!(keeper.queues[&1].len(), 1);
+        assert_eq!(keeper.held, 64);
     }
 
     #[test]

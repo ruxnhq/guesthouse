@@ -149,7 +149,7 @@ fn pack(staging: &Path, name: &str, archive: &Path) -> Result<()> {
         .arg(archive)
         .arg("-C")
         .arg(staging)
-        // Owners and times would say who made it and when, and say nothing about the bug.
+        // The owners would say who made it, and say nothing about the bug.
         .args(["--owner=0", "--group=0", "--numeric-owner", name])
         .output()
         .map_err(|error| Failure(format!("tar could not run: {error}")))?;

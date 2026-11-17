@@ -21,9 +21,15 @@ use super::kind::ProblemKind;
 use super::summary::{self, Summary};
 use crate::context::Context;
 use crate::machine::Machine;
-use std::fs;
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::Path;
+
+/// The most of a file that's read. The bundle trims each to far less, keeping its start and its end,
+/// so this only saves reading a huge log whole each time a choice in the dialog changes.
+const MOST_READ_BYTES: u64 = 64 << 20;
+/// Of that, how much comes from the start.
+const READ_START_BYTES: u64 = 8 << 20;
 
 /// What the tester chose about a report.
 #[derive(Debug, Clone, Default)]
@@ -31,7 +37,8 @@ pub struct Request {
     /// The machine the report is about. None is one with no machine, such as an app that won't open.
     pub machine: Option<Machine>,
     pub kind: ProblemKind,
-    /// The guest's serial console, which is the one part of a report that comes from inside the guest.
+    /// What the guest wrote to its serial port. The app's own log also quotes some of the guest's
+    /// answers to its scripts, and those stay.
     pub guest_serial: bool,
     /// Facts only the running app knows, such as the GTK and libadwaita it loaded.
     pub app_facts: Vec<(String, String)>,
@@ -78,8 +85,8 @@ impl Collection {
 
     /// A file that should be there, so its absence goes in the manifest.
     fn add_file(&mut self, name: &str, path: &Path) {
-        match fs::read(path) {
-            Ok(data) => self.add(name, String::from_utf8_lossy(&data).into_owned()),
+        match read_bounded(path) {
+            Ok(text) => self.add(name, text),
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 self.miss(name, "there is no such file", None)
             }
@@ -121,4 +128,27 @@ pub fn collect(context: &Context, request: &Request) -> Collection {
     running::collect(context, request.machine.as_ref(), &mut found);
     extras::collect(context, request, &mut found);
     found
+}
+
+/// A file as text, or its start and its end if it's bigger than `MOST_READ_BYTES`.
+fn read_bounded(path: &Path) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    if size <= MOST_READ_BYTES {
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        return Ok(String::from_utf8_lossy(&data).into_owned());
+    }
+    let mut start = vec![0; READ_START_BYTES as usize];
+    file.read_exact(&mut start)?;
+    let end_bytes = MOST_READ_BYTES - READ_START_BYTES;
+    file.seek(SeekFrom::Start(size - end_bytes))?;
+    let mut end = Vec::new();
+    file.read_to_end(&mut end)?;
+    let left_out = size - MOST_READ_BYTES;
+    Ok(format!(
+        "{}\n[{left_out} bytes left out here]\n{}",
+        String::from_utf8_lossy(&start),
+        String::from_utf8_lossy(&end)
+    ))
 }

@@ -16,7 +16,34 @@ const EXCERPT_LINES: usize = 20;
 const LINES_AFTER: usize = 5;
 /// Words of the app's own lines that say something went wrong.
 const FAILURE_WORDS: [&str; 7] = ["fail", "error", "panic", "could not", "couldn't", "did not", "stopped"];
-/// Lines the app writes with QEMU's or the guest's own words in them.
+/// A log line's time, as `12:34:56`.
+const TIME_LENGTH: usize = 8;
+/// Who wrote a line, as the word after its time, for the lines that only ever hold the host's side:
+/// the window, the viewer, and each task's steps (the actions in `run_action` in actions/mod.rs). Many
+/// other lines pass on what the guest or QEMU said, so a line from anyone else stays out.
+const OWN_SPEAKERS: [&str; 20] = [
+    "app:",
+    "frames:",
+    "own",
+    "card:",
+    "plan:",
+    "after",
+    "start",
+    "stop",
+    "force",
+    "grow",
+    "resume",
+    "clean_up",
+    "after_reboot",
+    "apply_display",
+    "install_display",
+    "install",
+    "take_snapshot",
+    "go_back",
+    "delete_snapshot",
+    "panic:",
+];
+/// Words that mean a line quotes QEMU or the guest, whoever wrote it.
 const GUEST_WORDS: [&str; 4] = ["last words", "qemu-system", "the guest said", "serial"];
 /// The facts worth a line in the issue, in the order they read best.
 const FACTS: [&str; 8] = [
@@ -33,13 +60,7 @@ const FACTS: [&str; 8] = [
 /// The lines around the last failure in the app's log, or its last lines if nothing failed, with any
 /// line that carries QEMU's or the guest's words left out. `log` must already be scrubbed.
 pub fn failure_excerpt(log: &str) -> Vec<String> {
-    let own: Vec<&str> = log
-        .lines()
-        .filter(|line| {
-            let lower = line.to_lowercase();
-            !line.trim().is_empty() && !GUEST_WORDS.iter().any(|word| lower.contains(word))
-        })
-        .collect();
+    let own: Vec<&str> = log.lines().filter(|line| is_own_line(line)).collect();
     let failure = own.iter().rposition(|line| {
         let lower = line.to_lowercase();
         FAILURE_WORDS.iter().any(|word| lower.contains(word))
@@ -47,6 +68,16 @@ pub fn failure_excerpt(log: &str) -> Vec<String> {
     let end = failure.map_or(own.len(), |at| (at + 1 + LINES_AFTER).min(own.len()));
     let start = end.saturating_sub(EXCERPT_LINES);
     own[start..end].iter().map(|line| (*line).to_owned()).collect()
+}
+
+/// A line with a time, written by the app's own side, that quotes nobody else. A line with no time
+/// is the rest of something written over several lines, which is often what a guest said.
+fn is_own_line(line: &str) -> bool {
+    let Some((time, rest)) = line.split_once(' ') else { return false };
+    let timed = time.len() == TIME_LENGTH && time.bytes().all(|byte| byte.is_ascii_digit() || byte == b':');
+    let speaker = rest.split(' ').next().unwrap_or_default();
+    let lower = line.to_lowercase();
+    timed && OWN_SPEAKERS.contains(&speaker) && !GUEST_WORDS.iter().any(|word| lower.contains(word))
 }
 
 /// The link. The excerpt is cut first, from its oldest line, and then the description, until it fits.
@@ -150,30 +181,36 @@ mod tests {
 
     #[test]
     fn the_excerpt_is_around_the_last_failure() {
-        let mut log: Vec<String> = (0..100).map(|number| format!("10:00 fine {number}")).collect();
-        log[50] = "10:00 app: The VM did not start: something is still running.".into();
+        let mut log: Vec<String> = (0..100).map(|number| format!("10:00:00 start fine {number}")).collect();
+        log[50] = "10:00:00 app: The VM did not start: something is still running.".into();
         let excerpt = failure_excerpt(&log.join("\n"));
         assert_eq!(excerpt.len(), EXCERPT_LINES);
-        assert_eq!(excerpt.last().unwrap(), "10:00 fine 55");
+        assert_eq!(excerpt.last().unwrap(), "10:00:00 start fine 55");
         assert!(excerpt.iter().any(|line| line.contains("did not start")));
     }
 
     #[test]
     fn with_no_failure_the_excerpt_is_the_end() {
-        let log: Vec<String> = (0..100).map(|number| format!("10:00 fine {number}")).collect();
+        let log: Vec<String> = (0..100).map(|number| format!("10:00:00 start fine {number}")).collect();
         let excerpt = failure_excerpt(&log.join("\n"));
-        assert_eq!(excerpt.first().unwrap(), "10:00 fine 80");
-        assert_eq!(excerpt.last().unwrap(), "10:00 fine 99");
+        assert_eq!(excerpt.first().unwrap(), "10:00:00 start fine 80");
+        assert_eq!(excerpt.last().unwrap(), "10:00:00 start fine 99");
     }
 
     #[test]
     fn qemus_and_the_guests_words_stay_out() {
-        let log = "10:00 start\n\
-                   10:01 w11 stopped by itself. QEMU's last words: qemu-system-x86_64: secret\n\
-                   10:02 the guest said: hello from inside\n\
-                   10:03 app: It stopped, and this app didn't stop it.";
+        let log = "10:00:00 start Starting the VM\n\
+                   10:00:01 w11 stopped by itself. QEMU's last words: qemu-system-x86_64: secret\n\
+                   10:00:02 display: session user GuestAccount\n\
+                   CM_PROB_NONE from inside\n\
+                   10:00:03 app: It stopped, and this app didn't stop it.";
         let excerpt = failure_excerpt(log).join("\n");
-        assert!(!excerpt.contains("secret") && !excerpt.contains("inside"));
-        assert!(excerpt.contains("10:03 app"));
+        for guest in ["secret", "GuestAccount", "inside"] {
+            assert!(!excerpt.contains(guest), "{guest} is in:\n{excerpt}");
+        }
+        assert_eq!(
+            excerpt,
+            "10:00:00 start Starting the VM\n10:00:03 app: It stopped, and this app didn't stop it."
+        );
     }
 }

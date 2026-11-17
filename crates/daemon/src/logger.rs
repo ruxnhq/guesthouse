@@ -2,7 +2,10 @@
 
 use log::{Level, Log, Metadata, Record};
 use std::fmt::Display;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+static STARTED: OnceLock<Instant> = OnceLock::new();
 
 struct StandardError {
     /// When the daemon started, if lines are to say how long after it they come. Only the verbose log
@@ -38,10 +41,16 @@ fn timed_line(elapsed: Duration, level: Level, message: impl Display) -> String 
 /// Starts logging. Debug lines cost time on the message path, so they stay off unless asked for.
 pub fn start(verbose: bool) {
     let level = if verbose { Level::Debug } else { Level::Info };
-    let logger = StandardError { started: verbose.then(Instant::now) };
+    let logger = StandardError { started: verbose.then(started) };
     if log::set_logger(Box::leak(Box::new(logger))).is_ok() {
         log::set_max_level(level.to_level_filter());
     }
+}
+
+/// When the log's clock started, which the verbose log's times count from, so other files can give
+/// times that match them.
+pub fn started() -> Instant {
+    *STARTED.get_or_init(Instant::now)
 }
 
 #[cfg(test)]

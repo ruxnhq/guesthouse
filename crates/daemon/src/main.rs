@@ -96,7 +96,10 @@ fn serve_amd(
     let needs = Needs::of_amd_card(slot, &project, &setup.driver_folder, node, memory_device);
     needs.prepare()?;
     let locked = lock_files(&needs)?;
-    let backend: AmdBackend = start_backend(&setup)?;
+    let mut backend: AmdBackend = start_backend(&setup)?;
+    if env::var_os(guesthouse_backend_amd::IB_DUMP_VARIABLE).is_some() {
+        backend.keep_command_buffers(&run_folder, guesthouse_daemon::logger::started());
+    }
     let limits = MemoryLimits::new(backend.facts(), video_cap(cap.as_deref()), guest_ram(ram.as_deref()));
     let config = Config::new(limits);
     let mut session = Session::new(backend, memory, config);

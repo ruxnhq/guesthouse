@@ -9,6 +9,7 @@ use crate::process_stat::Seen;
 use crate::slots;
 use crate::tasks::{read_task, task_alive, task_path};
 use crate::text::qemu_value;
+use crate::vm_args::MACOS_QEMU;
 use guesthouse_daemon::slot::Slot;
 use guesthouse_jail::launch::start_time;
 use std::collections::BTreeMap;
@@ -50,10 +51,13 @@ impl Qemu {
 }
 
 /// Every process of this install's QEMU, oldest first, so a VM comes before any child it has forked.
+/// A macOS guest runs on a QEMU of its own, which counts as this install's too.
 pub fn qemu_processes(context: &Context) -> Vec<Qemu> {
-    let program = context.paths.qemu.as_os_str().as_encoded_bytes();
+    let programs = [context.paths.qemu.clone(), context.paths.helper(MACOS_QEMU)];
+    let ours =
+        |words: &Words| programs.iter().any(|program| words[0] == program.as_os_str().as_encoded_bytes());
     let of_pid = |pid| {
-        let words = process_words(context, pid).filter(|words| words[0] == program)?;
+        let words = process_words(context, pid).filter(ours)?;
         Some(Qemu { seen: Seen::now(context, pid)?, words })
     };
     let mut found: Vec<Qemu> = pids(context).into_iter().filter_map(of_pid).collect();
@@ -319,6 +323,21 @@ mod tests {
             Some((2, 50))
         );
         assert!(running_machine(&context, &Machine::new("y", "y", "/d", "/v")).is_none());
+    }
+
+    #[test]
+    fn a_macos_guest_on_its_own_qemu_is_found_too() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let qemu = context.paths.helper(MACOS_QEMU).display().to_string();
+        let socket = format!(
+            "unix:{}/qmp.sock,server=on,wait=off",
+            context.paths.run_folder(slots::number(1)).display()
+        );
+        let disk = "id=disk,if=none,file=/m/mac/disk.qcow2,format=qcow2";
+        fake_process(&context, 60, &[&qemu, "-drive", disk, "-qmp", &socket], &[], "");
+        let mac = Machine::new("mac", "Mac", "/m/mac/disk.qcow2", "/m/mac/OVMF_VARS.fd");
+        assert_eq!(running_machine(&context, &mac).map(|(slot, qemu)| (slot, qemu.seen.pid)), Some((1, 60)));
     }
 
     #[test]

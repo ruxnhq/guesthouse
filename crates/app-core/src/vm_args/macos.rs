@@ -91,7 +91,8 @@ impl VmPlan {
             "-device",
             "ide-hd,bus=sata.2,drive=opencore,bootindex=1",
             "-drive",
-            &format!("id=disk,if=none,format=qcow2,file={}", qemu_value(&self.disk)),
+            // The file before the format, which is how a running VM is known by its disk.
+            &format!("id=disk,if=none,file={},format=qcow2", qemu_value(&self.disk)),
             "-device",
             "ide-hd,bus=sata.3,drive=disk,rotation_rate=1",
         ]);
@@ -243,7 +244,7 @@ mod tests {
                 "if=pflash,format=raw,readonly=on,file=/m/mac/OVMF_CODE.fd",
                 "if=pflash,format=raw,file=/m/mac/OVMF_VARS.fd",
                 "id=opencore,if=none,format=qcow2,file=/m/mac/opencore.qcow2",
-                "id=disk,if=none,format=qcow2,file=/m/mac/disk.qcow2",
+                "id=disk,if=none,file=/m/mac/disk.qcow2,format=qcow2",
             ]
         );
         assert!(arguments.iter().any(|word| word == "ide-hd,bus=sata.2,drive=opencore,bootindex=1"));

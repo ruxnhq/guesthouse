@@ -191,7 +191,7 @@ dsc_files() {
 # Ubuntu's source packages for the bundled libraries, at the exact versions they were built from.
 fetch_library_sources() { # folder
     mkdir -p "$1"
-    awk '$3 != "" && $4 == "source" { print $5 "=" $6 }' "$OUT/part/LIBRARIES.txt" | sort -u |
+    awk '!/^#/ && $4 == "source" { print $5 "=" $6 }' "$OUT/part/LIBRARIES.txt" | sort -u |
         while read -r wanted; do
             dsc=${wanted%%=*}_$(printf '%s' "${wanted#*=}" | sed 's/^[0-9]*://').dsc
             [ -f "$1/$dsc" ] || (cd "$1" && apt-get source -q --download-only --only-source "$wanted") ||

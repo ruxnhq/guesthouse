@@ -4,12 +4,12 @@ use crate::context::Context;
 use crate::daemon::is_own_daemon;
 use crate::held_memory::holders;
 use crate::machine::{Machine, sorted_names};
+use crate::macos_part::MACOS_QEMU;
 use crate::monitor::MAIN_SOCKET;
 use crate::process_stat::Seen;
 use crate::slots;
 use crate::tasks::{read_task, task_alive, task_path};
 use crate::text::qemu_value;
-use crate::vm_args::MACOS_QEMU;
 use guesthouse_daemon::slot::Slot;
 use guesthouse_jail::launch::start_time;
 use std::collections::BTreeMap;
@@ -53,7 +53,7 @@ impl Qemu {
 /// Every process of this install's QEMU, oldest first, so a VM comes before any child it has forked.
 /// A macOS guest runs on a QEMU of its own, which counts as this install's too.
 pub fn qemu_processes(context: &Context) -> Vec<Qemu> {
-    let programs = [context.paths.qemu.clone(), context.paths.helper(MACOS_QEMU)];
+    let programs = [context.paths.qemu.clone(), crate::macos_part::file(&context.paths, MACOS_QEMU)];
     let ours =
         |words: &Words| programs.iter().any(|program| words[0] == program.as_os_str().as_encoded_bytes());
     let of_pid = |pid| {
@@ -329,7 +329,7 @@ mod tests {
     fn a_macos_guest_on_its_own_qemu_is_found_too() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let qemu = context.paths.helper(MACOS_QEMU).display().to_string();
+        let qemu = crate::macos_part::file(&context.paths, MACOS_QEMU).display().to_string();
         let socket = format!(
             "unix:{}/qmp.sock,server=on,wait=off",
             context.paths.run_folder(slots::number(1)).display()

@@ -9,9 +9,10 @@ use crate::jailing::choose;
 use crate::linux::amd::amd_card;
 use crate::linux::card::forwarded_card;
 use crate::machine::Machine;
+use crate::macos_part::{self, MACOS_QEMU, MACOS_ROM};
 use crate::macos_setup::NO_MACOS_PART;
 use crate::start_checks::start_problems;
-use crate::vm_args::{Boot, MACOS_QEMU, MACOS_ROM, MacosBoot, MacosCard, UDMABUF};
+use crate::vm_args::{Boot, MacosBoot, MacosCard, UDMABUF};
 use crate::vm_host::sound_on_this_host;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,13 +54,13 @@ fn card_of(context: &Context, machine: &Machine) -> Result<MacosCard> {
 fn boot_of(context: &Context, machine: &Machine, card: MacosCard) -> Result<MacosBoot> {
     let opencore = PathBuf::from(&machine.opencore);
     let firmware_code = opencore.parent().unwrap_or(Path::new("")).join(FIRMWARE_CODE);
-    let rom = context.paths.helper(MACOS_ROM);
+    let rom = macos_part::file(&context.paths, MACOS_ROM);
     for file in [&opencore, &firmware_code] {
         if !file.exists() {
             return Err(Failure(format!("{} is missing.", file.display())));
         }
     }
-    if !rom.exists() || !context.paths.helper(MACOS_QEMU).exists() {
+    if !rom.exists() || !macos_part::file(&context.paths, MACOS_QEMU).exists() {
         return Err(Failure::new(NO_MACOS_PART));
     }
     let home = machine.folder(context).join(HOME_FOLDER);
@@ -87,12 +88,14 @@ pub fn start(task: &mut Task) -> Result<()> {
         return Err(Failure(problem));
     }
     let card = card_of(task.context, &task.machine)?;
+    // A newer app can want a newer part than the one this machine was made with.
+    macos_part::ensure(&task.context.paths, &|doing| task.step(doing))?;
     let boot = boot_of(task.context, &task.machine, card)?;
     if !can_open(UDMABUF) {
         return Err(Failure::new(NO_UDMABUF));
     }
     let mut plan = plan_for(task.context, &task.machine, Boot::Macos(boot));
-    plan.qemu = task.context.paths.helper(MACOS_QEMU);
+    plan.qemu = macos_part::file(&task.context.paths, MACOS_QEMU);
     // Its QEMU finds its own files beside itself.
     plan.qemu_files = None;
     // Before the jail is chosen, which lets a QEMU with sound reach PipeWire's socket.
@@ -126,7 +129,7 @@ mod tests {
 
     fn with_macos_part(context: &Context) {
         for name in [MACOS_QEMU, MACOS_ROM] {
-            let file = context.paths.helper(name);
+            let file = macos_part::file(&context.paths, name);
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             fs::write(file, "").unwrap();
         }
@@ -140,7 +143,7 @@ mod tests {
         let machine = mac(&context);
         let boot = boot_of(&context, &machine, MacosCard::default()).unwrap();
         assert_eq!(boot.firmware_code, machine.folder(&context).join(FIRMWARE_CODE));
-        assert_eq!(boot.rom, context.paths.helper(MACOS_ROM));
+        assert_eq!(boot.rom, macos_part::file(&context.paths, MACOS_ROM));
         assert_eq!(boot.installer, "");
         assert!(boot.home.is_dir() && boot.home.starts_with(machine.folder(&context)));
     }

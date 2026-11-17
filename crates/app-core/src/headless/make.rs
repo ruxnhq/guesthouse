@@ -14,10 +14,10 @@ use crate::host::{RamField, physical_cores};
 use crate::iso::Iso;
 use crate::library::{NewMachine, create, delete, folders_text, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
+use crate::macos_setup::{MACOS_SIZES, MACOS_TITLE, NewMac, create_macos, how_it_installs};
 use crate::remote_access::{Access, Service};
 use crate::render_cards::render_card;
 use crate::setup::amd_driver::{read_amd_installer, unpack_amd};
-use crate::macos_setup::{HOW_IT_INSTALLS, MACOS_SIZES, MACOS_TITLE, NewMac, create_macos};
 use crate::setup::checks::machine_gpu_warning;
 use crate::setup::driver::Extraction;
 use crate::setup::intel_driver::{read_intel_installer, unpack_intel};
@@ -27,6 +27,7 @@ use std::io::Write;
 
 /// The copy says how far it is at each step of this many percent.
 const PERCENT_STEP: u32 = 10;
+
 /// What `--kind` calls a macOS machine, which is a plain one with a boot image of its own.
 const MACOS_KIND: &str = "macos";
 
@@ -184,7 +185,7 @@ fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Wr
     };
     let machine = create_macos(context, &new)?;
     writeln!(out, "Made {} for {MACOS_TITLE} in {}.", machine.name, machine.folder(context).display())?;
-    writeln!(out, "{HOW_IT_INSTALLS}")?;
+    writeln!(out, "{}", how_it_installs(context))?;
     Ok(writeln!(out, "Run: guesthouse-vm install {}", machine.id)?)
 }
 

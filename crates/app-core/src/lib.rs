@@ -45,6 +45,7 @@ pub mod limits;
 pub mod linux;
 pub mod log;
 pub mod machine;
+pub mod macos_part;
 pub mod macos_setup;
 pub mod monitor;
 pub mod network;

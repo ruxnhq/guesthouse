@@ -15,7 +15,7 @@ mod standalone;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
-pub use macos::{MACOS_QEMU, MACOS_ROM, MacosBoot, MacosCard, UDMABUF};
+pub use macos::{MacosBoot, MacosCard, UDMABUF};
 pub use nic::PASST_PID_FILE;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;

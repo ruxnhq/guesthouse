@@ -25,6 +25,7 @@ const AGENT_PORT_VARIABLE: &str = "AGENT_PORT";
 
 const APP_FOLDER: &str = "guesthouse";
 const STORE_POINTER: &str = "store";
+const PARTS_FOLDER: &str = "parts";
 const INSTALLED_PROGRAM: &str = "/usr/libexec/guesthouse";
 const USER_PROGRAM: &str = ".local/lib/guesthouse/current";
 /// What the program folder holds besides the binaries, which tells it from any other folder.
@@ -110,6 +111,9 @@ pub struct Paths {
     /// The program folder: QEMU and the guest's files. It isn't in this repo, and the app runs plain
     /// VMs without it.
     pub program: PathBuf,
+    /// What the app fetches for itself, each part in a folder of its own name. It's outside the
+    /// program folder, which an update replaces.
+    pub parts: PathBuf,
     /// Where this app's own programs are, which is beside the running one if it can say.
     pub binaries: PathBuf,
     pub shared_memory: PathBuf,
@@ -131,6 +135,7 @@ impl Paths {
         let config = variables.xdg("XDG_CONFIG_HOME", ".config").join(APP_FOLDER);
         let data = variables.xdg("XDG_DATA_HOME", ".local/share").join(APP_FOLDER);
         let state = variables.xdg("XDG_STATE_HOME", ".local/state").join(APP_FOLDER);
+        let parts = data.join(PARTS_FOLDER);
         let store = variables
             .folder(STORE_VARIABLE)
             .or_else(|| store_pointer(&config.join(STORE_POINTER), &variables.home()))
@@ -152,6 +157,7 @@ impl Paths {
             state,
             runtime,
             program,
+            parts,
             shared_memory: variables
                 .folder(SHARED_MEMORY_VARIABLE)
                 .unwrap_or_else(|| PathBuf::from(SHARED_MEMORY)),

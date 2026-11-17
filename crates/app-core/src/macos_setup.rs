@@ -8,7 +8,7 @@ use crate::failure::{Failure, Result};
 use crate::host::plain_ram_limit;
 use crate::library::{MAX_DISK_GIB, new_id, unused_mac};
 use crate::machine::{Kind, Machine};
-use crate::vm_args::{MACOS_QEMU, MACOS_ROM};
+use crate::macos_part;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,15 +20,11 @@ pub const MACOS_VERSION: &str = "tahoe";
 pub const MACOS_SIZES: Sizes = Sizes { cores: 8, ram: 16, disk: 128 };
 /// macOS and its installer's download take about 40 GiB between them.
 pub const MIN_MACOS_DISK_GIB: u32 = 64;
-/// The tool that makes the boot image and fetches the installer, and the guest's drivers it adds.
-pub const REIMS_UTIL: &str = "macos/reims-util";
-pub const KEXTS_FOLDER: &str = "macos/kexts";
-pub const KEXT_SET: &str = "set.toml";
-pub const NO_MACOS_PART: &str =
-    "This install has no macOS part, which a macOS machine is made and started with.";
-pub const HOW_IT_INSTALLS: &str = "Downloads Apple's installer, about 1 GiB, and starts it. In its window, \
-                                   erase the disk in Disk Utility as APFS, then choose Reinstall macOS, \
-                                   which downloads the rest.";
+pub const NO_MACOS_PART: &str = "macOS support isn't on this PC yet. It's downloaded when a macOS machine \
+                                 is made or started.";
+const HOW_IT_INSTALLS: &str = "Downloads Apple's installer, about 1 GiB, and starts it. In its window, \
+                               erase the disk in Disk Utility as APFS, then choose Reinstall macOS, \
+                               which downloads the rest.";
 
 pub const DISK_FILE: &str = "disk.qcow2";
 pub const OPENCORE_FILE: &str = "opencore.qcow2";
@@ -45,13 +41,12 @@ pub struct NewMac {
     pub disk_gib: u32,
 }
 
-/// Whether this install can make and start a macOS machine.
-pub fn has_macos_part(context: &Context) -> bool {
-    let paths = &context.paths;
-    let set = paths.helper(KEXTS_FOLDER).join(KEXT_SET);
-    [paths.helper(REIMS_UTIL), paths.helper(MACOS_QEMU), paths.helper(MACOS_ROM), set]
-        .iter()
-        .all(|file| file.exists())
+/// What making a macOS machine will do, said before it's made.
+pub fn how_it_installs(context: &Context) -> String {
+    if macos_part::is_here(&context.paths) {
+        return HOW_IT_INSTALLS.to_owned();
+    }
+    format!("Downloads macOS support first, {}. {HOW_IT_INSTALLS}", macos_part::download_size())
 }
 
 fn file_in(folder: &std::path::Path, name: &str) -> String {
@@ -94,9 +89,6 @@ pub fn create_problems(context: &Context, new: &NewMac, machine: &Machine) -> Ve
         found.push(format!(
             "This PC has room for {limit} GiB right now. Give the machine that much, or stop another VM."
         ));
-    }
-    if !has_macos_part(context) {
-        found.push(NO_MACOS_PART.to_owned());
     }
     found.extend(crate::actions::macos_start_refusal(context, machine));
     found
@@ -153,7 +145,6 @@ mod tests {
         let small = NewMac { disk_gib: 8, ..new_mac() };
         let problems = create_problems(&context, &small, &planned(&context, &small));
         assert!(problems.iter().any(|problem| problem.starts_with("The disk must be between 64")));
-        assert!(problems.contains(&NO_MACOS_PART.to_owned()), "{problems:?}");
         assert!(create_macos(&context, &new_mac()).is_err());
         assert!(!context.paths.machines.join("my-mac").exists(), "nothing is left of one that wasn't made");
     }

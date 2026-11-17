@@ -9,10 +9,8 @@
 use super::Task;
 use super::macos::start;
 use crate::failure::{Failure, Result};
-use crate::macos_setup::{
-    FIRMWARE_CODE_FILE, FIRMWARE_VARS_FILE, KEXT_SET, KEXTS_FOLDER, MACOS_VERSION, NO_MACOS_PART, REIMS_UTIL,
-    has_macos_part,
-};
+use crate::macos_part::{self, KEXT_SET, KEXTS_FOLDER, REIMS_UTIL};
+use crate::macos_setup::{FIRMWARE_CODE_FILE, FIRMWARE_VARS_FILE, MACOS_VERSION};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -62,7 +60,7 @@ fn kext_words(list: &str, folder: &Path) -> Vec<String> {
 
 /// Runs reims-util, telling the task how far each step is, and gives back what it says it made.
 fn reims_util(task: &Task, doing: &str, words: &[String]) -> Result<Value> {
-    let mut child = Command::new(task.context.paths.helper(REIMS_UTIL))
+    let mut child = Command::new(macos_part::file(&task.context.paths, REIMS_UTIL))
         .arg("--json")
         .args(words)
         .stdin(Stdio::null())
@@ -113,7 +111,7 @@ fn make_boot_image(task: &Task, folder: &Path) -> Result<()> {
     let _ = fs::remove_dir_all(&parts);
     fs::create_dir_all(&parts)?;
     let image = parts.join("opencore.qcow2");
-    let kexts = task.context.paths.helper(KEXTS_FOLDER);
+    let kexts = macos_part::file(&task.context.paths, KEXTS_FOLDER);
     let list = fs::read_to_string(kexts.join(KEXT_SET))?;
     // A Mac's ROM is its first network card's address.
     let mut words: Vec<String> =
@@ -158,9 +156,7 @@ fn make_installer(task: &Task) -> Result<()> {
 }
 
 pub fn install(task: &mut Task) -> Result<()> {
-    if !has_macos_part(task.context) {
-        return Err(Failure::new(NO_MACOS_PART));
-    }
+    macos_part::ensure(&task.context.paths, &|doing| task.step(doing))?;
     let folder = task.machine.folder(task.context);
     make_boot_image(task, &folder)?;
     make_installer(task)?;

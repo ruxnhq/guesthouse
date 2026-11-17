@@ -14,10 +14,6 @@ use crate::text::qemu_value;
 use guesthouse_jail::{Grant, Plan};
 use std::path::{Path, PathBuf};
 
-/// Where the program folder keeps reims-vgpu's QEMU and the device's option ROM.
-pub const MACOS_QEMU: &str = "macos/qemu/bin/qemu-system-x86_64";
-pub const MACOS_ROM: &str = "macos/ReimsGraphics.rom";
-
 /// macOS puts every 64-bit BAR below 4 GiB, so the guest's RAM leaves room for the device's there.
 const MACHINE: &str = "q35,memory-backend=ram,dump-guest-core=off,max-ram-below-4g=1G";
 /// A CPU macOS knows, whatever the host's is, with what its kernel asks for at boot.

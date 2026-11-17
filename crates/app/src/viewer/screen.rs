@@ -382,12 +382,14 @@ impl Screen {
         if let Some(cursor) = source.new_cursor() {
             *self.0.guest_pointer.borrow_mut() = Some(cursor);
         }
-        // A pointer set here would show through the capture, which hides the root's.
+        // The guest's pointer set here would show through the capture, which hides the root's. None
+        // would too while a button is held: GTK then looks no further up than the widget under the
+        // pointer, and shows the desktop's.
         let captured = self.captured();
-        let pointer = if self.guest_draws_pointer() {
+        let pointer = if captured || self.guest_draws_pointer() {
             self.0.no_pointer.clone()
         } else {
-            self.0.guest_pointer.borrow().clone().filter(|_| !captured)
+            self.0.guest_pointer.borrow().clone()
         };
         if self.0.picture.cursor() != pointer {
             self.0.picture.set_cursor(pointer.as_ref());

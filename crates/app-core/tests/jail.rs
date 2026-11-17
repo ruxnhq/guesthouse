@@ -265,7 +265,15 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };
     let network = NetworkPlan { passt, mode, bridge: "br7".into(), ..plan.network.clone() };
-    let plan = VmPlan { qemu, qemu_files: None, jail: Some(jail), agent_port: free_port(), network, ..plan };
+    let plan = VmPlan {
+        qemu,
+        qemu_files: None,
+        jail: Some(jail),
+        agent_port: free_port(),
+        files_port: None,
+        network,
+        ..plan
+    };
     let mut command = plan.qemu_command();
     if let Some(at) = command.iter().position(|word| word == "--tap") {
         command[at + 1] = env::current_exe().unwrap().display().to_string();

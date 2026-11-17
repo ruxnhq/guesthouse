@@ -110,6 +110,8 @@ pub struct VmPlan {
     pub firmware: Firmware,
     pub run_folder: PathBuf,
     pub agent_port: u16,
+    /// Where the app reaches the helper for dropped and dragged files, which only Windows has.
+    pub files_port: Option<u16>,
     pub cores: u32,
     pub ram: String,
     pub screen: String,
@@ -184,6 +186,7 @@ impl VmPlan {
             qemu_files: Some(context.paths.helper("qemu/pc-bios")).filter(|folder| folder.is_dir()),
             firmware: context.paths.firmware.clone(),
             agent_port: context.paths.agent_port(slot),
+            files_port: (machine.kind == crate::machine::Kind::Windows).then(|| slot.files_port()),
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
             screen: machine.basic_screen().to_owned(),

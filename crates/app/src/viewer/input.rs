@@ -71,6 +71,10 @@ impl Screen {
         if self.captured() {
             return;
         }
+        if self.0.pointer_held.get() {
+            self.0.pointer_missed.set(Some((x, y)));
+            return;
+        }
         if let Some(input) = self.0.forwarded.borrow_mut().as_mut() {
             input.move_to(self.in_frame(x, self.frame_width()), self.in_frame(y, self.frame_height()));
             return;
@@ -125,6 +129,30 @@ impl Screen {
             } else {
                 held.remove(name);
             }
+        }
+    }
+
+    /// Keeps the guest's pointer where it is, or lets it go on to where this PC's has got to.
+    pub(super) fn hold_pointer(&self, held: bool) {
+        self.0.pointer_held.set(held);
+        if !held && let Some((x, y)) = self.0.pointer_missed.take() {
+            self.on_motion(x, y);
+        }
+    }
+
+    pub(super) fn holds_button(&self, name: &str) -> bool {
+        self.0.buttons_down.borrow().contains(name)
+    }
+
+    pub(super) fn picture(&self) -> &gtk::Picture {
+        &self.0.picture
+    }
+
+    /// Presses and lets go of a key the user didn't press, by its Linux key code.
+    pub(super) fn tap_key(&self, code: u32) {
+        if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
+            guest.key(code, true);
+            guest.key(code, false);
         }
     }
 

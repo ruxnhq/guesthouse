@@ -85,12 +85,14 @@ impl VmPlan {
         !matches!(self.boot, Boot::Ubuntu(_) | Boot::UbuntuInstall(_))
     }
 
-    /// What QEMU's user network listens on: the agent and the forwards, or for Ubuntu its SSH.
+    /// What QEMU's user network listens on: the agent, the files helper and the forwards, or for
+    /// Ubuntu its SSH.
     fn listened_ports(&self) -> Vec<u16> {
         if !self.has_machine_line() {
             return vec![self.ssh_port()];
         }
         let mut ports = vec![self.agent_port];
+        ports.extend(self.files_port);
         ports.extend(self.forwarded_ports(Protocol::Tcp));
         ports
     }

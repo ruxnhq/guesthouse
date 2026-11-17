@@ -74,6 +74,10 @@ pub(super) struct Inner {
     pub(super) keys_down: RefCell<BTreeSet<u32>>,
     pub(super) buttons_down: RefCell<BTreeSet<&'static str>>,
     pub(super) pointer: Cell<Option<(i64, i64)>>,
+    /// The guest's pointer stays where it is, for a helper's window that is under it.
+    pub(super) pointer_held: Cell<bool>,
+    /// Where the pointer went while it was held.
+    pub(super) pointer_missed: Cell<Option<(f64, f64)>>,
     pub(super) lock: RefCell<Option<Box<dyn PointerLock>>>,
     pub(super) capture: Cell<Capture>,
     pub(super) capture_input: RefCell<Vec<gtk::EventController>>,
@@ -178,6 +182,8 @@ impl Screen {
             keys_down: RefCell::default(),
             buttons_down: RefCell::default(),
             pointer: Cell::new(None),
+            pointer_held: Cell::new(false),
+            pointer_missed: Cell::new(None),
             lock: RefCell::new(lock),
             capture: Cell::default(),
             capture_input: RefCell::default(),

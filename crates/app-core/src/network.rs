@@ -11,6 +11,8 @@ use std::path::Path;
 pub const MOST_PORT: u32 = 65535;
 /// The guest's agent listens here.
 pub const GUEST_AGENT_PORT: u16 = 8765;
+/// A Windows guest's helper for dropped and dragged files listens here, while a viewer is open.
+pub const GUEST_FILES_PORT: u16 = 8767;
 /// QEMU's own range, which is locally administered.
 const MAC_PREFIX: &str = "52:54:00";
 /// What QEMU gives a NIC when it is told nothing.

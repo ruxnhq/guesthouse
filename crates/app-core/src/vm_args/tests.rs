@@ -140,11 +140,22 @@ fn the_slot_sets_every_name() {
     assert!(arguments.iter().any(|word| word.contains("/run-2/qmp.sock,")));
 }
 
+/// The helper for dragged files is Windows', and only a Windows guest has the agent that starts it.
+#[test]
+fn only_a_windows_guest_gets_the_forward_for_dragged_files() {
+    let (_scratch, plan) = plan(&plain_machine(), plain_boot());
+    assert_eq!(plan.files_port, None);
+    assert!(!value_after(&plan.qemu_arguments(), "-nic").contains("8767"));
+}
+
 #[test]
 fn nothing_set_is_the_line_every_machine_had() {
     let (_scratch, plan) = plan(&windows(), Boot::Gpu);
     let arguments = plan.qemu_arguments();
-    assert_eq!(value_after(&arguments, "-nic"), "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765");
+    assert_eq!(
+        value_after(&arguments, "-nic"),
+        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767"
+    );
     assert!(!has(&arguments, "-netdev"), "NAT has one adapter");
 }
 
@@ -153,7 +164,9 @@ fn no_internet_keeps_the_agent() {
     let machine = Machine { network_mode: Mode::None, ..windows() };
     let (_scratch, plan) = plan(&machine, Boot::Gpu);
     let nic = value_after(&plan.qemu_arguments(), "-nic");
-    assert!(nic.starts_with("user,model=e1000e,restrict=on,hostfwd=tcp:127.0.0.1:18765-:8765"));
+    assert!(nic.starts_with(
+        "user,model=e1000e,restrict=on,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767"
+    ));
 }
 
 #[test]
@@ -173,7 +186,7 @@ fn bridged_goes_through_the_helper_and_adds_the_private_link_last() {
             crate::network::bridge_helper()
         )
     );
-    assert!(value_after(&arguments, "-netdev").ends_with("-:8765,hostfwd=udp:127.0.0.1:5000-:50"));
+    assert!(value_after(&arguments, "-netdev").ends_with("-:8767,hostfwd=udp:127.0.0.1:5000-:50"));
     assert_eq!(arguments.last().unwrap(), "e1000e,netdev=link,mac=52:54:00:67:68:01,bus=pcie.0,addr=0x1e");
 }
 

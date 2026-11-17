@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 19] = [
+const SENT_TO_THE_GUEST: [&str; 21] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "autounattend.xml",
@@ -13,6 +13,8 @@ const SENT_TO_THE_GUEST: [&str; 19] = [
     "clipboard.ps1",
     "display-remove.ps1",
     "display.ps1",
+    "files-start.ps1",
+    "files.ps1",
     "finish.ps1",
     "nv-files.ps1",
     "nv-profiles.ps1",
@@ -48,6 +50,20 @@ fn the_window_speed_script_removes_only_its_own_entries() {
     assert!(removals[1].contains("SubKeyCount -eq 0") && removals[1].contains("ValueCount -eq 0"));
     assert!(script.contains("$_.FullName -ne $windows"), "Windows' own folder gets no entry");
     assert!(script.contains("WOW6432Node"), "a 32-bit program reads its own copy of the key");
+}
+
+/// The helper for dragged files listens on the guest's network, so both the firewall rule and the
+/// helper itself have to keep it to this PC's end of QEMU's private link.
+#[test]
+fn the_files_helper_only_answers_the_host() {
+    let start = fs::read_to_string(guest_file("files-start.ps1")).unwrap();
+    let rules: Vec<&str> = start.lines().filter(|line| line.contains("New-NetFirewallRule")).collect();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert!(rules[0].contains("-LocalPort 8767 -RemoteAddress 10.0.2.2"), "{}", rules[0]);
+    let helper = fs::read_to_string(guest_file("files.ps1")).unwrap();
+    assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
+    assert!(helper.contains("RemoteEndPoint).Address.ToString() != HostAddress) return;"));
+    assert!(helper.contains("words[0] != token) return;"));
 }
 
 #[test]

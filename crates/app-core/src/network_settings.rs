@@ -24,6 +24,7 @@ pub fn reserved_ports(context: &Context) -> BTreeMap<u32, String> {
     for slot in slots::all() {
         let agent = u32::from(slot.agent_port());
         found.entry(agent).or_insert_with(|| "the port Guesthouse talks to a VM's agent on".to_owned());
+        found.insert(slot.files_port().into(), "the port Guesthouse sends a VM dropped files on".to_owned());
         found.insert(slot.debug_port().into(), "a VM's debug port".to_owned());
     }
     found

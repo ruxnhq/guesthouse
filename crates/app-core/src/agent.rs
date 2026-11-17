@@ -3,6 +3,7 @@
 use crate::context::Context;
 use crate::driver_modes::{DriverModes, Mode};
 use crate::failure::{Failure, Result};
+use crate::guest_files::Helper;
 use crate::machine::Machine;
 use crate::random::random_hex;
 use crate::text::{base64_decode, base64_encode};
@@ -28,6 +29,8 @@ const WINDOW_SIZE_START_SECONDS: u64 = 20;
 const WINDOW_SIZE_SECONDS: u64 = 12;
 /// What the helper says, before the size, when Windows has taken it.
 const SIZE_SET: &str = "set";
+/// The first start on a machine also opens the helper's port in Windows' firewall.
+const FILES_START_SECONDS: u64 = 30;
 
 pub trait GuestAgent: Send + Sync {
     /// Runs PowerShell in the guest, and returns what it said. Nothing if the agent isn't up yet.
@@ -142,6 +145,25 @@ pub fn start_guest_clipboard(context: &Context, machine: &Machine, slot: Option<
 
 pub fn stop_guest_clipboard(context: &Context, machine: &Machine, slot: Option<Slot>) {
     context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-clipboard", QUICK_SECONDS, slot);
+}
+
+/// Says whether the helper for dropped and dragged files was started in the user's session. It
+/// takes a moment more to listen: [`Helper::answers`] says when it does.
+pub fn start_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>) -> Result<bool> {
+    let helper = base64_encode(&fs::read(context.paths.guest_files().join("files.ps1"))?);
+    let script = format!("$helper = '{helper}'\n{}", guest_script(context, "files-start.ps1")?);
+    Ok(context.ask_guest(machine, &script, FILES_START_SECONDS, slot).contains("started"))
+}
+
+pub fn stop_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>) {
+    context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-files", QUICK_SECONDS, slot);
+}
+
+/// The way to the machine's files helper. `None` for a machine with no token, which has no agent
+/// to start one.
+pub fn files_helper(context: &Context, machine: &Machine, slot: Option<Slot>) -> Option<Helper> {
+    let token = read_token(context, machine)?;
+    Some(Helper::new(slot.unwrap_or(context.slot).files_port(), &token))
 }
 
 /// What the helper answered, or `None` if it didn't. The agent can wrap long lines.

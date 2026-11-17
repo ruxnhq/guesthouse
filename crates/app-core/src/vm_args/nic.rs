@@ -2,7 +2,7 @@
 
 use super::arguments::words;
 use super::{PASST_FD, SHARE_ADDRESS, TAP_FD, VmPlan};
-use crate::network::{self, CONTROL_MAC, GUEST_AGENT_PORT, Mode, bridge_helper};
+use crate::network::{self, CONTROL_MAC, GUEST_AGENT_PORT, GUEST_FILES_PORT, Mode, bridge_helper};
 use crate::text::{qemu_value, shell_quote};
 
 /// Passt copies the host's address by default, and these can't clash with the private link. The
@@ -42,10 +42,13 @@ impl VmPlan {
         words
     }
 
-    /// The agent, the share and any forwards always go through QEMU's user network, as nothing else
+    /// The agent, the files helper, the share and any forwards always go through QEMU's user network, as nothing else
     /// can run a program per connection. Restricted, that network carries them and nothing more.
     fn private_link(&self) -> String {
         let mut link = format!("hostfwd=tcp:127.0.0.1:{}-:{GUEST_AGENT_PORT}", self.agent_port);
+        if let Some(port) = self.files_port {
+            link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_FILES_PORT}");
+        }
         if self.share.is_some() {
             let program = shell_quote(&self.share_program.to_string_lossy());
             link += &format!(",guestfwd=tcp:{SHARE_ADDRESS}:80-cmd:{}", qemu_value(&program));

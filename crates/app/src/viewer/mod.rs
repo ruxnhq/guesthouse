@@ -12,6 +12,7 @@ mod dbus_frames;
 mod display_attach;
 mod display_surface;
 mod dmabuf_feedback;
+mod files;
 mod forwarded_frames;
 mod frames;
 mod guest_cursor;
@@ -34,6 +35,7 @@ use crate::rows::name_for_readers;
 use crate::window::{MachineHandle, Window};
 use adw::prelude::*;
 use clipboard::SharedClipboard;
+use files::SharedFiles;
 use frames::FrameRoute;
 use gtk::{gdk, glib};
 use guesthouse_app_core::library::save_thumbnail;
@@ -83,6 +85,7 @@ struct Parts {
     screen: RefCell<Option<Screen>>,
     clipboard: RefCell<Option<SharedClipboard>>,
     window_size: RefCell<Option<WindowSize>>,
+    files: RefCell<Option<SharedFiles>>,
     monitors: RefCell<Option<Rc<Monitors>>>,
     fullscreen_handler: RefCell<Option<glib::SignalHandlerId>>,
     thumbnail_source: RefCell<Option<glib::SourceId>>,
@@ -132,6 +135,7 @@ impl ScreenPage {
             screen: RefCell::default(),
             clipboard: RefCell::default(),
             window_size: RefCell::default(),
+            files: RefCell::default(),
             monitors: RefCell::default(),
             fullscreen_handler: RefCell::default(),
             thumbnail_source: RefCell::default(),
@@ -437,12 +441,22 @@ impl ScreenPage {
             let shared = SharedClipboard::new(self.0.window.widget(), context, machine, slot);
             *self.0.clipboard.borrow_mut() = Some(shared);
         }
+        self.share_files();
         let this = self.clone();
         let source = glib::timeout_add_local(THUMBNAIL_EVERY, move || {
             this.save_thumbnail();
             glib::ControlFlow::Continue
         });
         *self.0.thumbnail_source.borrow_mut() = Some(source);
+    }
+
+    /// Dropped and dragged files are for Windows, whose helper does the guest's half.
+    fn share_files(&self) {
+        let machine = self.0.machine.borrow().clone();
+        let Some(screen) = self.screen().filter(|_| machine.has_gpu()) else { return };
+        let context = self.0.window.context();
+        let slot = slot_of(&context, &machine);
+        *self.0.files.borrow_mut() = SharedFiles::new(&self.0.window, &screen, context, machine, slot);
     }
 
     fn thumbnail(&self) -> Option<Vec<u8>> {
@@ -493,6 +507,7 @@ impl ScreenPage {
     fn on_hidden(&self) {
         let parts = &self.0;
         parts.clipboard.borrow_mut().take();
+        parts.files.borrow_mut().take();
         self.forget_header_wait();
         parts.window_size.borrow_mut().take();
         parts.window.widget().unfullscreen();

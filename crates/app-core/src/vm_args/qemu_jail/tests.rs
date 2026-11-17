@@ -64,7 +64,7 @@ fn it_gets_this_vms_files_and_not_its_folder() {
 fn nat_holds_binds_to_the_forwards_and_lets_the_guest_out() {
     let (_scratch, plan) = jailed(windows(), true);
     let network = plan.qemu_jail_plan(&jail(true)).network;
-    assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, 8080]));
+    assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, plan.files_port.unwrap(), 8080]));
     assert_eq!((network.tcp_connect, network.udp_send), (Ports::Any, Ports::Any));
 }
 
@@ -178,7 +178,7 @@ fn on_passt_qemu_only_has_the_private_link() {
     let network = plan.qemu_jail_plan(&jail(true)).network;
     assert_eq!(network.tcp_connect, Ports::none());
     assert_eq!(network.udp_send, Ports::Any, "for the UDP forward's replies");
-    assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, 8080]));
+    assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, plan.files_port.unwrap(), 8080]));
 }
 
 #[test]
@@ -221,7 +221,10 @@ fn with_no_sound_the_launcher_opens_every_unix_socket_and_qemu_makes_none() {
 fn a_shared_folder_gets_the_loopback_pair_its_program_is_reached_through() {
     let (_scratch, plan) = jailed(Machine { share: "/home/me/Shared".into(), ..windows() }, true);
     let network = plan.qemu_jail_plan(&jail(true)).network;
-    assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, 8080, EPHEMERAL_PORT]));
+    assert_eq!(
+        network.tcp_bind,
+        Ports::Only(vec![plan.agent_port, plan.files_port.unwrap(), 8080, EPHEMERAL_PORT])
+    );
     let restricted = Machine { share: "/home/me/Shared".into(), network_mode: Mode::None, ..windows() };
     let (_scratch, plan) = jailed(restricted, true);
     assert_eq!(plan.qemu_jail_plan(&jail(true)).network.tcp_connect, Ports::Any);

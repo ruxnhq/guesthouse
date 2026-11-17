@@ -15,6 +15,10 @@ def fields(line):
     return words[0], dict(word.split("=", 1) for word in words[1:] if "=" in word)
 
 
+# A NOP with the largest count is one dword of padding, as the card reads it.
+NOP_PAD = 0xFFFF1000
+
+
 def walk(data):
     """Packets in a PM4 stream, and how far the walk got: stops at a type 0 or 1 header, which this
     driver's graphics and compute buffers don't use."""
@@ -22,7 +26,9 @@ def walk(data):
     at, packets = 0, 0
     while at < len(words):
         kind = words[at] >> 30
-        if kind == 3:
+        if words[at] == NOP_PAD:
+            at += 1
+        elif kind == 3:
             at += 2 + ((words[at] >> 16) & 0x3FFF)
         elif kind == 2:
             at += 1

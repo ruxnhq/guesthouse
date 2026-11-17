@@ -55,6 +55,9 @@ const LATEST: &str = "ib-dump-latest.bin";
 /// PM4 type 3 packets that run another command buffer.
 const INDIRECT_BUFFER: u32 = 0x3f;
 const INDIRECT_BUFFER_CONST: u32 = 0x33;
+/// A NOP with the largest count, which the card takes as one dword of padding. AMD's driver pads
+/// its command buffers with it.
+const NOP_PAD: u32 = 0xffff_1000;
 
 /// One command buffer as copied, or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,6 +291,10 @@ pub fn chains_in(bytes: &[u8]) -> Vec<Ib> {
     let mut at = 0;
     while at < words.len() {
         let header = words[at];
+        if header == NOP_PAD {
+            at += 1;
+            continue;
+        }
         match header >> 30 {
             3 => {
                 let opcode = (header >> 8) & 0xff;
@@ -333,6 +340,13 @@ mod tests {
     #[test]
     fn an_indirect_buffer_packet_is_found_past_other_packets() {
         assert_eq!(chains_in(&with_chain()), vec![Ib { address: 0x1_2345_6000, bytes: 0x100 }]);
+    }
+
+    #[test]
+    fn padding_is_one_dword_and_not_a_long_nop() {
+        let mut words = le(&[NOP_PAD, NOP_PAD]);
+        words.extend(with_chain());
+        assert_eq!(chains_in(&words).len(), 1);
     }
 
     #[test]

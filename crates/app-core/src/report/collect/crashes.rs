@@ -25,8 +25,10 @@ const LONGER: &str = "--since=-14d";
 /// The newest few, as a crash that repeats has the same trace each time.
 const MOST_CRASHES: usize = 3;
 const SECONDS: u32 = 30;
-/// Lines of a record that name this PC, its boot or where the core file is, and nothing about the crash.
-const PC_LINES: [&str; 4] = ["Machine ID:", "Boot ID:", "Hostname:", "Storage:"];
+/// Lines of a record that name this PC, its boot, where the core file is, or which of the user's
+/// programs started the one that crashed, and nothing about the crash.
+const PC_LINES: [&str; 6] =
+    ["Machine ID:", "Boot ID:", "Hostname:", "Storage:", "Control Group:", "User Unit:"];
 
 #[derive(Deserialize)]
 struct Listed {
@@ -89,6 +91,8 @@ mod tests {
     #[test]
     fn a_record_keeps_the_crash_and_not_the_pcs_ids() {
         let record = "           PID: 4242 (guesthouse)\n\
+                      \x20Control Group: /user.slice/user-1000.slice/app-org.example.Terminal-77.scope\n\
+                      \x20    User Unit: app-org.example.Terminal-77.scope\n\
                       \x20      Boot ID: 981906ea9dfc43e7ade3e79a95c6d2d9\n\
                       \x20   Machine ID: b0160524751c40ef9abb4386a64016fd\n\
                       \x20     Hostname: marrowbox\n\
@@ -96,7 +100,7 @@ mod tests {
                       \x20      Message: Process 4242 (guesthouse) of user 1000 dumped core.\n\
                       \x20               #0  0x00007f1b07caf22b pthread_kill (libc.so.6 + 0xaf22b)\n";
         let kept = without_pc_lines(record);
-        for gone in ["981906ea", "b0160524", "marrowbox", "coredump/core"] {
+        for gone in ["981906ea", "b0160524", "marrowbox", "coredump/core", "example.Terminal"] {
             assert!(!kept.contains(gone), "{gone} is still in:\n{kept}");
         }
         assert!(kept.contains("PID: 4242") && kept.contains("pthread_kill"));

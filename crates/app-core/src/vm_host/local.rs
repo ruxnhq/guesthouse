@@ -40,7 +40,8 @@ const SOUND_CHECK_SECONDS: &str = "3";
 const OLD_SHARED_FILES: [&str; 3] = ["iomem", "ram", "display"];
 /// These can only be left by an earlier run, and a stale socket would pass for a ready daemon.
 const STALE_FILES: [&str; 4] = ["vgpu.sock", "global.sock", "screen.sock", PASST_PID_FILE];
-/// Which machine a run folder's logs are from. Slots are shared, so the folder alone can't say.
+/// Which machine a run folder's logs are from. Slots are shared, so the folder alone can't say, and
+/// a file older than the note is from an earlier run, maybe another machine's.
 pub const MACHINE_NOTE: &str = "run-machine";
 /// The last run's logs are the only evidence of whatever made someone restart. The note goes along,
 /// so the kept logs still say whose they are.
@@ -190,8 +191,9 @@ impl LocalHost<'_> {
                 fs::rename(&log, self.run_file(&format!("{name}.1")))?;
             }
         }
-        File::create(self.run_file("serial.log"))?;
+        // The note goes first, as a report takes a file as this run's only if it changed after it.
         fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
+        File::create(self.run_file("serial.log"))?;
         Ok(())
     }
 

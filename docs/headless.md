@@ -51,6 +51,7 @@ What you don't give, you get as the dialog would start you: the sizes for that k
 | `cores`, `ram` | a whole number, within what this PC allows | all |
 | `vram` | the video memory cap in GiB, 0 for none | Windows |
 | `sound` | on or off | Windows |
+| `window-speed` | on or off: whether programs in a window are shown without a copy of every frame | Windows |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |
 | `network` | nat, none or bridged | not Ubuntu |
@@ -58,7 +59,7 @@ What you don't give, you get as the dialog would start you: the sizes for that k
 | `bridge` | the bridge's name | not Ubuntu |
 | `share` | a folder, or `none` | not Ubuntu |
 
-These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen` and `refresh`. Those take effect at once if Windows is up on the display driver, as they do in the app. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
+These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh` and `window-speed`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` at the next start. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
 

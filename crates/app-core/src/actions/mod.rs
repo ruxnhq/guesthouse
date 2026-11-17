@@ -384,12 +384,21 @@ fn after_reboot(task: &mut Task) -> Result<()> {
     set_up_desktop(task)
 }
 
+/// macOS takes no request to shut down at its login screen, by key or by power button, and holds one
+/// up while it asks about a document that isn't saved.
+const MACOS_TURNED_OFF: &str = "macOS did not shut down, so the VM was turned off. It only shuts down \
+                                when asked once someone is logged in, and waits if a document isn't saved.";
+
 fn stop(task: &mut Task) -> Result<()> {
     let gpu = task.machine.has_gpu();
     task.step(if gpu { "Shutting down Windows" } else { "Shutting down" });
     if task.host.stop(&task.machine, STOP_WAIT_SECONDS)? == Stopped::TurnedOff {
         let who = if gpu { "Windows" } else { "The guest" };
-        task.error = format!("{who} did not shut down in time, so the VM was turned off.");
+        task.error = if task.machine.macos() {
+            MACOS_TURNED_OFF.to_owned()
+        } else {
+            format!("{who} did not shut down in time, so the VM was turned off.")
+        };
     }
     Ok(())
 }

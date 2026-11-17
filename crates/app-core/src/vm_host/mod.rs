@@ -2,6 +2,7 @@
 //! [`VmHost`], as the daemon's start-up is changing. Machines with and without a GPU both go through it.
 
 mod local;
+mod macos_stop;
 
 pub use local::{LocalHost, MACHINE_NOTE, last_words};
 

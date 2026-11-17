@@ -1,5 +1,6 @@
 //! The VM and the daemon as processes on this PC.
 
+use super::macos_stop::{KEYS_SHARE, shutdown_keys};
 use super::{Stopped, VmHost};
 use crate::context::Context;
 use crate::daemon::{self, DaemonStart, detached, is_own_daemon};
@@ -327,12 +328,19 @@ impl VmHost for LocalHost<'_> {
         }
         let mut how = Stopped::Cleanly;
         if qemu_pid(self.context, None).is_some() {
+            let mut left = seconds;
             if machine.has_gpu() {
                 self.context.ask_guest(machine, "Stop-Computer -Force", crate::agent::QUICK_SECONDS, None);
+            } else if machine.macos() {
+                self.context.ask_monitor(None, &shutdown_keys());
+                left -= seconds / KEYS_SHARE;
+                if !self.wait_gone(seconds / KEYS_SHARE) {
+                    self.context.ask_monitor(None, &Qmp::bare("system_powerdown"));
+                }
             } else {
                 self.context.ask_monitor(None, &Qmp::bare("system_powerdown"));
             }
-            if !self.wait_gone(seconds) {
+            if !self.wait_gone(left) {
                 terminate(qemu_pid(self.context, None));
                 if !self.wait_gone(AFTER_SIGTERM_SECONDS) {
                     return Err(Failure::new(STOPPED_LATE));

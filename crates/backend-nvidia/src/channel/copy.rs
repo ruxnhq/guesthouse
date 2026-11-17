@@ -30,7 +30,14 @@ pub(crate) const METHOD_LAUNCH: u32 = 0x300;
 pub(crate) const METHOD_OFFSET_IN: u32 = 0x400;
 const METHOD_SET_TARGET_BLOCK_SIZE: u32 = 0x70C;
 const METHOD_SET_SOURCE_BLOCK_SIZE: u32 = 0x728;
+const METHOD_SET_REMAP_COMPONENTS: u32 = 0x708;
 const RENDER_ALWAYS: u32 = 1;
+/// Four one-byte components in and out, with the first and third changed over: the target's first
+/// is the source's third, its second the second, its third the first (a zero) and its fourth the fourth.
+const REMAP_RED_AND_BLUE: u32 = 0x2 | 0x1 << 4 | 0x3 << 12 | 0x3 << 20 | 0x3 << 24;
+const LAUNCH_REMAP: u32 = 1 << 10;
+/// With the remap on, the engine counts a row and a place in a tiled surface in pixels.
+const TURNED_PIXEL_BYTES: u32 = 4;
 /// Launches: non-pipelined, flushed, ending in a one-word semaphore.
 const LAUNCH_PITCH_LINES: u32 = 0x38E;
 const LAUNCH_BLOCK_TO_PITCH_LINES: u32 = 0x30E;
@@ -53,6 +60,9 @@ pub struct Rows {
     pub target_pitch: u32,
     pub width: u32,
     pub count: u32,
+    /// True if red and blue change places on the way, for a source and a target that keep them in
+    /// different orders. The pixels are then four bytes wide.
+    pub turned: bool,
 }
 
 /// Where a rectangle sits in a tiled surface. `x` and `surface_width` are in bytes, and `block` is
@@ -93,6 +103,20 @@ pub struct Tiled {
     pub target: Option<TiledSide>,
 }
 
+/// The words that start a copy, with the remap ahead of them if red and blue change places.
+fn launch(rows: &Rows, kind: u32) -> Vec<u32> {
+    let start = increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1);
+    if !rows.turned {
+        return vec![start, kind];
+    }
+    vec![
+        increasing(COPY_SUBCHANNEL, METHOD_SET_REMAP_COMPONENTS, 1),
+        REMAP_RED_AND_BLUE,
+        start,
+        kind | LAUNCH_REMAP,
+    ]
+}
+
 /// See the module documentation.
 #[derive(Debug)]
 pub struct CopyChannel {
@@ -125,7 +149,7 @@ impl CopyChannel {
             rows.target as u32,
             rows.source_pitch,
             rows.target_pitch,
-            rows.width,
+            if rows.turned { rows.width / TURNED_PIXEL_BYTES } else { rows.width },
             rows.count,
             header(METHOD_SET_SEMAPHORE, 3),
             (done >> 32) as u32,
@@ -137,16 +161,26 @@ impl CopyChannel {
     /// The batch for a rectangle between linear surfaces.
     pub fn rows(&mut self, rows: &Rows) -> Vec<u32> {
         let mut words = self.head(rows);
-        words.extend([increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1), LAUNCH_PITCH_LINES]);
+        words.extend(launch(rows, LAUNCH_PITCH_LINES));
         words
     }
 
     /// The batch for a rectangle out of a tiled surface, which the engine detiles by itself. `None`
     /// if a number wouldn't fit its field, as it would change the one beside it.
     pub fn tiled(&mut self, tiled: &Tiled) -> Option<Vec<u32>> {
-        let source = tiled.source.as_ref().map(|side| side.words(METHOD_SET_SOURCE_BLOCK_SIZE));
-        let target = tiled.target.as_ref().map(|side| side.words(METHOD_SET_TARGET_BLOCK_SIZE));
-        let launch = match (&source, &target) {
+        let in_pixels = |side: &TiledSide| {
+            if !tiled.rows.turned {
+                return *side;
+            }
+            TiledSide {
+                x: side.x / TURNED_PIXEL_BYTES,
+                surface_width: side.surface_width / TURNED_PIXEL_BYTES,
+                ..*side
+            }
+        };
+        let source = tiled.source.as_ref().map(|side| in_pixels(side).words(METHOD_SET_SOURCE_BLOCK_SIZE));
+        let target = tiled.target.as_ref().map(|side| in_pixels(side).words(METHOD_SET_TARGET_BLOCK_SIZE));
+        let kind = match (&source, &target) {
             (Some(_), Some(_)) => LAUNCH_BLOCK_TO_BLOCK_LINES,
             (Some(_), None) => LAUNCH_BLOCK_TO_PITCH_LINES,
             (None, Some(_)) => LAUNCH_PITCH_TO_BLOCK_LINES,
@@ -155,13 +189,14 @@ impl CopyChannel {
         let sides = [source, target].into_iter().flatten().collect::<Option<Vec<_>>>()?;
         let mut words = self.head(&tiled.rows);
         words.extend(sides.into_iter().flatten());
-        words.extend([increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1), launch]);
+        words.extend(launch(&tiled.rows, kind));
         Some(words)
     }
 
     /// The batch for plain bytes between GPU addresses.
     pub fn bytes(&mut self, source: u64, target: u64, length: u32) -> Vec<u32> {
-        let rows = Rows { source, target, source_pitch: 0, target_pitch: 0, width: length, count: 1 };
+        let rows =
+            Rows { source, target, source_pitch: 0, target_pitch: 0, width: length, count: 1, turned: false };
         let mut words = self.head(&rows);
         words.extend([increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1), LAUNCH_PITCH_ONE_LINE]);
         words
@@ -282,6 +317,7 @@ mod tests {
             target_pitch: 512,
             width: 64,
             count: 8,
+            turned: false,
         }
     }
 

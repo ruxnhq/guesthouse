@@ -25,6 +25,22 @@ pub(crate) fn pixel_bytes(surface: &SurfaceShape) -> u32 {
     if surface.colour == SURFACE_COLOUR_16_BIT_FLOAT { FLOAT_PIXEL_BYTES } else { COPY_PIXEL_BYTES }
 }
 
+/// What a surface with red first carries, as a Direct3D 11 `R8G8B8A8` swap chain's back buffer does.
+const SURFACE_COLOUR_RED_FIRST: u32 = 0x20;
+/// What the kernel's staging surface carries: the standard colour, in `X8R8G8B8` or `A8R8G8B8`, which
+/// are blue first.
+const STAGING_COLOUR: u32 = 0;
+const FORMATS_BLUE_FIRST: [u32; 2] = [21, 22];
+
+/// Whether a copy goes from a surface with red first to one with blue first. A windowed program's
+/// present is such a copy when its back buffer is red first, and bytes moved as they are would show
+/// it with red and blue changed over.
+fn orders_differ(source: &SurfaceShape, target: &SurfaceShape) -> bool {
+    source.colour == SURFACE_COLOUR_RED_FIRST
+        && target.colour == STAGING_COLOUR
+        && FORMATS_BLUE_FIRST.contains(&target.format)
+}
+
 /// One side of a copy: where it starts, its pitch, and the tiling the engine has to know about. A
 /// linear side starts at the rectangle, and a tiled side starts at the surface.
 fn copy_side(
@@ -102,7 +118,15 @@ impl<R: Rm> NvidiaBackend<R> {
         let (target_left, target_top) = (i64::from(copy.target_left), i64::from(copy.target_top));
         let (target, target_pitch, target_side) =
             copy_side(copy.target_address, &copy.target, target_left, target_top, pixel)?;
-        let rows = Rows { source, target, source_pitch, target_pitch, width, count };
+        let rows = Rows {
+            source,
+            target,
+            source_pitch,
+            target_pitch,
+            width,
+            count,
+            turned: orders_differ(&copy.source, &copy.target),
+        };
         if source_side.is_none() && target_side.is_none() {
             return Some(channel.rows(&rows));
         }
@@ -183,6 +207,7 @@ impl<R: Rm> NvidiaBackend<R> {
             target_pitch: if target.is_some() { 0 } else { copy.slot_pitch },
             width,
             count: copy.height,
+            turned: false,
         };
         if source.is_none() && target.is_none() {
             return Some(channel.rows(&rows));
@@ -473,6 +498,36 @@ mod tests {
         let copy = SlotCopy { slot_tiling: Some(4), ..slot_copy(Some(3)) };
         let words = NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &copy).unwrap();
         assert_eq!(words[7..11], [0, 0, 400, 50]);
+    }
+
+    #[test]
+    fn a_red_first_back_buffer_is_turned_on_its_way_to_the_staging_surface() {
+        let mut copy = staging_copy(200, 50, Some(4));
+        copy.source.colour = SURFACE_COLOUR_RED_FIRST;
+        copy.target = SurfaceShape { format: 21, colour: STAGING_COLOUR, ..copy.target };
+        let plain =
+            NvidiaBackend::<FakeRm>::batch_for(&mut channel(), &staging_copy(200, 50, Some(4))).unwrap();
+        let turned = NvidiaBackend::<FakeRm>::batch_for(&mut channel(), &copy).unwrap();
+        // A row is counted in pixels, the remap comes just ahead of the launch, and the launch asks for it.
+        assert_eq!((plain[9], turned[9]), (800, 200));
+        assert_eq!(turned.len(), plain.len() + 2);
+        assert_eq!(turned[turned.len() - 3], 0x0330_3012);
+        assert_eq!(*turned.last().unwrap(), *plain.last().unwrap() | 1 << 10);
+        // The tiled source's width is in pixels too.
+        assert_eq!(turned[17] * 4, plain[17]);
+    }
+
+    #[test]
+    fn surfaces_in_one_order_and_colours_not_known_are_copied_as_they_are() {
+        let staging = SurfaceShape { format: 21, colour: STAGING_COLOUR, ..slot_copy(None).source };
+        let with = |colour| SurfaceShape { colour, ..slot_copy(Some(4)).source };
+        assert!(orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &staging));
+        assert!(orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &SurfaceShape { format: 22, ..staging }));
+        assert!(!orders_differ(&with(7), &staging));
+        assert!(!orders_differ(&with(SURFACE_COLOUR_10_BIT), &staging));
+        assert!(!orders_differ(&with(SURFACE_COLOUR_16_BIT_FLOAT), &staging));
+        assert!(!orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &with(SURFACE_COLOUR_RED_FIRST)));
+        assert!(!orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &SurfaceShape { format: 17, ..staging }));
     }
 
     fn staging_copy(right: i32, bottom: i32, tiling: Option<u32>) -> StagingCopy {

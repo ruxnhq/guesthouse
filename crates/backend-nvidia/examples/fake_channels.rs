@@ -106,6 +106,7 @@ fn main() {
         target_pitch: 512,
         width: 64,
         count: 8,
+        turned: false,
     };
     let batch = copier.rows(&rows);
     copier.start(&mut device, batch);

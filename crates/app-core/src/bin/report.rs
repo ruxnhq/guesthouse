@@ -29,7 +29,7 @@ them into one file here. It shows what's in the file and asks before sending any
   --kind KIND         what went wrong: wont-start, crashed, picture, slow, install-failed or other.
   --description TEXT  what went wrong, in your words. Without it, you're asked.
   --contact TEXT      how the developer can reach you, if you'd like them to. It isn't made public.
-  --no-guest-serial   leaves out the guest's serial log, the one thing that comes from inside it.
+  --no-guest-serial   leaves out what the guest wrote to its serial port.
   --save-only         writes the file and stops, with nothing sent.
   --help              this.
 ";

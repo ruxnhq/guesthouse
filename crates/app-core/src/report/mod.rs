@@ -5,8 +5,9 @@
 //! - `scrub` and `trim` make each file fit to send, and `bundle` packs them with a manifest.
 //! - `send` posts the bundle, and `issue_link` offers a GitHub issue with its ID afterwards.
 //!
-//! Nothing here sends anything unless the tester asks, and nothing comes from inside the guest but
-//! its serial console, which the tester can leave out.
+//! Nothing here sends anything unless the tester asks. From the guest, a report has its serial port's
+//! output, which the tester can leave out, and whatever the app's log quotes of its answers to the
+//! app's own scripts. Never its memory, its disk or a core file.
 
 pub mod bundle;
 pub mod collect;

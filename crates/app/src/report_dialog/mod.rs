@@ -75,7 +75,7 @@ impl ReportDialog {
         kind.set_selected(ProblemKind::ALL.len() as u32 - 1);
         let guest_serial = adw::SwitchRow::builder()
             .title("The guest's serial log")
-            .subtitle("What Windows or Linux wrote to its serial port, the one part from inside the guest.")
+            .subtitle("What Windows or Linux wrote to its serial port. The app's log can still hold a few of the guest's answers to its own scripts.")
             .active(true)
             .build();
         let choices = adw::PreferencesGroup::new();

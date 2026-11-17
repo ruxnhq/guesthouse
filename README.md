@@ -127,7 +127,7 @@ In the app, choose Show Log in the menu and press Send Report. A failure's See D
 ~/.local/lib/guesthouse/current/guesthouse-report --machine NAME --kind crashed --no-guest-serial
 ```
 
-A report holds the app's log, that machine's logs from its last runs and its settings, what Guesthouse's checks say of this PC, its system, GPU and driver, the kernel's lines about GPUs and KVM if you may read them, and a recent crash's stack trace. It never holds a core file, a memory dump, a disk or anything else from inside the guest, except its serial log, which you can leave out. Your user name, host name and home folder are taken out where they're found, but logs are free text, so read it first if that matters to you. It goes to me, it's read by me and my automation tools, and it's deleted after 30 days. Sending gives you an ID, and the app can open an issue filled in with it.
+A report holds the app's log, that machine's logs from its last runs and its settings, what Guesthouse's checks say of this PC, its system, GPU and driver, the kernel's lines about GPUs and KVM if you may read them, and a recent crash's stack trace. It never holds a core file, a memory dump or a disk. From the guest it has its serial log, which you can leave out, and the few answers to Guesthouse's own scripts that the app's log keeps. Your user name, host name and home folder are taken out where they're found, but logs are free text, so read it first if that matters to you. It goes to me, it's read by me and my automation tools, and it's deleted after 30 days. Sending gives you an ID, and the app can open an issue filled in with it.
 
 ## Working on it
 

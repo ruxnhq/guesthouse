@@ -40,8 +40,11 @@ const SOUND_CHECK_SECONDS: &str = "3";
 const OLD_SHARED_FILES: [&str; 3] = ["iomem", "ram", "display"];
 /// These can only be left by an earlier run, and a stale socket would pass for a ready daemon.
 const STALE_FILES: [&str; 4] = ["vgpu.sock", "global.sock", "screen.sock", PASST_PID_FILE];
-/// The last run's logs are the only evidence of whatever made someone restart.
-const LOGS_TO_KEEP: [&str; 3] = [daemon::OUTPUT_FILE, "serial.log", "qemu.log"];
+/// Which machine a run folder's logs are from. Slots are shared, so the folder alone can't say.
+pub const MACHINE_NOTE: &str = "run-machine";
+/// The last run's logs are the only evidence of whatever made someone restart. The note goes along,
+/// so the kept logs still say whose they are.
+const LOGS_TO_KEEP: [&str; 4] = [daemon::OUTPUT_FILE, "serial.log", "qemu.log", MACHINE_NOTE];
 const TPM_SOCKET: &str = "tpm.sock";
 /// A new VM hasn't booted yet, whatever an earlier one noted.
 const BOOTS_FILE: &str = "guesthouse-boots";
@@ -124,8 +127,9 @@ impl LocalHost<'_> {
     }
 
     /// QEMU with no daemon and no shared memory. Returns once its monitor answers.
-    fn start_plain(&self, plan: &VmPlan, drives: &OpenDrives) -> Result<()> {
+    fn start_plain(&self, plan: &VmPlan, machine: &Machine, drives: &OpenDrives) -> Result<()> {
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
+        fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
         // Whatever an earlier machine in this slot had to say about its jail isn't this one's, and
         // its passt, if one is somehow still there, goes before this one's is noted.
         jailing::write_note(&plan.run_folder, &plan.jail_note)?;
@@ -176,7 +180,7 @@ impl LocalHost<'_> {
         }
     }
 
-    fn clear_run_folder(&self) -> Result<()> {
+    fn clear_run_folder(&self, machine: &Machine) -> Result<()> {
         for name in STALE_FILES {
             let _ = fs::remove_file(self.run_file(name));
         }
@@ -187,6 +191,7 @@ impl LocalHost<'_> {
             }
         }
         File::create(self.run_file("serial.log"))?;
+        fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
         Ok(())
     }
 
@@ -254,7 +259,7 @@ impl LocalHost<'_> {
         {
             return Err(Failure::new("The VM did not start: something is still running."));
         }
-        self.clear_run_folder()?;
+        self.clear_run_folder(machine)?;
         self.remove_old_shared_files();
         // The app's own copies close when this returns, and the memory goes back once both have gone.
         let memory =
@@ -284,7 +289,7 @@ impl VmHost for LocalHost<'_> {
         // Before anything is started, so a drive that can't be had leaves nothing running.
         let drives = OpenDrives::open(self.context, &plan.drives)?;
         if !plan.is_gpu() {
-            return self.start_plain(plan, &drives);
+            return self.start_plain(plan, machine, &drives);
         }
         if self.context.second_instance() {
             return Err(Failure::new(SECOND_INSTANCE_REFUSAL));

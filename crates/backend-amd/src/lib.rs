@@ -28,6 +28,7 @@ mod memory;
 mod moves;
 mod nodes;
 pub mod protocol;
+mod reset;
 mod run_wait;
 mod screen_copy;
 mod sdma_copy;
@@ -271,7 +272,7 @@ impl AmdBackend {
             ib.mapped_in = Some(space);
         }
         let bytes = ib.write(commands).map_err(|error| error.to_string())?;
-        let ran = space_vm.run(HW_IP_DMA, &[Ib { address: copy_ib::ADDRESS, bytes }], self.patience);
+        let ran = space_vm.run(HW_IP_DMA, None, &[Ib { address: copy_ib::ADDRESS, bytes }], self.patience);
         self.note_how_it_ran(&ran);
         match ran {
             Ok(Ran::Retired) => Ok(()),
@@ -896,7 +897,7 @@ impl Backend for AmdBackend {
             };
         }
         // An engine with no fence writer is waited for here, and the core then completes the fence.
-        let ran = space.vm.run(node.ip_type, &ibs, self.patience);
+        let ran = space.vm.run(node.ip_type, Some(work.queue), &ibs, self.patience);
         self.note_how_it_ran(&ran);
         match ran {
             Ok(Ran::Retired) => WorkStart::Ran,

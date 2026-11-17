@@ -18,7 +18,7 @@ pub struct Sizes {
 const WINDOWS_SIZES: Sizes = Sizes { cores: 8, ram: 16, disk: 128 };
 const PLAIN_SIZES: Sizes = Sizes { cores: 4, ram: 4, disk: 32 };
 const UBUNTU_SIZES: Sizes = Sizes { cores: 8, ram: 8, disk: 80 };
-/// The least Windows 11's setup takes, for a Windows disc that's installed by hand.
+/// What Microsoft asks for Windows 11, for a Windows disc that's installed by hand.
 const PLAIN_WINDOWS_SIZES: Sizes = Sizes { cores: 4, ram: 4, disk: 64 };
 
 pub fn sizes_for(kind: Kind) -> Sizes {

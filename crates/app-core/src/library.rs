@@ -23,7 +23,7 @@ use std::process;
 /// mark file then keeps it from being imported again.
 pub const EXISTING_ID: &str = "windows-11";
 const REMOVED_MARK: &str = ".existing-removed";
-pub const MIN_WINDOWS_DISK_GIB: u32 = 64;
+pub const MIN_WINDOWS_DISK_GIB: u32 = 40;
 pub const MIN_PLAIN_DISK_GIB: u32 = 1;
 pub const MAX_DISK_GIB: u32 = 16384;
 /// A finished install, and the install disc beside it.
@@ -571,7 +571,7 @@ mod tests {
         for (change, text) in [
             (NewMachine { cores: 1, ..new.clone() }, "Cores"),
             (NewMachine { ram_gib: 3, ..new.clone() }, "RAM"),
-            (NewMachine { disk_gib: 63, ..new.clone() }, "disk"),
+            (NewMachine { disk_gib: MIN_WINDOWS_DISK_GIB - 1, ..new.clone() }, "disk"),
             (NewMachine { name: " ".into(), ..new.clone() }, "name"),
             (NewMachine { iso: scratch.path("gone.iso").display().to_string(), ..new.clone() }, "ISO"),
         ] {

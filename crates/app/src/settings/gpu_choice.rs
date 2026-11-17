@@ -13,12 +13,22 @@ const NOTE: &str = "An AMD card gives the guest a virtio GPU on it. The guest bu
 
 /// The row, added to `group`, or nothing on a PC with no AMD card.
 pub fn add_gpu_choice(shared: &Shared, group: &adw::PreferencesGroup) -> Option<adw::ComboRow> {
+    add_gpu_choice_saying(shared, group, NVIDIA, NOTE)
+}
+
+/// The same row with a guest's own words for the NVIDIA card and for what choosing means.
+pub fn add_gpu_choice_saying(
+    shared: &Shared,
+    group: &adw::PreferencesGroup,
+    nvidia: &str,
+    note: &str,
+) -> Option<adw::ComboRow> {
     let cards = amd_cards(&shared.window.context());
     let chosen = shared.machine.borrow().amd_gpu.clone();
     if cards.is_empty() && chosen.is_empty() {
         return None;
     }
-    let mut choices: Vec<(String, String)> = vec![(String::new(), NVIDIA.to_owned())];
+    let mut choices: Vec<(String, String)> = vec![(String::new(), nvidia.to_owned())];
     choices
         .extend(cards.into_iter().map(|card| (card.pci.clone(), format!("{} at {}", card.name, card.pci))));
     if !choices.iter().any(|(pci, _)| *pci == chosen) {
@@ -26,7 +36,7 @@ pub fn add_gpu_choice(shared: &Shared, group: &adw::PreferencesGroup) -> Option<
     }
     let names: Vec<&str> = choices.iter().map(|(_, name)| name.as_str()).collect();
     let row = choice_row(TITLE, &names);
-    row.set_subtitle(NOTE);
+    row.set_subtitle(note);
     let at = choices.iter().position(|(pci, _)| *pci == chosen).unwrap_or(0);
     row.set_selected(at as u32);
     let saving = shared.clone();

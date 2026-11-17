@@ -23,7 +23,8 @@ pub struct LinuxGpu {
 impl LinuxGpu {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
         let machine = shared.machine.borrow().clone();
-        if machine.kind != Kind::Plain {
+        // A plain machine that holds macOS has a GPU of its own kind.
+        if machine.kind != Kind::Plain || machine.macos() {
             return Self { group: None, switch: None, card: None };
         }
         let group = adw::PreferencesGroup::builder().title("Linux GPU").build();

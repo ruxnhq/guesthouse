@@ -454,6 +454,9 @@ impl Machine {
     pub fn summary_showing(&self, screen: &str) -> String {
         let (kind, cores, ram) = (self.kind.name(), self.cores, self.ram_gib);
         match self.kind {
+            Kind::Plain if self.macos() => {
+                format!("macOS, {cores} cores, {ram} GiB, {}, GPU preview", self.screen)
+            }
             Kind::Plain if self.linux_gpu => format!("{kind}, {cores} cores, {ram} GiB, Linux GPU preview"),
             Kind::Plain => format!("{kind}, {cores} cores, {ram} GiB, no GPU acceleration"),
             Kind::Linux if self.gpu_preview => format!("{kind}, {cores} cores, {ram} GiB, GPU preview"),
@@ -661,6 +664,16 @@ mod tests {
 
     fn sample() -> Machine {
         Machine::new("sample", "Sample", "/d", "/v")
+    }
+
+    #[test]
+    fn a_plain_machine_with_an_opencore_image_is_a_mac_and_says_so() {
+        let plain = Machine { kind: Kind::Plain, ..sample() };
+        assert!(!plain.macos() && plain.summary().ends_with("no GPU acceleration"));
+        let mac = Machine { opencore: "/m/mac/opencore.qcow2".into(), ..plain };
+        assert!(mac.macos());
+        assert_eq!(mac.summary(), "macOS, 8 cores, 16 GiB, 1920x1080, GPU preview");
+        assert!(!Machine { opencore: "/o".into(), ..sample() }.macos(), "only a plain machine");
     }
 
     #[test]

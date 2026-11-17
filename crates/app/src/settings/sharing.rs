@@ -76,6 +76,8 @@ impl Sharing {
         let machine = self.0.shared.machine.borrow();
         let place = if machine.kind == Kind::Windows {
             "as a drive, from its next start, for files up to 4 GiB"
+        } else if machine.macos() {
+            "in Finder, with Go, Connect to Server and http://10.0.2.4/"
         } else {
             "at http://10.0.2.4/, through a WebDAV client"
         };

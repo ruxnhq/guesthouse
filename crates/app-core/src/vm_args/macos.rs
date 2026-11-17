@@ -155,12 +155,9 @@ impl VmPlan {
         arguments
     }
 
+    /// The machine's network, as any machine line has it, on a card macOS has a driver for.
     fn macos_network(&self) -> Vec<String> {
-        let card = match self.network.mac.as_str() {
-            "" => "virtio-net-pci,netdev=net0,id=net0,addr=0x3".to_owned(),
-            mac => format!("virtio-net-pci,netdev=net0,id=net0,mac={mac},addr=0x3"),
-        };
-        words(&["-netdev", "user,id=net0,ipv6=off", "-device", &card])
+        self.macos_first_nic()
     }
 
     fn macos_devices(&self, boot: &MacosBoot) -> Vec<String> {
@@ -220,7 +217,9 @@ impl VmPlan {
         arguments.extend(self.macos_network());
         arguments.extend(self.macos_devices(boot));
         arguments.extend(self.macos_outputs());
+        arguments.extend(self.second_nic());
         arguments.extend(self.qemu_sandbox_arguments());
+        arguments.extend(self.drive_arguments());
         Some(arguments)
     }
 
@@ -332,7 +331,9 @@ mod tests {
         );
         assert!(arguments.iter().any(|word| word == "ide-hd,bus=sata.2,drive=opencore,bootindex=1"));
         assert!(!arguments.iter().any(|word| word.contains("installer")), "macOS is installed");
-        assert!(arguments.iter().any(|word| word.ends_with(",mac=52:54:00:9b:79:fe,addr=0x3")));
+        assert!(value_after(&arguments, "-netdev").starts_with("user,id=net0,hostfwd="));
+        let card = "virtio-net-pci,netdev=net0,id=net0,mac=52:54:00:9b:79:fe,addr=0x3";
+        assert!(arguments.iter().any(|word| word == card), "where macOS was installed with it");
     }
 
     #[test]
@@ -404,5 +405,25 @@ mod tests {
         assert!(mac.qemu_environment().contains(&home));
         assert!(!plan(boot("")).qemu_environment().contains(&home), "its user's own, with no jail");
         assert!(!plan(boot("")).qemu_arguments().iter().any(|word| word == "-sandbox"));
+    }
+
+    #[test]
+    fn it_has_the_machines_network_share_sound_and_drives() {
+        let mut mac = plan(boot(""));
+        mac.network.passt = true;
+        mac.share = Some("/home/me/Shared".into());
+        mac.sound = Some(crate::vm_args::Sound { sink: None });
+        mac.drives = vec![crate::machine::Drive { id: "ata-SSD".into() }];
+        let arguments = mac.qemu_arguments();
+        assert!(value_after(&arguments, "-netdev").starts_with("passt,id=net0,mtu=1500,"));
+        let link = arguments.iter().find(|word| word.starts_with("user,id=link,restrict=on,")).unwrap();
+        assert!(link.contains(",guestfwd=tcp:10.0.2.4:80-cmd:"), "the share: {link}");
+        assert!(arguments.iter().any(|word| word.starts_with("virtio-net-pci,netdev=link,")));
+        assert_eq!(value_after(&arguments, "-audiodev"), "pipewire,id=sound");
+        assert!(arguments.iter().any(|word| word == "hda-output,bus=hda.0,audiodev=sound"));
+        assert!(
+            arguments.iter().any(|word| word == "ide-hd,bus=sata.5,drive=drive1"),
+            "after the installer's port"
+        );
     }
 }

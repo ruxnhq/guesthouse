@@ -22,6 +22,9 @@ const PASST_QUIET: &str = "--quiet";
 /// Where the jail's launcher notes passt's pid and start time, in the run folder, so it can be found
 /// like QEMU.
 pub const PASST_PID_FILE: &str = "passt.pid";
+const CARD: &str = "e1000e";
+const MACOS_CARD: &str = "virtio-net-pci";
+const MACOS_CARD_SLOT: &str = "0x3";
 
 impl VmPlan {
     fn passt_settings(&self) -> Vec<(&'static str, String)> {
@@ -59,38 +62,61 @@ impl VmPlan {
         link
     }
 
+    /// The network card: an e1000e, or for macOS, which has no driver for one, a virtio card.
+    fn nic_card(&self) -> &'static str {
+        if self.macos_boot().is_some() { MACOS_CARD } else { CARD }
+    }
+
     fn first_nic_model(&self) -> String {
+        let card = self.nic_card();
         match self.network.mac.as_str() {
-            "" => "model=e1000e".to_owned(),
-            mac => format!("model=e1000e,mac={mac}"),
+            "" => format!("model={card}"),
+            mac => format!("model={card},mac={mac}"),
         }
     }
 
-    /// The first NIC stays `-nic` in every mode. `-device` would come after the others and move them.
-    pub(super) fn first_nic(&self) -> String {
-        let (model, link) = (self.first_nic_model(), self.private_link());
+    /// What the first NIC is connected to: QEMU's name for it, and its settings if it has any.
+    fn first_backend(&self) -> (&'static str, String) {
+        let link = self.private_link();
         match (self.network.mode, self.network.passt) {
             // The jail's launcher started passt, and QEMU has its end of the connection.
-            (Mode::Nat, true) if self.jail.is_some() => format!("socket,{model},fd={PASST_FD}"),
+            (Mode::Nat, true) if self.jail.is_some() => ("socket", format!("fd={PASST_FD}")),
             (Mode::Nat, true) => {
                 let settings = self.passt_settings();
                 let settings: Vec<String> =
                     settings.iter().map(|(name, value)| format!("{name}={value}")).collect();
-                format!("passt,{model},{}", settings.join(","))
+                ("passt", settings.join(","))
             }
-            (Mode::Nat, false) => format!("user,{model},{link}"),
-            (Mode::None, _) => format!("user,{model},restrict=on,{link}"),
+            (Mode::Nat, false) => ("user", link),
+            (Mode::None, _) => ("user", format!("restrict=on,{link}")),
             // The jail's launcher has the device from the helper already, as QEMU can't run it.
-            (Mode::Bridged, _) if self.jail.is_some() => format!("tap,{model},fd={TAP_FD}"),
+            (Mode::Bridged, _) if self.jail.is_some() => ("tap", format!("fd={TAP_FD}")),
             (Mode::Bridged, _) => {
                 let bridge = if self.network.bridge.is_empty() {
                     network::DEFAULT_BRIDGE
                 } else {
                     &self.network.bridge
                 };
-                format!("bridge,{model},br={bridge},helper={}", bridge_helper())
+                ("bridge", format!("br={bridge},helper={}", bridge_helper()))
             }
         }
+    }
+
+    /// The first NIC stays `-nic` in every mode. `-device` would come after the others and move them.
+    pub(super) fn first_nic(&self) -> String {
+        let (kind, settings) = self.first_backend();
+        format!("{kind},{},{settings}", self.first_nic_model())
+    }
+
+    /// The first NIC of a macOS guest, which was installed with its card at a place `-nic` can't name,
+    /// so it's a network and a card on it.
+    pub(super) fn macos_first_nic(&self) -> Vec<String> {
+        let (kind, settings) = self.first_backend();
+        let card = match self.network.mac.as_str() {
+            "" => format!("{MACOS_CARD},netdev=net0,id=net0,addr={MACOS_CARD_SLOT}"),
+            mac => format!("{MACOS_CARD},netdev=net0,id=net0,mac={mac},addr={MACOS_CARD_SLOT}"),
+        };
+        words(&["-netdev", &format!("{kind},id=net0,{settings}"), "-device", &card])
     }
 
     /// The second NIC goes last, in a slot of its own, so that nothing the guest knows about moves.
@@ -103,7 +129,7 @@ impl VmPlan {
             "-netdev",
             &format!("user,id=link,restrict=on,{}", self.private_link()),
             "-device",
-            &format!("e1000e,netdev=link,mac={CONTROL_MAC},bus=pcie.0,addr=0x1e"),
+            &format!("{},netdev=link,mac={CONTROL_MAC},bus=pcie.0,addr=0x1e", self.nic_card()),
         ])
     }
 }

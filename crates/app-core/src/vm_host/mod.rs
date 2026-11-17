@@ -4,7 +4,7 @@
 mod local;
 mod macos_stop;
 
-pub use local::{LocalHost, MACHINE_NOTE, last_words};
+pub use local::{LocalHost, MACHINE_NOTE, last_words, sound_on_this_host};
 
 use crate::context::Context;
 use crate::failure::Result;

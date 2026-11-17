@@ -385,8 +385,8 @@ fn terminate(pid: Option<u32>) {
 }
 
 /// QEMU won't start if it can't reach PipeWire, as from a session with no sound server. Only GPU
-/// machines get sound, as they always have.
-fn sound_on_this_host() -> Option<Sound> {
+/// machines get sound, as they always have, and a macOS guest counts as one.
+pub fn sound_on_this_host() -> Option<Sound> {
     let reachable = Command::new("timeout")
         .args([SOUND_CHECK_SECONDS, "pw-cli", "info", "0"])
         .stdout(Stdio::null())

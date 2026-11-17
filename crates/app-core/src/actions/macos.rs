@@ -11,6 +11,7 @@ use crate::linux::card::forwarded_card;
 use crate::machine::Machine;
 use crate::start_checks::start_problems;
 use crate::vm_args::{Boot, MACOS_QEMU, MACOS_ROM, MacosBoot, MacosCard, UDMABUF};
+use crate::vm_host::sound_on_this_host;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -83,6 +84,8 @@ pub fn start(task: &mut Task) -> Result<()> {
     plan.qemu = task.context.paths.helper(MACOS_QEMU);
     // Its QEMU finds its own files beside itself.
     plan.qemu_files = None;
+    // Before the jail is chosen, which lets a QEMU with sound reach PipeWire's socket.
+    plan.sound = if task.machine.sound { sound_on_this_host() } else { None };
     let choice = choose(task.context, &task.machine, &plan, &(task.context.jail_offer)(&plan))?;
     plan.jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
     plan.jail_note = choice.note;

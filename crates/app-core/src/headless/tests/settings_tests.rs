@@ -133,6 +133,22 @@ fn a_port_is_forwarded_listed_and_taken_back() {
 }
 
 #[test]
+fn window_speed_is_on_until_set_off_and_only_a_windows_machine_has_it() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    make(&context, "win", "Win", Kind::Windows);
+    assert!(said(&context, "show win").0.contains("window-speed on\n"));
+    assert_eq!(said(&context, "set win window-speed off"), ("window-speed is now off.\n".to_owned(), Ok(())));
+    assert!(said(&context, "show win").0.contains("window-speed off\n"));
+    assert!(!crate::machine::load(&context, "win").unwrap().window_speed());
+    assert_eq!(said(&context, "set win window-speed on").1, Ok(()));
+    assert!(crate::machine::load(&context, "win").unwrap().window_speed());
+    assert!(refused(&context, "set work window-speed off").contains("only for a Windows machine"));
+    assert!(!said(&context, "show work").0.contains("window-speed"));
+}
+
+#[test]
 fn show_lists_what_the_kind_of_machine_has() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);

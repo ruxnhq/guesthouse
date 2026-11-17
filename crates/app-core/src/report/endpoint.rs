@@ -4,7 +4,7 @@
 /// The drop box that takes reports for several projects, each under its own name.
 const ADDRESS: &str = "https://files.ruxn.com/r/";
 const PROJECT: &str = "guesthouse";
-/// Sends somewhere else, for a test against a stand-in or the server's `selftest` project. Unset,
+/// Sends somewhere else, for a test against a stand-in. Unset,
 /// reports go to Guesthouse's.
 const ADDRESS_VARIABLE: &str = "GUESTHOUSE_REPORT_ADDRESS";
 

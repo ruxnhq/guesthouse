@@ -7,6 +7,7 @@ mod amd;
 mod arguments;
 mod drives;
 mod forwarding_jail;
+mod macos;
 mod nic;
 mod own_linux;
 mod qemu_jail;
@@ -14,6 +15,7 @@ mod standalone;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
+pub use macos::{MACOS_QEMU, MACOS_ROM, MacosBoot};
 pub use nic::PASST_PID_FILE;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;
@@ -56,6 +58,8 @@ pub enum Boot {
     Ubuntu(UbuntuBoot),
     /// A plain machine holding a Linux the user installed, with the forwarded GPU if it can have it.
     OwnLinux { iso: String, gpu: UbuntuBoot },
+    /// A plain machine holding macOS, on reims-vgpu's QEMU.
+    Macos(MacosBoot),
 }
 
 /// What Ubuntu's unattended install starts from.
@@ -191,7 +195,8 @@ impl VmPlan {
             files_port: (machine.kind == crate::machine::Kind::Windows).then(|| slot.files_port()),
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
-            screen: machine.basic_screen().to_owned(),
+            // Its device takes any size, where the VGA only has the firmware's.
+            screen: if machine.macos() { machine.screen.clone() } else { machine.basic_screen().to_owned() },
             disk: machine.disk.clone(),
             nvme: machine.nvme,
             vars: machine.vars.clone(),

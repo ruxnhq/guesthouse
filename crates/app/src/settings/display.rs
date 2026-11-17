@@ -135,6 +135,19 @@ impl Display {
             saving.save();
         });
         group.add(&direct);
+        let bar = adw::SwitchRow::builder()
+            .title("Hide the bar")
+            .active(shared.machine.borrow().bar_hides())
+            .subtitle(
+                "The bar over the screen hides, and comes back when the pointer rests at the top edge of the window.",
+            )
+            .build();
+        let saving = shared.clone();
+        bar.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().bar_stays = !row.is_active();
+            saving.save();
+        });
+        group.add(&bar);
     }
 
     fn connect(&self) {

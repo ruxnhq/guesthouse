@@ -1,4 +1,8 @@
 //! The page that shows a guest's screen, with its toolbar, the mouse, fullscreen and the thumbnail.
+//!
+//! The bar at the top hides in fullscreen, and in a window too unless the machine says it stays. The
+//! top edge brings it back: at once in fullscreen, where the pointer stops against the edge, and in a
+//! window only once the pointer has rested there, as it also crosses that edge on its way out.
 
 mod capture;
 mod capture_state;
@@ -30,14 +34,14 @@ use crate::window::{MachineHandle, Window};
 use adw::prelude::*;
 use clipboard::SharedClipboard;
 use frames::FrameRoute;
-use gtk::glib;
+use gtk::{gdk, glib};
 use guesthouse_app_core::library::save_thumbnail;
 use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::{State, Status, slot_of};
 use monitors::Monitors;
 use screen::Screen;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -50,6 +54,17 @@ pub const CAPTURE_KEYS: &str = "Ctrl+Alt+M";
 pub const OVERLAY_KEYS: &str = "Ctrl+Alt+P";
 /// Pixels at the top of the screen that bring the header back in fullscreen.
 const TOP_EDGE: f64 = 2.0;
+/// The same in a window, where nothing stops the pointer at the edge.
+const WINDOW_TOP_EDGE: f64 = 6.0;
+/// How long the pointer rests at a window's top edge before the header comes back. Shorter, and
+/// reaching for the top row of the guest's screen brings it too.
+const REST: Duration = Duration::from_millis(300);
+/// How long the header stays once the pointer has left the window, so it's not gone the moment the
+/// pointer slips off it.
+const LEFT: Duration = Duration::from_millis(600);
+const BUTTONS: gdk::ModifierType = gdk::ModifierType::BUTTON1_MASK
+    .union(gdk::ModifierType::BUTTON2_MASK)
+    .union(gdk::ModifierType::BUTTON3_MASK);
 const USUAL_HEADER_HEIGHT: i32 = 48;
 /// Kept at twice the size it's shown, for screens that scale by two.
 const THUMBNAIL_WIDTH: usize = 256;
@@ -68,6 +83,12 @@ struct Parts {
     monitors: RefCell<Option<Rc<Monitors>>>,
     fullscreen_handler: RefCell<Option<glib::SignalHandlerId>>,
     thumbnail_source: RefCell<Option<glib::SourceId>>,
+    /// The pointer brought the header back, and hasn't left it since.
+    header_called: Cell<bool>,
+    /// Whether the header was hiding when last looked at, to say so once each time it starts to.
+    header_hid: Cell<bool>,
+    /// Runs out when the pointer has rested at the top edge, or has been gone from the window.
+    header_wait: RefCell<Option<glib::SourceId>>,
 }
 
 #[derive(Clone)]
@@ -110,6 +131,9 @@ impl ScreenPage {
             monitors: RefCell::default(),
             fullscreen_handler: RefCell::default(),
             thumbnail_source: RefCell::default(),
+            header_called: Cell::default(),
+            header_hid: Cell::default(),
+            header_wait: RefCell::default(),
         }));
         this.make_screen();
         *this.0.monitors.borrow_mut() = Some(Monitors::new(window, &this.0.fullscreen_button));
@@ -167,7 +191,11 @@ impl ScreenPage {
         *parts.fullscreen_handler.borrow_mut() = Some(handler);
         let motion = gtk::EventControllerMotion::new();
         let this = self.clone();
-        motion.connect_motion(move |_, _, y| this.on_motion(y));
+        motion.connect_motion(move |motion, _, y| {
+            this.on_motion(y, motion.current_event_state().intersects(BUTTONS));
+        });
+        let this = self.clone();
+        motion.connect_leave(move |_| this.on_pointer_left());
         parts.toolbar.add_controller(motion);
         let this = self.clone();
         parts.page.connect_shown(move |_| this.on_shown());
@@ -199,6 +227,16 @@ impl ScreenPage {
     /// Whether the guest is taking input, for the page checks.
     pub fn has_input(&self) -> bool {
         self.screen().is_some_and(|screen| screen.has_input())
+    }
+
+    /// Whether the bar is over the screen, for the page checks.
+    pub fn header_shown(&self) -> bool {
+        self.0.toolbar.reveals_top_bars()
+    }
+
+    /// The pointer moving with no button held, this far below the top edge, for the page checks.
+    pub fn move_pointer(&self, y: f64) {
+        self.on_motion(y, false);
     }
 
     pub fn machine_id(&self) -> String {
@@ -249,9 +287,7 @@ impl ScreenPage {
             self.0
                 .window
                 .toast(&format!("Mouse captured. {CAPTURE_KEYS} releases it."), adw::ToastPriority::High);
-            if self.0.window.widget().is_fullscreen() {
-                self.0.toolbar.set_reveal_top_bars(false);
-            }
+            self.call_header(false);
         }
         self.show_hint(None);
     }
@@ -259,8 +295,7 @@ impl ScreenPage {
     fn on_fullscreened(&self) {
         let parts = &self.0;
         let fullscreen = parts.window.widget().is_fullscreen();
-        parts.toolbar.set_extend_content_to_top_edge(fullscreen);
-        parts.toolbar.set_reveal_top_bars(!fullscreen);
+        self.call_header(false);
         let button = &parts.fullscreen_button;
         button.set_icon_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" });
         button.set_tooltip_text(Some(&if fullscreen {
@@ -274,16 +309,108 @@ impl ScreenPage {
         }
     }
 
-    fn on_motion(&self, y: f64) {
+    /// Whether the header is out of the way unless the pointer calls it. Not before there's a screen
+    /// to show: until then the header is all there is to read.
+    fn header_hides(&self) -> bool {
+        let fullscreen = self.0.window.widget().is_fullscreen();
+        let has_frames = self.screen().is_some_and(|screen| screen.has_frames());
+        fullscreen || (self.0.machine.borrow().bar_hides() && has_frames)
+    }
+
+    /// Shows the header or not, by what the machine and the window say and where the pointer was.
+    /// The screen always reaches the top edge when the header can hide, so the picture stays where
+    /// it is as the header comes and goes.
+    fn follow_header(&self) {
         let parts = &self.0;
-        if parts.window.widget().is_fullscreen() {
+        let hides = self.header_hides();
+        if !hides {
+            parts.header_called.set(false);
+            self.forget_header_wait();
+        }
+        let fullscreen = parts.window.widget().is_fullscreen();
+        if hides && !fullscreen && !parts.header_hid.get() {
+            let text = "The bar hides. Rest the pointer at the top edge of the window to bring it back.";
+            parts.window.toast(text, adw::ToastPriority::Normal);
+        }
+        parts.header_hid.set(hides);
+        if parts.toolbar.is_extend_content_to_top_edge() != hides {
+            parts.toolbar.set_extend_content_to_top_edge(hides);
+        }
+        let reveal = !hides || parts.header_called.get();
+        if parts.toolbar.reveals_top_bars() != reveal {
+            parts.toolbar.set_reveal_top_bars(reveal);
+        }
+    }
+
+    fn call_header(&self, called: bool) {
+        self.forget_header_wait();
+        self.0.header_called.set(called);
+        self.follow_header();
+    }
+
+    fn forget_header_wait(&self) {
+        if let Some(source) = self.0.header_wait.borrow_mut().take() {
+            source.remove();
+        }
+    }
+
+    /// Calls the header, or sends it away, once `after` has passed with nothing else happening.
+    fn call_header_after(&self, after: Duration, called: bool) {
+        self.forget_header_wait();
+        let weak = Rc::downgrade(&self.0);
+        let source = glib::timeout_add_local_once(after, move || {
+            if let Some(parts) = weak.upgrade() {
+                // It has run, so there is nothing left to remove.
+                parts.header_wait.borrow_mut().take();
+                ScreenPage(parts).call_header(called);
+            }
+        });
+        *self.0.header_wait.borrow_mut() = Some(source);
+    }
+
+    fn on_motion(&self, y: f64, button_held: bool) {
+        let parts = &self.0;
+        if !self.header_hides() {
+            return;
+        }
+        if parts.header_called.get() {
             let height = parts.toolbar.top_bar_height();
             let top_bar = if height > 0 { height } else { USUAL_HEADER_HEIGHT };
-            if y <= TOP_EDGE {
-                parts.toolbar.set_reveal_top_bars(true);
-            } else if y > f64::from(top_bar) {
-                parts.toolbar.set_reveal_top_bars(false);
+            if y > f64::from(top_bar) {
+                self.call_header(false);
+            } else {
+                // Back on the header after leaving the window.
+                self.forget_header_wait();
             }
+            return;
+        }
+        let fullscreen = parts.window.widget().is_fullscreen();
+        let captured = self.screen().is_some_and(|screen| screen.captured());
+        // A held button is a drag in the guest, which the header would land in the way of.
+        if captured || (button_held && !fullscreen) {
+            self.forget_header_wait();
+        } else if fullscreen {
+            if y <= TOP_EDGE {
+                self.call_header(true);
+            }
+        } else if y > WINDOW_TOP_EDGE {
+            self.forget_header_wait();
+        } else if parts.header_wait.borrow().is_none() {
+            self.call_header_after(REST, true);
+        }
+    }
+
+    /// The pointer left the window, or went into one of the header's menus.
+    fn on_pointer_left(&self) {
+        let parts = &self.0;
+        if !parts.header_called.get() {
+            self.forget_header_wait();
+            return;
+        }
+        let menu_open = parts.fullscreen_button.popover().is_some_and(|menu| menu.is_visible());
+        // In fullscreen the pointer has nowhere to go but back.
+        if !menu_open && !parts.window.widget().is_fullscreen() {
+            self.call_header_after(LEFT, false);
         }
     }
 
@@ -355,6 +482,7 @@ impl ScreenPage {
     fn on_hidden(&self) {
         let parts = &self.0;
         parts.clipboard.borrow_mut().take();
+        self.forget_header_wait();
         parts.window.widget().unfullscreen();
         if let Some(handler) = parts.fullscreen_handler.borrow_mut().take() {
             parts.window.widget().disconnect(handler);
@@ -388,6 +516,7 @@ impl ScreenPage {
         if hint != self.0.title.subtitle() {
             self.0.title.set_subtitle(&hint);
         }
+        self.follow_header();
         let problem = screen.capture_problem();
         self.0.capture_button.set_sensitive(problem.is_none());
         let tooltip = format!("Capture Mouse ({CAPTURE_KEYS})");

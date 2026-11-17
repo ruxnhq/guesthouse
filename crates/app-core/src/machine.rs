@@ -160,6 +160,10 @@ pub struct Machine {
     /// used: the frames are handed over unless the setting above says not to.
     #[serde(default, rename = "direct_frames", skip_serializing, deserialize_with = "any_value")]
     pub was_direct_frames: (),
+    /// The viewer's bar stays over a window's screen, rather than hiding until the pointer rests at
+    /// the top edge. Left out of the file when off, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub bar_stays: bool,
     #[serde(default)]
     pub network_mode: Mode,
     /// NAT through passt, if it's installed. It gives the guest a second adapter.
@@ -238,6 +242,7 @@ impl Machine {
             overlay: false,
             direct_frames_off: false,
             was_direct_frames: (),
+            bar_stays: false,
             network_mode: Mode::Nat,
             passt: false,
             mac: String::new(),
@@ -289,6 +294,11 @@ impl Machine {
     /// Whether the viewer hands the guest's frames to the compositor as they are.
     pub fn direct_frames(&self) -> bool {
         !self.direct_frames_off
+    }
+
+    /// Whether the viewer's bar hides while a window shows the screen.
+    pub fn bar_hides(&self) -> bool {
+        !self.bar_stays
     }
 
     /// Whether Windows is told to show every program in a window the fast way.
@@ -566,6 +576,15 @@ mod tests {
         assert!(serde_json::from_str::<Machine>(&old_file).unwrap().direct_frames());
         let turned_off = serde_json::to_string(&Machine { direct_frames_off: true, ..sample() }).unwrap();
         assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().direct_frames());
+    }
+
+    #[test]
+    fn the_bar_hides_unless_the_file_says_it_stays() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("bar_stays"), "an older build refuses a field it doesn't know: {text}");
+        assert!(serde_json::from_str::<Machine>(&text).unwrap().bar_hides());
+        let stays = serde_json::to_string(&Machine { bar_stays: true, ..sample() }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&stays).unwrap().bar_hides());
     }
 
     #[test]

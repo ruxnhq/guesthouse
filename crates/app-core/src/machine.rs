@@ -202,6 +202,11 @@ pub struct Machine {
     /// an older build can still read it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<Drive>,
+    /// Windows shows every program that draws in a window without a copy of each frame, not only
+    /// the ones it counts as games. The user turns it off when a program's window goes wrong. Left
+    /// out of the file until then, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub window_speed_off: bool,
 }
 
 impl Machine {
@@ -240,6 +245,7 @@ impl Machine {
             amd_gpu: String::new(),
             user: String::new(),
             drives: Vec::new(),
+            window_speed_off: false,
         }
     }
 
@@ -277,6 +283,11 @@ impl Machine {
     /// Whether the viewer hands the guest's frames to the compositor as they are.
     pub fn direct_frames(&self) -> bool {
         !self.direct_frames_off
+    }
+
+    /// Whether Windows is told to show every program in a window the fast way.
+    pub fn window_speed(&self) -> bool {
+        !self.window_speed_off
     }
 
     pub fn has_gpu(&self) -> bool {
@@ -523,6 +534,15 @@ mod tests {
         let allowed = serde_json::to_string(&Machine { start_without_jail: true, ..sample() }).unwrap();
         let read: Machine = serde_json::from_str(&allowed).unwrap();
         assert!(read.start_without_jail);
+    }
+
+    #[test]
+    fn programs_in_a_window_are_sped_up_unless_turned_off() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("window_speed"), "an older build can't read this: {text}");
+        assert!(serde_json::from_str::<Machine>(&text).unwrap().window_speed());
+        let turned_off = serde_json::to_string(&Machine { window_speed_off: true, ..sample() }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().window_speed());
     }
 
     #[test]

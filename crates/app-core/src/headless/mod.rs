@@ -46,7 +46,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
 
   show MACHINE               its settings
-  set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, sound, share
+  set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, sound, share,
+                             window-speed
   forward MACHINE add|remove tcp|udp HOST GUEST
                              a port on this PC that reaches a port in the guest
 

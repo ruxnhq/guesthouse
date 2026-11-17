@@ -14,6 +14,7 @@ mod identity_switch;
 mod install;
 mod own_linux;
 mod ubuntu;
+mod window_speed;
 
 use amd_files::{bring_amd_driver_up_to_date, complete_host_driver};
 pub use desktop::{apply_share, boots, rebooted};
@@ -26,6 +27,7 @@ use identity_switch::{new_vm_needed, stop_for_new_identity};
 pub use install::{
     INSTALL_STEPS, answer_disc_path, answer_file, install, install_step, make_answer_disc, wait_for_setup,
 };
+use window_speed::apply_window_speed;
 
 use crate::context::Context;
 use crate::disk_image::disk_size_gib;
@@ -197,6 +199,7 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
         get_gpu_ready(task)?;
     }
     set_up_desktop(task)?;
+    apply_window_speed(task)?;
     if task.machine.windows_amd_card().is_some() {
         // What follows places NVIDIA's files and settings store, which a guest on AMD has no use for.
         return bring_amd_driver_up_to_date(task);

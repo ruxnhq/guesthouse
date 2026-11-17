@@ -1,5 +1,6 @@
 use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::guest_files::{place_driver_files, place_profile_store};
+use super::window_speed::apply_window_speed;
 use super::*;
 use crate::agent::stand_in::ScriptedAgent;
 use crate::clock::Clock;
@@ -519,6 +520,56 @@ fn with_no_profile_store_script_the_guest_is_not_asked() {
     context.agent = agent.clone();
     let host = RecordingHost::default();
     place_profile_store(&mut placing_task(&context, &host)).unwrap();
+    assert!(agent.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_window_speed_script_carries_the_machines_setting() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/window-speed.ps1", "write the entries");
+    let agent = Arc::new(ScriptedAgent::answering(&["on for C:\\Games\\\r\n", "off, entries removed\r\n"]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    apply_window_speed(&mut task).unwrap();
+    task.machine.window_speed_off = true;
+    apply_window_speed(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked[0].2, "$on = $true\nwrite the entries");
+    assert_eq!(asked[1].2, "$on = $false\nwrite the entries");
+}
+
+#[test]
+fn a_window_speed_failure_is_said_and_the_start_goes_on() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/window-speed.ps1", "write the entries");
+    context.agent = Arc::new(ScriptedAgent::answering(&[
+        "kept 3 folders\r\n",
+        "FAILED window speed: access denied\r\n",
+        "FAILED window speed: access denied\r\n",
+    ]));
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    apply_window_speed(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    apply_window_speed(&mut task).unwrap();
+    assert!(task.error.contains("could not be told"), "{}", task.error);
+    task.machine.window_speed_off = true;
+    apply_window_speed(&mut task).unwrap();
+    assert!(task.error.contains("still in Windows"), "{}", task.error);
+}
+
+#[test]
+fn with_no_window_speed_script_the_guest_is_not_asked() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::answering(&[]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    apply_window_speed(&mut placing_task(&context, &host)).unwrap();
     assert!(agent.requests.lock().unwrap().is_empty());
 }
 

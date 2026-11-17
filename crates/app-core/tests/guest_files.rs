@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 15] = [
+const SENT_TO_THE_GUEST: [&str; 16] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "autounattend.xml",
@@ -19,6 +19,7 @@ const SENT_TO_THE_GUEST: [&str; 15] = [
     "setmode.ps1",
     "setup.ps1",
     "share-start.ps1",
+    "window-speed.ps1",
 ];
 
 fn guest_file(name: &str) -> PathBuf {
@@ -30,6 +31,20 @@ fn everything_the_app_sends_is_in_the_repo() {
     for name in SENT_TO_THE_GUEST {
         assert!(guest_file(name).is_file(), "{name} is missing");
     }
+}
+
+/// The registry entries are Windows' own to share with other programs, so the script may only ever
+/// touch the ones under its own name, and never names a folder the user didn't make or install into.
+#[test]
+fn the_window_speed_script_removes_only_its_own_entries() {
+    let script = fs::read_to_string(guest_file("window-speed.ps1")).unwrap();
+    assert!(script.contains("$ours = 'guesthouse-window-speed-'"));
+    let removals: Vec<&str> = script.lines().filter(|line| line.contains("Remove-Item")).collect();
+    assert_eq!(removals.len(), 2, "{removals:?}");
+    assert!(removals[0].trim_start().starts_with("Our-Entries $key |"), "{}", removals[0]);
+    assert!(removals[1].contains("SubKeyCount -eq 0") && removals[1].contains("ValueCount -eq 0"));
+    assert!(script.contains("$_.FullName -ne $windows"), "Windows' own folder gets no entry");
+    assert!(script.contains("WOW6432Node"), "a 32-bit program reads its own copy of the key");
 }
 
 #[test]

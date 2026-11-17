@@ -20,6 +20,10 @@ const RATE_NOTE: &str = "Set each time the machine starts.";
 const BASIC_NOTE: &str =
     "Windows is on its basic display, which has one rate. This is for the display driver.";
 const HDR_NOTE: &str = "Windows goes to HDR when the machine starts, or at once if it's running.";
+const WINDOW_SPEED_NOTE: &str = "Windows copies every frame of a program that draws in a window, unless it counts \
+                                 the program as a game. On, no program outside the Windows folder is held back \
+                                 that way, which can double its frame rate. Turn it off if a program's window \
+                                 flickers or stays blank. Takes effect when the machine starts.";
 const DRIVER_ROW: &str = "Display driver";
 const DRIVER_IN: &str = "In Windows. It was signed on this machine with a certificate made for it, which Windows \
                          trusts as a root. Its private key was deleted before the install.";
@@ -70,6 +74,17 @@ impl Display {
         group.add(&custom);
         let hdr = adw::SwitchRow::builder().title("HDR").active(machine.hdr).build();
         group.add(&hdr);
+        let window_speed = adw::SwitchRow::builder()
+            .title("Faster programs in a window")
+            .active(machine.window_speed())
+            .subtitle(WINDOW_SPEED_NOTE)
+            .build();
+        let saving = shared.clone();
+        window_speed.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().window_speed_off = !row.is_active();
+            saving.save();
+        });
+        group.add(&window_speed);
         let driver = adw::ActionRow::builder().title(DRIVER_ROW).build();
         let install = row_button("Install Driver");
         driver.add_suffix(&install);

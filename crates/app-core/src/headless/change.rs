@@ -18,8 +18,19 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 10] =
-    ["cores", "ram", "vram", "screen", "refresh", "network", "passt", "bridge", "sound", "share"];
+const SETTINGS: [&str; 11] = [
+    "cores",
+    "ram",
+    "vram",
+    "screen",
+    "refresh",
+    "network",
+    "passt",
+    "bridge",
+    "sound",
+    "share",
+    "window-speed",
+];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
 fn whole_number(key: &str, text: &str) -> Result<u32> {
@@ -110,6 +121,10 @@ pub(super) fn set(
             only_for_windows(&machine, key)?;
             must_be_off(context, &machine)?;
             machine.sound = on_or_off(key, value)?;
+        }
+        "window-speed" => {
+            only_for_windows(&machine, key)?;
+            machine.window_speed_off = !on_or_off(key, value)?;
         }
         "screen" => {
             only_for_windows(&machine, key)?;
@@ -223,6 +238,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "screen", &machine.screen)?;
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
+        line(out, "window-speed", &switch(machine.window_speed()))?;
     }
     if machine.kind != Kind::Linux {
         line(out, "network", &machine.network_mode.name())?;

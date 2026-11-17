@@ -70,6 +70,8 @@ pub struct Collection {
     pub summary: Summary,
     /// The ID of the machine it's about, which is taken out of every file as `<machine>`.
     pub machine: Option<String>,
+    /// Whether it has any logs of the machine running, from a run folder or the kept copy.
+    pub has_run_logs: bool,
 }
 
 impl Collection {

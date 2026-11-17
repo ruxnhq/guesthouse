@@ -586,3 +586,18 @@ fn an_install_with_no_room_to_boot_ends_well_and_stays_off() {
     assert_eq!(task.error, "Windows is installed. There isn't room to start it right now.");
     assert!(host.said().is_empty(), "nothing may start");
 }
+
+#[test]
+fn a_run_that_ends_is_kept_where_a_reboot_leaves_it() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let vm = machine(&context);
+    let run = context.run_folder(None);
+    fs::create_dir_all(&run).unwrap();
+    fs::write(run.join(crate::vm_host::MACHINE_NOTE), &vm.id).unwrap();
+    fs::write(run.join("daemon.out"), "the daemon's last words").unwrap();
+    let host = RecordingHost::default();
+    run_task(&context, &host, "clean_up", &vm.id, &[]).unwrap();
+    let kept = crate::kept_logs::kept_folder(&context, &vm.id).join("daemon.out");
+    assert_eq!(fs::read_to_string(kept).unwrap(), "the daemon's last words");
+}

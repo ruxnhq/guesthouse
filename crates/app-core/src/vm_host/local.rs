@@ -8,6 +8,8 @@ use crate::guest_memory::GuestMemory;
 use crate::host::GIB;
 use crate::host_drives::OpenDrives;
 use crate::jailing;
+use crate::kept_logs;
+use crate::log::write_log;
 use crate::machine::{Machine, sorted_names};
 use crate::monitor::Command as Qmp;
 use crate::processes::{memory_taken, passt_pid, qemu_pid};
@@ -130,6 +132,7 @@ impl LocalHost<'_> {
     /// QEMU with no daemon and no shared memory. Returns once its monitor answers.
     fn start_plain(&self, plan: &VmPlan, machine: &Machine, drives: &OpenDrives) -> Result<()> {
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
+        self.keep_last_run();
         fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
         // Whatever an earlier machine in this slot had to say about its jail isn't this one's, and
         // its passt, if one is somehow still there, goes before this one's is noted.
@@ -181,7 +184,17 @@ impl LocalHost<'_> {
         }
     }
 
+    /// The run that was in this slot, kept before its logs are rotated or written over, in case it
+    /// ended with nobody there to keep it.
+    fn keep_last_run(&self) {
+        if let Err(error) = kept_logs::keep_run(self.context, &self.context.run_folder(None)) {
+            let _ =
+                write_log(self.context, &format!("start: the last run's logs could not be kept: {error}"));
+        }
+    }
+
     fn clear_run_folder(&self, machine: &Machine) -> Result<()> {
+        self.keep_last_run();
         for name in STALE_FILES {
             let _ = fs::remove_file(self.run_file(name));
         }

@@ -35,6 +35,7 @@ use crate::failure::{Failure, Result};
 use crate::gpu_identity::{PciIdentity, read_state};
 use crate::guest_memory::is_no_room;
 use crate::host::{GIB, cpu_list, fits_now, ram_limit_for, vcache_cpus};
+use crate::kept_logs;
 use crate::library::MAX_DISK_GIB;
 use crate::log::{clock_text, write_log};
 use crate::machine::{Kind, Machine, load};
@@ -411,8 +412,21 @@ pub fn run_task(
         task.error = error.0.clone();
     }
     task.finish();
+    keep_ended_run(context, action);
     let _ = writeln!(std::io::stdout(), "{} {action} finished", clock_text());
     result
+}
+
+/// Once a VM has ended, its logs are copied where a reboot leaves them. A run that ended unseen is
+/// kept at the next start in its slot instead.
+fn keep_ended_run(context: &Context, action: &str) {
+    let ending = matches!(action, "stop" | "force" | "clean_up");
+    if ending
+        && qemu_pid(context, None).is_none()
+        && let Err(error) = kept_logs::keep_run(context, &context.run_folder(None))
+    {
+        let _ = write_log(context, &format!("{action}: the run's logs could not be kept: {error}"));
+    }
 }
 
 #[cfg(test)]

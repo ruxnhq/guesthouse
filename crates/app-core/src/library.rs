@@ -5,6 +5,7 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::gpu_support::{NO_GPU_PART, gpu_ready};
 use crate::host::{free_gib, host_ram_limit, plain_ram_limit};
+use crate::kept_logs;
 use crate::machine::{Kind, Machine, load_all, sorted_names};
 use crate::monitor::{Command, failed};
 use crate::network;
@@ -313,6 +314,7 @@ pub fn delete(context: &Context, machine: &Machine) -> Result<()> {
     }
     remove_disk_folder(machine)?;
     fs::remove_dir_all(folder)?;
+    kept_logs::forget(context, &machine.id);
     Ok(())
 }
 
@@ -328,6 +330,7 @@ pub fn remove_entry(context: &Context, machine: &Machine) -> Result<()> {
         return Err(Failure::new("Delete its snapshots first. They are inside the disk, which stays."));
     }
     let _ = fs::remove_dir_all(snapshots_folder(context, machine));
+    kept_logs::forget(context, &machine.id);
     let thumbnail = machine.thumbnail(context);
     for path in [with_suffix(&thumbnail, ".new"), thumbnail] {
         if path.exists() {
@@ -691,8 +694,10 @@ mod tests {
         assert!(remove_entry(&context, &made).unwrap_err().0.contains("Shut the VM down"));
         assert!(Path::new(&made.disk).exists(), "a refused delete takes nothing");
         fs::remove_dir_all(context.processes.join("60")).unwrap();
+        fs::create_dir_all(kept_logs::kept_folder(&context, &made.id)).unwrap();
         delete(&context, &made).unwrap();
         assert!(!made.folder(&context).exists());
+        assert!(!kept_logs::kept_folder(&context, &made.id).exists(), "its kept logs go with it");
     }
 
     #[test]

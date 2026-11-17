@@ -17,7 +17,7 @@ pub mod kind;
 pub mod scrub;
 pub mod send;
 pub mod summary;
-mod trim;
+pub(crate) mod trim;
 
 pub use bundle::{Bundle, Words, write_bundle};
 pub use collect::{Collection, Request, chosen_machine, collect, latest_machine};

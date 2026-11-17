@@ -1,0 +1,81 @@
+//! Which files in a run folder are a run's own logs, and whose run it was.
+//!
+//! Slots are shared between machines, and a start doesn't clear every file an earlier run left, so a
+//! run's files are the ones on this list that changed at or after its note was written. The note,
+//! `MACHINE_NOTE`, names the machine.
+
+use crate::daemon;
+use crate::vm_args::{self, INSTALL_LOG};
+use crate::vm_host::MACHINE_NOTE;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// What the host's side of a run leaves: the daemon's output and QEMU's, QEMU's own log, the TPM's,
+/// the Linux GPU device's calls, and the small notes the app and the daemon leave for the machine's
+/// row (written in jailing.rs, daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs
+/// and actions/desktop.rs).
+pub const HOST_LOGS: [&str; 10] = [
+    daemon::OUTPUT_FILE,
+    vm_args::OUTPUT_FILE,
+    "qemu.log",
+    "swtpm.log",
+    "calls.log",
+    "jail-note",
+    "display-ring",
+    "gpu-stopped",
+    "gpu-off-reason",
+    "guesthouse-boots",
+];
+/// The logs a start keeps from the run before, in vm_host/local.rs.
+pub const KEPT_HOST_LOGS: [&str; 2] = [daemon::OUTPUT_FILE, "qemu.log"];
+/// What the guest wrote to its serial port.
+pub const GUEST_SERIAL: &str = "serial.log";
+/// What an Ubuntu install wrote to its serial port.
+pub const INSTALL_SERIAL: &str = INSTALL_LOG;
+/// The suffix of the logs kept from the run before.
+pub const KEPT_SUFFIX: &str = ".1";
+
+/// The machine a note names and when it was written, which is when that run started.
+pub fn noted_run(folder: &Path, note: &str) -> Option<(String, SystemTime)> {
+    let path = folder.join(note);
+    let id = fs::read_to_string(&path).ok()?.trim().to_owned();
+    (!id.is_empty()).then_some(id).zip(modified(&path))
+}
+
+/// When this machine's current run in the folder started, if the folder's run is this machine's.
+pub fn run_of(folder: &Path, id: &str) -> Option<SystemTime> {
+    noted_run(folder, MACHINE_NOTE).filter(|(noted, _)| noted == id).map(|(_, since)| since)
+}
+
+/// When this machine's run before the current one started, if the kept logs are this machine's.
+pub fn kept_run_of(folder: &Path, id: &str) -> Option<SystemTime> {
+    let note = format!("{MACHINE_NOTE}{KEPT_SUFFIX}");
+    noted_run(folder, &note).filter(|(noted, _)| noted == id).map(|(_, since)| since)
+}
+
+/// Each of these files, with `suffix` added, that is there and changed at or after `since`.
+pub fn files_since(folder: &Path, names: &[&str], suffix: &str, since: SystemTime) -> Vec<(String, PathBuf)> {
+    names
+        .iter()
+        .map(|name| format!("{name}{suffix}"))
+        .map(|name| {
+            let path = folder.join(&name);
+            (name, path)
+        })
+        .filter(|(_, path)| modified(path).is_some_and(|changed| changed >= since))
+        .collect()
+}
+
+pub fn modified(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).ok()?.modified().ok()
+}
+
+/// A moment as a reader would want it.
+pub fn local_time(moment: SystemTime) -> String {
+    // A file's time that jiff can't hold is no real time, so it reads as the start of 1970.
+    let moment = Timestamp::try_from(moment).unwrap_or(Timestamp::UNIX_EPOCH);
+    moment.to_zoned_datetime(TimeZone::system()).strftime("%Y-%m-%d %H:%M").to_string()
+}

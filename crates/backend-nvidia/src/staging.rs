@@ -27,6 +27,8 @@ pub(crate) fn pixel_bytes(surface: &SurfaceShape) -> u32 {
 
 /// What a surface with red first carries, as a Direct3D 11 `R8G8B8A8` swap chain's back buffer does.
 const SURFACE_COLOUR_RED_FIRST: u32 = 0x20;
+/// The same with sRGB coding, as an `R8G8B8A8_UNORM_SRGB` swap chain's is.
+const SURFACE_COLOUR_RED_FIRST_SRGB: u32 = 0x59;
 /// What the kernel's staging surface carries: the standard colour, in `X8R8G8B8` or `A8R8G8B8`, which
 /// are blue first.
 const STAGING_COLOUR: u32 = 0;
@@ -36,7 +38,7 @@ const FORMATS_BLUE_FIRST: [u32; 2] = [21, 22];
 /// present is such a copy when its back buffer is red first, and bytes moved as they are would show
 /// it with red and blue changed over.
 fn orders_differ(source: &SurfaceShape, target: &SurfaceShape) -> bool {
-    source.colour == SURFACE_COLOUR_RED_FIRST
+    matches!(source.colour, SURFACE_COLOUR_RED_FIRST | SURFACE_COLOUR_RED_FIRST_SRGB)
         && target.colour == STAGING_COLOUR
         && FORMATS_BLUE_FIRST.contains(&target.format)
 }
@@ -550,6 +552,7 @@ mod tests {
         let with = |colour| SurfaceShape { colour, ..slot_copy(Some(4)).source };
         assert!(orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &staging));
         assert!(orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &SurfaceShape { format: 22, ..staging }));
+        assert!(orders_differ(&with(SURFACE_COLOUR_RED_FIRST_SRGB), &staging));
         assert!(!orders_differ(&with(7), &staging));
         assert!(!orders_differ(&with(SURFACE_COLOUR_10_BIT), &staging));
         assert!(!orders_differ(&with(SURFACE_COLOUR_16_BIT_FLOAT), &staging));

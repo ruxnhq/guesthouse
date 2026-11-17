@@ -6,7 +6,8 @@ use std::fmt;
 const NO_WAIT: &str = "--no-wait";
 const YES: &str = "--yes";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 7] = ["--iso", "--kind", "--disk", "--cores", "--ram", "--user", "--amd-card"];
+const NEW_OPTIONS: [&str; 8] =
+    ["--iso", "--kind", "--disk", "--disk-folder", "--cores", "--ram", "--user", "--amd-card"];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
 
 /// What `new` was told. Whatever it wasn't told, the New Machine dialog's choice stands.
@@ -15,6 +16,7 @@ pub(super) struct NewOptions<'a> {
     pub iso: Option<&'a str>,
     pub kind: Option<&'a str>,
     pub disk: Option<&'a str>,
+    pub disk_folder: Option<&'a str>,
     pub cores: Option<&'a str>,
     pub ram: Option<&'a str>,
     pub user: Option<&'a str>,
@@ -142,6 +144,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 iso: split.value("--iso"),
                 kind: split.value("--kind"),
                 disk: split.value("--disk"),
+                disk_folder: split.value("--disk-folder"),
                 cores: split.value("--cores"),
                 ram: split.value("--ram"),
                 user: split.value("--user"),

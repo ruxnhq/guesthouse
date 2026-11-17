@@ -2,6 +2,7 @@
 
 use crate::amd_driver_row::AmdDriverRow;
 use crate::common::{choose_file, in_background};
+use crate::disk_place_row::DiskPlaceRow;
 use crate::rows::{choice_row, number_row, row_button};
 use crate::window::Window;
 use adw::prelude::*;
@@ -29,6 +30,7 @@ const WINDOWS_ACCOUNT_NOTE: &str = "Windows signs in by itself. The password is 
                                     Desktop. Leave it empty for a random one, kept in the machine's folder.";
 const LINUX_ACCOUNT_NOTE: &str = "For a console login if the desktop won't start. Leave the password empty for a \
                                   random one, kept in the machine's folder.";
+const DISK_NOTE: &str = "The most it can hold. Its file starts small and grows as the guest fills it.";
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
@@ -53,6 +55,7 @@ struct Parts {
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     disk: adw::SpinRow,
+    disk_place: DiskPlaceRow,
     /// Which card a Windows machine runs on, there only when this PC has more than one to choose.
     card: adw::ComboRow,
     cards: Vec<CardChoice>,
@@ -121,6 +124,8 @@ impl NewMachineDialog {
         let cores = hardware_row(&hardware, "Cores", 1.0, physical_cores(&context.cpus).max(1).into());
         let ram = hardware_row(&hardware, "RAM in GiB", 1.0, 1.0);
         let disk = hardware_row(&hardware, "Disk in GiB", MIN_PLAIN_DISK_GIB.into(), MAX_DISK_GIB.into());
+        disk.set_subtitle(DISK_NOTE);
+        let disk_place = DiskPlaceRow::new(window, &hardware);
         let account = adw::PreferencesGroup::builder().title("Account").visible(false).build();
         page.add(&account);
         let user = adw::EntryRow::builder().title("User name").build();
@@ -170,6 +175,7 @@ impl NewMachineDialog {
             cores,
             ram,
             disk,
+            disk_place,
             card,
             cards,
             amd_driver,
@@ -439,6 +445,7 @@ impl NewMachineDialog {
             user: account_name(iso.kind, parts.user.text().trim()),
             password: parts.password.text().to_string(),
             amd_gpu: (iso.kind == Kind::Windows).then(|| self.chosen_card_pci()),
+            disk_place: parts.disk_place.chosen(),
         };
         let context = parts.window.context();
         let working = context.clone();

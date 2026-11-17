@@ -207,6 +207,11 @@ pub struct Machine {
     /// out of the file until then, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub window_speed_off: bool,
+    /// The folder made for its disk on another drive, which goes when the machine is deleted. Empty
+    /// is a disk in the machine's own folder. Left out of the file when empty, so an older build
+    /// can still read it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub disk_folder: String,
 }
 
 impl Machine {
@@ -246,6 +251,7 @@ impl Machine {
             user: String::new(),
             drives: Vec::new(),
             window_speed_off: false,
+            disk_folder: String::new(),
         }
     }
 
@@ -323,13 +329,13 @@ impl Machine {
         (self.kind == Kind::Windows && !same_maker).then_some(OTHER_MAKER)
     }
 
-    /// Whether its disk and firmware file live in its folder, so deleting that takes them too.
+    /// Whether its disk and firmware file are the app's to delete: both in its folder, or the disk
+    /// in the folder made for it on another drive.
     pub fn owns_files(&self, context: &Context) -> bool {
-        let Ok(folder) = fs::canonicalize(self.folder(context)) else { return false };
-        let inside = format!("{}{MAIN_SEPARATOR}", folder.display());
+        let own = self.folder(context);
+        let disk_home = if self.disk_folder.is_empty() { &own } else { Path::new(&self.disk_folder) };
         // Ubuntu boots with no firmware file of its own.
-        let mut files = [&self.disk, &self.vars].into_iter().filter(|path| !path.is_empty());
-        files.all(|path| fs::canonicalize(path).is_ok_and(|real| real.to_string_lossy().starts_with(&inside)))
+        is_inside(&self.disk, disk_home) && (self.vars.is_empty() || is_inside(&self.vars, &own))
     }
 
     /// The size the VM's VGA gets, for the firmware and for Windows if it's on the basic display.
@@ -457,6 +463,13 @@ pub fn read_refresh(text: &str) -> Result<u32> {
         .ok()
         .filter(|hz| digits && (MIN_REFRESH_HZ..=MAX_REFRESH_HZ).contains(hz))
         .ok_or_else(|| Failure(refresh_limits()))
+}
+
+/// Whether this file is in this folder, going by where both really are.
+fn is_inside(file: &str, folder: &Path) -> bool {
+    let Ok(folder) = fs::canonicalize(folder) else { return false };
+    let inside = format!("{}{MAIN_SEPARATOR}", folder.display());
+    fs::canonicalize(file).is_ok_and(|real| real.to_string_lossy().starts_with(&inside))
 }
 
 pub fn load(context: &Context, id: &str) -> Result<Machine> {

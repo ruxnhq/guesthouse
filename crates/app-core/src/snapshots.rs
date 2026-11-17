@@ -222,6 +222,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         create(context, &new).unwrap()
     }

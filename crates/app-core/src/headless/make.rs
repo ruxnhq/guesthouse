@@ -10,7 +10,7 @@ use crate::failure::{Failure, Result};
 use crate::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use crate::host::{RamField, physical_cores};
 use crate::iso::Iso;
-use crate::library::{NewMachine, create, delete, remove_entry};
+use crate::library::{NewMachine, create, delete, folders_text, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
 use crate::setup::checks::machine_gpu_warning;
 use crate::tasks::{State, status};
@@ -118,12 +118,16 @@ pub(super) fn new_machine(
         user: account_name(kind, options.user.unwrap_or_default().trim()),
         password: String::new(),
         amd_gpu: windows.then(|| card_for(context, options.amd_card)).transpose()?,
+        disk_place: options.disk_folder.unwrap_or_default().to_owned(),
     };
     if new.name.trim().is_empty() {
         return Err(Failure::new("The machine needs a name."));
     }
     let machine = create(context, &new)?;
     writeln!(out, "Made {} in {}.", machine.name, machine.folder(context).display())?;
+    if !machine.disk_folder.is_empty() {
+        writeln!(out, "Its disk is in {}.", machine.disk_folder)?;
+    }
     if machine.installing {
         let who = if windows { "Windows" } else { "Ubuntu" };
         writeln!(out, "{who} installs by itself. Run: guesthouse-vm install {}", machine.id)?;
@@ -164,10 +168,10 @@ pub(super) fn install(context: &Context, machine: &Machine, wait: bool, out: &mu
 pub(super) fn remove(context: &Context, machine: &Machine, yes: bool, out: &mut dyn Write) -> Result<()> {
     let owned = machine.owns_files(context);
     let what = if owned {
+        let places = folders_text(context, machine);
         format!(
-            "This deletes {}, its disk and everything on it, in {}. It cannot be undone.",
-            machine.name,
-            machine.folder(context).display()
+            "This deletes {}, its disk and everything on it, in {places}. It cannot be undone.",
+            machine.name
         )
     } else {
         format!(

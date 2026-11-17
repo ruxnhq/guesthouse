@@ -16,7 +16,7 @@ use serde_json::json;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
 /// The entry made for the VM from before the library. The user can remove it, and this name in a
@@ -92,6 +92,31 @@ pub struct NewMachine {
     /// The AMD card its GPU runs on, by PCI address, or empty for the NVIDIA card. None takes this
     /// PC's usual choice.
     pub amd_gpu: Option<String>,
+    /// A folder on another drive to keep the disk in, or empty for the machine's own folder. The
+    /// disk gets a new folder of its own in there.
+    pub disk_place: String,
+}
+
+/// The folder a new machine's disk goes in.
+fn disk_home(context: &Context, new: &NewMachine, id: &str) -> PathBuf {
+    if new.disk_place.is_empty() {
+        context.paths.machines.join(id)
+    } else {
+        Path::new(&new.disk_place).join(id)
+    }
+}
+
+/// Says why the disk can't go in the folder the user chose.
+fn disk_place_problem(new: &NewMachine, id: &str) -> Option<String> {
+    let place = Path::new(&new.disk_place);
+    if !place.is_absolute() {
+        return Some("Give the disk's folder as a full path, from /.".to_owned());
+    }
+    if !place.is_dir() {
+        return Some(format!("{} is not a folder on this PC.", new.disk_place));
+    }
+    let taken = place.join(id);
+    taken.exists().then(|| format!("{} is already there. Choose another folder or name.", taken.display()))
 }
 
 /// Says why this new machine can't be made now.
@@ -124,19 +149,28 @@ pub fn create_problems(context: &Context, new: &NewMachine, machine: &Machine) -
     if machine.kind == Kind::Windows && !gpu_ready(context) {
         found.push(NO_GPU_PART.to_owned());
     }
+    let elsewhere = !new.disk_place.is_empty();
+    let place_problem = if elsewhere { disk_place_problem(new, &machine.id) } else { None };
+    let place_is_fine = place_problem.is_none();
+    found.extend(place_problem);
     if machine.kind == Kind::Windows {
-        let room = free_gib(&context.paths.machines)?;
-        if room < context.install_room_gib() as f64 {
-            found.push(format!(
-                "An install needs {} GiB free here, and there is {room:.0} GiB.",
-                context.install_room_gib()
-            ));
+        let place = if elsewhere { Path::new(&new.disk_place) } else { &context.paths.machines };
+        if place_is_fine && let Some(short) = install_room_problem(context, place)? {
+            found.push(short);
         }
         if let Err(missing) = guest_driver(context, machine) {
             found.push(missing.to_owned());
         }
     }
     Ok(found)
+}
+
+/// Says so when the drive this folder is on has too little room for a Windows install.
+pub fn install_room_problem(context: &Context, folder: &Path) -> Result<Option<String>> {
+    let room = free_gib(folder)?;
+    let needed = context.install_room_gib();
+    let short = room < needed as f64;
+    Ok(short.then(|| format!("An install needs {needed} GiB free here, and there is {room:.0} GiB.")))
 }
 
 pub fn make_disk(context: &Context, machine: &Machine, gib: u32) -> Result<()> {
@@ -159,7 +193,8 @@ pub fn make_disk(context: &Context, machine: &Machine, gib: u32) -> Result<()> {
 pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     let id = new_id(context, &new.name);
     let folder = context.paths.machines.join(&id);
-    let disk = folder.join(DISK_FILE);
+    let disk_folder = disk_home(context, new, &id);
+    let disk = disk_folder.join(DISK_FILE);
     let firmware = folder.join(FIRMWARE_FILE);
     let windows = new.kind == Kind::Windows;
     let installs = windows || new.kind == Kind::Linux;
@@ -176,22 +211,63 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
         mac: unused_mac(context),
         amd_gpu: new.amd_gpu.clone().unwrap_or_else(|| crate::linux::amd::default_linux_gpu(context)),
         user: if installs { new.user.trim().to_owned() } else { String::new() },
+        disk_folder: if new.disk_place.is_empty() {
+            String::new()
+        } else {
+            disk_folder.to_string_lossy().into_owned()
+        },
         ..Machine::new(&id, new.name.trim(), &disk.to_string_lossy(), &firmware)
     };
     if let Some(problem) = create_problems(context, new, &machine)?.into_iter().next() {
         return Err(Failure(problem));
     }
     machine.save(context)?;
-    let made = if installs && !new.password.is_empty() {
-        store_password(&machine.password_file(context), &new.password)
-    } else {
-        Ok(())
-    };
-    if let Err(failure) = made.and_then(|()| make_disk(context, &machine, new.disk_gib)) {
+    if let Err(failure) = make_disk_folder(&machine) {
         let _ = fs::remove_dir_all(&folder);
         return Err(failure);
     }
-    Ok(machine)
+    let made = make_files(context, new, &machine);
+    if made.is_err() {
+        let _ = remove_disk_folder(&machine);
+        let _ = fs::remove_dir_all(&folder);
+    }
+    made.map(|()| machine)
+}
+
+/// The disk's own folder on another drive, if it has one. It must be new, so that nothing that was
+/// there before is ever taken for the machine's.
+fn make_disk_folder(machine: &Machine) -> Result<()> {
+    if machine.disk_folder.is_empty() {
+        return Ok(());
+    }
+    fs::create_dir(&machine.disk_folder).map_err(|error| {
+        Failure(format!("The disk's folder {} could not be made: {error}", machine.disk_folder))
+    })
+}
+
+/// The password and the disk.
+fn make_files(context: &Context, new: &NewMachine, machine: &Machine) -> Result<()> {
+    if installs_itself(machine) && !new.password.is_empty() {
+        store_password(&machine.password_file(context), &new.password)?;
+    }
+    make_disk(context, machine, new.disk_gib)
+}
+
+fn installs_itself(machine: &Machine) -> bool {
+    matches!(machine.kind, Kind::Windows | Kind::Linux)
+}
+
+/// Takes the disk and the folder made for it on another drive. Anything else that was put in the
+/// folder since isn't for here to remove, and then the folder stays.
+fn remove_disk_folder(machine: &Machine) -> Result<()> {
+    if machine.disk_folder.is_empty() {
+        return Ok(());
+    }
+    if Path::new(&machine.disk).exists() {
+        fs::remove_file(&machine.disk)?;
+    }
+    let _ = fs::remove_dir(&machine.disk_folder);
+    Ok(())
 }
 
 /// The password the user chose, where the install will look for one and keep it: a file only this
@@ -211,8 +287,15 @@ fn removal_problem(context: &Context, machine: &Machine) -> Option<Failure> {
     (current.state != State::Off || current.busy).then(|| Failure::new(SHUT_DOWN_FIRST))
 }
 
-/// Deletes the machine's folder, with its disk. A disk outside the folder is never touched, and
-/// such a machine can only lose its entry.
+/// The folders a delete empties, as a question about it names them.
+pub fn folders_text(context: &Context, machine: &Machine) -> String {
+    let folder = machine.folder(context).display().to_string();
+    if machine.disk_folder.is_empty() { folder } else { format!("{folder} and {}", machine.disk_folder) }
+}
+
+/// Deletes the machine's folder, with its disk, and the disk's own folder if it was made one on
+/// another drive. Any other disk outside the folder is never touched, and such a machine can only
+/// lose its entry.
 pub fn delete(context: &Context, machine: &Machine) -> Result<()> {
     if let Some(problem) = removal_problem(context, machine) {
         return Err(problem);
@@ -228,6 +311,7 @@ pub fn delete(context: &Context, machine: &Machine) -> Result<()> {
     if linked || real_parent != fs::canonicalize(&context.paths.machines).ok() {
         return Err(Failure::new("This machine's folder is not where it should be, so it was left alone."));
     }
+    remove_disk_folder(machine)?;
     fs::remove_dir_all(folder)?;
     Ok(())
 }
@@ -251,6 +335,11 @@ pub fn remove_entry(context: &Context, machine: &Machine) -> Result<()> {
         }
     }
     let folder = machine.folder(context);
+    if !machine.disk_folder.is_empty() {
+        // Its disk was on another drive that's gone or was emptied. What's left here is all the
+        // app's own, and useless without the disk.
+        return Ok(fs::remove_dir_all(folder)?);
+    }
     fs::remove_file(folder.join("machine.json"))?;
     // Anything else in there isn't for here to remove, and then the folder stays.
     let _ = fs::remove_dir(&folder);
@@ -308,6 +397,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         }
     }
 
@@ -342,6 +432,7 @@ mod tests {
             user: "ana".into(),
             password: "chosen".into(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         let made = create(&context, &new).unwrap();
         assert_eq!(made.account(), "ana");
@@ -427,6 +518,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         assert!(create(&context, &new).unwrap_err().0.contains("room for 6 GiB"));
     }
@@ -448,6 +540,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         assert_eq!(create(&context, &new).unwrap_err().0, NO_FIRMWARE);
     }
@@ -470,6 +563,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         let made = create(&context, &new).unwrap();
         assert!(made.installing && made.tpm && !made.has_gpu());
@@ -503,6 +597,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         let made = create(&context, &new).unwrap();
         assert!(made.installing && !made.tpm && made.vars.is_empty());
@@ -526,6 +621,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
+            disk_place: String::new(),
         };
         assert_eq!(create(&context, &new).unwrap_err().0, NO_DRIVER_FILES);
     }
@@ -597,6 +693,60 @@ mod tests {
         fs::remove_dir_all(context.processes.join("60")).unwrap();
         delete(&context, &made).unwrap();
         assert!(!made.folder(&context).exists());
+    }
+
+    #[test]
+    fn a_disk_on_another_drive_gets_a_folder_there_and_goes_with_the_machine() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let other = scratch.path("other-drive");
+        fs::create_dir_all(&other).unwrap();
+        let elsewhere =
+            NewMachine { disk_place: other.display().to_string(), ..plain(&scratch, "Far", None) };
+        let made = create(&context, &elsewhere).unwrap();
+        assert_eq!(Path::new(&made.disk), other.join("far/disk.qcow2"));
+        assert!(Path::new(&made.disk).exists() && Path::new(&made.vars).starts_with(made.folder(&context)));
+        assert!(made.owns_files(&context));
+        assert_eq!(load(&context, "far").unwrap(), made);
+        let again = create(&context, &NewMachine { name: "Far 2".into(), ..elsewhere.clone() }).unwrap();
+        fs::write(other.join("far-2/notes.txt"), "the user's").unwrap();
+        delete(&context, &made).unwrap();
+        assert!(!other.join("far").exists() && !made.folder(&context).exists());
+        delete(&context, &again).unwrap();
+        assert!(!Path::new(&again.disk).exists());
+        assert!(other.join("far-2/notes.txt").exists(), "what the user put beside the disk stays");
+    }
+
+    #[test]
+    fn a_machine_whose_other_drive_is_gone_can_be_forgotten_whole() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let other = scratch.path("other-drive");
+        fs::create_dir_all(&other).unwrap();
+        let elsewhere =
+            NewMachine { disk_place: other.display().to_string(), ..plain(&scratch, "Far", None) };
+        let made = create(&context, &elsewhere).unwrap();
+        fs::remove_dir_all(&other).unwrap();
+        assert!(!made.owns_files(&context));
+        assert!(delete(&context, &made).unwrap_err().0.contains("only its entry"));
+        remove_entry(&context, &made).unwrap();
+        assert!(!made.folder(&context).exists(), "nothing is left to block the name");
+        assert!(load_all(&context).1.is_empty());
+    }
+
+    #[test]
+    fn a_disk_place_that_is_taken_or_no_folder_is_refused() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let other = scratch.path("other-drive");
+        fs::create_dir_all(other.join("far")).unwrap();
+        let taken = NewMachine { disk_place: other.display().to_string(), ..plain(&scratch, "Far", None) };
+        assert!(create(&context, &taken).unwrap_err().0.contains("is already there"));
+        let missing = NewMachine { disk_place: scratch.path("nowhere").display().to_string(), ..taken };
+        assert!(create(&context, &missing).unwrap_err().0.contains("is not a folder"));
+        let relative = NewMachine { disk_place: "big".into(), ..missing };
+        assert!(create(&context, &relative).unwrap_err().0.contains("full path"));
+        assert!(sorted_names(&context.paths.machines).is_empty(), "a refusal makes nothing");
     }
 
     #[test]

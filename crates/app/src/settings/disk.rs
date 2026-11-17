@@ -93,7 +93,13 @@ impl Disk {
         self.0.grow.set_sensitive(off && self.0.size.get().is_some());
         if let Some(size) = self.0.size.get() {
             let note = if off { "" } else { " It can only grow while the VM is off." };
-            self.0.disk.set_subtitle(&format!("{size} GiB.{note}"));
+            let machine = self.0.shared.machine.borrow();
+            let place = if machine.disk_folder.is_empty() {
+                String::new()
+            } else {
+                format!(" In {}.", gtk::glib::markup_escape_text(&machine.disk_folder))
+            };
+            self.0.disk.set_subtitle(&format!("{size} GiB.{place}{note}"));
         }
     }
 

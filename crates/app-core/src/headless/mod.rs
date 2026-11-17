@@ -39,8 +39,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   log MACHINE                where the log is, and the end of it
   command MACHINE            what would start it beside your own QEMU or libvirt, printed
 
-  new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--cores N] [--ram GIB]
-                             [--user NAME] [--amd-card PCI]
+  new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
+                             [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere

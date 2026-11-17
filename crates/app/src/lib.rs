@@ -6,6 +6,7 @@
 pub mod amd_driver_row;
 pub mod application;
 pub mod common;
+pub mod disk_place_row;
 pub mod log_dialog;
 pub mod new_machine;
 pub mod rows;

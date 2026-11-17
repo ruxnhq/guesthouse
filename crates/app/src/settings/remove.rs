@@ -3,6 +3,7 @@
 use super::{Shared, is_off};
 use crate::rows::{confirm, row_button};
 use adw::prelude::*;
+use guesthouse_app_core::library::folders_text;
 use guesthouse_app_core::tasks::Status;
 use std::path::Path;
 
@@ -52,7 +53,7 @@ fn ask(shared: &Shared, owned: bool) {
             format!("Delete {}?", machine.name),
             format!(
                 "This deletes its disk and everything on it, in {}. It cannot be undone.",
-                machine.folder(&context).display()
+                folders_text(&context, &machine)
             ),
             "Delete",
         )

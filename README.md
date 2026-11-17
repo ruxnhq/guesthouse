@@ -87,7 +87,7 @@ You don't need a terminal. Give the app an ISO and it installs Windows or Ubuntu
 
 In the viewer, **Ctrl+Alt+M** captures the mouse, which games need. **Ctrl+Alt+Return** goes full screen, and **Ctrl+Alt+P** shows the performance overlay.
 
-Files go in and out of a Windows guest by dragging. Drop them from your file manager on the viewer and they land where you let go: in a folder window, on the Desktop, on a web page's upload box. If nothing there takes them, they go on the guest's Desktop and the app says so. Drag files in Windows off the edge of the picture and they come along to this PC as a copy. It needs someone logged in to Windows, and it doesn't work while the mouse is captured, in fullscreen on your only monitor, or over a window that runs as administrator, which Windows keeps drags away from.
+Files go in and out of a Windows guest by dragging. Drop them from your file manager on the viewer and they land where you let go: in a folder window, on the Desktop, on a web page's upload box. If nothing there takes them, they go on the guest's Desktop and the app says so. Drag files in Windows off the edge of the picture and they come along to this PC as a copy. A switch in the machine's settings turns it off. It needs someone logged in to Windows, and it doesn't work while the mouse is captured, in fullscreen on your only monitor, or over a window that runs as administrator, which Windows keeps drags away from.
 
 For the best speed, run games full screen and pick Direct3D 12 when a game offers it. In a window, OpenGL and Vulkan with vsync off present through a copy that can cost up to half the frame rate. Direct3D 11 in a window doesn't since 0.6.1.
 

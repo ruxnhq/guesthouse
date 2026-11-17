@@ -450,10 +450,9 @@ impl ScreenPage {
         *self.0.thumbnail_source.borrow_mut() = Some(source);
     }
 
-    /// Dropped and dragged files are for Windows, whose helper does the guest's half.
     fn share_files(&self) {
         let machine = self.0.machine.borrow().clone();
-        let Some(screen) = self.screen().filter(|_| machine.has_gpu()) else { return };
+        let Some(screen) = self.screen().filter(|_| machine.file_drop()) else { return };
         let context = self.0.window.context();
         let slot = slot_of(&context, &machine);
         *self.0.files.borrow_mut() = SharedFiles::new(&self.0.window, &screen, context, machine, slot);

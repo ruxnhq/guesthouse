@@ -215,6 +215,10 @@ pub struct Machine {
     /// out of the file until then, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub window_speed_off: bool,
+    /// Files can be dropped on its screen and dragged out of it. The user's to turn off. Left out
+    /// of the file until then, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub file_drop_off: bool,
     /// The folder made for its disk on another drive, which goes when the machine is deleted. Empty
     /// is a disk in the machine's own folder. Left out of the file when empty, so an older build
     /// can still read it.
@@ -261,6 +265,7 @@ impl Machine {
             user: String::new(),
             drives: Vec::new(),
             window_speed_off: false,
+            file_drop_off: false,
             disk_folder: String::new(),
         }
     }
@@ -310,6 +315,12 @@ impl Machine {
     /// driver can be given a size it didn't start with.
     pub fn sizes_to_window(&self) -> bool {
         self.has_gpu() && !self.window_size_off
+    }
+
+    /// Whether the viewer takes dropped files to the guest and brings dragged ones out, which
+    /// only Windows' helper can do the guest's half of.
+    pub fn file_drop(&self) -> bool {
+        self.has_gpu() && !self.file_drop_off
     }
 
     /// Whether Windows is told to show every program in a window the fast way.
@@ -582,6 +593,17 @@ mod tests {
         assert!(serde_json::from_str::<Machine>(&text).unwrap().window_speed());
         let turned_off = serde_json::to_string(&Machine { window_speed_off: true, ..sample() }).unwrap();
         assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().window_speed());
+    }
+
+    #[test]
+    fn files_can_be_dragged_to_and_from_a_windows_guest_unless_turned_off() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("file_drop"), "an older build can't read this: {text}");
+        assert!(serde_json::from_str::<Machine>(&text).unwrap().file_drop());
+        let turned_off = serde_json::to_string(&Machine { file_drop_off: true, ..sample() }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().file_drop());
+        assert!(!Machine { kind: Kind::Linux, ..sample() }.file_drop());
+        assert!(!Machine { installing: true, ..sample() }.file_drop());
     }
 
     #[test]

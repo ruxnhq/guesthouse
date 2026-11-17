@@ -1,4 +1,4 @@
-//! The clipboard and the shared folder.
+//! The clipboard, dragged files and the shared folder.
 
 use super::Shared;
 use crate::common::choose_folder;
@@ -42,6 +42,21 @@ impl Sharing {
             saving.save();
         });
         group.add(&clipboard);
+        let files = adw::SwitchRow::builder()
+            .title("Drag Files")
+            .active(!machine.file_drop_off)
+            .visible(machine.kind == Kind::Windows)
+            .subtitle(
+                "Files dropped on the guest's screen land where its pointer is, and files dragged off the \
+                 edge of the screen come to this PC as a copy. Takes effect when the screen opens.",
+            )
+            .build();
+        let saving = shared.clone();
+        files.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().file_drop_off = !row.is_active();
+            saving.save();
+        });
+        group.add(&files);
         let folder = adw::ActionRow::builder().title("Shared folder").subtitle_lines(2).build();
         let choose = row_button("Choose");
         let clear = row_button("Clear");

@@ -6,8 +6,9 @@
 //! - `send` posts the bundle, and `issue_link` offers a GitHub issue with its ID afterwards.
 //!
 //! Nothing here sends anything unless the tester asks. From the guest, a report has its serial port's
-//! output, which the tester can leave out, and whatever the app's log quotes of its answers to the
-//! app's own scripts. Never its memory, its disk or a core file.
+//! output, what a running Windows guest's agent says of its own logs, display events, adapter, build
+//! and crash dumps by name, each of which the tester can leave out, and whatever the app's log quotes
+//! of the guest's answers to the app's own scripts. Never its memory, its disk or a dump.
 
 pub mod bundle;
 pub mod collect;
@@ -59,6 +60,33 @@ pub fn write_in_reports_folder(
     Ok(bundle)
 }
 
+/// What to tell the tester before they send, if the report would be thin: no logs of the machine
+/// running, or a machine that isn't running to ask. One message for both, and none for a machine that
+/// couldn't be running for the problem they have. Sending anyway is always theirs to choose.
+pub fn before_sending(collection: &Collection, kind: ProblemKind) -> Option<String> {
+    collection.machine.as_ref()?;
+    let can_run = !matches!(kind, ProblemKind::WontStart | ProblemKind::InstallFailed);
+    let not_running = can_run && !collection.machine_running;
+    let no_logs = !collection.has_run_logs;
+    let text = match (no_logs, not_running) {
+        (true, true) => {
+            "This report has no logs of the machine running, and logs from inside the guest need it running. \
+             The fullest report comes with the machine running: start it, make the problem happen again if \
+             you can, then send."
+        }
+        (true, false) => {
+            "This report has no logs of the machine running. Start it, make the problem happen again, then \
+             send. If it won't start at all, send anyway."
+        }
+        (false, true) => {
+            "The machine isn't running, so the report has nothing from inside the guest. The fullest report \
+             comes with it running: start it, make the problem happen if you can, then send."
+        }
+        (false, false) => return None,
+    };
+    Some(text.to_owned())
+}
+
 /// What takes this PC's names out of a report, and every machine's ID, with `about` as `<machine>`.
 pub fn scrubber_for(context: &Context, about: Option<&str>) -> Scrubber {
     let ids: Vec<String> =
@@ -87,6 +115,26 @@ mod tests {
             fs::create_dir_all(context.paths.machines.join(id)).unwrap();
         }
         context
+    }
+
+    #[test]
+    fn a_thin_report_says_so_once_and_not_for_a_machine_that_cant_run() {
+        let thin = Collection { machine: Some("w11".into()), ..Collection::default() };
+        let both = before_sending(&thin, ProblemKind::WrongPicture).unwrap();
+        assert!(both.contains("no logs of the machine running") && both.contains("inside the guest"));
+        let no_logs = before_sending(&thin, ProblemKind::WontStart).unwrap();
+        assert!(!no_logs.contains("inside the guest"), "a machine that won't start can't be running");
+        let logged = Collection { has_run_logs: true, ..thin.clone() };
+        assert_eq!(before_sending(&logged, ProblemKind::WontStart), None);
+        assert_eq!(before_sending(&logged, ProblemKind::InstallFailed), None);
+        assert!(before_sending(&logged, ProblemKind::Slow).unwrap().contains("isn't running"));
+        let running = Collection { machine_running: true, ..logged };
+        assert_eq!(before_sending(&running, ProblemKind::Slow), None);
+        assert_eq!(
+            before_sending(&Collection::default(), ProblemKind::Slow),
+            None,
+            "no machine, nothing to say"
+        );
     }
 
     #[test]

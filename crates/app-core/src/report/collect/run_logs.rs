@@ -98,7 +98,13 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     fn request(guest_serial: bool) -> Request {
-        Request { machine: None, kind: ProblemKind::SomethingElse, guest_serial, app_facts: Vec::new() }
+        Request {
+            machine: None,
+            kind: ProblemKind::SomethingElse,
+            guest_serial,
+            guest_logs: false,
+            app_facts: Vec::new(),
+        }
     }
 
     fn set_age(path: &Path, seconds_ago: u64) {

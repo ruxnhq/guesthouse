@@ -11,7 +11,8 @@ use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::report::endpoint::KEPT_DAYS;
 use guesthouse_app_core::report::send::send;
 use guesthouse_app_core::report::{
-    Collection, ProblemKind, Request, Words, collect, latest_machine, new_issue_link, write_in_reports_folder,
+    Collection, ProblemKind, Request, Words, before_sending, collect, latest_machine, new_issue_link,
+    write_in_reports_folder,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -21,6 +22,9 @@ const HEIGHT: i32 = 760;
 const MARGIN: i32 = 12;
 const DESCRIPTION_HEIGHT: i32 = 120;
 const NO_MACHINE: &str = "None, it's about the app";
+const GUEST_LOGS_NOTE: &str = "From a running Windows guest: Guesthouse's own guest logs, display events, the \
+                              adapter and its driver, Windows' build, and whether a crash dump was written, by \
+                              name, time and size. Never the dump itself, memory or your files.";
 const GATHERING: &str = "Gathering what goes in…";
 
 fn what_is_sent() -> String {
@@ -41,6 +45,9 @@ struct Parts {
     machine: adw::ComboRow,
     kind: adw::ComboRow,
     guest_serial: adw::SwitchRow,
+    guest_logs: adw::SwitchRow,
+    /// Says, before sending, when the report would be thin and how to make it fuller.
+    thin: gtk::Label,
     description: gtk::TextView,
     contact: adw::EntryRow,
     contents: gtk::Label,
@@ -78,10 +85,18 @@ impl ReportDialog {
             .subtitle("What Windows or Linux wrote to its serial port. The app's log can still hold a few of the guest's answers to its own scripts.")
             .active(true)
             .build();
+        let guest_logs = adw::SwitchRow::builder()
+            .title("Include logs from inside the guest")
+            .subtitle(GUEST_LOGS_NOTE)
+            .active(true)
+            .build();
         let choices = adw::PreferencesGroup::new();
         choices.add(&machine);
         choices.add(&kind);
         choices.add(&guest_serial);
+        choices.add(&guest_logs);
+        let thin = gtk::Label::builder().wrap(true).xalign(0.0).visible(false).build();
+        thin.add_css_class("warning");
 
         let description = gtk::TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
@@ -110,6 +125,9 @@ impl ReportDialog {
         held.add(&contents);
 
         let page = adw::PreferencesPage::new();
+        let warning = adw::PreferencesGroup::new();
+        warning.add(&thin);
+        page.add(&warning);
         for group in [&choices, &words, &contact_group, &held] {
             page.add(group);
         }
@@ -138,6 +156,8 @@ impl ReportDialog {
             machine,
             kind,
             guest_serial,
+            guest_logs,
+            thin,
             description,
             contact,
             contents,
@@ -163,6 +183,8 @@ impl ReportDialog {
         let this = self.clone();
         parts.guest_serial.connect_active_notify(move |_| this.look());
         let this = self.clone();
+        parts.guest_logs.connect_active_notify(move |_| this.look());
+        let this = self.clone();
         parts.send.connect_clicked(move |_| this.on_send());
         let this = self.clone();
         parts.save.connect_clicked(move |_| this.on_save());
@@ -185,6 +207,7 @@ impl ReportDialog {
             machine: parts.machines.get(parts.machine.selected() as usize).cloned(),
             kind,
             guest_serial: parts.guest_serial.is_active(),
+            guest_logs: parts.guest_logs.is_active(),
             app_facts,
         }
     }
@@ -211,6 +234,7 @@ impl ReportDialog {
         let context = self.0.window.context();
         let reading = context.clone();
         let request = self.request();
+        let kind = request.kind;
         let this = self.clone();
         in_background(
             &context,
@@ -222,6 +246,9 @@ impl ReportDialog {
                 match found {
                     Ok(collection) => {
                         this.0.contents.set_label(&contents_text(&collection));
+                        let thin = before_sending(&collection, kind);
+                        this.0.thin.set_label(thin.as_deref().unwrap_or_default());
+                        this.0.thin.set_visible(thin.is_some());
                         *this.0.collected.borrow_mut() = Some(collection);
                     }
                     Err(problem) => this.0.contents.set_label(&problem),

@@ -164,6 +164,32 @@ fn replace_id(text: &str, machine: &MachineId) -> String {
     out
 }
 
+/// Takes each name out where it stands as a word, whatever its case, for names found along the way,
+/// such as a guest's computer and accounts. A name shorter than a bare name may be is left, as for
+/// the host's user.
+pub fn scrub_names(text: &str, names: &[(&str, &str)]) -> String {
+    let mut kept: Vec<(&str, &str)> =
+        names.iter().copied().filter(|(_, name)| name.len() >= SHORTEST_BARE_NAME).collect();
+    if kept.is_empty() {
+        return text.to_owned();
+    }
+    // One pass, so a mark that holds a name, as `<guest-user>` holds `Guest`, isn't taken apart.
+    kept.sort_by_key(|(_, name)| std::cmp::Reverse(name.len()));
+    let words: Vec<String> = kept.iter().map(|(_, name)| regex::escape(name)).collect();
+    let Ok(pattern) = Regex::new(&format!(r"(?i)\b(?:{})\b", words.join("|"))) else {
+        return text.to_owned();
+    };
+    pattern
+        .replace_all(text, |found: &regex::Captures| {
+            let word = &found[0];
+            kept.iter()
+                .find(|(_, name)| name.eq_ignore_ascii_case(word))
+                .map_or(word, |(mark, _)| mark)
+                .to_owned()
+        })
+        .into_owned()
+}
+
 fn apply(rules: &[(Regex, String)], text: &str) -> String {
     let mut text = text.to_owned();
     for (pattern, mark) in rules {

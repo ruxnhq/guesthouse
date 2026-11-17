@@ -7,8 +7,8 @@ use guesthouse_app_core::machine::load_all;
 use guesthouse_app_core::report::endpoint::KEPT_DAYS;
 use guesthouse_app_core::report::send::send;
 use guesthouse_app_core::report::{
-    Bundle, Collection, ProblemKind, Request, Words, chosen_machine, collect, latest_machine, new_issue_link,
-    scrubber_for, write_bundle,
+    Bundle, Collection, ProblemKind, Request, Words, before_sending, chosen_machine, collect, latest_machine,
+    new_issue_link, scrubber_for, write_bundle,
 };
 use rustix::fs::{Access, access};
 use std::env;
@@ -28,6 +28,9 @@ them into one file here. It shows what's in the file and asks before sending any
   --description TEXT  what went wrong, in your words. Without it, you're asked.
   --contact TEXT      how the developer can reach you, if you'd like them to. It isn't made public.
   --no-guest-serial   leaves out what the guest wrote to its serial port.
+  --no-guest-logs     doesn't ask a running Windows guest for its own logs: Guesthouse's guest logs,
+                      display events, the adapter and build, and whether a crash dump was written
+                      (its name, time and size, never the dump).
   --save-only         writes the file and stops, with nothing sent.
   --help              this.
 ";
@@ -39,6 +42,7 @@ struct Options {
     description: Option<String>,
     contact: String,
     no_guest_serial: bool,
+    no_guest_logs: bool,
     save_only: bool,
 }
 
@@ -57,6 +61,7 @@ fn read_options() -> Result<Options, String> {
             "--description" => options.description = Some(value()?),
             "--contact" => options.contact = value()?,
             "--no-guest-serial" => options.no_guest_serial = true,
+            "--no-guest-logs" => options.no_guest_logs = true,
             "--save-only" => options.save_only = true,
             "--help" | "-h" => return Err(HELP.to_owned()),
             other => return Err(format!("{other} isn't an option here.\n\n{HELP}")),
@@ -155,6 +160,7 @@ fn run(context: &Context, options: Options) -> ExitCode {
         machine,
         kind: options.kind,
         guest_serial: !options.no_guest_serial,
+        guest_logs: !options.no_guest_logs,
         app_facts: Vec::new(),
     };
     let collection = collect(context, &request);
@@ -181,7 +187,14 @@ fn run(context: &Context, options: Options) -> ExitCode {
          were taken out where they were found, but logs are free text, so look through it first if that \
          matters to you."
     );
-    if !ask("Send? [y/N] ").eq_ignore_ascii_case("y") {
+    let question = match before_sending(&collection, request.kind) {
+        Some(thin) => {
+            println!("\n{thin}");
+            "Send anyway? [y/N] "
+        }
+        None => "Send? [y/N] ",
+    };
+    if !ask(question).eq_ignore_ascii_case("y") {
         println!("Nothing was sent.");
         return ExitCode::SUCCESS;
     }

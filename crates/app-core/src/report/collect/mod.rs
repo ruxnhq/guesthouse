@@ -8,6 +8,7 @@ mod app_files;
 mod command;
 mod crashes;
 mod extras;
+mod guest_logs;
 mod host_checks;
 mod host_facts;
 mod kernel_log;
@@ -40,6 +41,8 @@ pub struct Request {
     /// What the guest wrote to its serial port. The app's own log also quotes some of the guest's
     /// answers to its scripts, and those stay.
     pub guest_serial: bool,
+    /// What the guest's agent can say about it, which needs the machine running.
+    pub guest_logs: bool,
     /// Facts only the running app knows, such as the GTK and libadwaita it loaded.
     pub app_facts: Vec<(String, String)>,
 }
@@ -72,6 +75,8 @@ pub struct Collection {
     pub machine: Option<String>,
     /// Whether it has any logs of the machine running, from a run folder or the kept copy.
     pub has_run_logs: bool,
+    /// Whether the machine was running when the report was gathered.
+    pub machine_running: bool,
 }
 
 impl Collection {
@@ -121,6 +126,7 @@ pub fn collect(context: &Context, request: &Request) -> Collection {
         found.summary.set(summary::MACHINE, machine.kind_name());
         machine_files::collect(context, machine, &mut found);
         run_logs::collect(context, machine, request, &mut found);
+        guest_logs::collect(context, machine, request, &mut found);
     } else {
         found
             .notes

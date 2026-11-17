@@ -9,8 +9,15 @@ use std::path::Path;
 
 const NAME: &str = "host/crashes.txt";
 /// The app's own programs.
-const OWN_PROGRAMS: [&str; 5] =
-    ["guesthouse", "guesthouse-task", "guesthouse-daemon", "guesthouse-vm", "guesthouse-share"];
+const OWN_PROGRAMS: [&str; 7] = [
+    "guesthouse",
+    "guesthouse-task",
+    "guesthouse-daemon",
+    "guesthouse-vm",
+    "guesthouse-share",
+    "guesthouse-check",
+    "guesthouse-report",
+];
 /// What a crash report adds: the VM's programs, whose crashes are as often the system's as ours.
 const VM_PROGRAMS: [&str; 3] = ["qemu-system-x86_64", "swtpm", "guesthouse-jail"];
 const RECENT: &str = "--since=-3d";

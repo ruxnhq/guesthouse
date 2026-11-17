@@ -43,6 +43,16 @@ fn orders_differ(source: &SurfaceShape, target: &SurfaceShape) -> bool {
         && FORMATS_BLUE_FIRST.contains(&target.format)
 }
 
+/// The width in bytes of a GOB, the tiled layout's smallest block.
+const GOB_BYTES: u32 = 64;
+
+/// How wide a tiled surface is to the engine, in bytes: its pixels' bytes rounded up to whole GOBs.
+/// The pitch the guest's driver gives can be rounded further than that (a Direct3D 9 surface's is, to
+/// 128 bytes), and the engine would then look for each row of blocks one GOB too far along.
+fn tiled_width(surface: &SurfaceShape, pixel: u32) -> Option<u32> {
+    surface.width.checked_mul(pixel)?.checked_next_multiple_of(GOB_BYTES)
+}
+
 /// One side of a copy: where it starts, its pitch, and the tiling the engine has to know about. A
 /// linear side starts at the rectangle, and a tiled side starts at the surface.
 fn copy_side(
@@ -60,7 +70,7 @@ fn copy_side(
     let side = TiledSide {
         x: u32::try_from(x_bytes).ok()?,
         y: u32::try_from(y).ok()?,
-        surface_width: surface.pitch,
+        surface_width: tiled_width(surface, u32::try_from(pixel).ok()?)?,
         surface_height: surface.height,
         block,
     };
@@ -558,6 +568,20 @@ mod tests {
         assert!(!orders_differ(&with(SURFACE_COLOUR_16_BIT_FLOAT), &staging));
         assert!(!orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &with(SURFACE_COLOUR_RED_FIRST)));
         assert!(!orders_differ(&with(SURFACE_COLOUR_RED_FIRST), &SurfaceShape { format: 17, ..staging }));
+    }
+
+    #[test]
+    fn a_tiled_surface_is_as_wide_as_its_pixels_in_whole_gobs_whatever_its_pitch() {
+        // A Direct3D 9 back buffer 1,484 pixels wide: 93 GOBs of pixels, and a pitch of 94.
+        let mut copy = staging_copy(1484, 50, Some(4));
+        copy.source = SurfaceShape { width: 1484, pitch: 6016, ..copy.source };
+        let words = NvidiaBackend::<FakeRm>::batch_for(&mut channel(), &copy).unwrap();
+        assert_eq!(words[17], 5952);
+        // One whose pitch is its pixels in whole GOBs is given as before.
+        copy.source = SurfaceShape { width: 1001, pitch: 4032, ..copy.source };
+        copy.right = 1001;
+        let words = NvidiaBackend::<FakeRm>::batch_for(&mut channel(), &copy).unwrap();
+        assert_eq!(words[17], 4032);
     }
 
     fn staging_copy(right: i32, bottom: i32, tiling: Option<u32>) -> StagingCopy {

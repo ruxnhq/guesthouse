@@ -76,6 +76,31 @@ pub struct Copier {
     /// One retry on a new channel, as a fault in one app can take this channel with it, and every
     /// frame on the screen goes through it.
     retried: bool,
+    /// The kinds of surface a copy has gone between, each said once in the log.
+    kinds_said: Vec<[u32; 4]>,
+}
+
+/// How many kinds of copy the log names. A guest can't make it grow past this.
+const KINDS_SAID_LIMIT: usize = 32;
+
+impl Copier {
+    /// Says a kind of copy the first time it's seen, so a log from a program with the wrong colours
+    /// names the surface it draws to.
+    fn say_kind(&mut self, copy: &StagingCopy) {
+        let kind = [copy.source.format, copy.source.colour, copy.target.format, copy.target.colour];
+        if self.kinds_said.contains(&kind) || self.kinds_said.len() >= KINDS_SAID_LIMIT {
+            return;
+        }
+        self.kinds_said.push(kind);
+        log::debug!(
+            "a copy from format {} colour {:#x} to format {} colour {:#x}, red and blue {}",
+            kind[0],
+            kind[1],
+            kind[2],
+            kind[3],
+            if orders_differ(&copy.source, &copy.target) { "changed over" } else { "as they are" },
+        );
+    }
 }
 
 impl<R: Rm> NvidiaBackend<R> {
@@ -101,7 +126,8 @@ impl<R: Rm> NvidiaBackend<R> {
             let size = AREA_SIZE as u64 + COPY_AREA_EXTRA;
             let area = host.take_gpu_addresses(size, CHANNEL_ADDRESS_ALIGN)?;
             let channel = self.make_copy_channel(area, space).map_err(memory_error)?;
-            self.copier = Some(Copier { channel, space, area, running: false, retried: false });
+            self.copier =
+                Some(Copier { channel, space, area, running: false, retried: false, kinds_said: Vec::new() });
         }
         Ok(self.copier.as_mut().expect("made just above"))
     }
@@ -172,6 +198,7 @@ impl<R: Rm> NvidiaBackend<R> {
                 return StagingStart::Finished(Status::UNSUCCESSFUL);
             }
         };
+        copier.say_kind(copy);
         let Some(words) = Self::batch_for(&mut copier.channel, copy) else {
             log::warn!("a copy's numbers don't fit its batch: {copy:?}");
             return StagingStart::Finished(Status::UNSUCCESSFUL);

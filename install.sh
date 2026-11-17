@@ -19,6 +19,7 @@ PAYLOAD_SHA256="409933fabc884387d38a3d4a8cee3fc5186a239ff690196b801cb5832d1ebbee
 SOURCE_SHA256="0540f1d8ff2fc9c871d7cd7de0badaa827a926b0f578f94f9cc9b326d1263916"
 
 REPO_URL=https://github.com/xnixy/guesthouse
+DISCORD_URL=https://discord.gg/rN3VARayZV
 RELEASE_URL=$REPO_URL/releases/download
 LATEST_SCRIPT_URL=https://raw.githubusercontent.com/xnixy/guesthouse/main/install.sh
 
@@ -1082,6 +1083,8 @@ say_done() {
     say "Guesthouse $RELEASE_VERSION is installed. It's in your apps, or run it with:"
     say "  env \"GUESTHOUSE_PROGRAM=$CURRENT_LINK\" \"$CURRENT_LINK/guesthouse\""
     say "To remove it: sh \"$CURRENT_LINK/uninstall.sh\""
+    say "Questions and chat: $DISCORD_URL"
+    say "Bugs: $REPO_URL/issues"
     [ "$ADD_TO_KVM" = no ] || say "Log out and in again, so that you're in the kvm group."
     [ "$IMMUTABLE" = no ] || [ -z "$PACKAGES" ] || say "Add the packages listed above before you open it."
 }

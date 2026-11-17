@@ -14,6 +14,9 @@ const HOST_ACCELS: [(&str, &str); 4] = [
     ("quit", "<Control>q"),
     ("shortcuts", "<Control>question"),
 ];
+const WEBSITE: &str = "https://github.com/xnixy/guesthouse";
+const ISSUES: &str = "https://github.com/xnixy/guesthouse/issues";
+const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const SHORTCUTS_WIDTH: i32 = 480;
 const SHORTCUTS_HEIGHT: i32 = 520;
 const SCREEN_SHORTCUTS: [(&str, &str); 4] = [
@@ -140,6 +143,9 @@ fn show_about(window: &Window) {
         .version(VERSION)
         .comments("Runs VMs on this PC. With its GPU part, Windows gets NVIDIA's own driver on the card the host keeps using.")
         .license_type(gtk::License::Gpl20)
+        .website(WEBSITE)
+        .issue_url(ISSUES)
         .build();
+    dialog.add_link("Discord", DISCORD);
     dialog.present(Some(window.widget()));
 }

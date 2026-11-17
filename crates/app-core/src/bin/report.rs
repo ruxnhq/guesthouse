@@ -3,14 +3,12 @@
 //! GTK, so it works when the app won't open or never could.
 
 use guesthouse_app_core::context::Context;
-use guesthouse_app_core::log::read_log;
 use guesthouse_app_core::machine::load_all;
 use guesthouse_app_core::report::endpoint::KEPT_DAYS;
-use guesthouse_app_core::report::issue_link::{failure_excerpt, issue_link};
 use guesthouse_app_core::report::send::send;
 use guesthouse_app_core::report::{
-    Bundle, Collection, ProblemKind, Request, Scrubber, Words, chosen_machine, collect, latest_machine,
-    write_bundle,
+    Bundle, Collection, ProblemKind, Request, Words, chosen_machine, collect, latest_machine, new_issue_link,
+    scrubber_for, write_bundle,
 };
 use rustix::fs::{Access, access};
 use std::env;
@@ -115,8 +113,7 @@ fn send_and_say(context: &Context, bundle: &Bundle, description: &str) -> ExitCo
     match send(bundle) {
         Ok(id) => {
             println!("Sent. The report's ID is {id}. Mention it wherever you talk about this problem.");
-            let log = Scrubber::for_this_pc(&context.paths.home).scrub(&read_log(context));
-            let link = issue_link(&id, &bundle.summary, description, &failure_excerpt(&log));
+            let link = new_issue_link(context, &id, bundle, description);
             println!(
                 "\nIf you'd like to open a GitHub issue too, this link fills one in for you to check first:\n{link}"
             );
@@ -166,7 +163,7 @@ fn run(context: &Context, options: Options) -> ExitCode {
     let description =
         options.description.unwrap_or_else(|| ask("What went wrong? One line, or Enter to skip: "));
     let words = Words { description: description.clone(), contact: options.contact };
-    let scrubber = Scrubber::for_this_pc(&context.paths.home);
+    let scrubber = scrubber_for(context, collection.machine.as_deref());
     let bundle = match write_bundle(&collection, &words, &scrubber, &output_folder()) {
         Ok(bundle) => bundle,
         Err(failure) => {

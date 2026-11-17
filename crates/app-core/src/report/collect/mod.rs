@@ -68,6 +68,8 @@ pub struct Collection {
     /// Lines for the manifest that explain what's there and what isn't.
     pub notes: Vec<String>,
     pub summary: Summary,
+    /// The ID of the machine it's about, which is taken out of every file as `<machine>`.
+    pub machine: Option<String>,
 }
 
 impl Collection {
@@ -110,6 +112,7 @@ impl Collection {
 pub fn collect(context: &Context, request: &Request) -> Collection {
     let mut found = Collection::default();
     found.summary.set(summary::VERSION, crate::updates::VERSION);
+    found.machine = request.machine.as_ref().map(|machine| machine.id.clone());
     found.summary.set(summary::KIND, request.kind.word());
     app_files::collect(context, &mut found);
     if let Some(machine) = &request.machine {

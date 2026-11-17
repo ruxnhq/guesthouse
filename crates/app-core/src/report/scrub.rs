@@ -1,5 +1,6 @@
 //! Takes this PC's user name, host name and home folder out of text before it goes into a report,
-//! along with the shapes that name a device rather than a model: UUIDs and MAC addresses.
+//! along with the shapes that name a device rather than a model: UUIDs and MAC addresses. Machines'
+//! IDs go too, as each is made from the name its user gave it.
 //!
 //! Logs are free text, so this catches the shapes it knows and nothing more. It's a best effort, and
 //! nothing here can promise a report holds nothing personal.
@@ -14,6 +15,15 @@ const USER_MARK: &str = "<user>";
 const HOST_MARK: &str = "<host>";
 const UUID_MARK: &str = "<uuid>";
 const MAC_MARK: &str = "<mac>";
+/// The machine a report is about. Any other is this with a number, from 2.
+const MACHINE_MARK: &str = "machine";
+/// IDs that are words the app's own lines use, or that its folders and programs are called. As a bare
+/// word they'd take those words out of every log, so they're only taken out as a whole part of a path
+/// or a whole quoted value, where an ID is what such a word almost always is.
+const COMMON_IDS: [&str; 18] = [
+    "windows", "ubuntu", "linux", "plain", "machine", "machines", "test", "guest", "host", "start", "stop",
+    "install", "display", "gpu", "card", "daemon", "qemu", "app",
+];
 /// A shorter name as a bare word would take letters out of ordinary words all through a log. It's
 /// still caught inside its home folder's path.
 const SHORTEST_BARE_NAME: usize = 3;
@@ -41,6 +51,17 @@ pub struct Scrubber {
     /// Each pattern with what goes in its place, in the order they run. A home folder goes before
     /// the bare user name, so its path becomes `~` and not `/home/<user>`.
     rules: Vec<(Regex, String)>,
+    /// How many of the rules are for the home folder, which go before the machines' IDs.
+    home_rules: usize,
+    machines: Vec<MachineId>,
+}
+
+/// A machine's ID and what goes in its place.
+struct MachineId {
+    id: String,
+    mark: String,
+    /// Whether it's taken out wherever it stands as a word of its own, and not only in a path or quotes.
+    as_word: bool,
 }
 
 impl Scrubber {
@@ -60,6 +81,7 @@ impl Scrubber {
             let pattern = format!(r"{}(/|[^A-Za-z0-9._-]|$)", regex::escape(home));
             push_rule(&mut rules, &pattern, &format!("{HOME_MARK}$1"));
         }
+        let home_rules = rules.len();
         if user.len() >= SHORTEST_BARE_NAME && user != "root" {
             push_rule(&mut rules, &format!(r"\b{}\b", regex::escape(user)), USER_MARK);
         }
@@ -69,16 +91,85 @@ impl Scrubber {
         }
         push_rule(&mut rules, UUID_SHAPE, UUID_MARK);
         push_rule(&mut rules, MAC_SHAPE, MAC_MARK);
-        Self { rules }
+        Self { rules, home_rules, machines: Vec::new() }
+    }
+
+    /// Takes out these machines' IDs as well: `about`, the machine the report is about, becomes
+    /// `<machine>`, and each other one `<machine-2>`, `<machine-3>` and on, the same all through
+    /// one report.
+    pub fn with_machines(mut self, about: Option<&str>, all: &[String]) -> Self {
+        let mut others: Vec<&String> = all.iter().filter(|id| Some(id.as_str()) != about).collect();
+        others.sort();
+        others.dedup();
+        let mut marks: Vec<(&str, String)> =
+            about.map(|id| (id, format!("<{MACHINE_MARK}>"))).into_iter().collect();
+        for (number, id) in others.into_iter().enumerate() {
+            marks.push((id, format!("<{MACHINE_MARK}-{}>", number + 2)));
+        }
+        // The longest first, so `w11` can't take part of `w11-old` should their bounds ever allow it.
+        marks.sort_by_key(|(id, _)| std::cmp::Reverse(id.len()));
+        self.machines = marks
+            .into_iter()
+            .filter(|(id, _)| !id.is_empty())
+            .map(|(id, mark)| MachineId {
+                id: id.to_owned(),
+                mark,
+                as_word: id.len() >= SHORTEST_BARE_NAME && !COMMON_IDS.contains(&id),
+            })
+            .collect();
+        self
     }
 
     pub fn scrub(&self, text: &str) -> String {
+        let (home, rest) = self.rules.split_at(self.home_rules);
+        let mut text = apply(home, text);
+        // Machines go after the home folder and before the user name, as an ID can hold the user's
+        // name and would otherwise be left half taken out.
+        text = self.scrub_machines(&text);
+        apply(rest, &text)
+    }
+
+    /// Only the machines' IDs, for the tester's own words, which are otherwise sent as they wrote them.
+    pub fn scrub_machines(&self, text: &str) -> String {
         let mut text = text.to_owned();
-        for (pattern, mark) in &self.rules {
-            text = pattern.replace_all(&text, mark.as_str()).into_owned();
+        for machine in &self.machines {
+            text = replace_id(&text, machine);
         }
         text
     }
+}
+
+/// Characters an ID can be made of, and so ones that make a longer name when they stand beside it.
+fn is_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+}
+
+fn replace_id(text: &str, machine: &MachineId) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices(&machine.id) {
+        let end = at + machine.id.len();
+        let before = text[..at].bytes().next_back();
+        let after = text[end..].bytes().next();
+        let alone = |byte: Option<u8>| byte.is_none_or(|byte| !is_name_byte(byte));
+        let in_path = before == Some(b'/') && alone(after);
+        let quoted = before == Some(b'"') && after == Some(b'"');
+        if at >= copied && (in_path || quoted || (machine.as_word && alone(before) && alone(after))) {
+            out.push_str(&text[copied..at]);
+            out.push_str(&machine.mark);
+            copied = end;
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+fn apply(rules: &[(Regex, String)], text: &str) -> String {
+    let mut text = text.to_owned();
+    for (pattern, mark) in rules {
+        text = pattern.replace_all(&text, mark.as_str()).into_owned();
+    }
+    text
 }
 
 fn push_rule(rules: &mut Vec<(Regex, String)>, pattern: &str, mark: &str) {
@@ -168,6 +259,40 @@ mod tests {
             assert!(!scrubbed.to_lowercase().contains(planted), "{planted} is still in:\n{scrubbed}");
         }
         assert!(scrubbed.contains("~/.config/guesthouse/app.json"));
+    }
+
+    fn with_machines() -> Scrubber {
+        let all = ["w11".to_owned(), "quillon-games".to_owned(), "tv".to_owned(), "windows".to_owned()];
+        scrubber().with_machines(Some("quillon-games"), &all)
+    }
+
+    #[test]
+    fn machine_ids_go_in_paths_words_and_quotes() {
+        let text = "disk /home/quillon/.local/share/guesthouse/machines/quillon-games/disk.qcow2\n\
+                    10:00 quillon-games stopped by itself. w11 is still running.\n\
+                    {\"machine\": \"w11\"} and \"tv\" at /store/machines/tv/vars.fd\n";
+        assert_eq!(
+            with_machines().scrub(text),
+            "disk ~/.local/share/guesthouse/machines/<machine>/disk.qcow2\n\
+             10:00 <machine> stopped by itself. <machine-3> is still running.\n\
+             {\"machine\": \"<machine-3>\"} and \"<machine-2>\" at /store/machines/<machine-2>/vars.fd\n"
+        );
+    }
+
+    #[test]
+    fn a_short_or_common_id_stays_as_a_word() {
+        let text = "a tv show on windows, Windows with GPU-PV, /machines/windows/disk and w11-old";
+        assert_eq!(
+            with_machines().scrub(text),
+            "a tv show on windows, Windows with GPU-PV, /machines/<machine-4>/disk and w11-old"
+        );
+    }
+
+    #[test]
+    fn the_same_machine_gets_the_same_mark_all_through() {
+        let scrubber = with_machines();
+        assert_eq!(scrubber.scrub("w11"), scrubber.scrub("w11"));
+        assert_eq!(scrubber.scrub_machines("my quillon-games won't start"), "my <machine> won't start");
     }
 
     #[test]

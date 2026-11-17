@@ -34,6 +34,8 @@ pub struct Bundle {
     pub summary: Summary,
     /// Each file in it, and its size in bytes.
     pub files: Vec<(String, usize)>,
+    /// The ID of the machine it's about.
+    pub machine: Option<String>,
 }
 
 /// What the tester wrote.
@@ -64,7 +66,8 @@ pub fn write_bundle(
         let _ = fs::remove_dir_all(&staging);
         let (summary, files) = packed?;
         if fs::metadata(&archive)?.len() <= MOST_REPORT_BYTES {
-            return Ok(Bundle { path: archive, summary, files });
+            let machine = collection.machine.clone();
+            return Ok(Bundle { path: archive, summary, files, machine });
         }
         most /= 2;
     }
@@ -85,8 +88,9 @@ fn write_files(
     for item in &collection.items {
         put(top, &mut files, &item.name, &scrubber.scrub(&trim(&item.text, most)))?;
     }
-    // The tester's own words go as they wrote them.
-    put(top, &mut files, DESCRIPTION_FILE, &format!("{}\n", words.description.trim()))?;
+    // The tester's own words go as they wrote them, but for the machines' IDs.
+    let description = scrubber.scrub_machines(words.description.trim());
+    put(top, &mut files, DESCRIPTION_FILE, &format!("{description}\n"))?;
     let summary = summary_of(collection, words, scrubber);
     put(top, &mut files, SUMMARY_FILE, &summary.to_json())?;
     let manifest = manifest(collection, &files);
@@ -108,7 +112,7 @@ fn summary_of(collection: &Collection, words: &Words, scrubber: &Scrubber) -> Su
     for (key, value) in collection.summary.facts() {
         summary.set(key, &scrubber.scrub(value));
     }
-    summary.set(summary::DESCRIPTION, &words.description);
+    summary.set(summary::DESCRIPTION, &scrubber.scrub_machines(&words.description));
     summary.set(summary::CONTACT, &words.contact);
     summary
 }

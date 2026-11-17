@@ -38,6 +38,7 @@ guesthouse-app-core = { path = "crates/app-core" }
 guesthouse-frame-socket = { path = "crates/frame-socket" }
 guesthouse-sensors = { path = "crates/sensors" }
 guesthouse-jail = { path = "crates/jail" }
+guesthouse-card-check = { path = "tools/card-check" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -523,6 +523,7 @@ name = "guesthouse-app-core"
 version = "0.6.1"
 dependencies = [
  "guesthouse-backend-nvidia",
+ "guesthouse-card-check",
  "guesthouse-daemon",
  "guesthouse-jail",
  "guesthouse-sensors",

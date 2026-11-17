@@ -107,7 +107,8 @@ impl DisplayState {
     }
 }
 
-fn state_file(context: &Context, machine: &Machine) -> PathBuf {
+/// Where what is known of this machine's display driver is kept.
+pub fn state_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(STATE_FILE)
 }
 

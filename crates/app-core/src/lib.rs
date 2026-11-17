@@ -45,6 +45,7 @@ pub mod paths;
 pub mod process_stat;
 pub mod processes;
 pub mod random;
+pub mod report;
 pub mod screen_gpu;
 pub mod settings;
 pub mod setup;

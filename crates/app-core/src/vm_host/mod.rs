@@ -3,7 +3,7 @@
 
 mod local;
 
-pub use local::{LocalHost, last_words};
+pub use local::{LocalHost, MACHINE_NOTE, last_words};
 
 use crate::context::Context;
 use crate::failure::Result;

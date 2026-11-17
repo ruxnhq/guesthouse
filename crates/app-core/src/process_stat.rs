@@ -14,10 +14,14 @@ pub fn read(context: &Context, pid: u32) -> Option<String> {
 
 /// Whether a process has gone, or is on its way out, by its `stat`, if there was one to read.
 pub fn has_ended(stat: Option<&str>) -> bool {
+    stat.and_then(state_of).is_none_or(|state| ENDED_STATES.contains(&state))
+}
+
+/// The kernel's letter for what a process is doing, such as `R` running, `S` asleep or `D` waiting
+/// on a device.
+pub fn state_of(stat: &str) -> Option<char> {
     // The state comes after the program's name, which can hold anything, brackets too.
-    let state =
-        stat.and_then(|stat| stat.rsplit_once(')')).and_then(|(_, rest)| rest.trim_start().chars().next());
-    state.is_none_or(|state| ENDED_STATES.contains(&state))
+    stat.rsplit_once(')').and_then(|(_, rest)| rest.trim_start().chars().next())
 }
 
 /// A process as it was when it was seen.

@@ -102,7 +102,8 @@ pub fn default_linux_gpu(context: &Context) -> String {
     amd_cards(context).into_iter().next().map(|card| card.pci).unwrap_or_default()
 }
 
-fn fallback_file(context: &Context, machine: &Machine) -> PathBuf {
+/// Where the reason this machine fell back to Venus is kept.
+pub fn fallback_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(FALLBACK_FILE)
 }
 

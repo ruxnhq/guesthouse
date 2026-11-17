@@ -353,6 +353,11 @@ impl Machine {
         self.summary_showing(&self.screen_wanted())
     }
 
+    /// What sort of guest it is, such as "Windows with GPU-PV", which says nothing of whose it is.
+    pub fn kind_name(&self) -> &'static str {
+        self.kind.name()
+    }
+
     /// The summary, with what's known of the screen.
     pub fn summary_showing(&self, screen: &str) -> String {
         let (kind, cores, ram) = (self.kind.name(), self.cores, self.ram_gib);

@@ -129,7 +129,8 @@ impl IdentityState {
     }
 }
 
-fn state_file(context: &Context, machine: &Machine) -> PathBuf {
+/// Where this machine's choice of identity is kept.
+pub fn state_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(STATE_FILE)
 }
 

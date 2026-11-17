@@ -17,7 +17,8 @@ const DRIVER_VERSION_FIELD: &str = "driver_version";
 pub const NO_AMD_SETUP: &str = "A Windows machine on an AMD card needs AMD's Windows driver unpacked first, and it \
                                 hasn't been.";
 
-fn amd_setup_file(context: &Context) -> PathBuf {
+/// What setup found of AMD's Windows driver.
+pub fn amd_setup_file(context: &Context) -> PathBuf {
     context.paths.setup_folder().join(AMD_SETUP_FILE)
 }
 

@@ -43,6 +43,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                              [--amd-driver PATH] [--intel-driver PATH]
                              [--remote-desktop on|off] [--ssh on|off]
+  new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere

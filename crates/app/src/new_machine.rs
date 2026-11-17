@@ -1,4 +1,5 @@
-//! The dialog that makes a machine from an ISO. Looking inside the ISO decides what it will be.
+//! The dialog that makes a machine from an ISO. Looking inside the ISO decides what it will be. A
+//! macOS machine has no ISO to look into: its installer comes from Apple.
 
 use crate::common::{choose_file, in_background};
 use crate::disk_place_row::DiskPlaceRow;
@@ -19,6 +20,9 @@ use guesthouse_app_core::library::{
 };
 use guesthouse_app_core::machine::{Kind, MIN_CORES, MIN_RAM_GIB, Machine};
 use guesthouse_app_core::remote_access::{Access, Service, ssh_problem};
+use guesthouse_app_core::macos_setup::{
+    HOW_IT_INSTALLS, MACOS_SIZES, MACOS_TITLE, MIN_MACOS_DISK_GIB, NewMac, create_macos, has_macos_part,
+};
 use guesthouse_app_core::setup::amd::NO_AMD_SETUP;
 use guesthouse_app_core::setup::checks::machine_gpu_warning;
 use guesthouse_app_core::setup::guest_driver::guest_driver;
@@ -44,6 +48,8 @@ const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
 const CARD_TITLE: &str = "Card";
+const MACOS_ROW_NOTE: &str = "Needs no ISO. Apple's installer is downloaded for it.";
+const MACOS_NAME: &str = "macOS";
 /// Said plainly until a guest on an AMD card has drawn with it.
 const AMD_NOT_FINISHED: &str = "starts on the AMD card. GPU-PV on AMD is not finished, so Windows may have no \
                                 GPU there yet";
@@ -58,6 +64,8 @@ struct Parts {
     dialog: adw::Dialog,
     create_button: gtk::Button,
     iso_row: adw::ActionRow,
+    /// Whether macOS was chosen, and not a disc.
+    macos: Cell<bool>,
     verdict: adw::ActionRow,
     hardware: adw::PreferencesGroup,
     name: adw::EntryRow,
@@ -127,6 +135,14 @@ impl NewMachineDialog {
         let choose = row_button("Choose");
         iso_row.add_suffix(&choose);
         disc.add(&iso_row);
+        let macos_row = adw::ActionRow::builder()
+            .title(MACOS_TITLE)
+            .subtitle(MACOS_ROW_NOTE)
+            .visible(has_macos_part(&context))
+            .build();
+        let use_macos = row_button("Use");
+        macos_row.add_suffix(&use_macos);
+        disc.add(&macos_row);
         let verdict = adw::ActionRow::builder().visible(false).activatable(false).build();
         verdict.add_css_class("verdict");
         disc.add(&verdict);
@@ -203,6 +219,7 @@ impl NewMachineDialog {
             dialog,
             create_button,
             iso_row,
+            macos: Cell::new(false),
             verdict,
             hardware,
             name,
@@ -229,6 +246,8 @@ impl NewMachineDialog {
         }));
         this.set_vm_running(window.vm_running());
         this.connect(&cancel, &choose);
+        let handle = this.clone();
+        use_macos.connect_clicked(move |_| handle.choose_macos());
         this
     }
 
@@ -290,7 +309,71 @@ impl NewMachineDialog {
 
     /// Takes this ISO as if it had been chosen. It's public for the page checks, where no file dialog
     /// can be answered.
+    /// macOS in place of a disc: nothing to read, and sizes it runs well with.
+    fn choose_macos(&self) {
+        let parts = &self.0;
+        let context = parts.window.context();
+        parts.macos.set(true);
+        *parts.iso_path.borrow_mut() = Some(String::new());
+        parts.iso_row.set_subtitle("Choose the disc to install from.");
+        self.show_verdict(MACOS_TITLE, HOW_IT_INSTALLS);
+        let field = RamField::for_plain(&context, 1, MACOS_SIZES.ram);
+        parts.cores.adjustment().set_lower(1.0);
+        parts.cores.set_value(MACOS_SIZES.cores.min(physical_cores(&context.cpus)).into());
+        parts.ram.adjustment().set_lower(field.lower as f64);
+        parts.ram.adjustment().set_upper(field.upper as f64);
+        parts.ram.set_value(field.value as f64);
+        parts.ram.set_sensitive(field.fits);
+        parts.ram.set_subtitle(&field.subtitle);
+        parts.no_room.set(!field.fits);
+        parts.disk.adjustment().set_lower(MIN_MACOS_DISK_GIB.into());
+        parts.disk.set_value(MACOS_SIZES.disk.into());
+        parts.card.set_visible(false);
+        parts.account.set_visible(false);
+        parts.no_driver.set(false);
+        if keeps_following_the_disc(&parts.name.text(), &parts.suggested.borrow()) {
+            parts.name.set_text(MACOS_NAME);
+        }
+        *parts.suggested.borrow_mut() = MACOS_NAME.to_owned();
+        let title = MACOS_TITLE.to_owned();
+        *parts.iso.borrow_mut() =
+            Some(Iso { kind: Kind::Plain, title, edition: String::new(), windows_disc: false });
+        parts.hardware.set_sensitive(true);
+        self.update();
+    }
+
+    fn create_macos(&self) {
+        let parts = &self.0;
+        parts.create_button.set_sensitive(false);
+        let new = NewMac {
+            name: parts.name.text().to_string(),
+            cores: parts.cores.value() as u32,
+            ram_gib: parts.ram.value() as u32,
+            disk_gib: parts.disk.value() as u32,
+        };
+        let context = parts.window.context();
+        let working = context.clone();
+        let this = self.clone();
+        in_background(
+            &context,
+            move || create_macos(&working, &new),
+            move |result| match result {
+                Ok(machine) => {
+                    let window = &this.0.window;
+                    window.add_machine(machine.clone());
+                    window.launch("install", &machine, &[], None);
+                    this.0.dialog.close();
+                }
+                Err(text) => {
+                    this.0.window.problem(&text);
+                    this.update();
+                }
+            },
+        );
+    }
+
     pub fn read_iso(&self, path: String) {
+        self.0.macos.set(false);
         *self.0.iso_path.borrow_mut() = Some(path.clone());
         *self.0.iso.borrow_mut() = None;
         self.0.iso_row.set_subtitle(&path);
@@ -486,6 +569,9 @@ impl NewMachineDialog {
 
     fn on_create(&self) {
         let parts = &self.0;
+        if parts.macos.get() {
+            return self.create_macos();
+        }
         let (Some(iso), Some(path)) = (parts.iso.borrow().clone(), parts.iso_path.borrow().clone()) else {
             return;
         };

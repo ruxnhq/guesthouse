@@ -21,6 +21,7 @@ mod intel_device;
 mod intel_files;
 mod nvme_move;
 mod macos;
+mod macos_install;
 mod own_linux;
 mod remote_access;
 mod ubuntu;
@@ -137,6 +138,8 @@ impl<'a> Task<'a> {
         self.context.clock.now()
     }
 }
+
+pub use macos::start_refusal as macos_start_refusal;
 
 /// The plan for this machine, in this task's slot, as things stand on the PC now.
 pub fn plan_for(context: &Context, machine: &Machine, boot: Boot) -> VmPlan {
@@ -491,6 +494,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
             Ok(())
         }
         crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
+        "install" if task.machine.macos() => macos_install::install(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),
         "take_snapshot" => take_snapshot(task, text),

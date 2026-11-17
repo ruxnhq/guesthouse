@@ -35,8 +35,10 @@ impl Disk {
         disk.add_suffix(&grow);
         group.add(&disk);
         let plain = shared.machine.borrow().kind == Kind::Plain;
-        let drive = adw::ActionRow::builder().title("ISO").subtitle_lines(1).visible(plain).build();
-        let eject = row_button("Eject");
+        let macos = shared.machine.borrow().macos();
+        let title = if macos { "Installer" } else { "ISO" };
+        let drive = adw::ActionRow::builder().title(title).subtitle_lines(1).visible(plain).build();
+        let eject = row_button(if macos { "Remove" } else { "Eject" });
         drive.add_suffix(&eject);
         group.add(&drive);
         let this = Self(Rc::new(Parts {
@@ -60,7 +62,13 @@ impl Disk {
 
     fn show_drive(&self) {
         let iso = self.0.shared.machine.borrow().iso.clone();
-        let text = if iso.is_empty() { "Empty. The machine boots from its disk." } else { iso.as_str() };
+        let macos = self.0.shared.machine.borrow().macos();
+        let text = match (iso.is_empty(), macos) {
+            (true, true) => "Removed. From its next start the Mac boots only from its disk.",
+            (true, false) => "Empty. The machine boots from its disk.",
+            (false, true) => "Apple's installer. Remove it once macOS is installed.",
+            (false, false) => iso.as_str(),
+        };
         self.0.drive.set_subtitle(&gtk::glib::markup_escape_text(text));
         self.0.eject.set_sensitive(!iso.is_empty());
     }

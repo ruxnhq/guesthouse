@@ -376,8 +376,22 @@ pub fn remove_entry(context: &Context, machine: &Machine) -> Result<()> {
     Ok(())
 }
 
+/// A Mac's installer is a disk, which can't leave a running VM: it's gone from the next start. The
+/// machine's own copy goes with it, as Apple's download is kept for the next Mac.
+fn take_out_installer(context: &Context, machine: &mut Machine) -> Result<()> {
+    let installer = std::mem::take(&mut machine.iso);
+    machine.save(context)?;
+    if Path::new(&installer).starts_with(machine.folder(context)) {
+        let _ = fs::remove_file(installer);
+    }
+    Ok(())
+}
+
 /// Takes the ISO out, at once if the VM is running, so that it boots from its disk.
 pub fn eject(context: &Context, machine: &mut Machine) -> Result<()> {
+    if machine.macos() {
+        return take_out_installer(context, machine);
+    }
     if status(context, machine).state == State::Running {
         let command = Command::new("eject", json!({"device": "cd0", "force": true}));
         if failed(&context.ask_monitor(slot_of(context, machine), &command)) {
@@ -875,6 +889,24 @@ mod tests {
         monitor.set_answer(Some(json!({"error": {"desc": "locked"}})));
         assert!(eject(&context, &mut machine).unwrap_err().0.contains("would not eject"));
         assert_eq!(load(&context, &machine.id).unwrap().iso, iso, "a failed eject changes nothing");
+    }
+
+    #[test]
+    fn a_macs_installer_is_taken_out_as_a_setting_and_its_copy_goes() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        let monitor = Arc::new(RecordingMonitor::answering(Some(json!({"return": {}}))));
+        context.monitor = monitor.clone();
+        let mut mac = create(&context, &plain(&scratch, "Mac", None)).unwrap();
+        let installer = mac.folder(&context).join("installer.img");
+        fs::write(&installer, "apple's").unwrap();
+        mac.opencore = mac.folder(&context).join("opencore.qcow2").to_string_lossy().into_owned();
+        mac.iso = installer.to_string_lossy().into_owned();
+        run(&context, &mac);
+        eject(&context, &mut mac).unwrap();
+        assert!(monitor.asked().is_empty(), "a disk can't leave a running VM");
+        assert_eq!(load(&context, &mac.id).unwrap().iso, "");
+        assert!(!installer.exists());
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub const PASST_PID_FILE: &str = "passt.pid";
 const CARD: &str = "e1000e";
 const MACOS_CARD: &str = "virtio-net-pci";
 const MACOS_CARD_SLOT: &str = "0x3";
+const QEMU_NAT: &str = "user";
 
 impl VmPlan {
     fn passt_settings(&self) -> Vec<(&'static str, String)> {
@@ -112,6 +113,8 @@ impl VmPlan {
     /// so it's a network and a card on it.
     pub(super) fn macos_first_nic(&self) -> Vec<String> {
         let (kind, settings) = self.first_backend();
+        // QEMU's own NAT gives macOS an IPv6 address that leads nowhere on most PCs.
+        let settings = if kind == QEMU_NAT { format!("ipv6=off,{settings}") } else { settings };
         let card = match self.network.mac.as_str() {
             "" => format!("{MACOS_CARD},netdev=net0,id=net0,addr={MACOS_CARD_SLOT}"),
             mac => format!("{MACOS_CARD},netdev=net0,id=net0,mac={mac},addr={MACOS_CARD_SLOT}"),

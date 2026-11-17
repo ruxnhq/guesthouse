@@ -9,6 +9,7 @@ use crate::jailing::choose;
 use crate::linux::amd::amd_card;
 use crate::linux::card::forwarded_card;
 use crate::machine::Machine;
+use crate::macos_setup::NO_MACOS_PART;
 use crate::start_checks::start_problems;
 use crate::vm_args::{Boot, MACOS_QEMU, MACOS_ROM, MacosBoot, MacosCard, UDMABUF};
 use crate::vm_host::sound_on_this_host;
@@ -19,7 +20,6 @@ use std::path::{Path, PathBuf};
 const FIRMWARE_CODE: &str = "OVMF_CODE.fd";
 /// The jailed QEMU's home, in the machine's folder: see [`MacosBoot::home`].
 const HOME_FOLDER: &str = "gpu-cache";
-const NO_MACOS_PART: &str = "This install has no macOS part, which a macOS machine starts with.";
 const NO_UDMABUF: &str = "/dev/udmabuf can't be opened. A macOS machine's memory reaches the GPU through \
                           it. Add yourself to the group that owns it, usually kvm, and log in again.";
 const NO_CARD: &str = "This PC has no GPU a macOS machine can use. It needs an NVIDIA or AMD card with \
@@ -69,6 +69,17 @@ fn boot_of(context: &Context, machine: &Machine, card: MacosCard) -> Result<Maco
 
 fn can_open(device: &str) -> bool {
     fs::OpenOptions::new().read(true).write(true).open(device).is_ok()
+}
+
+/// What on this PC would stop any macOS machine's start, whatever its files: no card, or no way for
+/// its memory to reach one. Asked before a machine is made, so nothing is downloaded for nothing.
+pub fn start_refusal(context: &Context, machine: &Machine) -> Vec<String> {
+    let mut found: Vec<String> =
+        card_of(context, machine).err().map(|failure| failure.0).into_iter().collect();
+    if !can_open(UDMABUF) {
+        found.push(NO_UDMABUF.to_owned());
+    }
+    found
 }
 
 pub fn start(task: &mut Task) -> Result<()> {

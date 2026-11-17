@@ -4,6 +4,7 @@ use crate::window::Window;
 use adw::prelude::*;
 use gtk::glib;
 use guesthouse_app_core::context::Context;
+use guesthouse_app_core::log::log_panics;
 use std::cell::RefCell;
 use std::fs;
 use std::io;
@@ -73,5 +74,6 @@ pub fn run() -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         }
     };
+    log_panics(&context);
     application(context, |_| {}).run()
 }

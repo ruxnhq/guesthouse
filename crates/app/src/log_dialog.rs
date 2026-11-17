@@ -1,6 +1,7 @@
-//! Shows the end of the log, which is where the whole story of a failure is.
+//! Shows the end of the log, which is where the whole story of a failure is, and leads to sending it.
 
 use crate::common::in_background;
+use crate::report_dialog;
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::log::read_log;
@@ -23,6 +24,8 @@ pub fn show(window: &Window) {
     let header = adw::HeaderBar::new();
     let file = window.context().paths.log_file();
     header.set_title_widget(Some(&adw::WindowTitle::new("Log", &file.to_string_lossy())));
+    let report = gtk::Button::builder().label("Send Report…").build();
+    header.pack_start(&report);
     let toolbar = adw::ToolbarView::new();
     toolbar.set_content(Some(&gtk::ScrolledWindow::builder().child(&text).build()));
     toolbar.add_top_bar(&header);
@@ -33,6 +36,8 @@ pub fn show(window: &Window) {
         .child(&toolbar)
         .build();
     dialog.present(Some(window.widget()));
+    let handle = window.clone();
+    report.connect_clicked(move |_| report_dialog::show(&handle));
     let context = window.context();
     let reading = context.clone();
     let window = window.clone();

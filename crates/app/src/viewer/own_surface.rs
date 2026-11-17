@@ -435,6 +435,8 @@ pub struct OwnSurface {
     dmabuf_feedback: Option<ZwpLinuxDmabufFeedbackV1>,
     presentation: Option<WpPresentation>,
     surface: WlSurface,
+    /// GTK's own surface, which this one sits under.
+    parent: WlSurface,
     subsurface: WlSubsurface,
     viewport: WpViewport,
     manager: Option<WpColorManagerV1>,
@@ -511,6 +513,7 @@ impl OwnSurface {
             dmabuf_feedback,
             presentation,
             surface,
+            parent,
             subsurface,
             viewport,
             manager,
@@ -556,8 +559,7 @@ impl OwnSurface {
         }
     }
 
-    /// Where the picture goes on the parent, in its logical pixels, and whether that moved it. The
-    /// place takes effect when GTK next commits the parent, and the size at once.
+    /// Where the picture goes on the parent, in its logical pixels, and whether that moved it.
     pub fn place(&mut self, x: i32, y: i32, width: i32, height: i32) -> bool {
         if self.place == Some((x, y, width, height)) || width <= 0 || height <= 0 {
             return false;
@@ -566,6 +568,10 @@ impl OwnSurface {
         self.subsurface.set_position(x, y);
         self.viewport.set_destination(width, height);
         self.surface.commit();
+        // A new place waits for the parent's next commit, and GTK makes none while it has nothing new
+        // to draw: a guest whose screen changed shape under a still window stayed where the old shape
+        // was. GTK sets and commits its own state in one go, so nothing of its is half done here.
+        self.parent.commit();
         let _ = self.queue.flush();
         true
     }

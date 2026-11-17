@@ -232,10 +232,14 @@ impl<R: Rm> NvidiaBackend<R> {
             surface_height: copy.source.height,
             block,
         });
+        // Whoever shows a tiled slot lays it out from the picture's width, in whole GOBs, and not from
+        // the pitch its rows would have, which is rounded further: at 1366 wide the pitch is 1408
+        // pixels' worth and the tiles are 1376, and each row of blocks came out 32 pixels along.
+        let slot_width = width.checked_next_multiple_of(GOB_BYTES)?;
         let target = copy.slot_tiling.map(|block| TiledSide {
             x: 0,
             y: 0,
-            surface_width: copy.slot_pitch,
+            surface_width: slot_width,
             surface_height: copy.height,
             block,
         });
@@ -526,7 +530,7 @@ mod tests {
         let copy = SlotCopy { slot_tiling: Some(4), ..slot_copy(None) };
         let words = NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &copy).unwrap();
         assert_eq!(words[7..11], [512, 0, 400, 50], "the engine works out the slot's own pitch");
-        assert_eq!(words[17..19], [512, 50], "the slot is as high as the picture");
+        assert_eq!(words[17..19], [448, 50], "as wide as the picture in whole GOBs, and as high");
         let read_tiled =
             NvidiaBackend::<FakeRm>::slot_batch_for(&mut channel(), &slot_copy(Some(4))).unwrap();
         assert_ne!(words.last(), read_tiled.last(), "writing tiles is another launch than reading them");

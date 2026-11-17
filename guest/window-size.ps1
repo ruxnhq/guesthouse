@@ -104,7 +104,7 @@ function Size-Screen([int]$width, [int]$height, [int]$rate, [string]$modes) {
     if ($result -eq 0) { "set ${width}x$height" } else { "refused $result" }
 }
 $token = (Get-Content C:\gpupv\token.txt -Raw).Trim()
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8767)
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8768)
 $listener.Start()
 while ($true) {
     $client = $listener.AcceptTcpClient()

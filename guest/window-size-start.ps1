@@ -12,6 +12,6 @@ Register-ScheduledTask -TaskName gpupv-window-size -Action $action -Principal $p
 Start-ScheduledTask -TaskName gpupv-window-size
 # It compiles its calls to Windows before it listens, which took a second or two in a guest.
 for ($i = 0; $i -lt 40; $i++) {
-    try { [System.Net.Sockets.TcpClient]::new('127.0.0.1', 8767).Close(); 'started'; return } catch { Start-Sleep -Milliseconds 250 }
+    try { [System.Net.Sockets.TcpClient]::new('127.0.0.1', 8768).Close(); 'started'; return } catch { Start-Sleep -Milliseconds 250 }
 }
 'not listening'

@@ -16,12 +16,13 @@ use std::process::{Command, Stdio};
 const NVIDIA_VENDOR: &str = "0x10de";
 const NVIDIA_NAMES_START: &str = "\n10de  ";
 const DISPLAY_CLASS: &str = "0x03";
-/// The cards Windows has run on, here or on a tester's PC: RTX 5090, 5080, 4080, 3090, 3050 Laptop, GTX
-/// 1660 SUPER, RTX A1000 Laptop and A5500 Laptop.
-const TESTED_CARDS: [u32; 8] = [0x2B85, 0x2C02, 0x2704, 0x2204, 0x25A2, 0x21C4, 0x25B9, 0x2438];
-/// The AMD cards Windows has run on: Radeon 610M, RX 9070 XT, RX 7900 XTX, RX 6900 XT, RX 6700 XT and
-/// RX 6700, and RX 6600 XT. Each id covers the other cards on its chip too, as pci.ids says.
-const TESTED_AMD_CARDS: [u32; 6] = [0x13C0, 0x7550, 0x744C, 0x73BF, 0x73DF, 0x73FF];
+/// The cards Windows has run on, here or on a tester's PC: RTX 5090, 5080, 5060 Ti, 4090, 4080, 3090,
+/// 3050 Laptop, GTX 1660 SUPER, RTX A1000 Laptop and A5500 Laptop.
+const TESTED_CARDS: [u32; 10] =
+    [0x2B85, 0x2C02, 0x2D04, 0x2684, 0x2704, 0x2204, 0x25A2, 0x21C4, 0x25B9, 0x2438];
+/// The AMD cards Windows has run on: Radeon 610M, RX 9070 XT, RX 7900 XTX, RX 7800 XT, RX 6900 XT, RX 6700 XT
+/// and RX 6700, and RX 6600 XT. Each id covers the other cards on its chip too, as pci.ids says.
+const TESTED_AMD_CARDS: [u32; 7] = [0x13C0, 0x7550, 0x744C, 0x747E, 0x73BF, 0x73DF, 0x73FF];
 /// RDNA's graphics block starts at version 10. AMD's driver package for older cards is another one,
 /// which the guest side doesn't handle.
 const FIRST_RDNA_GRAPHICS: u32 = 10;
@@ -402,7 +403,8 @@ mod tests {
         assert_eq!((chip_of(0x25B9), support_of(0x25B9)), ("GA107", Support::Tested));
         assert_eq!((chip_of(0x2438), support_of(0x2438)), ("GA103", Support::Tested));
         assert_eq!((chip_of(0x2208), support_of(0x2208)), ("GA102", Support::Experimental));
-        assert_eq!((chip_of(0x2684), support_of(0x2684)), ("AD102", Support::Experimental));
+        assert_eq!((chip_of(0x2684), support_of(0x2684)), ("AD102", Support::Tested));
+        assert_eq!((chip_of(0x2685), support_of(0x2685)), ("AD102", Support::Experimental));
         assert_eq!(support_of(0x2230), Support::Unsupported, "an RTX A6000 hasn't been checked");
     }
 

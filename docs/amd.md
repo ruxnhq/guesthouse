@@ -22,12 +22,13 @@ Testers have run it on these too:
 |---|---|
 | RX 9070 XT, RDNA4 | works: Windows, 3ds Max and Superposition |
 | RX 7900 XTX, RDNA3 | installs, display driver at 1920x1080 144 Hz, all four graphics APIs start |
+| RX 7800 XT, RDNA3 | works |
 | RX 6900 XT, RDNA2 | works |
 | RX 6700 XT, RDNA2 | works |
 | RX 6700, RDNA2 | works |
 | RX 6600 XT, RDNA2 | works: OpenGL games and Edge on the GPU |
 
-On an RX 9070 XT, Superposition at 720p Low reaches 65% of the same card on the host, and 4K Optimized 72%. That's on main, in the next release. [#118](https://github.com/xnixy/guesthouse/issues/118) has the rest.
+On an RX 9070 XT, Superposition at 720p Low went from 21,920 to 36,903 with the speed work in 0.5.2, and 4K Optimized reaches 72% of the same card on the host. [#118](https://github.com/xnixy/guesthouse/issues/118) has the rest.
 
 ## Setting it up
 

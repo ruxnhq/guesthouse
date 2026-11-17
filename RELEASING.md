@@ -6,9 +6,9 @@ The order matters. `install.sh` on `main` is what points people at a release, so
 
 Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is a new folder with about 10 GB free. Use a neutral one like `/var/tmp/guesthouse-release`, and never one under my home folder. Its path ends up in the binaries, as the compilers write down where each source file was. It has to be new because an old one keeps its QEMU tree, and the patch wouldn't get applied again.
 
-1. **Set the version.** Change `version` in `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and commit that to `main`.
+1. **Set the version.** Change `version` in `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that into `main` with a pull request. `main` takes nothing else, and the checks have to pass.
 
-2. **Tag it.** The download URLs have a `v` in them, so the tag must too.
+2. **Tag it.** Tag the commit that pull request became on `main`. The download URLs have a `v` in them, so the tag must too.
 
    ```sh
    git tag vVERSION
@@ -37,7 +37,7 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
 6. **Upload it.** Push the tag, then make the release with these four files, and no others. Nothing points at it yet, so a mistake here costs nothing.
 
    ```sh
-   git push origin main vVERSION
+   git push origin vVERSION
    gh release create vVERSION --title VERSION --notes-file NOTES \
      BUILD_FOLDER/guesthouse-VERSION-x86_64.tar.xz \
      BUILD_FOLDER/guesthouse-VERSION-source.tar.xz \
@@ -47,7 +47,7 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
 
    The two sources are there for the GPL and the LGPL, so a release doesn't go out without them. They have to stay up for as long as the payload does.
 
-7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed, then commit and push. From that moment the one line installs this release, and `--update` and `--check-update` offer it to everyone.
+7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed, and merge that with a pull request too. From that moment the one line installs this release, and `--update` and `--check-update` offer it to everyone.
 
 8. **Check it from the outside.** Run `install.sh --dry-run` from the raw URL, in a fake HOME. It should download, verify and show the plan.
 

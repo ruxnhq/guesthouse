@@ -61,3 +61,5 @@ Each handler has tests in `core/src/session/tests.rs`, which send whole messages
 ## Commits
 
 Small steps, each of which builds and passes its tests. Say what changed and why, in a line a stranger can follow.
+
+A change reaches `main` through a pull request. It runs `cargo fmt --check`, clippy with warnings as errors, the tests, shellcheck on the shell scripts and PSScriptAnalyzer on the PowerShell ones, and all of them have to pass.

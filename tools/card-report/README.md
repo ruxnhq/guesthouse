@@ -1,6 +1,6 @@
 # card-report
 
-Windows guests only run on Blackwell so far. To add another card I need to know what NVIDIA's Windows driver reports for it, and that only shows up on real Windows. This program writes that down in a short text file you can read and then post.
+Windows guests run on the NVIDIA generations in the [README's table](../../README.md#cards). To add a card from another one I need to know what NVIDIA's Windows driver reports for it, and that only shows up on real Windows. This program writes that down in a short text file you can read and then post.
 
 Run `card-report.exe`, by double-click or from a terminal. It needs no admin rights. It writes `guesthouse-card-report.txt` in the folder you ran it from, or in your temp folder if it can't write there, and says where. Nothing is sent anywhere.
 

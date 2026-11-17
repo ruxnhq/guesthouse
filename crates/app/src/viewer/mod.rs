@@ -27,6 +27,7 @@ mod screen;
 mod screen_frame;
 mod slot_hold;
 mod socket_frames;
+mod window_size;
 
 use crate::common::in_background;
 use crate::rows::name_for_readers;
@@ -44,6 +45,7 @@ use screen::Screen;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
+use window_size::WindowSize;
 
 pub use own_screen::own_surface_takes_hdr;
 pub use socket_frames::takes_hdr_frames;
@@ -80,6 +82,7 @@ struct Parts {
     capture_button: gtk::Button,
     screen: RefCell<Option<Screen>>,
     clipboard: RefCell<Option<SharedClipboard>>,
+    window_size: RefCell<Option<WindowSize>>,
     monitors: RefCell<Option<Rc<Monitors>>>,
     fullscreen_handler: RefCell<Option<glib::SignalHandlerId>>,
     thumbnail_source: RefCell<Option<glib::SourceId>>,
@@ -128,6 +131,7 @@ impl ScreenPage {
             capture_button,
             screen: RefCell::default(),
             clipboard: RefCell::default(),
+            window_size: RefCell::default(),
             monitors: RefCell::default(),
             fullscreen_handler: RefCell::default(),
             thumbnail_source: RefCell::default(),
@@ -420,6 +424,13 @@ impl ScreenPage {
         }
         self.show_hint(None);
         let machine = self.0.machine.borrow().clone();
+        if machine.sizes_to_window()
+            && let Some(screen) = self.screen()
+        {
+            let context = self.0.window.context();
+            let slot = slot_of(&context, &machine);
+            *self.0.window_size.borrow_mut() = WindowSize::new(screen, context, machine.clone(), slot);
+        }
         if machine.clipboard {
             let context = self.0.window.context();
             let slot = slot_of(&context, &machine);
@@ -483,6 +494,7 @@ impl ScreenPage {
         let parts = &self.0;
         parts.clipboard.borrow_mut().take();
         self.forget_header_wait();
+        parts.window_size.borrow_mut().take();
         parts.window.widget().unfullscreen();
         if let Some(handler) = parts.fullscreen_handler.borrow_mut().take() {
             parts.window.widget().disconnect(handler);

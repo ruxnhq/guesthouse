@@ -164,6 +164,10 @@ pub struct Machine {
     /// the top edge. Left out of the file when off, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub bar_stays: bool,
+    /// The guest's screen keeps the size the machine's settings give it, rather than taking the size
+    /// of the viewer's window. Left out of the file when off, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub window_size_off: bool,
     #[serde(default)]
     pub network_mode: Mode,
     /// NAT through passt, if it's installed. It gives the guest a second adapter.
@@ -243,6 +247,7 @@ impl Machine {
             direct_frames_off: false,
             was_direct_frames: (),
             bar_stays: false,
+            window_size_off: false,
             network_mode: Mode::Nat,
             passt: false,
             mac: String::new(),
@@ -299,6 +304,12 @@ impl Machine {
     /// Whether the viewer's bar hides while a window shows the screen.
     pub fn bar_hides(&self) -> bool {
         !self.bar_stays
+    }
+
+    /// Whether the guest's screen takes the size of the viewer's window. Only Windows on our display
+    /// driver can be given a size it didn't start with.
+    pub fn sizes_to_window(&self) -> bool {
+        self.has_gpu() && !self.window_size_off
     }
 
     /// Whether Windows is told to show every program in a window the fast way.
@@ -590,6 +601,16 @@ mod tests {
         assert!(serde_json::from_str::<Machine>(&text).unwrap().bar_hides());
         let stays = serde_json::to_string(&Machine { bar_stays: true, ..sample() }).unwrap();
         assert!(!serde_json::from_str::<Machine>(&stays).unwrap().bar_hides());
+    }
+
+    #[test]
+    fn the_screen_sizes_to_the_window_unless_the_file_says_not_to() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("window_size"), "an older build refuses a field it doesn't know: {text}");
+        assert!(serde_json::from_str::<Machine>(&text).unwrap().sizes_to_window());
+        let off = serde_json::to_string(&Machine { window_size_off: true, ..sample() }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&off).unwrap().sizes_to_window());
+        assert!(!Machine { kind: Kind::Plain, ..sample() }.sizes_to_window(), "no driver to ask");
     }
 
     #[test]

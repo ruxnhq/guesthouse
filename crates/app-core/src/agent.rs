@@ -1,6 +1,7 @@
 //! The guest's agent: PowerShell over a socket, with each machine's own token.
 
 use crate::context::Context;
+use crate::driver_modes::{DriverModes, Mode};
 use crate::failure::{Failure, Result};
 use crate::machine::Machine;
 use crate::random::random_hex;
@@ -22,6 +23,11 @@ const TOKEN_BYTES: usize = 16;
 pub const MOST_CLIPBOARD_TEXT: usize = 1 << 20;
 pub const QUICK_SECONDS: u64 = 10;
 const CLIPBOARD_START_SECONDS: u64 = 20;
+const WINDOW_SIZE_START_SECONDS: u64 = 20;
+/// A new size took about a second in a guest. The helper itself gives up on Windows after four.
+const WINDOW_SIZE_SECONDS: u64 = 12;
+/// What the helper says, before the size, when Windows has taken it.
+const SIZE_SET: &str = "set";
 
 pub trait GuestAgent: Send + Sync {
     /// Runs PowerShell in the guest, and returns what it said. Nothing if the agent isn't up yet.
@@ -151,6 +157,49 @@ fn ask_guest_clipboard(
         return Ok(None);
     }
     Ok(Some(answer.split_whitespace().skip(1).collect()))
+}
+
+/// Says whether the helper that sizes the screen is running in the user's session.
+pub fn start_guest_window_size(context: &Context, machine: &Machine, slot: Option<Slot>) -> Result<bool> {
+    let helper = base64_encode(&fs::read(context.paths.guest_files().join("window-size.ps1"))?);
+    let script = format!("$helper = '{helper}'\n{}", guest_script(context, "window-size-start.ps1")?);
+    Ok(context.ask_guest(machine, &script, WINDOW_SIZE_START_SECONDS, slot).contains("started"))
+}
+
+pub fn stop_guest_window_size(context: &Context, machine: &Machine, slot: Option<Slot>) {
+    context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-window-size", QUICK_SECONDS, slot);
+}
+
+/// What became of a size the guest's screen was asked to take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sized {
+    Set,
+    /// The helper's own words: no display of the driver's, or Windows refusing the mode.
+    Not(String),
+    /// The helper didn't answer.
+    NoHelper,
+}
+
+/// Has the guest's screen take a size, at a rate. `modes` is the driver's own list, which the helper
+/// adds the size to if Windows doesn't list it yet.
+pub fn size_guest_screen(
+    context: &Context,
+    machine: &Machine,
+    (width, height, hz): Mode,
+    modes: &DriverModes,
+    slot: Option<Slot>,
+) -> Result<Sized> {
+    let request = format!("{width} {height} {hz} {}", modes.list());
+    let script = format!("$request = '{request}'\n{}", guest_script(context, "window-size-ask.ps1")?);
+    let answer = context.ask_guest(machine, &script, WINDOW_SIZE_SECONDS, slot);
+    let Some(said) = answer.trim().strip_prefix("answer") else { return Ok(Sized::NoHelper) };
+    let said = said.trim();
+    Ok(match said.split_whitespace().next() {
+        Some(SIZE_SET) => Sized::Set,
+        Some(_) => Sized::Not(said.to_owned()),
+        // It took the request and said nothing, which is what it does with one it can't read.
+        None => Sized::NoHelper,
+    })
 }
 
 /// The guest's text with Linux line ends, or `None` if the helper didn't answer.

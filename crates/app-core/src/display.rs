@@ -3,6 +3,7 @@
 
 use crate::context::Context;
 use crate::daemon::is_own_daemon;
+use crate::driver_modes::{DriverModes, SETTINGS_FILE, with_rate};
 use crate::failure::Result;
 use crate::machine::Machine;
 use crate::settings::{read_prefs, write_json};
@@ -239,6 +240,14 @@ impl DriverPackage {
         let id = fs::read_to_string(folder.join(PACKAGE_ID_FILE)).ok()?.trim().to_owned();
         (all_there && !id.is_empty()).then_some(Self { folder, id })
     }
+}
+
+/// The modes the driver has for this machine: the ones it ships with, and the machine's rate at every
+/// size, as the app gives it at a start. `None` with no driver in this build.
+pub fn machine_modes(context: &Context, machine: &Machine) -> Option<DriverModes> {
+    let package = DriverPackage::find(context)?;
+    let shipped = fs::read_to_string(package.folder.join(SETTINGS_FILE)).ok()?;
+    Some(DriverModes::read(&with_rate(&shipped, machine.refresh_hz)))
 }
 
 #[cfg(test)]

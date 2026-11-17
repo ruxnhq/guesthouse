@@ -148,6 +148,20 @@ impl Display {
             saving.save();
         });
         group.add(&bar);
+        let window_size = adw::SwitchRow::builder()
+            .title("Match the window")
+            .active(shared.machine.borrow().sizes_to_window())
+            .visible(shared.machine.borrow().has_gpu())
+            .subtitle(
+                "Windows' screen takes the size of the viewer's window. The resolution above is what it starts with.",
+            )
+            .build();
+        let saving = shared.clone();
+        window_size.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().window_size_off = !row.is_active();
+            saving.save();
+        });
+        group.add(&window_size);
     }
 
     fn connect(&self) {

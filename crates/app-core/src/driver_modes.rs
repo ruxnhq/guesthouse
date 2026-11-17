@@ -69,9 +69,14 @@ impl DriverModes {
 
     /// The driver's command to take these modes, as they are.
     pub fn command(&self) -> String {
+        format!("{SET_MODES} {}", self.list())
+    }
+
+    /// The modes as the command names them, for whoever adds to them before sending.
+    pub fn list(&self) -> String {
         let modes: Vec<String> =
             self.0.iter().map(|(width, height, hz)| format!("{width}x{height}x{hz}")).collect();
-        format!("{SET_MODES} {}", modes.join(","))
+        modes.join(",")
     }
 }
 

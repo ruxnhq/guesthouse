@@ -223,6 +223,15 @@ impl Screen {
         self.0.latest.borrow().as_ref().map(|texture| (texture.width(), texture.height()))
     }
 
+    /// The size of the room the picture has in the window, in the screen's own pixels. The picture
+    /// itself is only as large as the guest's frame fits in that.
+    pub(super) fn picture_pixels(&self) -> Option<(u32, u32)> {
+        let room = self.widget();
+        let scale = room.native()?.surface()?.scale();
+        let side = |length: i32| (f64::from(length) * scale).round() as u32;
+        (room.width() > 0 && room.height() > 0).then(|| (side(room.width()), side(room.height())))
+    }
+
     pub fn has_input(&self) -> bool {
         self.0.guest.borrow().as_ref().is_some_and(Guest::knows_mice)
     }

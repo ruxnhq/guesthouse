@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 16] = [
+const SENT_TO_THE_GUEST: [&str; 19] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "autounattend.xml",
@@ -19,6 +19,9 @@ const SENT_TO_THE_GUEST: [&str; 16] = [
     "setmode.ps1",
     "setup.ps1",
     "share-start.ps1",
+    "window-size-ask.ps1",
+    "window-size-start.ps1",
+    "window-size.ps1",
     "window-speed.ps1",
 ];
 

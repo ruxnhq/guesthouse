@@ -354,7 +354,15 @@ impl Screen {
 
     /// The guest's own frames win, and QEMU's are only looked at until they come.
     fn next_texture(&self) -> Option<gdk::Texture> {
-        let from_gpu = self.0.gpu.borrow_mut().as_mut().and_then(|source| source.newest());
+        // While the own surface is there or on its way, the guest's frames are its to hand out, and
+        // it gives GTK the ones it can't take. A frame that came in just after it looked would be
+        // drawn by GTK otherwise: a solid window over the surface, which stood still in fullscreen
+        // until the window had something else to draw.
+        let from_gpu = if self.own_awaited() {
+            None
+        } else {
+            self.0.gpu.borrow_mut().as_mut().and_then(|source| source.newest())
+        };
         self.follow_gpu_cursor();
         if from_gpu.is_some() {
             self.0.booting.set(false);

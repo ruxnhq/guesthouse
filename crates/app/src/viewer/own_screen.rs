@@ -77,7 +77,7 @@ impl Screen {
     ///
     /// Only the daemon's frames in video memory are for it. Frames in memory, QEMU's display and a
     /// Linux guest's forwarded frames stay with GTK.
-    fn own_awaited(&self) -> bool {
+    pub(super) fn own_awaited(&self) -> bool {
         let for_it = self.0.route.get() == FrameRoute::FrameSocket && !self.0.memory_frames.get();
         for_it && self.0.direct_frames.get() && !self.0.own_impossible.get() && own_surface_allowed()
     }

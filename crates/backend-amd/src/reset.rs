@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::fmt;
 use std::io;
 
 /// Video memory was lost since the context was made (`AMDGPU_CTX_QUERY2_FLAGS_VRAMLOST`).
@@ -95,7 +96,7 @@ impl<C> Contexts<C> {
             self.resets += 1;
             tries -= 1;
             if tries == 0 {
-                return Err(io::Error::new(error.kind(), format!("{error}, after amdgpu reset the card")));
+                return Err(io::Error::new(error.kind(), AfterReset(error)));
             }
         }
     }
@@ -104,6 +105,26 @@ impl<C> Contexts<C> {
     pub fn forget_queue(&mut self, queue: u32) {
         self.queues.remove(&queue);
     }
+}
+
+/// The kernel's refusal of the run that showed the reset. It keeps the kernel's own error, so the
+/// error number can still be asked for.
+#[derive(Debug)]
+struct AfterReset(io::Error);
+
+impl fmt::Display for AfterReset {
+    fn fmt(&self, text: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(text, "{}, after amdgpu reset the card", self.0)
+    }
+}
+
+impl std::error::Error for AfterReset {}
+
+/// The kernel's error number behind a failed submission, also when [`Contexts::submit`] has said
+/// what the failure meant.
+pub fn os_error(error: &io::Error) -> Option<i32> {
+    let behind = || error.get_ref()?.downcast_ref::<AfterReset>()?.0.raw_os_error();
+    error.raw_os_error().or_else(behind)
 }
 
 #[cfg(test)]
@@ -216,5 +237,16 @@ mod tests {
         let reset_seen = 1;
         assert!(!spoiled_by_reset(&error(libc::EINVAL), Some(reset_seen)));
         assert!(!spoiled_by_reset(&error(libc::EINVAL), None));
+    }
+
+    #[test]
+    fn the_kernels_error_number_is_still_there_after_a_reset_is_named() {
+        let plain = io::Error::from_raw_os_error(libc::ETIME);
+        assert_eq!(os_error(&plain), Some(libc::ETIME));
+        let named = io::Error::new(plain.kind(), AfterReset(plain));
+        assert_eq!(named.raw_os_error(), None);
+        assert_eq!(os_error(&named), Some(libc::ETIME));
+        assert!(named.to_string().ends_with(", after amdgpu reset the card"));
+        assert_eq!(os_error(&io::Error::other("the queue was there before")), None);
     }
 }

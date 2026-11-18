@@ -993,7 +993,7 @@ impl Backend for AmdBackend {
             }
             Err(error) => {
                 space.vm.drop_fence_writer(run.slot);
-                if error.raw_os_error() == Some(libc::ETIME)
+                if reset::os_error(&error) == Some(libc::ETIME)
                     && let Some(keeper) = &mut self.ib_dump
                 {
                     keeper.keep_for(run.fence.queue, run.fence.value, "ETIME", Instant::now());

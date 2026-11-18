@@ -201,8 +201,10 @@ mod tests {
         kernel.reset();
         let failed = contexts.submit(&kernel, GFX, old, |context| kernel.cs(context)).unwrap_err();
         assert!(failed.to_string().contains("reset"));
-        // Every context went, not just the one found spoiled.
-        assert_eq!(*kernel.freed.borrow(), vec![0, 1]);
+        // Every context went, not just the one found spoiled, in whatever order.
+        let mut freed = kernel.freed.borrow().clone();
+        freed.sort_unstable();
+        assert_eq!(freed, vec![0, 1]);
         // Neither queue from before is put on a fresh context, so the guest hears of the reset.
         assert!(contexts.submit(&kernel, GFX, old, |context| kernel.cs(context)).is_err());
         assert!(contexts.submit(&kernel, DMA, other_old, |context| kernel.cs(context)).is_err());

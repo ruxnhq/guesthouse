@@ -77,6 +77,7 @@ MANIFEST_BEFORE=""
 PACKAGES_ADDED=""
 HELPER_PLACED=no
 SWTPM_RULE_ADDED=no
+HELPER_LEFT_OUT=no
 
 say() {
     printf '%s\n' "$*"
@@ -649,10 +650,9 @@ helper_needs_work() {
 # Root checks the copy against the hash taken here, before it makes it setuid, as the source is in a
 # folder you can write. A copy that fails goes.
 helper_command() {
-    source=$TREE/$BRIDGE_HELPER_SOURCE
     # shellcheck disable=SC2016 # $f and $n are for root's shell
     printf '{ f="%s"; n="$f/%s.new"; { mkdir -p "$f" && chmod 755 "$f" && cp "%s" "$n" && chown 0:0 "$n" && echo "%s  $n" | sha256sum -c --quiet && chmod 4755 "$n" && mv -f "$n" "$f/%s"; } || { rm -f "$n"; false; }; }' \
-        "$BRIDGE_HELPER_FOLDER" "${BRIDGE_HELPER##*/}" "$source" "$(hash_of "$source")" "${BRIDGE_HELPER##*/}"
+        "$BRIDGE_HELPER_FOLDER" "${BRIDGE_HELPER##*/}" "$1" "$(hash_of "$1")" "${BRIDGE_HELPER##*/}"
 }
 
 # With AppArmor on: swtpm's profile is there without the rule, or swtpm is about to be installed and its
@@ -675,7 +675,8 @@ swtpm_rule_command() {
 }
 
 # What root does, as one string, so what's shown is exactly what runs. An immutable system gets no
-# packages, but its /usr/local takes the helper all the same.
+# packages, but its /usr/local takes the helper all the same. With no sudo the helper is left out: only
+# bridged networking needs it, and a command that copies from staging can't be run once this has stopped.
 plan_root_work() {
     ROOT_COMMAND=""
     ADD_TO_KVM=no
@@ -686,9 +687,13 @@ plan_root_work() {
             ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }usermod -aG kvm $(id -un)"
         fi
     fi
-    if helper_needs_work "$TREE/$BRIDGE_HELPER_SOURCE"; then
+    if ! helper_needs_work "$TREE/$BRIDGE_HELPER_SOURCE"; then
+        :
+    elif [ -n "$FROM_APP" ] || command -v sudo >/dev/null 2>&1; then
         HELPER_PLACED=yes
-        ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }$(helper_command)"
+        ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }$(helper_command "$TREE/$BRIDGE_HELPER_SOURCE")"
+    else
+        HELPER_LEFT_OUT=yes
     fi
     if swtpm_rule_needed; then
         SWTPM_RULE_ADDED=yes
@@ -809,6 +814,8 @@ print_root_plan() {
         say "That puts QEMU's bridge helper in $BRIDGE_HELPER_FOLDER, setuid root, for bridged networking."
     [ "$SWTPM_RULE_ADDED" = no ] ||
         say "It lets swtpm, the virtual TPM a Windows machine needs, write in your run folder under /run/user and take the jailed QEMU's data channel. Its AppArmor profile doesn't."
+    [ "$HELPER_LEFT_OUT" = no ] ||
+        say "There's no sudo here, so QEMU's bridge helper is left out. Only bridged networking needs it, and once the rest is installed I'll show what root can run to put it in."
     [ -z "$ROOT_COMMAND" ] || [ "$ADD_TO_KVM" = no ] ||
         say "You'd join the kvm group to open /dev/kvm, and that takes a new login."
 }
@@ -929,7 +936,9 @@ list_root_work() {
         manifest_line package - "$package"
     done
     [ "$ADD_TO_KVM" = no ] || manifest_line group - kvm
-    [ "$HELPER_PLACED" = no ] || manifest_line root-file "$(hash_of "$TREE/$BRIDGE_HELPER_SOURCE")" "$BRIDGE_HELPER"
+    # A helper left for root is listed too, so that uninstall.sh takes it away if root did put it in.
+    [ "$HELPER_PLACED" = no ] && [ "$HELPER_LEFT_OUT" = no ] ||
+        manifest_line root-file "$(hash_of "$TREE/$BRIDGE_HELPER_SOURCE")" "$BRIDGE_HELPER"
     [ "$SWTPM_RULE_ADDED" = no ] || manifest_line apparmor-rule - "$SWTPM_LOCAL"
 }
 
@@ -1154,6 +1163,15 @@ say_done() {
     say "Bugs: $REPO_URL/issues"
     [ "$ADD_TO_KVM" = no ] || say "Log out and in again, so that you're in the kvm group."
     [ "$IMMUTABLE" = no ] || [ -z "$PACKAGES" ] || say "Add the packages listed above before you open it."
+    [ "$HELPER_LEFT_OUT" = no ] || say_how_root_adds_the_helper
+}
+
+# The copy that's installed is the source, as staging is gone by the time root reads this. The line is
+# for pasting, so a quote in your home folder's name is written the way a shell reads one inside quotes.
+say_how_root_adds_the_helper() {
+    say ""
+    say "There's no sudo here, so this release's bridge helper isn't in $BRIDGE_HELPER_FOLDER. Bridged networking needs it, and nothing else does. This puts it in, as root:"
+    say "  sh -c '$(helper_command "$CURRENT_LINK/$BRIDGE_HELPER_SOURCE" | sed "s/'/'\\\\''/g")'"
 }
 
 # Which release this run is about, and whether there's anything to do.

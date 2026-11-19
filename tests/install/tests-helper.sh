@@ -68,6 +68,62 @@ t_an_update_with_a_new_helper_puts_it_in() {
     [ "$(helper_line | wc -l)" -eq 1 ] || fail "the manifest lists the helper more than once"
 }
 
+# A server often has no sudo. Only bridged networking needs the helper, so the rest goes in, and what
+# it shows for root has to work after staging is gone.
+root_runs_what_was_shown() {
+    sandbox sh -c "$(sed -n 's/^  \(sh -c .*\)$/\1/p' "$T/said")" >"$T/root-said" 2>&1 ||
+        fail "the command shown for root failed"
+}
+
+t_without_sudo_the_rest_goes_in_and_root_can_add_the_helper() {
+    release 1.0
+    give_everything
+    rm -rf "$T/system"
+    rm "$T/bin/sudo"
+    install_version 1.0
+    check_exit 0
+    check_said "There's no sudo here, so QEMU's bridge helper is left out."
+    check_said "This puts it in, as root:"
+    check_there "$H/.local/lib/guesthouse/current/guesthouse"
+    check_gone "$(helper_path)"
+    root_runs_what_was_shown
+    [ -u "$(helper_path)" ] || fail "the helper isn't setuid"
+    check_same "$(helper_path)" "$H/.local/lib/guesthouse/current/qemu/build/qemu-bridge-helper" "it isn't the release's"
+    [ "$(helper_line | cut -f 3)" = "$(helper_path)" ] || fail "the manifest doesn't list it"
+    install_version 1.0
+    check_said "is the latest release"
+    check_not_said "There's no sudo here"
+}
+
+t_an_update_without_sudo_goes_in_too() {
+    release 1.0
+    HELPER_VERSION=2 release 1.1
+    give_everything
+    install_version 1.0
+    rm "$T/bin/sudo"
+    install_version 1.1
+    check_exit 0
+    check_said "This puts it in, as root:"
+    [ "$(current_says)" = "guesthouse 1.1" ] || fail "version 1.1 doesn't run"
+    root_runs_what_was_shown
+    check_same "$(helper_path)" "$H/.local/lib/guesthouse/current/qemu/build/qemu-bridge-helper" "it's still the old one"
+    [ "$(helper_line | wc -l)" -eq 1 ] || fail "the manifest lists the helper more than once"
+}
+
+t_uninstall_asks_nothing_of_root_for_a_helper_that_never_went_in() {
+    release 1.0
+    give_everything
+    rm -rf "$T/system"
+    rm "$T/bin/sudo"
+    snapshot >"$T/empty"
+    install_version 1.0
+    check_exit 0
+    answering 'yes\n' "$SHELL_UNDER_TEST" "$(uninstaller)"
+    check_exit 0
+    check_not_said "as root"
+    check_home_is "$T/empty"
+}
+
 t_uninstall_takes_the_helper_away_as_root() {
     release 1.0
     give_everything

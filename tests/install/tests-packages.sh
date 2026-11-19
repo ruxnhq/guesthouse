@@ -84,6 +84,22 @@ t_a_failed_package_install_installs_nothing() {
     check_home_is "$T/before"
 }
 
+# Staging is gone once it stops, so what it tells root to run can't copy the bridge helper from there.
+t_without_sudo_missing_packages_stop_it_with_a_command_root_can_run() {
+    release 1.0
+    rm "$T/bin/sudo"
+    snapshot >"$T/before"
+    install_version 1.0
+    check_exit 1
+    check_said "this needs sudo, and it's not here."
+    check_home_is "$T/before"
+    sandbox sh -c "$(sed -n 's/.*then run me again: //p' "$T/said")" >"$T/root-said" 2>&1 ||
+        fail "the command it named for root failed"
+    install_version 1.0
+    check_exit 0
+    check_there "$H/.local/lib/guesthouse/current/guesthouse"
+}
+
 # Root adds no packages there, but /usr/local still takes the bridge helper.
 t_an_immutable_system_gets_user_files_and_a_list() {
     release 1.0

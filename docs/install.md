@@ -28,7 +28,7 @@ What `install.sh` does, in order:
 8. Puts everything else under your own folders: the program in `~/.local/lib/guesthouse/VERSION`, reached through a `current` link, plus a launcher and icons. It writes all of that in `~/.local/lib/guesthouse/manifest`.
 9. Tells the desktop the icons changed. It touches `~/.local/share/icons/hicolor`, and if there's an icon cache in it already, it rebuilds that with `gtk-update-icon-cache`. It never makes a cache, and the uninstall does the same once the icons are gone.
 
-It never installs or changes a GPU driver, kernel arguments or services. On an immutable distro it adds no packages and prints what to layer, but the bridge helper still goes in, as `/usr/local` is writable there. If bridged networking says the helper is missing or can't run as root, run the installer again: it puts it back, even when the version is the same.
+It never installs or changes a GPU driver, kernel arguments or services. On an immutable distro it adds no packages and prints what to layer, but the bridge helper still goes in, as `/usr/local` is writable there. On a system with no `sudo` the helper is left out, and if nothing else needs root the rest still installs: the script ends with the command root can run to put it in, and until then only bridged networking is missing. With packages missing, or swtpm's AppArmor rule still to add, it stops as before and names what root has to run first. If bridged networking says the helper is missing or can't run as root, run the installer again: it puts it back, even when the version is the same, or with no `sudo` shows root's command again.
 
 ## The AppImage
 

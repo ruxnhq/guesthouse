@@ -15,6 +15,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const PRIVATE_FOLDER: u32 = 0o700;
+/// Where pci.ids is kept: hwdata on Fedora and Arch, misc on Debian and Ubuntu.
+const PCI_NAMES: [&str; 2] = ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"];
+
+/// The first of these that is there, or the first if none is.
+fn first_present(paths: &[&str]) -> PathBuf {
+    let found = paths.iter().find(|path| Path::new(path).exists());
+    PathBuf::from(found.or(paths.first()).copied().unwrap_or_default())
+}
 
 /// A folder that already exists is made private too, as the first run could have made it otherwise.
 fn make_private_folder(folder: &Path) -> std::io::Result<()> {
@@ -85,7 +93,7 @@ impl Context {
             swaps: "/proc/swaps".into(),
             udev_data: "/run/udev/data".into(),
             pci_devices: "/sys/bus/pci/devices".into(),
-            pci_names: "/usr/share/hwdata/pci.ids".into(),
+            pci_names: first_present(&PCI_NAMES),
             nvidia_cards: "/proc/driver/nvidia/gpus".into(),
             drm_class: "/sys/class/drm".into(),
             kvm: "/dev/kvm".into(),
@@ -152,5 +160,15 @@ mod tests {
         for folder in [context.paths.runtime.clone(), context.run_folder(None)] {
             assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & OTHERS, 0);
         }
+    }
+
+    #[test]
+    fn pci_ids_is_found_where_the_distribution_keeps_it() {
+        let scratch = Scratch::new();
+        let fedora = scratch.path("hwdata/pci.ids");
+        let debian = scratch.write("misc/pci.ids", "");
+        let places = [fedora.to_str().unwrap(), debian.to_str().unwrap()];
+        assert_eq!(super::first_present(&places), debian);
+        assert_eq!(super::first_present(&places[..1]), fedora, "none there is the first");
     }
 }

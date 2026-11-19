@@ -16,6 +16,8 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+# How long each API's process gets, for the functions below.
+$probeSeconds = $TimeoutSeconds
 
 # ---- C# shared by every probe: one line at a time into the probe's file, so a crash keeps the lines before it.
 $common = @'
@@ -712,12 +714,12 @@ function Invoke-Probe([string]$probe, [int]$bits) {
     try {
         $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
         $null = $process.Handle
-        if ($process.WaitForExit($TimeoutSeconds * 1000)) {
+        if ($process.WaitForExit($probeSeconds * 1000)) {
             $result = 'exit code {0} (0x{0:X8})' -f $process.ExitCode
         } else {
             try { $process.Kill() } catch { }
             $null = $process.WaitForExit(5000)
-            $result = "TIMED OUT after $TimeoutSeconds seconds, process killed"
+            $result = "TIMED OUT after $probeSeconds seconds, process killed"
         }
     } catch {
         $result = "could not run: $($_.Exception.Message)"

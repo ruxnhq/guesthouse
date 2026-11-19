@@ -1,18 +1,19 @@
 //! One log line for each exchange with the guest's driver, in a fixed form a tester's log can be
 //! searched by: `amd <kind> name=value ...`.
 //!
-//! The kinds so far are `escape` and `query`. All of the lines are at debug, so they are in the log
-//! only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A line names only what
-//! the protocol modules read; the rest of a buffer is in its `amd dump` line, whole up to 4 KiB. A
-//! registry lookup left to the core has neither line: a guest makes them by the hundred thousand as
-//! it starts, and the core logs each name it finds no value for.
+//! The kinds so far are `escape`, `query` and `registry`. All of the lines are at debug, so they are
+//! in the log only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A line names
+//! only what the protocol modules read; the rest of a buffer is in its `amd dump` line, whole up to
+//! 4 KiB. A registry lookup left to the core has neither line: a guest makes them by the hundred
+//! thousand as it starts, and the core logs each name it finds no value for. A value this backend
+//! gives has a `registry` line with its name.
 //!
 //! Nothing here writes to a buffer of the guest's or decides an answer: every function takes what
 //! it logs by shared reference, after the answer is made or, for an escape, before and after.
 
 use crate::protocol::escape::{self, Answered, Count, Framing};
 use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, bit, dump, watching};
-use guesthouse_backend::{Status, VendorQuery};
+use guesthouse_backend::{RegistryName, RegistryValue, Status, VendorQuery};
 use guesthouse_messages::adapter::AdapterQuery;
 use std::fmt;
 
@@ -150,6 +151,35 @@ impl fmt::Display for QueryLine<'_> {
             None => f.write_str("answer=left-to-the-core")?,
         }
         write!(f, " data={}", Hex { bytes: query.data, most: QUERY_BYTES_SHOWN })
+    }
+}
+
+/// Logs a registry value this backend gives, which nothing else names: the lookup has no line as a
+/// query, and the core logs only the names no value was found for. What the guest gets of the value
+/// is the core's to say, as it refuses a lookup that asks for another type.
+pub fn registry(name: &RegistryName, value: &RegistryValue) {
+    log::debug!("{}", RegistryLine { name, value });
+}
+
+/// A registry value's line. A driver path has no name the guest spells, and no type to match.
+struct RegistryLine<'a> {
+    name: &'a RegistryName,
+    value: &'a RegistryValue,
+}
+
+impl fmt::Display for RegistryLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self.name {
+            RegistryName::DriverStorePath => "<driver store path>",
+            RegistryName::DriverImagePath => "<driver image path>",
+            RegistryName::Value(name) => name,
+        };
+        write!(
+            f,
+            "{PREFIX} registry name=\"{name}\" type={} bytes={}",
+            OrDash(self.value.value_type),
+            self.value.bytes.len()
+        )
     }
 }
 
@@ -447,6 +477,30 @@ mod tests {
         let lines = lines::logged(|| query(&lookup, Some(Status::SUCCESS)));
         let [line, _dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
         assert!(line.starts_with("amd query kind=48 size=16 "), "{lines:?}");
+    }
+
+    #[test]
+    fn a_registry_value_the_backend_gives_is_named_and_one_it_has_not_is_left_to_the_core() {
+        use guesthouse_messages::registry::TYPE_STRING;
+        let vulkan = RegistryName::Value("vulkandrivername".into());
+        let given = crate::registry_answer(&vulkan);
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&vulkan), given));
+        let bytes = given.expect("the backend has this value").bytes.len();
+        let line = format!("amd registry name=\"vulkandrivername\" type={TYPE_STRING} bytes={bytes}");
+        assert_eq!(lines, [(Level::Debug, line)]);
+
+        let store = RegistryName::DriverStorePath;
+        let given = crate::registry_answer(&store);
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&store), given));
+        let bytes = given.expect("the backend has this path").bytes.len();
+        assert_eq!(
+            lines,
+            [(Level::Debug, format!("amd registry name=\"<driver store path>\" type=- bytes={bytes}"))]
+        );
+
+        let unknown = RegistryName::Value("opencldrivername".into());
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&unknown), None));
+        assert!(lines.is_empty(), "{lines:?}");
     }
 
     #[test]

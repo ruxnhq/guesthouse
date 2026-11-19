@@ -6,6 +6,7 @@ use crate::common::in_background;
 use gtk::glib;
 use guesthouse_app_core::actions::rebooted;
 use guesthouse_app_core::context::Context;
+use guesthouse_app_core::ending;
 use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::process_stat::Seen;
 use guesthouse_app_core::processes::all_leftovers;
@@ -188,7 +189,13 @@ impl Window {
             Some((id.clone(), status.slot.zip(status.qemu).filter(|_| status.state == State::Running)?))
         };
         let running: BTreeMap<String, (u8, Seen)> = report.statuses.iter().filter_map(up).collect();
-        let before = std::mem::replace(&mut self.0.refresh.borrow_mut().running_before, running);
+        let before = std::mem::replace(&mut self.0.refresh.borrow_mut().running_before, running.clone());
+        // QEMU says why it's shutting down only as it goes, so something listens from the start.
+        for (id, (slot, _)) in &running {
+            if !before.contains_key(id) {
+                ending::watch(&self.0.context, *slot);
+            }
+        }
         for (id, (slot, _)) in before {
             let gone = report.statuses.get(&id).is_some_and(|found| found.state == State::Off && !found.busy);
             let machine = self.0.cards.borrow().get(&id).map(|row| row.machine().borrow().clone());

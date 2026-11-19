@@ -22,6 +22,8 @@ guesthouse-app-core.workspace = true
 # The UI. These are the oldest that do: what Ubuntu 24.04 has.
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+# The icon in the desktop's tray, over D-Bus. GTK has nothing for one.
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 # Progress from a thread to GTK's main loop, which glib no longer has a channel for.
 async-channel = "2"
 # Local time for snapshot dates.

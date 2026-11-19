@@ -41,6 +41,7 @@ fn look(window: &Window, asked: bool) {
             let text = match found {
                 Ok(Found::Newer(version)) => {
                     window.0.library.offer_update(&version);
+                    crate::notify::send(&window, "update", &format!("Guesthouse {version} is out"), "");
                     *window.0.newer.borrow_mut() = Some(version);
                     return;
                 }

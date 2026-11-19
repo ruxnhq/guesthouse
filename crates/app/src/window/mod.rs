@@ -16,6 +16,7 @@ use crate::common::in_background;
 use crate::log_dialog;
 use crate::new_machine::NewMachineDialog;
 use crate::settings::SettingsDialog;
+use crate::tray::{Asked, Tray};
 use crate::viewer::ScreenPage;
 use crate::wizard;
 use adw::prelude::*;
@@ -41,6 +42,8 @@ use std::thread;
 const DEFAULT_SIZE: (i32, i32) = (1120, 720);
 const SMALLEST_WINDOW: (i32, i32) = (360, 300);
 const TOAST_SECONDS: u32 = 6;
+/// The preference that asks for the icon in the tray.
+pub const TRAY: &str = "tray";
 /// How long after a login started the app its machines start, so what's already running is known.
 const LOGIN_START_AFTER_SECONDS: u32 = 3;
 const PROBLEM_SECONDS: u32 = 10;
@@ -61,6 +64,11 @@ struct Inner {
     screen_watch: OnceCell<Option<Rc<screen_hdr::ScreenWatch>>>,
     /// A newer release, once a check has found one.
     newer: RefCell<Option<String>>,
+    /// The icon in the desktop's tray, while the preferences ask for one and the desktop has a
+    /// place for it. With it there, closing the window hides it and the app runs on.
+    tray: RefCell<Option<Tray>>,
+    /// What keeps the app running with its window hidden.
+    hold: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
 }
 
 /// A handle to the window, which any page can hold.
@@ -103,8 +111,13 @@ impl Window {
             refresh: RefCell::default(),
             screen_watch: OnceCell::new(),
             newer: RefCell::default(),
+            tray: RefCell::default(),
+            hold: RefCell::default(),
         }));
         crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
+        if prefs.get(TRAY) == Some(&Value::Bool(true)) {
+            this.set_tray(true, crate::login::started_at_login());
+        }
         this.0.library.connect_new_machine(&this);
         this.connect_chosen();
         keys::add_host_keys(&this);
@@ -123,8 +136,63 @@ impl Window {
                 page.save_thumbnail_now();
             }
             this.remember_size();
+            // With the icon in the tray the app stays, and the icon brings the window back.
+            if this.has_tray() {
+                this.0.window.set_visible(false);
+                return glib::Propagation::Stop;
+            }
             glib::Propagation::Proceed
         });
+    }
+
+    pub fn has_tray(&self) -> bool {
+        self.0.tray.borrow().is_some()
+    }
+
+    /// Puts the app's icon in the tray or takes it out, and says whether it's there now. A desktop
+    /// with no tray leaves it out. `waits` is for a run a login started, when the tray may not
+    /// be up yet.
+    pub fn set_tray(&self, wanted: bool, waits: bool) -> bool {
+        if wanted && !self.has_tray() {
+            let icons = self.0.context.paths.runtime.join("icons");
+            let Some((tray, asks)) = Tray::start(icons, waits) else { return false };
+            *self.0.tray.borrow_mut() = Some(tray);
+            *self.0.hold.borrow_mut() = self.0.window.application().map(|application| application.hold());
+            let this = self.clone();
+            glib::spawn_future_local(async move {
+                while let Ok(asked) = asks.recv().await {
+                    match asked {
+                        Asked::Show => this.present(),
+                        Asked::Quit => this.quit(),
+                    }
+                }
+            });
+        } else if !wanted && self.has_tray() {
+            self.drop_tray();
+            // Nothing else would bring a hidden window back.
+            self.present();
+        }
+        self.has_tray()
+    }
+
+    fn drop_tray(&self) {
+        let tray = self.0.tray.borrow_mut().take();
+        if let Some(tray) = tray {
+            tray.stop();
+        }
+        self.0.hold.borrow_mut().take();
+    }
+
+    /// Ends the app, whether or not its icon would have kept it running. The machines run on.
+    pub fn quit(&self) {
+        if let Some(page) = self.0.screen_page.borrow().as_ref() {
+            page.save_thumbnail_now();
+        }
+        self.remember_size();
+        self.drop_tray();
+        if let Some(application) = self.0.window.application() {
+            application.quit();
+        }
     }
 
     fn remember_size(&self) {

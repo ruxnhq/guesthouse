@@ -35,7 +35,7 @@ fn add(window: &Window, name: &str, run: impl Fn(&Window) + 'static) {
 pub fn add_actions(window: &Window) {
     add(window, "new-machine", on_new_machine_key);
     add(window, "settings", on_settings_key);
-    add(window, "quit", |window| window.widget().close());
+    add(window, "quit", Window::quit);
     add(window, "shortcuts", show_shortcuts);
     add(window, "setup", Window::show_setup);
     add(window, "log", Window::show_log);

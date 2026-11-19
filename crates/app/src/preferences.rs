@@ -2,9 +2,10 @@
 //! starts it.
 
 use crate::login;
+use crate::notify;
 use crate::rows::choice_row;
 use crate::theme;
-use crate::window::Window;
+use crate::window::{TRAY, Window};
 use adw::prelude::*;
 use guesthouse_app_core::settings::read_prefs;
 use serde_json::{Value, json};
@@ -72,9 +73,37 @@ pub fn show(window: &Window) {
     });
     let starting = adw::PreferencesGroup::builder().title("Starting").build();
     starting.add(&at_login);
+    let in_tray = adw::SwitchRow::builder()
+        .title("Keep running in the tray")
+        .subtitle("Closing the window leaves the app running, with its icon in the tray to call it back.")
+        .active(window.has_tray())
+        .build();
+    let asking = window.clone();
+    in_tray.connect_active_notify(move |row| {
+        let wanted = row.is_active();
+        let there = asking.set_tray(wanted, false);
+        asking.remember(json!({ TRAY: there }));
+        if wanted && !there {
+            asking.problem("This desktop has no tray for the icon to go in.");
+            row.set_active(false);
+        }
+    });
+    let notifications = adw::SwitchRow::builder()
+        .title("Notifications")
+        .subtitle("While the window isn't in front: a machine that has started, been installed or stopped by itself, and a new version.")
+        .active(notify::wanted(window))
+        .build();
+    let remembering = window.clone();
+    notifications.connect_active_notify(move |row| {
+        remembering.remember(json!({ notify::NOTIFICATIONS: row.is_active() }))
+    });
+    let background = adw::PreferencesGroup::builder().title("In the Background").build();
+    background.add(&in_tray);
+    background.add(&notifications);
     let page = adw::PreferencesPage::new();
     page.add(&look);
     page.add(&starting);
+    page.add(&background);
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&page));

@@ -3,6 +3,7 @@
 
 use super::Window;
 use crate::common::in_background;
+use crate::notify;
 use gtk::glib;
 use guesthouse_app_core::actions::rebooted;
 use guesthouse_app_core::context::Context;
@@ -165,8 +166,14 @@ impl Window {
         // A row can be gone if it was deleted while this was being read.
         let Some(row) = rows.get(id) else { return };
         let looked = self.0.refresh.borrow().looked;
-        if looked && !status.error.is_empty() && status.error != row.status().error {
+        let before = row.status();
+        if looked && !status.error.is_empty() && status.error != before.error {
             self.problem(&status.error);
+        }
+        if looked
+            && let Some((title, body)) = notify::of_change(&row.machine().borrow().name, &before, status)
+        {
+            notify::send(self, id, &title, &body);
         }
         row.set_status(status, vm_running);
         if let Some(settings) = self.0.settings.borrow().as_ref().filter(|dialog| dialog.machine_id() == id) {
@@ -205,6 +212,18 @@ impl Window {
         }
     }
 
+    /// The icon in the tray names the machines that are running.
+    fn tell_the_tray(&self, report: &Report) {
+        let tray = self.0.tray.borrow();
+        let Some(tray) = tray.as_ref() else { return };
+        let cards = self.0.cards.borrow();
+        let is_running = |(id, status): (&String, &Status)| {
+            (status.state == State::Running)
+                .then(|| cards.get(id).map(|card| card.machine().borrow().name.clone()))?
+        };
+        tray.set_running(report.statuses.iter().filter_map(is_running).collect());
+    }
+
     fn show_status(&self, report: Report) {
         {
             let mut state = self.0.refresh.borrow_mut();
@@ -224,5 +243,6 @@ impl Window {
             self.show_machine_status(id, status, report.vm_running);
         }
         self.0.refresh.borrow_mut().looked = true;
+        self.tell_the_tray(&report);
     }
 }

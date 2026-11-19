@@ -65,6 +65,8 @@ impl Pill {
         name.add_css_class("pill-name");
         let hint = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
+            // The same width whatever it says, so the buttons after it don't move under the pointer.
+            .width_chars(HINT_CHARS)
             .max_width_chars(HINT_CHARS)
             .build();
         hint.add_css_class("pill-hint");

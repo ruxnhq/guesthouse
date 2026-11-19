@@ -149,7 +149,7 @@ fn serve_intel(
     let desktop = Desktop::from_environment();
     if desktop == Desktop::Software {
         log::info!(
-            "Intel's test stage composes the guest's desktop in software; {DESKTOP_VARIABLE}=0 gives it \
+            "Windows composes the guest's desktop in software on this start; {DESKTOP_VARIABLE}=0 gives it \
              the hardware desktop instead"
         );
     }

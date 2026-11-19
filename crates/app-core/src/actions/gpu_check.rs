@@ -18,7 +18,7 @@ const CHECK_POLL: Duration = Duration::from_secs(3);
 const CHECK_ANSWER_SECONDS: u64 = 15;
 const NO_GPU: &str = "Windows started without its GPU, so the VM was turned off.";
 const KEPT_WITHOUT_GPU: &str = "Windows started without its GPU. The VM was left running on Windows' basic display, as \
-                                Intel's support is at a test stage, so dxdiag can run and a bug report can be sent from it.";
+                                Intel's support is experimental, so dxdiag can run and a bug report can be sent from it.";
 const DAEMON_ERROR_MARK: &str = "ERROR ";
 
 /// The virtual render device, under any identity the QEMU patch can give it.

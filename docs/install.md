@@ -6,7 +6,7 @@ A Windows machine on NVIDIA needs NVIDIA's kernel module loaded, with `/dev/nvid
 
 A Windows machine on AMD needs the card on amdgpu, and AMD's Windows installer for that card, which the app unpacks. It has run on an integrated RDNA2 Radeon with driver 32.0.21045.20006, and on testers' RX 9070 XT, RX 7900 XTX, RX 7800 XT, RX 6900 XT, RX 6700 XT, RX 6700 and RX 6600 XT. See [AMD](amd.md).
 
-A Windows machine on an Intel card is at a test stage, on Lunar Lake, Battlemage, Panther Lake and Wildcat Lake: it needs the card on `xe` and Intel's Windows installer, which the app unpacks, and nothing is drawn by the card yet. See [Intel](intel.md).
+A Windows machine on an Intel card is experimental, on Lunar Lake, Battlemage, Panther Lake and Wildcat Lake: it needs the card on `xe` and Intel's Windows installer, which the app unpacks. The card has drawn Windows' desktop on an Arc B580, and the other cards are untried. See [Intel](intel.md).
 
 A Linux machine's needs are in [`linux/`](../linux/README.md).
 

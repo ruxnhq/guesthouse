@@ -43,6 +43,7 @@ Windows with the GPU has run on these:
 | RX 6700 XT | AMD, RDNA2 | Works |
 | RX 6700 | AMD, RDNA2 | Works |
 | RX 6600 XT | AMD, RDNA2 | Works |
+| Arc B580 | Intel, Battlemage | Experimental, on a tester's PC. The card draws Windows' desktop. See [Intel](docs/intel.md) |
 
 Nobody has tried these yet. They should work, most likely first:
 

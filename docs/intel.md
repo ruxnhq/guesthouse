@@ -1,18 +1,18 @@
 # Windows on an Intel card
 
-This is a test stage. It has run with a guest against a recording of an Arc B580 and a stand-in for the driver, and never on a real card. It's the first step towards Intel's graphics on Linux's `xe` driver. The cards offered are the ones Intel's Windows driver 32.0.101.9175 covers and `xe` takes by default: Lunar Lake (Arc 130V and 140V), Battlemage (Arc B570, B580 and the Pro cards), and Panther Lake and Wildcat Lake. Only the Arc B580 has been read on a real PC so far; the others are set up from Intel's and the kernel's open tables and are untested. The daemon tells a card's generation from what the card says, so a card of these generations is offered whatever its PCI id.
+Intel support is experimental. On an Arc B580, on Linux's `xe` driver, the card draws Windows' desktop, and programs reach it through Direct3D 11 and 12, Vulkan and OpenCL. One tester's card is all it has run on, and it has rough edges: frames reach the screen by a copy, video in a browser is new and untried, and work on the card can hang the card or make it reset. If your Linux desktop is on the same card, that can freeze or restart your Linux session, so save your work before you start a machine. The cards offered are the ones Intel's Windows driver 32.0.101.9175 covers and `xe` takes by default: Lunar Lake (Arc 130V and 140V), Battlemage (Arc B570, B580 and the Pro cards), and Panther Lake and Wildcat Lake. Only the Arc B580 has been read on a real PC so far; the others are set up from Intel's and the kernel's open tables and are untested. The daemon tells a card's generation from what the card says, so a card of these generations is offered whatever its PCI id.
 
 Alchemist (the Arc A-series), Meteor Lake and Arrow Lake are known too, but `i915` drives them unless the kernel is told otherwise, and a card that `i915` drives is not offered: the daemon works through `xe`. The setup check says so and gives the kernel options that hand the card to `xe`. `xe` on those cards is newer than `i915` and less tried.
 
 ## What it's meant to do
 
-The daemon built with the `intel` feature is meant to answer Intel's Windows driver in the guest well enough for it to load and make its devices, contexts, queues and memory. That's untested. In the first test builds nothing ran on the card: every bit of work the guest sent came back as finished without running, so the guest's screen showed nothing drawn by the GPU. This build can run it, as "Work on the card" below says, and falls back to running nothing where the card doesn't pass its own test. Either way the log matters most. Every exchange that is Intel's own gets a line in `daemon.out` starting with `intel`, and with `GUESTHOUSE_VERBOSE` set the log holds the whole of each one too, so one run should tell me how far the guest got and where it stopped.
+The daemon built with the `intel` feature answers Intel's Windows driver in the guest, so that it loads and makes its devices, contexts, queues and memory, and it runs the guest's work on the card, as "Work on the card" below says. Where the card doesn't pass its own test at the start, nothing is run and Windows draws its desktop in software. Either way the log matters most. Every exchange that is Intel's own gets a line in `daemon.out` starting with `intel`, and with `GUESTHOUSE_VERBOSE` set the log holds the whole of each one too, so a bug report from one run says how far the guest got and where it stopped. The app turns that on for a machine on an Intel card, and the daemon keeps the log under 64 MiB.
 
 It only takes Intel's driver 32.0.101.9175 in the guest, as the data it passes around changes from one release to the next.
 
 ## Trying it
 
-You need one of those cards, Linux with the `xe` driver on it, and a test build of Guesthouse. It takes a Windows 11 ISO and about an hour.
+You need one of those cards and Linux with the `xe` driver on it. It takes a Windows 11 ISO and about an hour.
 
 1. Download Intel's graphics driver 32.0.101.9175 for Arc from Intel's site. The file is `gfx_win_101.9175.exe`, about 860 MB. Other releases are refused.
 2. Make sure `7z` can unpack it. Intel's installer keeps its files in a RAR archive, and many distributions' `7z` leave RAR out, so it lists the file and then fails to unpack it. The app says so when that happens. 7-Zip's own Linux build from 7-zip.org works. Put it on your PATH as `7z`.
@@ -71,7 +71,7 @@ When the hardware desktop fails, the app keeps that start's daemon log as `intel
 
 ## Work on the card
 
-From this build the daemon can run the guest's work on the card through `xe`: real buffers, an address space for each guest program, and a queue behind each of the guest's. It has only run against a stand-in for the driver, never on a real card, so expect it to fail in ways nobody has seen.
+The daemon can run the guest's work on the card through `xe`: real buffers, an address space for each guest program, and a queue behind each of the guest's. It has only run against a stand-in for the driver, never on a real card, so expect it to fail in ways nobody has seen.
 
 At each start the daemon runs the short self-test `intel-probe --run` runs. If a step the guest's work needs fails (the address space, buffers, host pages, binds, the render, compute or copy engine), or the card can't be opened for work, the machine starts as before with nothing run on the card. A failed video engine step, copy instruction, clock reading or cleanup is a warning in `daemon.out`, and work runs all the same. A line in `daemon.out` starting with `intel stage=` says which it is and, if nothing runs, what refused.
 

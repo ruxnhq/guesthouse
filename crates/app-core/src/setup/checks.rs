@@ -40,7 +40,7 @@ const CARD_FIX: &str = "GPU-PV needs an NVIDIA RTX 50, 40, 30 or 20 series or GT
 /// For a PC with no card of any maker GPU-PV runs on.
 const NO_CARD_FIX: &str = "GPU-PV needs an NVIDIA RTX 50, 40, 30 or 20 series or GTX 16 series card on the open \
                            kernel modules, an AMD card from the RX 5000 series on, or RDNA2 or newer graphics in a \
-                           Ryzen, on amdgpu, or for testing, an Intel Arc B580 or Arc 140V on xe.";
+                           Ryzen, on amdgpu, or as an experiment, an Intel Arc B580 or Arc 140V on xe.";
 const EXPERIMENTAL_FIX: &str =
     "Nobody has run Windows on this card yet. Others on the same chip work, so it likely does too.";
 const AMD_UNSUPPORTED_FIX: &str = "Windows on AMD needs an RDNA card: the RX 5000 series and newer, or RDNA2 or \
@@ -50,7 +50,7 @@ pub const AMD_NEEDS_NO_SETUP: &str = "This PC's card is AMD's, and it needs no s
                                       when you make a Windows machine.";
 /// What setup does on a PC whose only card GPU-PV runs on is Intel's: nothing, as with AMD's.
 pub const INTEL_NEEDS_NO_SETUP: &str = "This PC's card is Intel's, and it needs no setup. Windows with GPU-PV runs \
-                                        on it at a test stage, where nothing is drawn by the card yet. Intel's \
+                                        on it is experimental. Intel's \
                                         driver is asked for when you make a Windows machine.";
 /// The Linux drivers Windows has run on, newest first. The guest's graphics depend on the exact version.
 pub const TESTED_DRIVERS: [&str; 2] = ["620.70.06", "615.78.08"];
@@ -135,7 +135,7 @@ fn card_judged(context: &Context) -> Option<Card> {
 }
 
 /// A check for each maker's card this PC has, or one failure if it has none. Intel's cards are only
-/// looked at on a PC with neither NVIDIA's nor AMD's, as they are at a test stage, and a PC that has
+/// looked at on a PC with neither NVIDIA's nor AMD's, as they are experimental, and a PC that has
 /// one of those runs on it.
 fn check_cards(context: &Context) -> Vec<Check> {
     let checks: Vec<Check> = [check_card(context), check_amd_card(context)].into_iter().flatten().collect();
@@ -152,7 +152,7 @@ fn check_cards(context: &Context) -> Vec<Check> {
 }
 
 /// The first Intel card the Intel daemon is written for. It's a warning, not a failure: Windows sets
-/// up and starts on it, and nothing is drawn by the card yet.
+/// up and starts on it, and only one card has been tried.
 fn check_intel_card(context: &Context) -> Option<Check> {
     const TITLE: &str = "Intel card";
     let Some(card) = supported_intel_cards(context).into_iter().next() else {
@@ -161,8 +161,9 @@ fn check_intel_card(context: &Context) -> Option<Check> {
     let check = Check::new(
         TITLE,
         CheckState::Warning,
-        format!("{} at {}. Test stage.", card.name, card.pci),
-        "Windows sets up and starts on it, but nothing is drawn by the card yet. Intel's driver is asked for \
+        format!("{} at {}. Experimental.", card.name, card.pci),
+        "The card draws Windows' desktop on an Arc B580, and other cards are untried. Work on the card can \
+         hang or reset it, which can freeze a Linux desktop on the same card. Intel's driver is asked for \
          when you make the machine.",
     );
     Some(check.about(Part::Intel))

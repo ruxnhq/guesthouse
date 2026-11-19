@@ -162,7 +162,7 @@ pub const STAYS_ON_INTEL: &str = "Windows keeps Intel's vendor ID, as Intel's Di
 
 /// Whether a failed GPU check moves a machine on this maker's card to Microsoft's number for its next
 /// start. On NVIDIA and AMD, the maker's number is the first suspect and Microsoft's always works.
-/// Intel's Direct3D 12 driver doesn't open on Microsoft's number at all, and at this test stage a
+/// Intel's Direct3D 12 driver doesn't open on Microsoft's number at all, and while Intel is experimental a
 /// failed check is what the stage is, not the number, so an Intel machine keeps its maker's.
 pub fn falls_back_after_failed_check(maker: GpuMaker) -> bool {
     match maker {

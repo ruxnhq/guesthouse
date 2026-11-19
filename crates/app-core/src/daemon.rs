@@ -69,9 +69,9 @@ impl DaemonStart {
         self.with_intel_test_log()
     }
 
-    /// Intel's support is at a test stage where nothing is drawn by the card, and what a run is for
-    /// is the daemon's log, so the daemon is told to write all of it. Take this out when the
-    /// backend draws, and the log is quiet again.
+    /// Intel's support is experimental, and a report of a run is only as good as the daemon's log,
+    /// so the daemon is told to write all of it. The daemon keeps that log under a limit. Take this
+    /// out when Intel's cards are no longer experimental, and the log is quiet again.
     fn with_intel_test_log(mut self) -> Self {
         self.environment.insert(VERBOSE_VARIABLE.to_owned(), "1".to_owned());
         self
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(on_intel.environment["GUESTHOUSE_VERBOSE"], "1");
         assert!(!on_intel.environment.contains_key("GUESTHOUSE_AMD_CARD"));
         let on_amd = start.on_card(GpuMaker::Amd, "0000:7c:00.0").unwrap();
-        assert!(!on_amd.environment.contains_key("GUESTHOUSE_VERBOSE"), "only Intel's test stage is verbose");
+        assert!(!on_amd.environment.contains_key("GUESTHOUSE_VERBOSE"), "only Intel's log is verbose");
     }
 
     #[test]

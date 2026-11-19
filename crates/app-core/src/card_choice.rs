@@ -11,8 +11,8 @@ use crate::render_cards::render_cards;
 use crate::setup::cards::{Support, amd_support, card_in_use, find_cards};
 use crate::setup::intel::supported_intel_cards;
 
-/// Whether a new machine, or a settings page, is offered Intel's cards. They are, as a test stage:
-/// Windows can be set up and started on one, but nothing is drawn by the card yet.
+/// Whether a new machine, or a settings page, is offered Intel's cards. They are, as an experiment:
+/// an Arc B580 has drawn Windows' desktop, and the other cards are untried.
 const OFFER_INTEL_CARDS: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

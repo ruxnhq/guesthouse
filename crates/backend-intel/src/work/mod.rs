@@ -3,14 +3,16 @@
 //!
 //! [`CardWork`] is what the backend's trait methods call once the stage is past listening. Its
 //! parts are in the modules here: [`memory`] for buffers and guest pages, [`spaces`] for address
-//! spaces and their mappings, [`queues`] for submissions and what became of them, and [`copies`]
-//! for pictures on their way out. [`choices`] holds what the card has yet to confirm.
+//! spaces and their mappings, [`queues`] for submissions and what became of them, [`marks`] for what
+//! a context's submission has written when it is done, and [`copies`] for pictures on their way out.
+//! [`choices`] holds what the card has yet to confirm.
 
 mod bans;
 pub mod cap;
 pub mod choices;
 pub mod copies;
 pub mod engines;
+mod marks;
 mod memory;
 mod queues;
 #[cfg(test)]
@@ -52,6 +54,9 @@ pub struct CardWork {
     spaces: HashMap<SpaceId, spaces::Space>,
     queues: HashMap<u32, queues::Queue>,
     prepared: HashMap<u64, queues::Prepared>,
+    /// A context's marks whose run will never end, as xe refused it or its queue went, to be
+    /// written at the next chance: each with its space and queue, and why.
+    left_marks: Vec<(SpaceId, u32, marks::Marks, &'static str)>,
     last_look: Option<Instant>,
 }
 
@@ -93,6 +98,7 @@ impl CardWork {
             spaces: HashMap::new(),
             queues: HashMap::new(),
             prepared: HashMap::new(),
+            left_marks: Vec::new(),
             last_look: None,
         })
     }

@@ -4,15 +4,21 @@
 //! A batch that ends runs in the process's VM. xe writes the guest's fence at its end, as a user
 //! fence, and signals a point of the queue's own timeline, by which a run that ended without
 //! writing its fence is found. A batch that parks is a ring: see [`super::choices::Rings`].
+//!
+//! A context's submission also names marks of its own in its header: a monitored fence and a tag.
+//! See [`super::marks`].
 
 use super::choices::{self, Rings};
+use super::marks::{Marks, Monitored};
 use super::{CardWork, engines};
 use crate::protocol::command_header::{Header, Length};
 use crate::xe::abi::{EngineInstance, Keying, Sync};
 use crate::xe::batch::{self, Ending};
 use crate::xe::plan::{self, Backing, ExecVerdict, Point};
 use crate::xe_query::Engine;
-use guesthouse_backend::{BackendError, CommandBuffer, Doorbell, HostServices, SpaceId, Work, WorkStart};
+use guesthouse_backend::{
+    BackendError, CommandBuffer, Doorbell, HostServices, SpaceId, Work, WorkSource, WorkStart,
+};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -24,6 +30,10 @@ pub(super) struct Run {
     /// The guest's fence, by guest physical address, and the value this run brings it to.
     pub fence: u64,
     pub value: u64,
+    /// Whether the card writes that fence. If not, the host does once the run has ended.
+    pub card_writes_fence: bool,
+    /// What a context's submission has the host write once it is done.
+    pub marks: Option<Marks>,
     /// The batch: its GPU address, its length in bytes, and where it goes on if it chains.
     pub batch: u64,
     pub length: u64,
@@ -53,7 +63,8 @@ pub(super) struct Queue {
 #[derive(Debug)]
 pub(super) struct Prepared {
     queue: u32,
-    xe_queue: u32,
+    /// `None` for a context's submission that runs nothing but has to wait for the runs before it.
+    xe_queue: Option<u32>,
     batch: u64,
     syncs: Vec<Sync>,
     /// `None` for a ring, which signals nothing.
@@ -89,6 +100,7 @@ pub enum Refused {
     Unreadable { address: u64 },
     RunsOn { address: u64 },
     Ring,
+    ContextRing,
     Xe(String),
 }
 
@@ -111,6 +123,9 @@ impl std::fmt::Display for Refused {
                 write!(f, "its batch at {address:#x} neither ends, chains nor parks, and would run on")
             }
             Self::Ring => f.write_str("its batch parks and never ends, and rings are switched off"),
+            Self::ContextRing => f.write_str(
+                "its batch parks and never ends, so the marks a context's work names would never come",
+            ),
             Self::Xe(error) => write!(f, "xe made no queue for it: {error}"),
         }
     }
@@ -126,21 +141,75 @@ enum Kind {
 impl CardWork {
     /// Checks a submission and prepares it. Nothing is sent before its doorbell.
     pub fn start(&mut self, host: &mut dyn HostServices, work: &Work<'_>, header: &Header) -> WorkStart {
-        if !work.may_run || work.queue_failed {
+        self.write_left_marks(host);
+        let marks = (work.source == WorkSource::Context).then(|| Marks::of(host, work, header));
+        // Work that may not run is dropped, and the guest hears so. Its marks, and a refused one's,
+        // are written at once, as its process is losing its device.
+        let dropped = !work.may_run || work.queue_failed;
+        let unrun = if dropped {
+            WorkStart::Finished
+        } else {
+            match self.prepare(host, work, header, marks) {
+                Ok(Some(prepared)) => {
+                    let doorbell = self.new_id();
+                    self.prepared.insert(doorbell, prepared);
+                    return WorkStart::Started { doorbell, work: 1 };
+                }
+                Ok(None) => WorkStart::Finished,
+                Err(refused) => {
+                    log::warn!(
+                        "intel work: queue {:#x} in space {:?} stops: {refused}",
+                        work.queue,
+                        work.space
+                    );
+                    WorkStart::QueueFailed
+                }
+            }
+        };
+        match marks {
+            Some(marks) if dropped || unrun != WorkStart::Finished => {
+                self.write_marks(host, work.space, work.queue, &marks, "at once, as it won't run");
+                unrun
+            }
+            Some(marks) => self.finish_unrun(host, work, marks),
+            None => unrun,
+        }
+    }
+
+    /// A context's submission that runs nothing is done at once, unless runs before it on its queue
+    /// are not: then it waits for them, so its marks come in order. Its queue's fence is the core's
+    /// to write when nothing waits, as for any work finished unrun.
+    fn finish_unrun(&mut self, host: &mut dyn HostServices, work: &Work<'_>, marks: Marks) -> WorkStart {
+        let in_flight = self.queues.get(&work.queue).is_some_and(|queue| !queue.in_flight.is_empty());
+        let prepared =
+            self.prepared.values().any(|prepared| prepared.queue == work.queue && prepared.run.is_some());
+        if !(in_flight || prepared) {
+            self.write_marks(host, work.space, work.queue, &marks, "at once, as nothing ran");
             return WorkStart::Finished;
         }
-        match self.prepare(host, work, header) {
-            Ok(Some(prepared)) => {
-                let doorbell = self.new_id();
-                self.prepared.insert(doorbell, prepared);
-                WorkStart::Started { doorbell, work: 1 }
-            }
-            Ok(None) => WorkStart::Finished,
-            Err(refused) => {
-                log::warn!("intel work: queue {:#x} in space {:?} stops: {refused}", work.queue, work.space);
-                WorkStart::QueueFailed
-            }
-        }
+        let run = Run {
+            point: 0,
+            fence: work.fence,
+            value: work.fence_value,
+            card_writes_fence: false,
+            marks: Some(Marks { queue_fence: Some((work.fence, work.fence_value)), ..marks }),
+            batch: 0,
+            length: 0,
+            chain: None,
+            sent: None,
+            changes_before: 0,
+        };
+        let doorbell = self.new_id();
+        let prepared = Prepared {
+            queue: work.queue,
+            xe_queue: None,
+            batch: 0,
+            syncs: Vec::new(),
+            run: Some(run),
+            ring_run: None,
+        };
+        self.prepared.insert(doorbell, prepared);
+        WorkStart::Started { doorbell, work: 1 }
     }
 
     /// `Ok(None)` is work this stage doesn't run, or can't yet: it is finished unrun.
@@ -149,13 +218,12 @@ impl CardWork {
         host: &mut dyn HostServices,
         work: &Work<'_>,
         header: &Header,
+        marks: Option<Marks>,
     ) -> Result<Option<Prepared>, Refused> {
         if self.space_failed(work.space) {
             return Err(Refused::SpaceFailed);
         }
         let Some(commands) = work.commands else {
-            // A context's submission: where its commands are isn't read from the message yet, and
-            // its private data isn't known to be this header.
             log::debug!(
                 "intel work: queue {:#x} names no commands, so its work is finished unrun",
                 work.queue
@@ -176,6 +244,7 @@ impl CardWork {
         let kind = match self.ending(host, work.space, commands)? {
             Ending::Ends => Kind::Ends(None),
             Ending::Chains(to) => Kind::Ends(Some(to)),
+            Ending::Parks if marks.is_some() => return Err(Refused::ContextRing),
             Ending::Parks if choices::RINGS == Rings::LongRunning => Kind::Ring,
             Ending::Parks => return Err(Refused::Ring),
             Ending::RunsOn => return Err(Refused::RunsOn { address: commands.address }),
@@ -196,6 +265,8 @@ impl CardWork {
             point,
             fence: work.fence,
             value: work.fence_value,
+            card_writes_fence: true,
+            marks: None,
             batch: commands.address,
             length,
             chain,
@@ -234,7 +305,7 @@ impl CardWork {
                 queue.ring_fence = Some((work.fence, work.fence_value));
                 Ok(Some(Prepared {
                     queue: work.queue,
-                    xe_queue,
+                    xe_queue: Some(xe_queue),
                     batch: commands.address,
                     syncs,
                     run: None,
@@ -258,16 +329,40 @@ impl CardWork {
                 let held = self.spaces.get(&space).ok_or(Refused::SpaceFailed)?;
                 let last_bind =
                     (held.bind_point > 0).then_some(Point { timeline: held.binds, point: held.bind_point });
-                // The card writes the fence where the guest watches it, if that is mapped and
-                // aligned as xe wants. Otherwise the host writes it when the run has ended.
-                let fence_mapped = work.fence_gpu_address.is_multiple_of(plan::FENCE_ALIGNMENT)
-                    && held.holding(work.fence_gpu_address, plan::FENCE_ALIGNMENT).is_some();
-                let fence = fence_mapped.then_some((work.fence_gpu_address, work.fence_value));
+                let mapped = |address: u64| {
+                    address.is_multiple_of(plan::FENCE_ALIGNMENT)
+                        && held.holding(address, plan::FENCE_ALIGNMENT).is_some()
+                };
+                let mut run = run_of(point, chain);
+                let fence = match marks {
+                    // A context's: the card writes the monitored fence the guest waits on, if it is
+                    // mapped and aligned as xe wants, and the host the rest when the run has ended.
+                    // One run takes one fence of the card's, and the guest waits on this one.
+                    Some(marks) => {
+                        let card_writes = marks.monitored.filter(|monitored| {
+                            mapped(monitored.gpu_address) && self.card_may_raise(host, monitored)
+                        });
+                        // The host raises the monitored fence too, which changes nothing once the
+                        // card has, and covers a run that never gets there.
+                        run.marks =
+                            Some(Marks { queue_fence: Some((work.fence, work.fence_value)), ..marks });
+                        if let Some(Monitored { guest_address, value, .. }) = card_writes {
+                            (run.fence, run.value) = (guest_address, value);
+                        } else {
+                            run.card_writes_fence = false;
+                        }
+                        card_writes.map(|monitored| (monitored.gpu_address, monitored.value))
+                    }
+                    // The card writes the fence where the guest watches it, if that is mapped and
+                    // aligned as xe wants. Otherwise the host writes it when the run has ended.
+                    None => {
+                        mapped(work.fence_gpu_address).then_some((work.fence_gpu_address, work.fence_value))
+                    }
+                };
                 let syncs = plan::exec_syncs(last_bind, fence, Point { timeline: done, point });
-                let run = run_of(point, chain);
                 Ok(Some(Prepared {
                     queue: work.queue,
-                    xe_queue,
+                    xe_queue: Some(xe_queue),
                     batch: commands.address,
                     syncs,
                     run: Some(run),
@@ -275,6 +370,20 @@ impl CardWork {
                 }))
             }
         }
+    }
+
+    /// Whether the card may write a monitored fence as a run's own: only to raise it, past what it
+    /// holds and what the card is already on its way to write there. The host never lowers one.
+    fn card_may_raise(&self, host: &dyn HostServices, monitored: &Monitored) -> bool {
+        let holds = host.fence_value(monitored.guest_address).unwrap_or(u64::MAX);
+        let in_flight = self.queues.values().flat_map(|queue| queue.in_flight.iter());
+        let unsent = self.prepared.values().filter_map(|prepared| prepared.run.as_ref());
+        let coming = in_flight
+            .chain(unsent)
+            .filter(|run| run.card_writes_fence && run.fence == monitored.guest_address)
+            .map(|run| run.value)
+            .max();
+        monitored.value > holds && coming.is_none_or(|value| monitored.value > value)
     }
 
     /// An xe queue in a VM with the timeline its runs signal.
@@ -364,6 +473,13 @@ impl CardWork {
             self.prepared.remove(&doorbell);
             return Err(BackendError::new("a doorbell for a queue that has gone"));
         };
+        let Some(xe_queue) = prepared.xe_queue else {
+            // Nothing to send: it waits behind the runs before it.
+            let prepared = self.prepared.remove(&doorbell).expect("found above");
+            let queue = self.queues.get_mut(&prepared.queue).expect("found above");
+            queue.in_flight.extend(prepared.run);
+            return Ok(Doorbell::Rung);
+        };
         // A ring's VM signals nothing, so its binds are waited for here rather than by xe.
         if prepared.run.is_none() {
             let ring = self.spaces.get(&space).and_then(|space| space.ring.as_ref());
@@ -372,7 +488,7 @@ impl CardWork {
             }
         }
         let attempted = prepared.run.or(prepared.ring_run);
-        let mut sent = self.xe.exec(prepared.xe_queue, prepared.batch, &prepared.syncs);
+        let mut sent = self.xe.exec(xe_queue, prepared.batch, &prepared.syncs);
         // A ring that xe won't take with a fence still runs without one. Its end then goes
         // unsaid, which is better than no ring.
         let refused = sent.as_ref().is_err_and(|error| plan::exec_verdict(error) == ExecVerdict::Failed);
@@ -381,7 +497,7 @@ impl CardWork {
                 "intel work: xe refused a ring with a fence ({}), so it is sent with none",
                 sent.as_ref().expect_err("just seen")
             );
-            sent = self.xe.exec(prepared.xe_queue, prepared.batch, &[]);
+            sent = self.xe.exec(xe_queue, prepared.batch, &[]);
         }
         match sent.as_ref().map_err(plan::exec_verdict) {
             Ok(()) => {
@@ -403,8 +519,12 @@ impl CardWork {
             Err(ExecVerdict::NotYet) => Ok(Doorbell::NotYet),
             Err(verdict) => {
                 let error = sent.expect_err("matched as an error");
-                let prepared_queue = self.prepared.get(&doorbell).map_or(0, |prepared| prepared.queue);
-                self.prepared.remove(&doorbell);
+                let gone = self.prepared.remove(&doorbell);
+                let prepared_queue = gone.as_ref().map_or(0, |prepared| prepared.queue);
+                // Nothing of it will run, so a context's marks are written now.
+                if let Some(marks) = gone.and_then(|prepared| prepared.run).and_then(|run| run.marks) {
+                    self.left_marks.push((space, prepared_queue, marks, "after xe refused its run"));
+                }
                 if verdict == ExecVerdict::Lost {
                     self.explain_cancel(prepared_queue, space, attempted);
                     self.fail_space(
@@ -424,6 +544,7 @@ impl CardWork {
     /// Looks at runs on the card for ones xe ended early: it stands in at the fence of each, and a
     /// queue xe banned takes its whole process's work with it.
     pub fn poll(&mut self, host: &mut dyn HostServices, now: Instant) {
+        self.write_left_marks(host);
         if self
             .last_look
             .is_some_and(|last| now.saturating_duration_since(last) < choices::LOOK_AT_RUNS_EVERY)
@@ -442,25 +563,40 @@ impl CardWork {
         let Some(queue) = self.queues.get_mut(&id) else { return };
         let Some((xe_queue, done)) = queue.ordinary else { return };
         let space = queue.space;
-        // The first run that ended without its fence, which is the one xe gave up on, and how many
-        // after it were lost with it.
-        let mut cut_short: Option<Run> = None;
-        let mut lost_with_it = 0;
+        let mut ended = Vec::new();
         while let Some(run) = queue.in_flight.front().copied() {
-            match self.xe.point_reached(done, run.point, Duration::ZERO) {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(error) => {
+            // A context's submission that ran nothing waits only for the runs before it.
+            let reached = run.point == 0
+                || self.xe.point_reached(done, run.point, Duration::ZERO).unwrap_or_else(|error| {
                     log::warn!("intel work: queue {id:#x}: asking xe whether a run ended failed: {error}");
-                    break;
-                }
+                    false
+                });
+            if !reached {
+                break;
             }
             queue.in_flight.pop_front();
-            if stand_in(host, id, run.fence, run.value) {
+            ended.push(run);
+        }
+        // The first run that ended without its fence, which is the one xe gave up on, and how many
+        // after it were lost with it. A run whose fence the host writes was cut short if xe banned
+        // its queue.
+        let mut cut_short: Option<Run> = None;
+        let mut lost_with_it = 0;
+        for run in ended {
+            let lost = if run.card_writes_fence {
+                stand_in(host, id, run.fence, run.value)
+            } else {
+                run.point != 0 && self.xe.queue_banned(xe_queue).unwrap_or(true)
+            };
+            if lost {
                 match cut_short {
                     None => cut_short = Some(run),
                     Some(_) => lost_with_it += 1,
                 }
+            }
+            if let Some(marks) = run.marks {
+                let when = if run.point == 0 { "after the runs before it" } else { "after its run" };
+                self.write_marks(host, space, id, &marks, when);
             }
         }
         // A run that ended without its fence was cut short. Whether the queue was banned for it
@@ -501,8 +637,22 @@ impl CardWork {
 
     /// Destroys what backs a queue. Work prepared for it and not yet sent goes with it.
     pub fn close_queue(&mut self, queue: u32) {
-        self.prepared.retain(|_, prepared| prepared.queue != queue);
+        let mut doorbells: Vec<u64> = self
+            .prepared
+            .iter()
+            .filter(|(_, prepared)| prepared.queue == queue)
+            .map(|(&doorbell, _)| doorbell)
+            .collect();
+        // Doorbells count up, so this is the order the work came in.
+        doorbells.sort_unstable();
+        let unsent: Vec<Prepared> =
+            doorbells.iter().filter_map(|doorbell| self.prepared.remove(doorbell)).collect();
         let Some(gone) = self.queues.remove(&queue) else { return };
+        // A context's marks still to come are written, in order, as nothing will run now.
+        let runs = gone.in_flight.iter().copied().chain(unsent.iter().filter_map(|prepared| prepared.run));
+        for marks in runs.filter_map(|run| run.marks) {
+            self.left_marks.push((gone.space, queue, marks, "as its queue went"));
+        }
         let (ordinary, done) = gone.ordinary.unzip();
         for xe_queue in [ordinary, gone.ring].into_iter().flatten() {
             if let Err(error) = self.xe.destroy_queue(xe_queue) {
@@ -514,6 +664,12 @@ impl CardWork {
         {
             log::warn!("intel work: destroying queue {queue:#x}'s sync object failed: {error}");
         }
+    }
+
+    /// Whether prepared work sends anything to the card when its doorbell rings. A context's
+    /// submission that runs nothing but waits for the runs before it sends nothing.
+    pub fn sends(&self, doorbell: u64) -> bool {
+        self.prepared.get(&doorbell).is_some_and(|prepared| prepared.xe_queue.is_some())
     }
 
     pub fn live_queues(&self) -> usize {

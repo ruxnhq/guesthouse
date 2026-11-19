@@ -915,13 +915,20 @@ impl Backend for IntelBackend {
 
     /// Each submission is logged with what its header says, as far as it can be read. While
     /// listening nothing runs, so none fails: each is finished unrun.
+    /// A context's submission names its commands in the message, and its header after them.
+    fn runs_context_commands(&self) -> bool {
+        true
+    }
+
     fn start_work(&mut self, host: &mut dyn HostServices, work: &Work<'_>) -> WorkStart {
         let header = Header::read(work.private);
         let start = match &mut self.work {
             Some(card) => card.start(host, work, &header),
             None => WorkStart::Finished,
         };
+        let sends = |doorbell| self.work.as_ref().is_some_and(|work| work.sends(doorbell));
         let answer = match start {
+            WorkStart::Started { doorbell, .. } if !sends(doorbell) => "unrun-after-earlier-runs",
             WorkStart::Started { .. } => "started",
             WorkStart::QueueFailed => "queue-failed",
             _ => "finished-unrun",

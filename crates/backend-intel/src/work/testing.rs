@@ -109,11 +109,18 @@ pub struct FakeHost {
     fences: Vec<(u64, u64)>,
     /// Every fence the host itself wrote.
     pub written: Vec<(u64, u64)>,
+    /// Monitored fences a space's process holds: the space, the GPU address and the fence's guest
+    /// physical address.
+    monitored: Vec<(SpaceId, u64, u64)>,
 }
 
 impl FakeHost {
     pub fn show(&mut self, space: SpaceId, gpu_address: u64, pages: &Pages) {
         self.spans.push((space, gpu_address, pages.address(), pages.len()));
+    }
+
+    pub fn hold_monitored(&mut self, space: SpaceId, gpu_address: u64, guest_address: u64) {
+        self.monitored.push((space, gpu_address, guest_address));
     }
 
     pub fn fence_at(&mut self, guest_address: u64, host_address: u64) {
@@ -154,8 +161,16 @@ impl HostServices for FakeHost {
         Some(count)
     }
 
-    fn write_guest_span(&mut self, _space: SpaceId, _address: u64, _value: u32) -> bool {
-        false
+    fn write_guest_span(&mut self, space: SpaceId, address: u64, value: u32) -> bool {
+        let found = self.spans.iter().find(|(held, start, _, length)| {
+            *held == space && (*start..*start + *length as u64).contains(&address)
+        });
+        let Some(&(_, start, host, length)) = found else { return false };
+        let offset = (address - start) as usize;
+        assert!(offset + 4 <= length);
+        // SAFETY: the span is pages a test keeps alive, and the word lies inside it.
+        unsafe { (host as *mut u8).add(offset).cast::<u32>().write_unaligned(value) };
+        true
     }
 
     fn write_u32(&mut self, _address: u64, _value: u32) -> Result<(), MemoryError> {
@@ -178,10 +193,16 @@ impl HostServices for FakeHost {
         // SAFETY: as in `write_u64`.
         Ok(unsafe { self.fence(fence)?.read_volatile() })
     }
+
+    fn monitored_fence(&self, space: SpaceId, gpu_address: u64) -> Option<u64> {
+        let found = self.monitored.iter().find(|(held, gpu, _)| *held == space && *gpu == gpu_address);
+        found.map(|&(_, _, guest)| guest)
+    }
 }
 
 /// A submission a test can change before it is started.
 pub struct WorkBuilder {
+    pub source: WorkSource,
     pub queue: u32,
     pub space: SpaceId,
     pub node: u32,
@@ -212,9 +233,16 @@ impl WorkBuilder {
         self
     }
 
+    /// The same, sent to a context: its header names a tag and a monitored fence.
+    pub fn sent_to_context(mut self, tag: (u64, u32), fence: (u64, u64)) -> Self {
+        self.source = WorkSource::Context;
+        crate::protocol::command_header::tests::put_marks(&mut self.private, tag, fence);
+        self
+    }
+
     pub fn work(&self) -> Work<'_> {
         Work {
-            source: WorkSource::HardwareQueue,
+            source: self.source,
             queue: self.queue,
             space: self.space,
             node: self.node,
@@ -239,6 +267,8 @@ const DATA_BYTES: usize = 0x2000;
 const FENCE_BYTES: usize = 0x1000;
 /// The fence's guest physical address, which only the test host resolves.
 const FENCE_GUEST_ADDRESS: u64 = 0x7000_0000;
+/// Where in the fence block a monitored fence is, next to the queue's.
+const MONITORED_OFFSET: u64 = 0x100;
 
 /// A process's space with a batch in video memory, data in guest pages and the fence block mapped,
 /// as the core sets one up.
@@ -269,6 +299,7 @@ impl Rig {
         let fence = work.adopt(fence_pages.address(), FENCE_BYTES as u64).unwrap();
         let mut host = FakeHost::default();
         host.fence_at(FENCE_GUEST_ADDRESS, fence_pages.address());
+        host.fence_at(FENCE_GUEST_ADDRESS + MONITORED_OFFSET, fence_pages.address() + MONITORED_OFFSET);
         let mut rig = Self {
             work,
             xe,
@@ -341,12 +372,41 @@ impl Rig {
         self.fence.1.qword(0)
     }
 
+    /// A monitored fence in the fence block, by GPU address and guest physical address. It is the
+    /// process's to name once [`FakeHost::hold_monitored`] says so.
+    pub fn monitored_addresses(&self) -> (u64, u64) {
+        (FENCE_AT + MONITORED_OFFSET, FENCE_GUEST_ADDRESS + MONITORED_OFFSET)
+    }
+
+    /// The monitored fence's value, as the guest would read it.
+    pub fn monitored(&self) -> u64 {
+        self.fence.1.qword(MONITORED_OFFSET as usize)
+    }
+
+    /// Sets the monitored fence, as the guest or another run would have.
+    pub fn set_monitored(&mut self, value: u64) {
+        self.fence.1.write(MONITORED_OFFSET as usize, &value.to_le_bytes());
+    }
+
+    /// Reads a dword of video memory the batch buffer holds, at an offset from its start.
+    pub fn batch_dword(&mut self, offset: u64) -> u32 {
+        let mut bytes = [0; 4];
+        assert!(self.work.cpu_view(self.batch).unwrap().read(offset, &mut bytes));
+        u32::from_le_bytes(bytes)
+    }
+
+    pub fn data_dword(&self, offset: usize) -> u32 {
+        let bytes = self.data.1.bytes();
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
     pub fn submission(&self, queue: u32, value: u64) -> WorkBuilder {
         self.submission_in(self.space, queue, value)
     }
 
     pub fn submission_in(&self, space: SpaceId, queue: u32, value: u64) -> WorkBuilder {
         let builder = WorkBuilder {
+            source: WorkSource::HardwareQueue,
             queue,
             space,
             node: COMPUTE_NODE,

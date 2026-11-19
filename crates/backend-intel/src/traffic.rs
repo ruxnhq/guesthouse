@@ -272,11 +272,6 @@ impl Traffic {
         }
         let kind = (work.space, work.node, work.client_hint, work.source == WorkSource::Context);
         let telling = self.submissions.worth_telling((kind, command_header::kind_of(work.private)));
-        // Only a hardware queue's submissions are known to carry this header.
-        let kernel_would = match work.source {
-            WorkSource::HardwareQueue => header.verdict.word(),
-            WorkSource::Context => "unknown",
-        };
         let source = match work.source {
             WorkSource::HardwareQueue => "hardware-queue",
             WorkSource::Context => "context",
@@ -287,14 +282,16 @@ impl Traffic {
         });
         tell!(
             telling,
-            "{PREFIX} submit source={source} queue={:#x} node={} node_name={} hint={:#x} fence_value={} length={} \
-             kernel_would={kernel_would} answer={answer} fields=[{}] undecoded=[{}]",
+            "{PREFIX} submit source={source} queue={:#x} node={} node_name={} hint={:#x} fence_value={} \
+             commands={} length={} kernel_would={} answer={answer} fields=[{}] undecoded=[{}]",
             work.queue,
             work.node,
             nodes::name(work.node),
             work.client_hint,
             work.fence_value,
+            DisplayOption(work.commands.map(|commands| Pair(commands.address, u64::from(commands.length)))),
             header.length,
+            header.verdict.word(),
             DisplayOption(header.compact.as_ref().map(CompactText)),
             DisplayOption(undecoded)
         );

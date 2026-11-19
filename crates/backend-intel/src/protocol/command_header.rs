@@ -200,6 +200,15 @@ pub(crate) mod tests {
         data
     }
 
+    /// Sets a header's tag and monitored fence, as a context's submission names them.
+    pub fn put_marks(data: &mut [u8], tag: (u64, u32), fence: (u64, u64)) {
+        put_dword(data, at::TAG_ENABLE, 1);
+        put_qword(data, at::TAG_ADDRESS, tag.0);
+        put_dword(data, at::TAG_VALUE, tag.1);
+        put_qword(data, at::MONITOR_FENCE_ADDRESS, fence.0);
+        put_qword(data, at::MONITOR_FENCE_VALUE, fence.1);
+    }
+
     fn hashed(value: impl Hash) -> u64 {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);

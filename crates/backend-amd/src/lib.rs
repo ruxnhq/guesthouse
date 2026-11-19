@@ -532,6 +532,39 @@ fn answer_escape(process: u32, data: &mut [u8]) {
     traffic::escape_answered(process, asked, &answered);
 }
 
+/// The answer to an adapter query this backend owns, appended to `out`, or `None` for one it leaves
+/// to the core.
+fn own_answer(info: &DeviceInfo, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
+    if query.kind == guesthouse_backend::guest_text::QUERY_USER_DRIVER_NAME {
+        protocol::guest_driver::write_name(query, out);
+        return Some(Status::SUCCESS);
+    }
+    if query.kind == protocol::api_drivers::QUERY_OPENGL {
+        protocol::api_drivers::write_opengl_info(query, out);
+        return Some(Status::SUCCESS);
+    }
+    if let Some(status) = protocol::adapter_registry::answer(query, out) {
+        return Some(status);
+    }
+    if let Some(status) = protocol::wddm_caps::answer(query, out) {
+        return Some(status);
+    }
+    if let Some(status) = protocol::gpu_mmu_caps::answer(query, out) {
+        return Some(status);
+    }
+    if let Some(status) = protocol::node_metadata::answer(query, &info.engines, out) {
+        return Some(status);
+    }
+    protocol::adapter_info::answer(query, info, out)
+}
+
+/// Answers an adapter query as [`own_answer`] does, and logs that it was asked.
+fn answer_query(info: &DeviceInfo, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
+    let answer = own_answer(info, query, out);
+    traffic::query(query, answer);
+    answer
+}
+
 /// Builds the facts the guest is told from the card's own readings.
 fn facts_from(info: &DeviceInfo) -> AdapterFacts {
     AdapterFacts {
@@ -818,27 +851,7 @@ impl Backend for AmdBackend {
     }
 
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
-        if query.kind == guesthouse_backend::guest_text::QUERY_USER_DRIVER_NAME {
-            protocol::guest_driver::write_name(query, out);
-            return Some(Status::SUCCESS);
-        }
-        if query.kind == protocol::api_drivers::QUERY_OPENGL {
-            protocol::api_drivers::write_opengl_info(query, out);
-            return Some(Status::SUCCESS);
-        }
-        if let Some(status) = protocol::adapter_registry::answer(query, out) {
-            return Some(status);
-        }
-        if let Some(status) = protocol::wddm_caps::answer(query, out) {
-            return Some(status);
-        }
-        if let Some(status) = protocol::gpu_mmu_caps::answer(query, out) {
-            return Some(status);
-        }
-        if let Some(status) = protocol::node_metadata::answer(query, &self.device.info().engines, out) {
-            return Some(status);
-        }
-        protocol::adapter_info::answer(query, self.device.info(), out)
+        answer_query(self.device.info(), query, out)
     }
 
     fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {

@@ -1,19 +1,25 @@
 //! One log line for each exchange with the guest's driver, in a fixed form a tester's log can be
 //! searched by: `amd <kind> name=value ...`.
 //!
-//! The kind so far is `escape`. All of the lines are at debug, so they are in the log only with
-//! `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A line names only what the
-//! protocol modules read; the rest of a buffer is in its `amd dump` line, whole up to 4 KiB.
+//! The kinds so far are `escape` and `query`. All of the lines are at debug, so they are in the log
+//! only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A line names only what
+//! the protocol modules read; the rest of a buffer is in its `amd dump` line, whole up to 4 KiB. A
+//! registry lookup left to the core has neither line: a guest makes them by the hundred thousand as
+//! it starts, and the core logs each name it finds no value for.
 //!
 //! Nothing here writes to a buffer of the guest's or decides an answer: every function takes what
 //! it logs by shared reference, after the answer is made or, for an escape, before and after.
 
 use crate::protocol::escape::{self, Answered, Count, Framing};
-use crate::watch::{HexNumber, Kept, OrDash, PREFIX, bit, dump, watching};
+use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, bit, dump, watching};
+use guesthouse_backend::{Status, VendorQuery};
+use guesthouse_messages::adapter::AdapterQuery;
 use std::fmt;
 
 /// How many bytes of an escape's payload a line shows.
 const ESCAPE_BYTES_SHOWN: usize = 32;
+/// How many bytes of the data that came with a query a line shows.
+const QUERY_BYTES_SHOWN: usize = 32;
 
 /// An escape as the guest sent it, kept from before its answer was written into the same buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +111,45 @@ impl fmt::Display for EscapeAnswer<'_> {
             Ok(_) => f.write_str("answer=failed"),
             Err(refused) => write!(f, "answer=unreadable why=\"{}\"", refused.0),
         }
+    }
+}
+
+/// Logs an adapter query this backend was offered, and what came of it: `answer` is the status it
+/// answered with, or `None` for a query it left to the core. Then dumps the data that came with it.
+pub fn query(query: &VendorQuery<'_>, answer: Option<Status>) {
+    // The core reads a registry lookup itself and logs the name it finds no value for, and a guest
+    // makes them by the hundred thousand as it starts, so one left to the core gets nothing here.
+    if !watching() || (answer.is_none() && query.kind == AdapterQuery::REGISTRY) {
+        return;
+    }
+    log::debug!("{}", QueryLine { query, answer });
+    dump(format_args!("query kind={}", query.kind), query.data);
+}
+
+/// A query's line. The program is quoted, as a name can hold a space, and empty when the guest gave
+/// none.
+struct QueryLine<'a> {
+    query: &'a VendorQuery<'a>,
+    answer: Option<Status>,
+}
+
+impl fmt::Display for QueryLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { query, answer } = self;
+        write!(
+            f,
+            "{PREFIX} query kind={} size={} wow64={} program=\"{}\" data_bytes={} ",
+            query.kind,
+            query.size,
+            bit(query.process_is_32_bit),
+            query.program,
+            query.data.len()
+        )?;
+        match answer {
+            Some(status) => write!(f, "answer=given status={:#x}", status.0)?,
+            None => f.write_str("answer=left-to-the-core")?,
+        }
+        write!(f, " data={}", Hex { bytes: query.data, most: QUERY_BYTES_SHOWN })
     }
 }
 
@@ -298,6 +343,110 @@ mod tests {
             lines::at(Level::Info, &lines),
             ["an escape from 7 is shorter than its header (6 bytes, starting 0xeeeeeeee, 0xeeee)"]
         );
+    }
+
+    fn query_of<'a>(kind: u32, data: &'a [u8], program: &'a str) -> VendorQuery<'a> {
+        VendorQuery { kind, size: 16, data, process_is_32_bit: false, program }
+    }
+
+    #[test]
+    fn a_query_says_who_asked_what_and_who_answers() {
+        let given =
+            QueryLine { query: &query_of(1, &[0x0C, 0, 0, 0], "dwm.exe"), answer: Some(Status::SUCCESS) };
+        assert_eq!(
+            given.to_string(),
+            "amd query kind=1 size=16 wow64=0 program=\"dwm.exe\" data_bytes=4 answer=given status=0x0 \
+             data=0c000000"
+        );
+        let refused = QueryLine {
+            query: &VendorQuery { process_is_32_bit: true, ..query_of(24, &[], "") },
+            answer: Some(Status::INVALID_PARAMETER),
+        };
+        assert_eq!(
+            refused.to_string(),
+            "amd query kind=24 size=16 wow64=1 program=\"\" data_bytes=0 answer=given status=0xc000000d data="
+        );
+        let left = QueryLine { query: &query_of(15, &[0xAB; 40], "a game.exe"), answer: None };
+        assert_eq!(
+            left.to_string(),
+            format!(
+                "amd query kind=15 size=16 wow64=0 program=\"a game.exe\" data_bytes=40 \
+                 answer=left-to-the-core data={}..(+8)",
+                "ab".repeat(QUERY_BYTES_SHOWN)
+            )
+        );
+    }
+
+    /// Queries of each kind this backend answers, one it answers as too short, and one it leaves.
+    fn queries() -> Vec<VendorQuery<'static>> {
+        use crate::protocol::{
+            adapter_header, adapter_info, adapter_registry, api_drivers, gpu_mmu_caps, wddm_caps,
+        };
+        let sized = |kind: u32, size: usize| VendorQuery { size, ..query_of(kind, &[0; 16], "dwm.exe") };
+        vec![
+            sized(guesthouse_backend::guest_text::QUERY_USER_DRIVER_NAME, 528),
+            sized(api_drivers::QUERY_OPENGL, 528),
+            sized(adapter_registry::QUERY_TYPE, 64),
+            sized(wddm_caps::QUERY_WDDM_2_0_CAPS, 4),
+            sized(wddm_caps::QUERY_WDDM_2_0_CAPS, 2),
+            sized(gpu_mmu_caps::QUERY_GPU_MMU_CAPS, 12),
+            sized(adapter_info::QUERY_TYPE, adapter_header::HEADER_SIZE),
+            sized(adapter_info::QUERY_TYPE, 1),
+            sized(u32::MAX, 4),
+        ]
+    }
+
+    #[test]
+    fn a_query_is_answered_the_same_whether_or_not_it_is_logged() {
+        let info = crate::DeviceInfo::default();
+        let mut answers = 0;
+        for query in queries() {
+            let mut alone = vec![0xA5; 4];
+            let status = crate::own_answer(&info, &query, &mut alone);
+            answers += usize::from(status.is_some());
+
+            let mut quiet = vec![0xA5; 4];
+            assert_eq!(crate::answer_query(&info, &query, &mut quiet), status);
+            assert_eq!(quiet, alone, "with debug lines off");
+
+            let mut watched = vec![0xA5; 4];
+            let lines =
+                lines::logged(|| assert_eq!(crate::answer_query(&info, &query, &mut watched), status));
+            assert_eq!(watched, alone, "with debug lines on");
+
+            // The modules that answer have lines of their own, which come first.
+            let kind = query.kind;
+            let [.., line, dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
+            assert!(line.starts_with(&format!("amd query kind={kind} size=")), "{lines:?}");
+            assert_eq!(dump, format!("amd dump query kind={kind} length=16 bytes={}", "00".repeat(16)));
+            assert_eq!(line.contains("answer=left-to-the-core"), status.is_none(), "{lines:?}");
+            let ours = lines.iter().filter(|(_, text)| text.starts_with("amd ")).count();
+            assert_eq!(ours, 2, "{lines:?}");
+        }
+        assert_eq!(answers, queries().len() - 1, "only the last is left to the core");
+    }
+
+    #[test]
+    fn a_registry_lookup_left_to_the_core_has_no_line_and_another_query_left_to_it_has() {
+        let info = crate::DeviceInfo::default();
+        let lookup = query_of(AdapterQuery::REGISTRY, &[0x5A; 16], "dwm.exe");
+        let mut out = vec![0xA5; 4];
+        let lines = lines::logged(|| assert_eq!(crate::answer_query(&info, &lookup, &mut out), None));
+        assert_eq!(out, [0xA5; 4]);
+        assert!(!lines.iter().any(|(_, text)| text.starts_with("amd ")), "{lines:?}");
+
+        let other = VendorQuery { kind: u32::MAX, ..lookup };
+        let lines = lines::logged(|| assert_eq!(crate::answer_query(&info, &other, &mut out), None));
+        assert_eq!(out, [0xA5; 4]);
+        let [line, dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
+        assert!(line.starts_with("amd query kind=4294967295 size=16 "), "{lines:?}");
+        assert!(line.contains(" answer=left-to-the-core "), "{lines:?}");
+        assert_eq!(dump, format!("amd dump query kind=4294967295 length=16 bytes={}", "5a".repeat(16)));
+
+        // Being left to the core is what keeps a lookup out: one this backend answered has its lines.
+        let lines = lines::logged(|| query(&lookup, Some(Status::SUCCESS)));
+        let [line, _dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
+        assert!(line.starts_with("amd query kind=48 size=16 "), "{lines:?}");
     }
 
     #[test]

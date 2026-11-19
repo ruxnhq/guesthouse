@@ -42,9 +42,6 @@ const DEFAULT_SIZE: (i32, i32) = (1120, 720);
 const SMALLEST_WINDOW: (i32, i32) = (360, 300);
 const TOAST_SECONDS: u32 = 6;
 const PROBLEM_SECONDS: u32 = 10;
-/// In fullscreen the viewer's header lies over the picture, and it has no background of its own.
-const STYLE: &str = ".screen-header { background: @headerbar_bg_color; }";
-
 struct Inner {
     context: Arc<Context>,
     window: adw::ApplicationWindow,
@@ -106,7 +103,6 @@ impl Window {
             newer: RefCell::default(),
         }));
         crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
-        this.add_style();
         this.0.library.connect_new_machine(&this);
         this.connect_chosen();
         keys::add_host_keys(&this);
@@ -116,17 +112,6 @@ impl Window {
         this.refresh();
         refresh::start_ticking(&this);
         this
-    }
-
-    fn add_style(&self) {
-        let style = gtk::CssProvider::new();
-        style.load_from_string(STYLE);
-        // Above USER, as a theme's gtk.css can make header bars see-through.
-        gtk::style_context_add_provider_for_display(
-            &WidgetExt::display(&self.0.window),
-            &style,
-            gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
-        );
     }
 
     fn connect_close(&self) {
@@ -205,6 +190,11 @@ impl Window {
             let card = this.0.cards.borrow().values().find(|card| card.widget() == clicked).cloned();
             this.choose(card.as_ref());
         });
+    }
+
+    /// The card of the machine with this id, which is where its actions are.
+    pub fn card(&self, id: &str) -> Option<MachineCard> {
+        self.0.cards.borrow().get(id).cloned()
     }
 
     fn show_problems(&self) {

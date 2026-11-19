@@ -240,3 +240,43 @@ statuspage .title {
 .machine-thumbnail {
   border-radius: 12px;
 }
+
+/* The viewer's bar. It lies over the guest's screen, so it is dark in light mode too. */
+.viewer-pill {
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(10, 11, 14, 0.94);
+  color: #f4f5f7;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.viewer-pill button {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  color: #f4f5f7;
+}
+
+.viewer-pill windowcontrols > button > image {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f5f7;
+}
+
+.viewer-pill separator {
+  margin: 9px 4px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.pill-name {
+  margin: 0 6px 0 2px;
+  font-weight: 600;
+}
+
+.pill-hint {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.9em;
+}

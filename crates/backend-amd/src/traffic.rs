@@ -995,4 +995,141 @@ mod tests {
         });
         assert!(lines.is_empty());
     }
+
+    /// Bytes that look random and are the same on every run, so the test below needs no crate for
+    /// them.
+    struct Scattered(u64);
+
+    impl Scattered {
+        /// An xorshift step, which scatters well enough for test bytes.
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, limit: usize) -> usize {
+            (self.next() % limit as u64) as usize
+        }
+
+        fn bytes(&mut self, length: usize) -> Vec<u8> {
+            (0..length).map(|_| self.next() as u8).collect()
+        }
+
+        /// What a guest could send in place of `shape`: now and then bytes of no shape at all, a
+        /// few of them past what a dump shows, and otherwise the shape with a count set to the
+        /// most a dword says, bytes changed, or its end cut off anywhere.
+        fn spoiled(&mut self, shape: &Shape) -> Vec<u8> {
+            const MOST_SHAPELESS: usize = 0x300;
+            if self.below(4) == 0 {
+                let most = if self.below(16) == 0 { 2 * crate::watch::DUMP_BYTES } else { MOST_SHAPELESS };
+                let length = self.below(most);
+                return self.bytes(length);
+            }
+            let mut data = shape.whole.clone();
+            if !shape.counts.is_empty() && self.below(3) == 0 {
+                put_dword(&mut data, shape.counts[self.below(shape.counts.len())], u32::MAX);
+            }
+            for _ in 0..self.below(4) {
+                let at = self.below(data.len());
+                data[at] = self.next() as u8;
+            }
+            if self.below(3) == 0 {
+                data.truncate(self.below(data.len() + 1));
+            }
+            data
+        }
+    }
+
+    /// A buffer as the guest's driver sends it, and where it keeps the counts its reader goes by.
+    struct Shape {
+        whole: Vec<u8>,
+        counts: Vec<usize>,
+    }
+
+    fn escape_shape(code: u32, input_bytes: usize, output_bytes: usize, in_wrapper: bool) -> Shape {
+        let bare = escape_of(code, input_bytes, output_bytes);
+        let front = if in_wrapper { WRAPPER_SIZE } else { 0 };
+        Shape {
+            whole: if in_wrapper { wrapped(&bare) } else { bare },
+            counts: vec![front + HEADER_SIZE, front + HEADER_SIZE + COUNT_SIZE + input_bytes],
+        }
+    }
+
+    // The readers the lines brought run only with debug lines on, and the tests above send them what
+    // a driver sends or a few things near it. This one sends them anything.
+    #[test]
+    fn bytes_of_any_shape_are_logged_without_a_panic_and_answered_the_same() {
+        const ROUNDS: usize = 4000;
+        const SEED: u64 = 0x2545_F491_4F6C_DD1D;
+        /// Where a submission keeps its record count and its first record's length, and a context
+        /// its size.
+        const RECORD_COUNT_AT: usize = 0x04;
+        const FIRST_RECORD_LENGTH_AT: usize = 0x0C;
+        const CONTEXT_SIZE_AT: usize = 0x00;
+        let escapes = [
+            escape_shape(0x0300_5D03, 0x20, 0x60, false),
+            escape_shape(0x0300_6203, 0x20, 0x20, false),
+            escape_shape(0x0300_6203, 0x20, 0x20, true),
+            escape_shape(0x0300_7E03, 0x100, 0x100, true),
+            escape_shape(0x0200_0103, 8, 8, false),
+        ];
+        let submission =
+            Shape { whole: submission_data(), counts: vec![RECORD_COUNT_AT, FIRST_RECORD_LENGTH_AT] };
+        let context = Shape { whole: context_data(HAS_CLIENT_ID, 1 << 4, 3), counts: vec![CONTEXT_SIZE_AT] };
+        let queue = Shape { whole: queue_data(), counts: Vec::new() };
+        let info = full_card();
+        let asked = queries();
+        let mut random = Scattered(SEED);
+        // What the bytes sent turned out to hold, so the test can say it met each.
+        let (mut empty, mut odd, mut in_wrapper, mut greatest_count, mut read) = (0, 0, 0, 0, 0);
+
+        for round in 0..ROUNDS {
+            let sent = random.spoiled(&escapes[round % escapes.len()]);
+            let framing = escape::framing(&sent);
+            empty += usize::from(sent.is_empty());
+            odd += sent.len() % 2;
+            in_wrapper += usize::from(framing.wrapped);
+            greatest_count += usize::from(framing.input == Count::PastEnd(u32::MAX));
+            greatest_count += usize::from(framing.output == Count::PastEnd(u32::MAX));
+            let mut quiet = sent.clone();
+            crate::answer_escape(PROCESS, &mut quiet);
+            let mut watched = sent.clone();
+            let lines = lines::logged(|| crate::answer_escape(PROCESS, &mut watched));
+            assert_eq!(watched, quiet, "escape {sent:02x?}");
+            assert_eq!(lines::at(Level::Debug, &lines).len(), 2, "escape {sent:02x?}");
+
+            let mut query = asked[round % asked.len()];
+            let data = random.spoiled(&context);
+            query.data = &data;
+            let mut quiet = vec![0xA5; 4];
+            let status = crate::answer_query(&info, &query, &mut quiet);
+            let mut watched = vec![0xA5; 4];
+            lines::logged(|| assert_eq!(crate::answer_query(&info, &query, &mut watched), status));
+            assert_eq!(watched, quiet, "query {} {data:02x?}", query.kind);
+
+            let private = random.spoiled(&submission);
+            let work = Work { node: random.below(4) as u32, ..work_with(&private) };
+            let quiet = crate::submission_read(&info, &work);
+            read += usize::from(quiet.is_some());
+            lines::logged(|| assert_eq!(crate::submission_read(&info, &work), quiet, "{private:02x?}"));
+            let lines = lines::logged(|| submission_refused(&work, "whatever the check said"));
+            assert_eq!(lines::at(Level::Debug, &lines).len(), 1, "submission {private:02x?}");
+
+            let private = random.spoiled(&context);
+            let node = random.below(4) as u32;
+            let quiet = crate::context_taken(PROCESS, node, &private);
+            let lines = lines::logged(|| assert_eq!(crate::context_taken(PROCESS, node, &private), quiet));
+            assert_eq!(lines::at(Level::Debug, &lines).len(), 2, "context {private:02x?}");
+
+            let private = random.spoiled(&queue);
+            let judged = || crate::queue_checked(0x4000_0020, 1, &private).map_err(|error| error.to_string());
+            let quiet = judged();
+            let lines = lines::logged(|| assert_eq!(judged(), quiet));
+            assert_eq!(lines::at(Level::Debug, &lines).len(), 2, "queue {private:02x?}");
+        }
+        let met = [empty, odd, in_wrapper, greatest_count, read, ROUNDS - read];
+        assert!(met.iter().all(|&times| times > 0), "{met:?}");
+    }
 }

@@ -4,10 +4,6 @@
    Nothing here gives a window, a page or the guest's screen a background: the viewer makes its
    window see-through to show the guest's own surface under it. */
 
-window {
-  font-family: "Geist", "Inter", "Adwaita Sans", "Cantarell", sans-serif;
-}
-
 /* The bar at the top is part of the page, not a strip over it. */
 headerbar {
   /* Said here too, as a desktop's own gtk.css can colour header bars. */
@@ -181,7 +177,7 @@ statuspage .title {
 .spec {
   padding: 7px 12px;
   border-radius: 12px;
-  font-family: "Geist Mono", monospace;
+  font-family: monospace;
   font-size: 0.8em;
   letter-spacing: 0.06em;
   text-transform: uppercase;

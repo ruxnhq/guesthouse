@@ -600,6 +600,23 @@ fn submission_read(info: &DeviceInfo, work: &Work<'_>) -> Option<(Node, Vec<Ib>)
     Some((node, ibs))
 }
 
+/// Whether the kernel driver would take a new context's private data, and logs what it holds.
+fn context_taken(process: u32, node: u32, private: &[u8]) -> bool {
+    let checked = protocol::context::check(private);
+    if let Err(refused) = &checked {
+        log::info!("refused a context on node {node}: {}", refused.0);
+    }
+    traffic::context(process, node, private, &checked);
+    checked.is_ok()
+}
+
+/// Checks a new hardware queue's private data, which nothing is written back into, and logs it.
+fn queue_checked(queue: u32, serial: u32, private: &[u8]) -> Result<(), BackendError> {
+    let checked = protocol::hw_queue::check(private);
+    traffic::queue(queue, serial, private, checked);
+    checked.map_err(|refused| BackendError::new(refused.0))
+}
+
 /// Builds the facts the guest is told from the card's own readings.
 fn facts_from(info: &DeviceInfo) -> AdapterFacts {
     AdapterFacts {
@@ -871,13 +888,8 @@ impl Backend for AmdBackend {
     /// The kernel driver writes nothing back into private data the guest built.
     fn finish_allocation_data(&mut self, _private: &mut [u8], _size: u64) {}
 
-    fn finish_queue_data(
-        &mut self,
-        _queue: u32,
-        private: &mut [u8],
-        _serial: u32,
-    ) -> Result<(), BackendError> {
-        protocol::hw_queue::check(private).map_err(|refused| BackendError::new(refused.0))
+    fn finish_queue_data(&mut self, queue: u32, private: &mut [u8], serial: u32) -> Result<(), BackendError> {
+        queue_checked(queue, serial, private)
     }
 
     /// The answer is in the escape's own header. The trait has no status to return beside it.
@@ -911,14 +923,8 @@ impl Backend for AmdBackend {
     }
 
     /// The kernel driver writes nothing back into a context's private data, so it is only checked.
-    fn context_data_valid(&mut self, _process: u32, node: u32, private: &[u8]) -> bool {
-        match protocol::context::check(private) {
-            Ok(_) => true,
-            Err(refused) => {
-                log::info!("refused a context on node {node}: {}", refused.0);
-                false
-            }
-        }
+    fn context_data_valid(&mut self, process: u32, node: u32, private: &[u8]) -> bool {
+        context_taken(process, node, private)
     }
 
     fn start_work(&mut self, _host: &mut dyn HostServices, work: &Work<'_>) -> WorkStart {

@@ -42,6 +42,22 @@ pub struct Context {
     pub has_extension: bool,
 }
 
+/// The header's two flag dwords as they came, whether or not [`check`] takes the data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlagWords {
+    pub flags: u32,
+    pub session_flags: u32,
+}
+
+/// Reads the flag dwords for the log, a refused context's too. `None` for data shorter than a
+/// header, which holds none.
+pub fn flag_words(data: &[u8]) -> Option<FlagWords> {
+    if data.len() < HEADER_SIZE {
+        return None;
+    }
+    Some(FlagWords { flags: dword(data, FLAGS)?, session_flags: dword(data, SESSION_FLAGS)? })
+}
+
 /// Checks the private data as the kernel driver would.
 ///
 /// Data shorter than a header carries nothing to check. The kernel takes it for the contexts the
@@ -124,6 +140,25 @@ mod tests {
     fn data_too_short_for_a_header_is_taken_unread() {
         assert_eq!(check(&[]), Ok(None));
         assert_eq!(check(&[0xFF; HEADER_SIZE - 1]), Ok(None));
+    }
+
+    #[test]
+    fn the_flag_dwords_are_read_from_any_whole_header() {
+        let mut taken = header(FLAG_HAS_CLIENT_ID | 1 << 1);
+        put_dword(&mut taken, CLIENT_ID, 3);
+        put_dword(&mut taken, SESSION_FLAGS, 1 << 4);
+        let words = flag_words(&taken).unwrap();
+        assert_eq!(words, FlagWords { flags: FLAG_HAS_CLIENT_ID | 1 << 1, session_flags: 1 << 4 });
+        assert_eq!(check(&taken).unwrap().unwrap().flags, words.flags);
+
+        let mut refused = header(FLAG_DEBUG_VMID);
+        put_dword(&mut refused, SESSION_FLAGS, SESSION_DISPLAY_ENCODING);
+        assert!(check(&refused).is_err());
+        let words = FlagWords { flags: FLAG_DEBUG_VMID, session_flags: SESSION_DISPLAY_ENCODING };
+        assert_eq!(flag_words(&refused), Some(words));
+
+        assert_eq!(flag_words(&[0xFF; HEADER_SIZE - 1]), None);
+        assert_eq!(flag_words(&[]), None);
     }
 
     #[test]

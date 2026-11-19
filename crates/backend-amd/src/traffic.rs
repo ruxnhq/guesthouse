@@ -1,19 +1,21 @@
 //! One log line for each exchange with the guest's driver, in a fixed form a tester's log can be
 //! searched by: `amd <kind> name=value ...`.
 //!
-//! The kinds so far are `escape`, `query`, `registry` and `submit`. All of the lines are at debug, so
-//! they are in the log only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A
-//! line names only what the protocol modules read; the rest of a buffer is in its `amd dump` line,
-//! whole up to 4 KiB. A submission has no dump, as a busy guest makes thousands a second. A registry
-//! lookup left to the core has neither line: a guest makes them by the hundred thousand as it
-//! starts, and the core logs each name it finds no value for. A value this backend gives has a
-//! `registry` line with its name.
+//! The kinds are `escape`, `query`, `registry`, `submit`, `context` and `queue`. All of the lines are
+//! at debug, so they are in the log only with `GUESTHOUSE_VERBOSE`, and nothing is read for them
+//! without it. A line names only what the protocol modules read; the rest of a buffer is in its
+//! `amd dump` line, whole up to 4 KiB. A submission has no dump, as a busy guest makes thousands a
+//! second. A registry lookup left to the core has neither line: a guest makes them by the hundred
+//! thousand as it starts, and the core logs each name it finds no value for. A value this backend
+//! gives has a `registry` line with its name.
 //!
 //! Nothing here writes to a buffer of the guest's or decides an answer: every function takes what
 //! it logs by shared reference, after the answer is made or, for an escape, before and after.
 
 use crate::protocol::command_data::Submission;
+use crate::protocol::context::{self, Context};
 use crate::protocol::escape::{self, Answered, Count, Framing};
+use crate::protocol::hw_queue;
 use crate::submit::Ib;
 use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, Spaced, bit, dump, dwords, watching};
 use guesthouse_backend::{RegistryName, RegistryValue, Status, VendorQuery, Work, WorkSource};
@@ -205,6 +207,8 @@ pub fn submission_refused(work: &Work<'_>, why: &str) {
 /// How a check of private data came out, as `check=`, with why for data that was refused.
 enum Check<'a> {
     Taken,
+    /// Taken with nothing checked, as the data is too short to hold what a check reads.
+    Unread,
     Refused(&'a str),
 }
 
@@ -212,6 +216,7 @@ impl fmt::Display for Check<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Taken => f.write_str("check=taken"),
+            Self::Unread => f.write_str("check=unread"),
             Self::Refused(why) => write!(f, "check=refused why=\"{why}\""),
         }
     }
@@ -285,6 +290,78 @@ impl fmt::Display for RefusedSubmitLine<'_> {
         let Self { work, why } = self;
         let first = dwords(work.private, REFUSED_DWORDS_SHOWN);
         write!(f, "{} {} first=[{first}]", WorkText(work), Check::Refused(why))
+    }
+}
+
+/// Logs a new context's private data and what the check made of it, and dumps the data.
+pub fn context(process: u32, node: u32, private: &[u8], checked: &Result<Option<Context>, context::Refused>) {
+    if !watching() {
+        return;
+    }
+    log::debug!("{}", ContextLine { process, node, private, checked });
+    dump(format_args!("context process={process:#x} node={node}"), private);
+}
+
+/// A context's line. The two flag dwords are as they came, so a refused context shows them too. The
+/// client id and the extension are what the check read, and `-` where it took or read nothing.
+struct ContextLine<'a> {
+    process: u32,
+    node: u32,
+    private: &'a [u8],
+    checked: &'a Result<Option<Context>, context::Refused>,
+}
+
+impl fmt::Display for ContextLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { process, node, private, checked } = self;
+        let check = match checked {
+            Ok(Some(_)) => Check::Taken,
+            Ok(None) => Check::Unread,
+            Err(refused) => Check::Refused(refused.0),
+        };
+        let taken = checked.as_ref().ok().copied().flatten();
+        let words = context::flag_words(private);
+        write!(
+            f,
+            "{PREFIX} context process={process:#x} node={node} length={} {check} flags={} session_flags={} \
+             client_id={} extension={}",
+            private.len(),
+            OrDash(words.map(|words| HexNumber(words.flags))),
+            OrDash(words.map(|words| HexNumber(words.session_flags))),
+            OrDash(taken.and_then(|context| context.client_id)),
+            OrDash(taken.map(|context| bit(context.has_extension)))
+        )
+    }
+}
+
+/// Logs a new hardware queue's private data and what the check made of it, and dumps the data.
+/// `private` is the guest's data and the padding after it, as the core passes it on.
+pub fn queue(queue: u32, serial: u32, private: &[u8], checked: Result<(), hw_queue::Refused>) {
+    if !watching() {
+        return;
+    }
+    log::debug!("{}", QueueLine { queue, serial, bytes_with_padding: private.len(), checked });
+    dump(format_args!("queue id={queue:#x}"), private);
+}
+
+struct QueueLine {
+    queue: u32,
+    serial: u32,
+    bytes_with_padding: usize,
+    checked: Result<(), hw_queue::Refused>,
+}
+
+impl fmt::Display for QueueLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { queue, serial, bytes_with_padding, checked } = self;
+        let check = match checked {
+            Ok(()) => Check::Taken,
+            Err(refused) => Check::Refused(refused.0),
+        };
+        write!(
+            f,
+            "{PREFIX} queue id={queue:#x} serial={serial} bytes_with_padding={bytes_with_padding} {check}"
+        )
     }
 }
 
@@ -798,6 +875,114 @@ mod tests {
         let unknown = RegistryName::Value("opencldrivername".into());
         let lines = lines::logged(|| assert_eq!(crate::registry_answer(&unknown), None));
         assert!(lines.is_empty(), "{lines:?}");
+    }
+
+    /// A context's header, with its size, its flags, its session flags and its client id.
+    fn context_data(flags: u32, session_flags: u32, client_id: u32) -> Vec<u8> {
+        const SIZE: usize = 0x40;
+        const FLAGS_AT: usize = 0x04;
+        const SESSION_FLAGS_AT: usize = 0x14;
+        const CLIENT_ID_AT: usize = 0x34;
+        let mut data = vec![0u8; SIZE];
+        put_dword(&mut data, 0, SIZE as u32);
+        put_dword(&mut data, FLAGS_AT, flags);
+        put_dword(&mut data, SESSION_FLAGS_AT, session_flags);
+        put_dword(&mut data, CLIENT_ID_AT, client_id);
+        data
+    }
+
+    const HAS_CLIENT_ID: u32 = 1 << 18;
+
+    fn context_line(private: &[u8]) -> String {
+        ContextLine { process: PROCESS, node: 2, private, checked: &context::check(private) }.to_string()
+    }
+
+    #[test]
+    fn a_context_says_what_the_check_read_from_its_header() {
+        assert_eq!(
+            context_line(&context_data(HAS_CLIENT_ID | 1 << 1, 1 << 4, 3)),
+            "amd context process=0x40000002 node=2 length=64 check=taken flags=0x40002 session_flags=0x10 \
+             client_id=3 extension=0"
+        );
+        assert_eq!(
+            context_line(&context_data(0, 0, 0)),
+            "amd context process=0x40000002 node=2 length=64 check=taken flags=0x0 session_flags=0x0 \
+             client_id=- extension=0"
+        );
+    }
+
+    #[test]
+    fn a_refused_context_still_shows_its_flag_dwords() {
+        assert_eq!(
+            context_line(&context_data(0, 1, 0)),
+            "amd context process=0x40000002 node=2 length=64 check=refused why=\"a display encoding session \
+             is asked for\" flags=0x0 session_flags=0x1 client_id=- extension=-"
+        );
+    }
+
+    #[test]
+    fn a_context_too_short_for_a_header_is_taken_unread_and_names_nothing() {
+        assert_eq!(
+            context_line(&[0xFF; 12]),
+            "amd context process=0x40000002 node=2 length=12 check=unread flags=- session_flags=- \
+             client_id=- extension=-"
+        );
+    }
+
+    /// A queue's private data with its description pointer set, and padding after it.
+    fn queue_data() -> Vec<u8> {
+        const DESCRIPTION_POINTER_AT: usize = 0x30;
+        let mut data = vec![0u8; 0x68];
+        put_qword(&mut data, DESCRIPTION_POINTER_AT, 0x7FF0_0000_1000);
+        data
+    }
+
+    #[test]
+    fn a_queue_says_how_its_check_came_out() {
+        let taken = QueueLine { queue: 0x4000_0020, serial: 1, bytes_with_padding: 0x68, checked: Ok(()) };
+        assert_eq!(taken.to_string(), "amd queue id=0x40000020 serial=1 bytes_with_padding=104 check=taken");
+        let checked = hw_queue::check(&[0; 0x68]);
+        let refused = QueueLine { queue: 0x4000_0020, serial: 2, bytes_with_padding: 0x68, checked };
+        assert_eq!(
+            refused.to_string(),
+            "amd queue id=0x40000020 serial=2 bytes_with_padding=104 check=refused why=\"the queue has no \
+             description\""
+        );
+    }
+
+    #[test]
+    fn contexts_and_queues_are_judged_the_same_whether_or_not_they_are_logged() {
+        let contexts = [context_data(HAS_CLIENT_ID, 0, 3), context_data(0, 1, 0), vec![0xFF; 12]];
+        for private in &contexts {
+            let alone = context::check(private).is_ok();
+            assert_eq!(crate::context_taken(PROCESS, 2, private), alone, "with debug lines off");
+            let lines = lines::logged(|| assert_eq!(crate::context_taken(PROCESS, 2, private), alone));
+            let hex: String = private.iter().map(|byte| format!("{byte:02x}")).collect();
+            let length = private.len();
+            let [line, dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
+            assert!(line.starts_with("amd context process=0x40000002 node=2 "), "{lines:?}");
+            assert_eq!(
+                dump,
+                format!("amd dump context process=0x40000002 node=2 length={length} bytes={hex}")
+            );
+            // The refusal's own line is as it was.
+            let info = lines::at(Level::Info, &lines);
+            let refusal = "refused a context on node 2: a display encoding session is asked for";
+            assert_eq!(info, if alone { vec![] } else { vec![refusal] });
+        }
+
+        for private in [queue_data(), vec![0; 0x68], vec![0; 4]] {
+            let alone = hw_queue::check(&private).map_err(|refused| refused.0.to_string());
+            let judged = || crate::queue_checked(0x4000_0020, 1, &private).map_err(|error| error.to_string());
+            assert_eq!(judged(), alone, "with debug lines off");
+            let lines = lines::logged(|| assert_eq!(judged(), alone));
+            let hex: String = private.iter().map(|byte| format!("{byte:02x}")).collect();
+            let length = private.len();
+            let [line, dump] = lines::at(Level::Debug, &lines)[..] else { panic!("{lines:?}") };
+            assert!(line.starts_with("amd queue id=0x40000020 serial=1 "), "{lines:?}");
+            assert_eq!(dump, format!("amd dump queue id=0x40000020 length={length} bytes={hex}"));
+            assert_eq!(lines.len(), 2);
+        }
     }
 
     #[test]

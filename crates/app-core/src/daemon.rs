@@ -109,7 +109,13 @@ impl DaemonStart {
 
     /// Starts it with the guest's memory open, where it looks for it.
     pub fn spawn(&self, run_folder: &Path, memory: &GuestMemory) -> Result<Child> {
-        let output = File::create(run_folder.join(OUTPUT_FILE))?;
+        // Readable too, as the daemon keeps its log under a limit and reads the newest part back.
+        let output = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(run_folder.join(OUTPUT_FILE))?;
         let mut command = self.command();
         memory.hand_to(&mut command);
         let spawned =

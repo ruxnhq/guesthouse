@@ -45,6 +45,8 @@ pub fn add_actions(window: &Window) {
     add(window, "setup", Window::show_setup);
     add(window, "log", Window::show_log);
     add(window, "about", show_about);
+    add(window, "preferences", crate::preferences::show);
+    add(window, "report", crate::report_dialog::show);
     add(window, "check-updates", Window::check_for_updates);
     add(window, "update", Window::update);
     if let Some(application) = window.widget().application() {

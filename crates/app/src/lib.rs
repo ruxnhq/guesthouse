@@ -9,6 +9,7 @@ pub mod common;
 pub mod disk_place_row;
 pub mod log_dialog;
 pub mod new_machine;
+pub mod preferences;
 pub mod report_dialog;
 pub mod rows;
 pub mod settings;

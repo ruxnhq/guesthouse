@@ -43,14 +43,18 @@ fn brand() -> gtk::Box {
 }
 
 fn main_menu() -> gio::Menu {
+    let app_items = gio::Menu::new();
+    app_items.append(Some("Preferences"), Some("win.preferences"));
     let setup_items = gio::Menu::new();
     setup_items.append(Some("Run Setup Again"), Some("win.setup"));
     setup_items.append(Some("Show Log"), Some("win.log"));
+    setup_items.append(Some("Send Report…"), Some("win.report"));
     setup_items.append(Some("Check for Updates"), Some("win.check-updates"));
     let about_items = gio::Menu::new();
     about_items.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
     about_items.append(Some("About Guesthouse"), Some("win.about"));
     let menu = gio::Menu::new();
+    menu.append_section(None, &app_items);
     menu.append_section(None, &setup_items);
     menu.append_section(None, &about_items);
     menu

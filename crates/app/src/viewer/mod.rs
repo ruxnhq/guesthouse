@@ -544,6 +544,9 @@ impl ScreenPage {
     pub fn show_hint(&self, status: Option<&Status>) {
         let Some(screen) = self.screen() else { return };
         if let Some(status) = status {
+            if let Some(window_size) = self.0.window_size.borrow().as_ref() {
+                window_size.follow_tasks(status);
+            }
             screen.set_memory_frames(self.memory_frames());
             screen.set_direct_frames(self.0.machine.borrow().direct_frames());
             screen.follow_machine(self.run_folder(), FrameRoute::now(&self.0.machine.borrow(), status));

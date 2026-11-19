@@ -4,6 +4,10 @@
 //! once it has stopped changing: every new size makes Windows lay out all its windows again, and the
 //! display driver takes its monitor away for a moment to offer one it hasn't had. A thread asks the
 //! guest, as that takes about a second.
+//!
+//! A start, a restart in the guest and a change to the display's settings end with the guest at the
+//! size in the machine's settings. Nothing is sent while such a task runs, and the window's size is
+//! sent again once it's over.
 
 use super::screen::Screen;
 use gtk::glib;
@@ -13,7 +17,10 @@ use guesthouse_app_core::display::machine_modes;
 use guesthouse_app_core::driver_modes::DriverModes;
 use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::machine::Machine;
+use guesthouse_app_core::tasks::Status;
 use guesthouse_daemon::slot::Slot;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
@@ -42,9 +49,21 @@ struct Watch {
     seen: Option<Size>,
     still: u32,
     sent: Option<Size>,
+    /// A task is setting the guest's screen.
+    held: bool,
 }
 
 impl Watch {
+    /// Holds the sizes back while a task sets the guest's screen. Once it's done, the window's size is
+    /// sent again when the window is still, as the task will have put the guest back at its own.
+    fn hold(&mut self, held: bool) {
+        if self.held && !held {
+            self.sent = None;
+            self.still = 0;
+        }
+        self.held = held;
+    }
+
     /// The size to send now, given what this look found: the picture's size, and the size of the
     /// guest's frames. A size is sent once, so a guest that then picks its own, as a game does, keeps it.
     fn look(&mut self, picture: Option<Size>, frame: Option<Size>) -> Option<Size> {
@@ -55,6 +74,9 @@ impl Watch {
             return None;
         }
         self.still = self.still.saturating_add(1);
+        if self.held {
+            return None;
+        }
         let size = size.filter(|size| self.still == STILL_LOOKS && self.sent != Some(*size))?;
         self.sent = Some(size);
         (frame != Some(size)).then_some(size)
@@ -100,6 +122,8 @@ fn run(context: &Context, machine: &Machine, slot: Option<Slot>, modes: &DriverM
 
 pub struct WindowSize {
     looks: Option<glib::SourceId>,
+    /// Whether a task is setting the guest's screen, which the app's look at its tasks says.
+    held: Rc<Cell<bool>>,
     /// Dropping this ends the thread, which is why it's kept.
     _sizes: Sender<Size>,
 }
@@ -112,7 +136,11 @@ impl WindowSize {
         thread::spawn(move || run(&context, &machine, slot, &modes, &wake));
         let for_guest = sizes.clone();
         let mut watch = Watch::default();
+        // Held until the app has looked at the machine's tasks, as a start may be setting the screen.
+        let held = Rc::new(Cell::new(true));
+        let holding = held.clone();
         let looks = glib::timeout_add_local(BETWEEN_LOOKS, move || {
+            watch.hold(holding.get());
             let picture = screen.has_frames().then(|| screen.picture_pixels()).flatten();
             let frame =
                 screen.frame_size().map(|(width, height)| (width.unsigned_abs(), height.unsigned_abs()));
@@ -121,7 +149,12 @@ impl WindowSize {
             }
             glib::ControlFlow::Continue
         });
-        Some(Self { looks: Some(looks), _sizes: sizes })
+        Some(Self { looks: Some(looks), held, _sizes: sizes })
+    }
+
+    /// What the app found its tasks doing.
+    pub fn follow_tasks(&self, status: &Status) {
+        self.held.set(status.sets_screen);
     }
 }
 
@@ -163,5 +196,51 @@ mod tests {
             assert_eq!(watch.look(Some((1920, 1080)), Some((1920, 1080))), None);
         }
         assert_eq!(watch.look(None, None), None, "no picture yet");
+    }
+
+    /// Looks at a still window until one sends, or gives up.
+    fn send(watch: &mut Watch, picture: Size, frame: Size) -> Option<Size> {
+        (0..=STILL_LOOKS).find_map(|_| watch.look(Some(picture), Some(frame)))
+    }
+
+    #[test]
+    fn nothing_is_sent_while_a_task_sets_the_screen() {
+        let mut watch = Watch::default();
+        watch.hold(true);
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), None);
+        watch.hold(false);
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), Some((3518, 1794)), "sent once it's over");
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), None, "and only once");
+    }
+
+    #[test]
+    fn the_window_s_size_goes_again_after_a_task_has_set_the_screen() {
+        let mut watch = Watch::default();
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), Some((3518, 1794)));
+        watch.hold(true);
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), None, "the task puts its size back");
+        watch.hold(false);
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), Some((3518, 1794)));
+    }
+
+    #[test]
+    fn a_task_that_left_the_window_s_size_has_nothing_sent_after_it() {
+        let mut watch = Watch::default();
+        watch.hold(true);
+        watch.hold(false);
+        assert_eq!(send(&mut watch, (3518, 1794), (3518, 1794)), None);
+    }
+
+    #[test]
+    fn a_guest_s_own_size_is_left_by_a_task_that_doesn_t_set_the_screen() {
+        let mut watch = Watch::default();
+        assert_eq!(send(&mut watch, (3518, 1794), (2560, 1440)), Some((3518, 1794)));
+        // A game picks its own, and a task that doesn't touch the screen runs and ends.
+        watch.hold(false);
+        assert_eq!(send(&mut watch, (3518, 1794), (1920, 1080)), None);
+        watch.hold(true);
+        watch.hold(false);
+        assert_eq!(send(&mut watch, (3518, 1794), (3518, 1794)), None);
+        assert_eq!(send(&mut watch, (3518, 1794), (1920, 1080)), None, "a game's size after that is left");
     }
 }

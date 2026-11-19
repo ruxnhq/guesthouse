@@ -30,6 +30,9 @@ pub const TASK_PROGRAM: &str = "guesthouse-task";
 const TASK_FILE: &str = "guesthouse-task.json";
 const STILL_BUSY: &str = "Something else is still in progress.";
 const QEMU_PAUSED_WORDS: [&str; 2] = ["paused", "debug"];
+/// The tasks that set the guest's screen to the size in the machine's settings: the ones that end
+/// with Windows' desktop up, and a change to the display's settings.
+const SCREEN_TASKS: [&str; 5] = ["start", "install", "after_reboot", "install_display", "apply_display"];
 const TASK_DIED: &str = "The task stopped before it finished. The log has more.";
 /// How a machine is told it would be one too many.
 /// Why there's no slot. Slots and their shared memory are the whole PC's, so another user's or another
@@ -95,6 +98,8 @@ pub struct Status {
     pub error: String,
     /// A task for this machine is running.
     pub busy: bool,
+    /// The running task gives the guest's screen the size in the machine's settings, as a start does.
+    pub sets_screen: bool,
     /// Which VM it is, if it's running or has a task.
     pub slot: Option<u8>,
     /// The VM's QEMU, while it's running.
@@ -267,7 +272,8 @@ fn what_is_running(context: &Context, machine: &Machine, before: Option<(u8, See
         _ => state,
     };
     let (step, error) = (task.step.clone(), task.error.clone());
-    Status { state, step, error, busy: true, slot: Some(number), qemu, ..Status::default() }
+    let sets_screen = SCREEN_TASKS.contains(&task.action.as_str());
+    Status { state, step, error, busy: true, sets_screen, slot: Some(number), qemu, ..Status::default() }
 }
 
 /// Starts a task that will outlive the app, and returns at once. It runs in the machine's slot, or
@@ -537,7 +543,25 @@ mod tests {
         let found = status(&context, &machine());
         assert_eq!((found.state, found.busy, found.slot), (State::Installing, true, Some(1)));
         assert_eq!(found.step, "x");
+        assert!(found.sets_screen, "an install ends with a start");
         assert_eq!(slot_of(&context, &machine()), Some(slots::number(1)));
+    }
+
+    #[test]
+    fn a_task_says_whether_it_sets_the_screen() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        fake_process(&context, 78, &["/usr/libexec/guesthouse/guesthouse-task", "x", "sample"], &[], "");
+        for (action, sets) in
+            [("start", true), ("after_reboot", true), ("apply_display", true), ("resume", false)]
+        {
+            let task = TaskRecord { action: action.into(), ..record("sample", 78, "") };
+            write_task(&context, None, &task).unwrap();
+            let found = status(&context, &machine());
+            assert_eq!((found.busy, found.sets_screen), (true, sets), "{action}");
+        }
+        write_task(&context, None, &record("sample", 0, "")).unwrap();
+        assert!(!status(&context, &machine()).sets_screen, "a finished task sets nothing");
     }
 
     #[test]

@@ -166,8 +166,9 @@ pub struct Machine {
     #[serde(default, rename = "direct_frames", skip_serializing, deserialize_with = "any_value")]
     pub was_direct_frames: (),
     /// The viewer's bar stays over a window's screen, rather than hiding until the pointer rests at
-    /// the top edge. Left out of the file when off, so an older build can still read it.
-    #[serde(default, skip_serializing_if = "is_off")]
+    /// the top edge. On unless the user hides it. Older builds only wrote it when on, so a file
+    /// without it is a machine nobody told to hide its bar. Left out of the file when on.
+    #[serde(default = "default_on", skip_serializing_if = "is_on")]
     pub bar_stays: bool,
     /// The app starts this machine when a login starts the app. Left out of the file when off, so
     /// an older build can still read it.
@@ -266,7 +267,7 @@ impl Machine {
             overlay: false,
             direct_frames_off: false,
             was_direct_frames: (),
-            bar_stays: false,
+            bar_stays: true,
             start_with_pc: false,
             window_size_off: false,
             network_mode: Mode::Nat,
@@ -732,12 +733,17 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_hides_unless_the_file_says_it_stays() {
+    fn the_bar_stays_unless_the_file_says_it_hides() {
         let text = serde_json::to_string(&sample()).unwrap();
-        assert!(!text.contains("bar_stays"), "an older build refuses a field it doesn't know: {text}");
-        assert!(serde_json::from_str::<Machine>(&text).unwrap().bar_hides());
-        let stays = serde_json::to_string(&Machine { bar_stays: true, ..sample() }).unwrap();
-        assert!(!serde_json::from_str::<Machine>(&stays).unwrap().bar_hides());
+        assert!(!text.contains("bar_stays"), "the default stays out: {text}");
+        assert!(!serde_json::from_str::<Machine>(&text).unwrap().bar_hides());
+        let older = r#"{"name": "Old", "disk": "/d", "vars": "/v"}"#;
+        assert!(!serde_json::from_str::<Machine>(older).unwrap().bar_hides(), "nobody chose");
+        let stayed = text.replacen('{', r#"{"bar_stays":true,"#, 1);
+        assert!(!serde_json::from_str::<Machine>(&stayed).unwrap().bar_hides());
+        let hides = serde_json::to_string(&Machine { bar_stays: false, ..sample() }).unwrap();
+        assert!(hides.contains(r#""bar_stays":false"#), "an older build knows the field: {hides}");
+        assert!(serde_json::from_str::<Machine>(&hides).unwrap().bar_hides());
     }
 
     #[test]

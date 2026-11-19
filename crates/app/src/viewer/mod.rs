@@ -225,7 +225,8 @@ impl ScreenPage {
         pill.connect("force-off", move || card().iter().for_each(|card| card.on_force()));
     }
 
-    fn toggle_bar_hides(&self) {
+    /// The menu's Hide the Bar, which the page checks use too.
+    pub fn toggle_bar_hides(&self) {
         let hides = {
             let mut machine = self.0.machine.borrow_mut();
             machine.bar_stays = !machine.bar_stays;

@@ -495,7 +495,9 @@ async fn whole_flow(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>) {
     check(&failures, after > before && before > 0, &format!("QEMU's display shows: {before} then {after}"));
     check(&failures, page.has_input(), "the guest takes input");
     shot_after_paint(&window, &folder, "22-viewer-qemu-display").await;
-    check(&failures, !page.header_shown(), "the bar hides once a window shows the screen");
+    check(&failures, page.header_shown(), "the bar stays in a window unless told to hide");
+    page.toggle_bar_hides();
+    check(&failures, !page.header_shown(), "the bar hides once told to");
     page.move_pointer(1.0);
     check(&failures, !page.header_shown(), "the bar waits for the pointer to rest at the top edge");
     glib::timeout_future(SETTLE).await;

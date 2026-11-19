@@ -1,16 +1,18 @@
 //! What a context's submission has written once its work is done: the monitored fence its header
 //! names, which the guest waits on, then its tag, then the core's fence for the context's queue.
 //!
-//! Intel's kernel driver has the card write the first two at the end of the batch. Here the card
-//! writes the monitored fence when it can, as a run's one fence of its own, and the host writes the
-//! rest once the run has ended. A submission that runs nothing has them written at once, or after
-//! the runs before it on its queue, so they always come in order.
+//! The guest's batch stores the tag itself, at its end. The monitored fence is left to the kernel
+//! driver. Here the card writes it when it can, as a run's one fence of its own, and the host
+//! writes the rest once the run has ended. A submission that runs nothing has them written at once,
+//! or after the runs before it on its queue, so they always come in order.
 //!
-//! Both come from the guest. A monitored fence is written only if the process holds a sync object
-//! with it, and never lowered. A tag is written only inside a mapping of the process's own space.
+//! Both come from the guest, and only a compact header's are read. A monitored fence is written
+//! only while the process holds a sync object with it, and never lowered. A tag is written only
+//! inside a mapping of the process's own space, and never lowered either, so the host can't step
+//! back one a later batch has stored.
 
 use super::CardWork;
-use crate::protocol::command_header::Header;
+use crate::protocol::command_header::{Header, Length};
 use crate::xe::plan::Backing;
 use guesthouse_backend::{HostServices, SpaceId, Work};
 use std::fmt;
@@ -38,7 +40,7 @@ impl Marks {
     /// The marks a context's submission names in its header. The queue's fence is left out, as the
     /// core writes it for work finished unrun.
     pub fn of(host: &dyn HostServices, work: &Work<'_>, header: &Header) -> Self {
-        let compact = header.compact.as_ref();
+        let compact = header.compact.as_ref().filter(|_| header.verdict == Length::Compact);
         let named = compact.and_then(|compact| compact.monitor_fence);
         let monitored = named.and_then(|(gpu_address, value)| {
             let found = host.monitored_fence(work.space, gpu_address);
@@ -55,12 +57,14 @@ impl Marks {
     }
 }
 
-/// What became of a fence the host was to raise.
+/// What became of a mark the host was to raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Raised {
     Now,
     /// It was there already, at this value.
     Already(u64),
+    /// Its process no longer holds it, or nothing maps it.
+    Gone,
     Failed,
 }
 
@@ -69,6 +73,7 @@ impl fmt::Display for Raised {
         match self {
             Self::Now => f.write_str("written"),
             Self::Already(value) => write!(f, "already-{value:#x}"),
+            Self::Gone => f.write_str("gone"),
             Self::Failed => f.write_str("unwritable"),
         }
     }
@@ -83,16 +88,50 @@ fn raise(host: &mut dyn HostServices, fence: u64, value: u64) -> Raised {
     }
 }
 
-/// A mark for the log: its address, its value and what became of it, or `-`.
-struct Said<T>(Option<(u64, u64, T)>);
+/// Brings a monitored fence up to its value, if the space's process still holds it. A fence page
+/// can pass to another sync object once its own has gone.
+fn raise_monitored(host: &mut dyn HostServices, space: SpaceId, monitored: &Monitored) -> Raised {
+    if host.monitored_fence(space, monitored.gpu_address) != Some(monitored.guest_address) {
+        return Raised::Gone;
+    }
+    raise(host, monitored.guest_address, monitored.value)
+}
 
-impl<T: fmt::Display> fmt::Display for Said<T> {
+/// A mark for the log: its address, its value and what became of it, or `-`.
+struct Said(Option<(u64, u64, Raised)>);
+
+impl fmt::Display for Said {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
             Some((address, value, what)) => write!(f, "{address:#x}:{value:#x}:{what}"),
             None => f.write_str("-"),
         }
     }
+}
+
+/// Writes a context's monitored fence and a tag in guest pages, with no card to run anything.
+pub fn write_marks_without_card(host: &mut dyn HostServices, work: &Work<'_>, header: &Header) {
+    let marks = Marks::of(host, work, header);
+    let monitored = marks.monitored.map(|monitored| {
+        (monitored.gpu_address, monitored.value, raise_monitored(host, work.space, &monitored))
+    });
+    let tag = marks.tag.map(|(address, value)| {
+        let mut bytes = [0; 4];
+        let read = host.read_guest_span(work.space, address, &mut bytes) == Some(4);
+        let raised = match u32::from_le_bytes(bytes) {
+            _ if !read => Raised::Gone,
+            held if held >= value => Raised::Already(u64::from(held)),
+            _ if host.write_guest_span(work.space, address, value) => Raised::Now,
+            _ => Raised::Failed,
+        };
+        (address, u64::from(value), raised)
+    });
+    log::debug!(
+        "intel work: queue {:#x} marks at once, with no card: monitored_fence={} tag={} queue_fence=-",
+        work.queue,
+        Said(monitored),
+        Said(tag)
+    );
 }
 
 impl CardWork {
@@ -106,12 +145,11 @@ impl CardWork {
         when: &str,
     ) {
         let monitored = marks.monitored.map(|monitored| {
-            (monitored.gpu_address, monitored.value, raise(host, monitored.guest_address, monitored.value))
+            (monitored.gpu_address, monitored.value, raise_monitored(host, space, &monitored))
         });
-        let tag = marks.tag.map(|(address, value)| {
-            let written = if self.write_tag(host, space, address, value) { "written" } else { "unmapped" };
-            (address, u64::from(value), written)
-        });
+        let tag = marks
+            .tag
+            .map(|(address, value)| (address, u64::from(value), self.raise_tag(host, space, address, value)));
         let queue_fence = marks.queue_fence.map(|(fence, value)| (fence, value, raise(host, fence, value)));
         log::debug!(
             "intel work: queue {queue:#x} marks {when}: monitored_fence={} tag={} queue_fence={}",
@@ -121,18 +159,32 @@ impl CardWork {
         );
     }
 
-    /// Writes a tag where the process's space maps its address: a buffer through the CPU's view of
-    /// it, guest pages through the core. Says whether it found it.
-    fn write_tag(&mut self, host: &mut dyn HostServices, space: SpaceId, address: u64, value: u32) -> bool {
-        let Some(held) = self.spaces.get(&space) else { return false };
-        let Some((memory, offset)) = held.holding(address, 4) else { return false };
+    /// Brings a tag up to a value where the process's space maps its address: a buffer through the
+    /// CPU's view of it, guest pages through the core.
+    fn raise_tag(&mut self, host: &mut dyn HostServices, space: SpaceId, address: u64, value: u32) -> Raised {
+        let Some(held) = self.spaces.get(&space) else { return Raised::Gone };
+        let Some((memory, offset)) = held.holding(address, 4) else { return Raised::Gone };
         let in_buffer =
             matches!(self.blocks.get(&memory).map(|block| block.backing), Some(Backing::Buffer { .. }));
-        if in_buffer {
+        let mut bytes = [0; 4];
+        let read = if in_buffer {
+            self.cpu_view(memory).is_ok_and(|view| view.read(offset, &mut bytes))
+        } else {
+            host.read_guest_span(space, address, &mut bytes) == Some(4)
+        };
+        let held = u32::from_le_bytes(bytes);
+        if !read {
+            return Raised::Failed;
+        }
+        if held >= value {
+            return Raised::Already(u64::from(held));
+        }
+        let written = if in_buffer {
             self.cpu_view(memory).is_ok_and(|view| view.write(offset, &value.to_le_bytes()))
         } else {
             host.write_guest_span(space, address, value)
-        }
+        };
+        if written { Raised::Now } else { Raised::Failed }
     }
 
     /// Writes the marks of runs that will never end, which nothing else will.
@@ -354,6 +406,52 @@ mod tests {
         rig.poll();
         assert_eq!((rig.monitored(), rig.data_dword(TAG_IN_DATA as usize)), (30, 300));
         assert_eq!(host_wrote(&rig, rig.monitored_addresses().1), [10, 20, 30], "in order");
+    }
+
+    #[test]
+    fn a_fence_its_process_let_go_of_before_the_marks_came_is_left_alone() {
+        let mut rig = ready();
+        let work = context_work(&rig, 1, rig.data_address() + TAG_IN_DATA);
+        let doorbell = started(&mut rig, &work);
+        rig.xe.fail("exec", libc::EINVAL);
+        assert!(rig.work.ring_doorbell(doorbell).is_err());
+        rig.host.release_monitored();
+        rig.poll();
+        assert_eq!((rig.monitored(), rig.data_dword(TAG_IN_DATA as usize)), (0, 100));
+        assert_eq!(rig.fence(), 0, "the queue's fence is the core's once the run is refused");
+    }
+
+    #[test]
+    fn a_tag_the_guests_batch_already_took_further_is_not_stepped_back() {
+        let mut rig = ready();
+        rig.write_data(TAG_IN_DATA as usize, &500u32.to_le_bytes());
+        let work = context_work(&rig, 1, rig.data_address() + TAG_IN_DATA);
+        let doorbell = started(&mut rig, &work);
+        rig.work.ring_doorbell(doorbell).unwrap();
+        rig.poll();
+        assert_eq!((rig.data_dword(TAG_IN_DATA as usize), rig.fence()), (500, 1));
+    }
+
+    #[test]
+    fn only_a_compact_headers_marks_are_read() {
+        let mut rig = ready();
+        let mut work = unrun(context_work(&rig, 3, rig.data_address() + TAG_IN_DATA));
+        work.private.resize(crate::protocol::command_header::FULL_SIZE, 0);
+        rig.start(&work);
+        assert_eq!((rig.monitored(), rig.data_dword(TAG_IN_DATA as usize)), (0, 0));
+    }
+
+    #[test]
+    fn with_no_card_a_contexts_fence_and_a_tag_in_guest_pages_are_still_written() {
+        let mut rig = ready();
+        let work = unrun(context_work(&rig, 3, rig.data_address() + TAG_IN_DATA));
+        let built = work.work();
+        super::write_marks_without_card(
+            &mut rig.host,
+            &built,
+            &crate::protocol::command_header::Header::read(built.private),
+        );
+        assert_eq!((rig.monitored(), rig.data_dword(TAG_IN_DATA as usize)), (30, 300));
     }
 
     #[test]

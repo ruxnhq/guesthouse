@@ -523,6 +523,8 @@ impl CardWork {
                 let prepared_queue = gone.as_ref().map_or(0, |prepared| prepared.queue);
                 // Nothing of it will run, so a context's marks are written now.
                 if let Some(marks) = gone.and_then(|prepared| prepared.run).and_then(|run| run.marks) {
+                    // The core writes the queue's own fence for work that never ran.
+                    let marks = Marks { queue_fence: None, ..marks };
                     self.left_marks.push((space, prepared_queue, marks, "after xe refused its run"));
                 }
                 if verdict == ExecVerdict::Lost {
@@ -648,9 +650,11 @@ impl CardWork {
         let unsent: Vec<Prepared> =
             doorbells.iter().filter_map(|doorbell| self.prepared.remove(doorbell)).collect();
         let Some(gone) = self.queues.remove(&queue) else { return };
-        // A context's marks still to come are written, in order, as nothing will run now.
+        // A context's marks still to come are written, in order, as nothing will run now. The
+        // queue's own fence goes back to the core with it, so it is left alone.
         let runs = gone.in_flight.iter().copied().chain(unsent.iter().filter_map(|prepared| prepared.run));
         for marks in runs.filter_map(|run| run.marks) {
+            let marks = Marks { queue_fence: None, ..marks };
             self.left_marks.push((gone.space, queue, marks, "as its queue went"));
         }
         let (ordinary, done) = gone.ordinary.unzip();

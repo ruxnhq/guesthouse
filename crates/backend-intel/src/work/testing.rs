@@ -123,6 +123,11 @@ impl FakeHost {
         self.monitored.push((space, gpu_address, guest_address));
     }
 
+    /// The process lets go of every monitored fence it held.
+    pub fn release_monitored(&mut self) {
+        self.monitored.clear();
+    }
+
     pub fn fence_at(&mut self, guest_address: u64, host_address: u64) {
         self.fences.push((guest_address, host_address));
     }

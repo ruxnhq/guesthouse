@@ -12,7 +12,7 @@ pub mod cap;
 pub mod choices;
 pub mod copies;
 pub mod engines;
-mod marks;
+pub mod marks;
 mod memory;
 mod queues;
 #[cfg(test)]

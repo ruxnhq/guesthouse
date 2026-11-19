@@ -53,7 +53,7 @@ use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, COPY_PIXEL_BYTES, CardLabel, Doorbell, DriverFound,
     DriverSurvey, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard, Refusal,
     RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, Status, UnmapRequest,
-    VendorQuery, Work, WorkStart,
+    VendorQuery, Work, WorkSource, WorkStart,
 };
 use hwconfig::Hwconfig;
 pub use ioctl::{INTEL_VENDOR, intel_render_node};
@@ -924,7 +924,12 @@ impl Backend for IntelBackend {
         let header = Header::read(work.private);
         let start = match &mut self.work {
             Some(card) => card.start(host, work, &header),
-            None => WorkStart::Finished,
+            None => {
+                if work.source == WorkSource::Context {
+                    work::marks::write_marks_without_card(host, work, &header);
+                }
+                WorkStart::Finished
+            }
         };
         let sends = |doorbell| self.work.as_ref().is_some_and(|work| work.sends(doorbell));
         let answer = match start {

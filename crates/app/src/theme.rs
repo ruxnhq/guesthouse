@@ -1,12 +1,13 @@
 //! The app's own look: its colours, in dark and in light, and the shapes of its widgets.
 //!
-//! libadwaita's look is GNOME's, and most people who run this aren't on GNOME. So the app carries its
-//! look with it and is the same on every desktop. The colours go in under the names libadwaita reads
-//! its own from, which is what lets one set of shapes serve both.
+//! Unless the preferences say otherwise the app follows the desktop: its theme draws everything it
+//! knows, dark or light as the desktop says, and only the widgets that are the app's own are styled
+//! here, in the theme's colours.
 //!
-//! Someone with a theme of their own may want the app in it, as it was before it had a look. The
-//! preferences can ask for that: then the theme draws everything it knows, and only the widgets
-//! that are the app's own are styled here, in the theme's colours.
+//! libadwaita's look is GNOME's, and most people who run this aren't on GNOME. So the preferences
+//! can ask for the app's own look instead, which is the same on every desktop. Its colours go in
+//! under the names libadwaita reads its own from, which is what lets one set of shapes serve both
+//! dark and light.
 
 use adw::prelude::*;
 use gtk::gio;
@@ -24,9 +25,11 @@ const PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 1;
 /// Where an app's own style usually goes, under the desktop's theme and the user's gtk.css. It's
 /// where the app's own widgets go when the desktop's theme is the one wanted.
 const UNDER_THE_THEME: u32 = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION;
-/// The preference that says whose look to use, and what it holds for the desktop's theme.
+/// The preference that says whose look to use, and what it holds for each. Anything else means the
+/// desktop's theme.
 pub const LOOK_OF: &str = "look";
 pub const DESKTOP_LOOK: &str = "desktop";
+pub const OWN_LOOK: &str = "own";
 /// The preference that says which colours to use.
 pub const SCHEME: &str = "scheme";
 /// The preference that says whose accent colour to use, and what it holds for the desktop's.
@@ -54,16 +57,18 @@ thread_local! {
     static LOOK: RefCell<Option<Look>> = const { RefCell::new(None) };
 }
 
-fn desktops_look(prefs: &Fields) -> bool {
-    prefs.get(LOOK_OF).and_then(Value::as_str) == Some(DESKTOP_LOOK)
+pub fn desktops_look(prefs: &Fields) -> bool {
+    prefs.get(LOOK_OF).and_then(Value::as_str) != Some(OWN_LOOK)
 }
 
-/// What the preference asks for. Anything else follows the desktop, and is dark where the desktop
-/// doesn't say.
+/// What the preference asks for. Anything else follows the desktop. Where the desktop doesn't say,
+/// the app's own look is dark and the desktop's theme is left as it comes: a desktop that says
+/// nothing is most often a light one.
 fn scheme(prefs: &Fields) -> adw::ColorScheme {
     match prefs.get(SCHEME).and_then(Value::as_str) {
         Some("dark") => adw::ColorScheme::ForceDark,
         Some("light") => adw::ColorScheme::ForceLight,
+        _ if desktops_look(prefs) => adw::ColorScheme::Default,
         _ => adw::ColorScheme::PreferDark,
     }
 }
@@ -191,6 +196,19 @@ mod tests {
         assert!(text.find("#8fb4ff").unwrap() < own, "the palette's accent has to come first to lose");
         assert!(own < text.find("headerbar {").unwrap());
         assert!(!style(true, None).contains("accent_bg_color rgb("));
+    }
+
+    #[test]
+    fn the_desktops_theme_is_followed_unless_the_apps_own_look_is_asked_for() {
+        let prefs = |text: &str| serde_json::from_str::<Fields>(text).unwrap();
+        assert!(desktops_look(&prefs("{}")));
+        assert!(desktops_look(&prefs(r#"{"look":"desktop"}"#)));
+        assert!(desktops_look(&prefs(r#"{"look":""}"#)));
+        assert!(!desktops_look(&prefs(r#"{"look":"own"}"#)));
+        // A desktop that states no preference keeps its theme as it comes; the app's own look is dark there.
+        assert_eq!(scheme(&prefs("{}")), adw::ColorScheme::Default);
+        assert_eq!(scheme(&prefs(r#"{"look":"own"}"#)), adw::ColorScheme::PreferDark);
+        assert_eq!(scheme(&prefs(r#"{"scheme":"light"}"#)), adw::ColorScheme::ForceLight);
     }
 
     #[test]

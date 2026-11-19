@@ -1,6 +1,8 @@
 #!/bin/bash
 # Walks the app's pages on GTK's Broadway backend, which draws in software, with a scratch store.
-# Nothing appears on the desktop and nothing touches the GPU. Usage: page-shots.sh FOLDER
+# Nothing appears on the desktop and nothing touches the GPU. Usage: page-shots.sh FOLDER [HOME]
+# HOME is a folder whose files go into the scratch home first: a desktop's gtk.css, say, or the
+# app's preferences (.config/guesthouse/app.json).
 # Needs a build first: cargo build -p guesthouse-app --example page_shots --bins
 set -e
 FOLDER=$(realpath -m "${1:?usage: page-shots.sh FOLDER}")
@@ -10,6 +12,7 @@ BROADWAY_DISPLAY=:49
 BROADWAY_PORT=28949
 rm -rf "$FOLDER"
 mkdir -p "$FOLDER/home" "$FOLDER/shm" "$FOLDER/program/guest" "$FOLDER/program/qemu/pc-bios" "$FOLDER/shots" "$FOLDER/bin"
+if [ -n "$2" ]; then cp -a "$2/." "$FOLDER/home/"; fi
 # The walk is also what stands in for QEMU, under QEMU's name.
 cp "$PROGRAM" "$FOLDER/bin/qemu"
 # Its own place, as a socket's path can't be long, and FOLDER's might be.

@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 /// The colours to choose from, and what the preference holds for each. The first follows the
 /// desktop, and is what anything else in the preference means too.
 const SCHEMES: [(&str, &str); 3] = [("Follow the desktop", ""), ("Dark", "dark"), ("Light", "light")];
-/// Whose look the app has: its own, or the desktop's GTK theme.
-const LOOKS: [&str; 2] = ["Guesthouse", "The desktop's"];
+/// Whose look the app has: the desktop's GTK theme, or its own.
+const LOOKS: [&str; 2] = ["The desktop's", "Guesthouse"];
 /// The second is the desktop's own, where it has one.
 const ACCENTS: [&str; 2] = ["Blue", "Follow the desktop"];
 const WIDTH: i32 = 520;
@@ -42,16 +42,16 @@ pub fn show(window: &Window) {
         remembering.remember(json!({ theme::ACCENT: value }));
         theme::follow(&read_prefs(&remembering.context()));
     });
-    let desktops_look = prefs.get(theme::LOOK_OF).and_then(Value::as_str) == Some(theme::DESKTOP_LOOK);
+    let desktops_look = theme::desktops_look(&prefs);
     let whose = choice_row("Theme", &LOOKS);
-    whose.set_subtitle("The desktop's is its GTK theme, as the app was before it had a look of its own.");
-    whose.set_selected(u32::from(desktops_look));
+    whose.set_subtitle("Guesthouse's own is the same on every desktop.");
+    whose.set_selected(u32::from(!desktops_look));
     // The accent is the theme's when the theme is the desktop's.
     accent.set_sensitive(!desktops_look);
     let (remembering, accent_row) = (window.clone(), accent.clone());
     whose.connect_selected_notify(move |row| {
-        let desktops = row.selected() == 1;
-        let value = if desktops { theme::DESKTOP_LOOK } else { "" };
+        let desktops = row.selected() == 0;
+        let value = if desktops { theme::DESKTOP_LOOK } else { theme::OWN_LOOK };
         remembering.remember(json!({ theme::LOOK_OF: value }));
         accent_row.set_sensitive(!desktops);
         theme::follow(&read_prefs(&remembering.context()));

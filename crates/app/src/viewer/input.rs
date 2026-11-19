@@ -8,11 +8,18 @@ use guesthouse_app_core::input::TABLET_RANGE;
 /// GDK adds the X11 offset to the Linux key code.
 const X11_KEY_OFFSET: u32 = 8;
 
+/// GDK's numbers for the two thumb buttons, back and forward.
+const BUTTON_BACK: u32 = 8;
+const BUTTON_FORWARD: u32 = 9;
+
+/// QEMU's name for a button, by GDK's number for it.
 pub(super) fn button_name(number: u32) -> Option<&'static str> {
     match number {
         1 => Some("left"),
         2 => Some("middle"),
         3 => Some("right"),
+        BUTTON_BACK => Some("side"),
+        BUTTON_FORWARD => Some("extra"),
         _ => None,
     }
 }
@@ -110,7 +117,12 @@ impl Screen {
         if down {
             self.0.picture.grab_focus();
         }
-        if let Some(name) = button_name(gesture.current_button()) {
+        let button = gesture.current_button();
+        if let Some(name) = button_name(button) {
+            // Left unclaimed, back would also take the window back to the list of machines.
+            if matches!(button, BUTTON_BACK | BUTTON_FORWARD) {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
             self.on_motion(x, y);
             self.press(name, down);
         }
@@ -217,5 +229,18 @@ impl Screen {
             }
         }
         held.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_thumb_buttons_go_to_the_guest_as_back_and_forward() {
+        assert_eq!(button_name(1), Some("left"));
+        assert_eq!(button_name(8), Some("side"));
+        assert_eq!(button_name(9), Some("extra"));
+        assert_eq!(button_name(4), None);
     }
 }

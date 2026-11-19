@@ -16,12 +16,13 @@
 use super::dmabuf_feedback::fourcc_name;
 use super::frames::{FrameRoute, SlotFrame};
 use super::import::texture;
-use super::own_surface::{NotShown, OwnSurface};
+use super::own_surface::{NotShown, OwnSurface, Stall};
 use super::screen::Screen;
 use super::slot_hold::HeldFrame;
 use adw::prelude::*;
 use gtk::{gdk, graphene};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 const OWN_SURFACE_VARIABLE: &str = "GUESTHOUSE_OWN_SURFACE";
 const OWN_SURFACE_OFF: &str = "0";
@@ -77,7 +78,7 @@ impl Screen {
     ///
     /// Only the daemon's frames in video memory are for it. Frames in memory, QEMU's display and a
     /// Linux guest's forwarded frames stay with GTK.
-    fn own_awaited(&self) -> bool {
+    pub(super) fn own_awaited(&self) -> bool {
         let for_it = self.0.route.get() == FrameRoute::FrameSocket && !self.0.memory_frames.get();
         for_it && self.0.direct_frames.get() && !self.0.own_impossible.get() && own_surface_allowed()
     }
@@ -206,6 +207,7 @@ impl Screen {
         if let Some(own) = own.as_mut() {
             own.catch_up();
             self.place_own_surface(own);
+            self.watch_own_surface(own);
         }
         let mut gpu = self.0.gpu.borrow_mut();
         let Some(source) = gpu.as_mut() else { return false };
@@ -243,6 +245,33 @@ impl Screen {
         }
         self.pass_on_notes(own);
         true
+    }
+
+    /// Says in the log when the frames sent stop reaching the screen, and when they do again.
+    fn watch_own_surface(&self, own: &mut OwnSurface) {
+        let window = self.0.root.root().and_downcast::<gtk::Window>();
+        // A window that is minimised, covered or on another desktop is shown no frames.
+        let seen = window.as_ref().is_none_or(|window| !window.is_suspended());
+        match own.watch(Instant::now(), seen) {
+            Some(Stall::Began { waited, sent }) => {
+                let shown = own.shown();
+                let (active, fullscreen) = window
+                    .as_ref()
+                    .map_or((false, false), |window| (window.is_active(), window.is_fullscreen()));
+                self.note(&format!(
+                    "own surface: no frame has reached the screen for {} ms, with {sent} sent since \
+                     ({} shown and {} dropped so far; window active {active}, fullscreen {fullscreen})",
+                    waited.as_millis(),
+                    shown.presented,
+                    shown.discarded,
+                ));
+            }
+            Some(Stall::Over { after }) => self.note(&format!(
+                "own surface: frames reach the screen again, {} ms after that was seen",
+                after.as_millis()
+            )),
+            None => {}
+        }
     }
 
     /// The own surface isn't showing this frame, so it comes off the screen and GTK shows it.

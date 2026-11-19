@@ -11,7 +11,7 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::mem::ManuallyDrop;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::FileExt;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// The most a log file holds.
@@ -20,6 +20,8 @@ const MOST_BYTES: u64 = 64 << 20;
 const START_BYTES: u64 = 8 << 20;
 /// What is carried over of its newest part when the middle goes.
 const NEWEST_BYTES: u64 = 8 << 20;
+
+static STARTED: OnceLock<Instant> = OnceLock::new();
 
 struct StandardError {
     /// When the daemon started, if lines are to say how long after it they come. Only the verbose log
@@ -111,12 +113,18 @@ fn timed_line(elapsed: Duration, level: Level, message: impl Display) -> String 
 pub fn start(verbose: bool) {
     let level = if verbose { Level::Debug } else { Level::Info };
     let logger = StandardError {
-        started: verbose.then(Instant::now),
+        started: verbose.then(started),
         since_checked: error_is_a_file().then(|| Mutex::new(0)),
     };
     if log::set_logger(Box::leak(Box::new(logger))).is_ok() {
         log::set_max_level(level.to_level_filter());
     }
+}
+
+/// When the log's clock started, which the verbose log's times count from, so other files can give
+/// times that match them.
+pub fn started() -> Instant {
+    *STARTED.get_or_init(Instant::now)
 }
 
 #[cfg(test)]

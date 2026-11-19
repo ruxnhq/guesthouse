@@ -2,6 +2,7 @@
 
 use super::Wizard;
 use crate::application::APP_ID;
+use crate::rows::message_page;
 use adw::prelude::*;
 use std::rc::Rc;
 
@@ -14,12 +15,12 @@ pub fn done_page(wizard: &Rc<Wizard>) -> adw::NavigationPage {
         closing.dialog.close();
         closing.window.show_new_machine();
     });
-    let status = adw::StatusPage::builder()
-        .icon_name(APP_ID)
-        .title("Guesthouse Is Ready")
-        .description("All that is left is a Windows 11 ISO, or an Ubuntu server ISO.")
-        .child(&button)
-        .build();
+    let status = message_page(
+        APP_ID,
+        "Guesthouse Is Ready",
+        "All that is left is a Windows 11 ISO, or an Ubuntu server ISO.",
+        &button,
+    );
     let toolbar = adw::ToolbarView::new();
     toolbar.set_content(Some(&status));
     toolbar.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());

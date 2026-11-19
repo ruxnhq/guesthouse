@@ -22,12 +22,14 @@ mod device;
 mod fault;
 mod fence_ib;
 mod guest_dma;
+mod ib_dump;
 mod info;
 mod ioctl;
 mod memory;
 mod moves;
 mod nodes;
 pub mod protocol;
+mod reset;
 mod run_wait;
 mod screen_copy;
 mod sdma_copy;
@@ -37,6 +39,7 @@ mod udmabuf;
 
 pub use device::{Device, Mapping};
 pub use fence_ib::{Writer as FenceWriter, words as fence_words, writer_for as fence_writer_for};
+pub use ib_dump::VARIABLE as IB_DUMP_VARIABLE;
 pub use info::{
     CardDetails, DeviceInfo, EngineSet, Firmware, HW_IP_DMA, HW_IP_GFX, read_device_info, read_gpu_clock,
 };
@@ -116,6 +119,8 @@ pub struct AmdBackend {
     looked_at_runs: Option<Instant>,
     /// Makes dma-bufs of guest memory, where this user may.
     udmabuf: Udmabuf,
+    /// Copies of the last command buffers, when the daemon was asked for them.
+    ib_dump: Option<ib_dump::Keeper>,
 }
 
 /// A run ready to send: its command buffers, the fence writer in `slot` last.
@@ -150,12 +155,15 @@ const DMA_NOT_WRITTEN: &str = "the DMA copy is written for GFX10 to GFX12";
 
 /// Stands in at the fence of each run the kernel retired before the card wrote it: one it reset,
 /// or cancelled after a reset. A run that went through wrote its fence before the kernel saw it end.
-fn stand_in_for_lost_runs(host: &mut dyn HostServices, retired: Vec<GuestFence>) {
+/// Returns the fences it stood in at.
+fn stand_in_for_lost_runs(host: &mut dyn HostServices, retired: Vec<GuestFence>) -> Vec<GuestFence> {
+    let mut lost = Vec::new();
     for fence in retired {
         let Ok(reached) = host.fence_value(fence.address) else { continue };
         if reached >= fence.value {
             continue;
         }
+        lost.push(fence);
         log::warn!(
             "queue {:#x}: the kernel ended a run before it wrote fence value {:#x}, so the host writes it",
             fence.queue,
@@ -165,6 +173,7 @@ fn stand_in_for_lost_runs(host: &mut dyn HostServices, retired: Vec<GuestFence>)
             log::warn!("standing in for a lost run: {error}");
         }
     }
+    lost
 }
 
 impl std::fmt::Debug for AmdBackend {
@@ -192,7 +201,40 @@ impl AmdBackend {
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
+            ib_dump: None,
         })
+    }
+
+    /// Copies the guest's graphics and compute command buffers as they are sent, and writes them to
+    /// `folder` now and then and when a run hangs. `started` is when the log's clock started.
+    pub fn keep_command_buffers(&mut self, folder: &std::path::Path, started: Instant) {
+        let info = self.device.info();
+        let (major, minor) = info.details.gfx_version;
+        let card = format!(
+            "card device={:#06x} revision={:#04x} family={:#x} external_revision={:#x} gfx={major}.{minor}",
+            info.device_id, info.pci_revision, info.family, info.details.external_revision
+        );
+        self.ib_dump = Some(ib_dump::Keeper::new(folder, started, card));
+    }
+
+    /// Copies a run's command buffers, if that was asked for.
+    fn note_run(&mut self, work: &Work<'_>, engine: u32, listed: &[Ib]) {
+        if self.ib_dump.is_none() || !matches!(engine, HW_IP_GFX | info::HW_IP_COMPUTE) {
+            return;
+        }
+        let facts =
+            ib_dump::RunFacts { queue: work.queue, space: work.space.0, engine, fence: work.fence_value };
+        let mut keeper = self.ib_dump.take().expect("just checked");
+        let mut read = |ib: &Ib| {
+            let at = self.cpu_address(work.space, ib.address, u64::from(ib.bytes)).ok()?;
+            let mut bytes = vec![0u8; ib.bytes as usize];
+            // SAFETY: `cpu_address` gave an address good for the buffer's bytes. The guest can write
+            // them meanwhile, which a copy takes as it finds them.
+            unsafe { std::ptr::copy_nonoverlapping(at, bytes.as_mut_ptr(), bytes.len()) };
+            Some(bytes)
+        };
+        keeper.note_run(facts, listed, Instant::now(), &mut read);
+        self.ib_dump = Some(keeper);
     }
 
     /// The full device readings, richer than [`AdapterFacts`], for the harness and the report.
@@ -271,7 +313,7 @@ impl AmdBackend {
             ib.mapped_in = Some(space);
         }
         let bytes = ib.write(commands).map_err(|error| error.to_string())?;
-        let ran = space_vm.run(HW_IP_DMA, &[Ib { address: copy_ib::ADDRESS, bytes }], self.patience);
+        let ran = space_vm.run(HW_IP_DMA, None, &[Ib { address: copy_ib::ADDRESS, bytes }], self.patience);
         self.note_how_it_ran(&ran);
         match ran {
             Ok(Ran::Retired) => Ok(()),
@@ -880,6 +922,7 @@ impl Backend for AmdBackend {
                 space.vm.fence_writer(card.va_alignment, writer, work.fence_gpu_address, work.fence_value);
             return match written {
                 Ok(Some((slot, last))) => {
+                    self.note_run(work, node.ip_type, &ibs);
                     ibs.push(last);
                     let doorbell = self.new_id();
                     let fence =
@@ -896,7 +939,11 @@ impl Backend for AmdBackend {
             };
         }
         // An engine with no fence writer is waited for here, and the core then completes the fence.
-        let ran = space.vm.run(node.ip_type, &ibs, self.patience);
+        self.note_run(work, node.ip_type, &ibs);
+        let Some(space) = self.spaces.get_mut(&work.space) else {
+            return WorkStart::QueueFailed;
+        };
+        let ran = space.vm.run(node.ip_type, Some(work.queue), &ibs, self.patience);
         self.note_how_it_ran(&ran);
         match ran {
             Ok(Ran::Retired) => WorkStart::Ran,
@@ -946,6 +993,11 @@ impl Backend for AmdBackend {
             }
             Err(error) => {
                 space.vm.drop_fence_writer(run.slot);
+                if reset::os_error(&error) == Some(libc::ETIME)
+                    && let Some(keeper) = &mut self.ib_dump
+                {
+                    keeper.keep_for(run.fence.queue, run.fence.value, "ETIME", Instant::now());
+                }
                 Err(BackendError::new(format!("engine family {}: {error}", run.ip_type)))
             }
         }
@@ -976,7 +1028,13 @@ impl Backend for AmdBackend {
         }
         self.looked_at_runs = Some(now);
         for space in self.spaces.values_mut() {
-            stand_in_for_lost_runs(host, space.vm.take_retired());
+            let lost = stand_in_for_lost_runs(host, space.vm.take_retired());
+            if let (Some(keeper), Some(fence)) = (&mut self.ib_dump, lost.first()) {
+                keeper.keep_for(fence.queue, fence.value, "hung", now);
+            }
+        }
+        if let Some(keeper) = &mut self.ib_dump {
+            keeper.now_and_then(now);
         }
     }
 
@@ -1078,7 +1136,9 @@ mod tests {
             GuestFence { queue: 1, address: WRITTEN, value: 7 },
             GuestFence { queue: 2, address: LOST, value: 4 },
         ];
-        stand_in_for_lost_runs(&mut host, retired);
+        // Only the lost run is named, as that is the one whose command buffers are kept.
+        let lost = stand_in_for_lost_runs(&mut host, retired);
+        assert_eq!(lost, vec![GuestFence { queue: 2, address: LOST, value: 4 }]);
         assert_eq!(host.0[&WRITTEN], 7);
         assert_eq!(host.0[&LOST], 4);
     }
@@ -1088,7 +1148,8 @@ mod tests {
         const FENCE: u64 = 0x1000;
         let mut host = Fences::default();
         host.0.insert(FENCE, 9);
-        stand_in_for_lost_runs(&mut host, vec![GuestFence { queue: 1, address: FENCE, value: 8 }]);
+        let lost = stand_in_for_lost_runs(&mut host, vec![GuestFence { queue: 1, address: FENCE, value: 8 }]);
+        assert!(lost.is_empty());
         assert_eq!(host.0[&FENCE], 9);
     }
 

@@ -14,9 +14,9 @@
 set -eu
 
 # A release sets these three, last of all, once its files are up. Until the first one they're empty.
-RELEASE_VERSION="0.6.2-intel.11"
-PAYLOAD_SHA256="61694714ac180c8745fb9c58d366ec3f14c36c1e5c0277b8eb65633a92ad3484"
-SOURCE_SHA256="502198d625dfdb2b9e0a4be1ae9158faf75ee1a7df11b50f1e79105df6c71e18"
+RELEASE_VERSION="0.6.2"
+PAYLOAD_SHA256="dc51f839132f37e7829d746a0eec91da07e8baaf11022fadea884fe7ba6aa850"
+SOURCE_SHA256="708b595884081a3d6673b98c57dbc2eb25f325d32ede55f20fefeb24e9a91835"
 
 REPO_URL=https://github.com/xnixy/guesthouse
 DISCORD_URL=https://discord.gg/rN3VARayZV
@@ -426,12 +426,10 @@ ask_the_release() {
     HOST_REPORT=$STAGING/host-report
     GPU_ANSWER=no
     AMD_ANSWER=no
-    INTEL_ANSWER=no
     if [ -x "$TREE/guesthouse-check" ] &&
         GUESTHOUSE_PROGRAM=$TREE "$TREE/guesthouse-check" >"$HOST_REPORT" 2>/dev/null; then
         GPU_ANSWER=$(awk -F "$TAB" '$1 == "gpu" { print $2 }' "$HOST_REPORT")
         AMD_ANSWER=$(awk -F "$TAB" '$1 == "amd" { print $2 }' "$HOST_REPORT")
-        INTEL_ANSWER=$(awk -F "$TAB" '$1 == "intel" { print $2 }' "$HOST_REPORT")
     else
         : >"$HOST_REPORT"
     fi
@@ -462,9 +460,6 @@ decide_mode() {
     elif [ "$AMD_ANSWER" = yes ]; then
         MODE=gpu
         GPU_NOTE="The checks above say this PC can't run NVIDIA's GPU machines, but its AMD card can be a Linux guest's GPU."
-    elif [ "$INTEL_ANSWER" = yes ]; then
-        MODE=gpu
-        GPU_NOTE="The checks above say this PC can't run NVIDIA's GPU machines, but it has an Intel card that a Windows machine can be set up on, at an early test stage where nothing is drawn by the card yet."
     elif [ "$previous" = gpu ]; then
         MODE=gpu
         GPU_NOTE="The checks above say this PC can't run GPU machines right now. Often that's a driver update that moved to another branch: host and guest have to match. This update doesn't change that, and doesn't touch your driver. GPU machines won't start until it's fixed, your machines and disks stay as they are, and plain VMs still run."

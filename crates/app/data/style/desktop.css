@@ -1,0 +1,6 @@
+/* With the desktop's own theme in use, the few colours the app's own widgets ask for by a name
+   of the app's, made from the theme's. */
+@define-color hairline alpha(@window_fg_color, 0.12);
+@define-color field_bg_color alpha(@window_fg_color, 0.08);
+@define-color primary_bg_color @window_fg_color;
+@define-color primary_fg_color @window_bg_color;

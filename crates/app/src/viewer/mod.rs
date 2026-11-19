@@ -22,16 +22,17 @@ mod monitors;
 mod overlay;
 mod own_screen;
 mod own_surface;
+mod pill;
 mod pointer_lock;
 mod ring;
 mod screen;
 mod screen_frame;
 mod slot_hold;
 mod socket_frames;
+mod stall;
 mod window_size;
 
 use crate::common::in_background;
-use crate::rows::name_for_readers;
 use crate::window::{MachineHandle, Window};
 use adw::prelude::*;
 use clipboard::SharedClipboard;
@@ -43,6 +44,7 @@ use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::{State, Status, slot_of};
 use monitors::Monitors;
+use pill::Pill;
 use screen::Screen;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -78,10 +80,8 @@ struct Parts {
     window: Window,
     machine: MachineHandle,
     page: adw::NavigationPage,
-    title: adw::WindowTitle,
+    pill: Pill,
     toolbar: adw::ToolbarView,
-    fullscreen_button: adw::SplitButton,
-    capture_button: gtk::Button,
     screen: RefCell<Option<Screen>>,
     clipboard: RefCell<Option<SharedClipboard>>,
     window_size: RefCell<Option<WindowSize>>,
@@ -102,23 +102,15 @@ pub struct ScreenPage(Rc<Parts>);
 
 impl ScreenPage {
     pub fn new(window: &Window, machine: MachineHandle) -> Self {
-        let title = adw::WindowTitle::new(&machine.borrow().name, "");
-        let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&title));
-        header.add_css_class("screen-header");
-        let fullscreen_button = adw::SplitButton::builder()
-            .icon_name("view-fullscreen-symbolic")
-            .tooltip_text(format!("Fullscreen ({FULLSCREEN_KEYS})"))
-            .build();
-        name_for_readers(&fullscreen_button, "Fullscreen");
-        header.pack_end(&fullscreen_button);
-        // A button that took the focus from the screen would end the capture it starts.
-        let capture_button =
-            gtk::Button::builder().icon_name("input-mouse-symbolic").focus_on_click(false).build();
-        name_for_readers(&capture_button, "Capture Mouse");
-        header.pack_end(&capture_button);
+        let pill = {
+            let machine = machine.borrow();
+            Pill::new(&machine.name, machine.overlay, machine.bar_hides())
+        };
+        pill.fullscreen.set_tooltip_text(Some(&format!("Fullscreen ({FULLSCREEN_KEYS})")));
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
+        toolbar.add_top_bar(pill.widget());
+        // The pill floats over the screen whether it hides or stays, so the picture never moves.
+        toolbar.set_extend_content_to_top_edge(true);
         let page = adw::NavigationPage::builder()
             .title(&machine.borrow().name)
             .tag("screen")
@@ -128,10 +120,8 @@ impl ScreenPage {
             window: window.clone(),
             machine,
             page,
-            title,
+            pill,
             toolbar,
-            fullscreen_button,
-            capture_button,
             screen: RefCell::default(),
             clipboard: RefCell::default(),
             window_size: RefCell::default(),
@@ -144,7 +134,7 @@ impl ScreenPage {
             header_wait: RefCell::default(),
         }));
         this.make_screen();
-        *this.0.monitors.borrow_mut() = Some(Monitors::new(window, &this.0.fullscreen_button));
+        *this.0.monitors.borrow_mut() = Some(Monitors::new(window, &this.0.pill.monitors));
         this.connect();
         this
     }
@@ -191,9 +181,10 @@ impl ScreenPage {
     fn connect(&self) {
         let parts = &self.0;
         let this = self.clone();
-        parts.fullscreen_button.connect_clicked(move |_| this.toggle_fullscreen());
+        parts.pill.fullscreen.connect_clicked(move |_| this.toggle_fullscreen());
         let this = self.clone();
-        parts.capture_button.connect_clicked(move |_| this.toggle_capture());
+        parts.pill.capture.connect_clicked(move |_| this.toggle_capture());
+        self.connect_menu();
         let this = self.clone();
         let handler = parts.window.widget().connect_fullscreened_notify(move |_| this.on_fullscreened());
         *parts.fullscreen_handler.borrow_mut() = Some(handler);
@@ -211,6 +202,38 @@ impl ScreenPage {
         parts.page.connect_hiding(move |_| this.on_hiding());
         let this = self.clone();
         parts.page.connect_hidden(move |_| this.on_hidden());
+    }
+
+    /// What the pill's menu does. The machine's own actions are its card's, so they ask and refuse
+    /// as they do in the library.
+    fn connect_menu(&self) {
+        let pill = &self.0.pill;
+        let this = self.clone();
+        pill.connect("overlay", move || this.toggle_overlay());
+        let this = self.clone();
+        pill.connect("hides", move || this.toggle_bar_hides());
+        let this = self.clone();
+        pill.connect("report", move || crate::report_dialog::show(&this.0.window));
+        let card = {
+            let this = self.clone();
+            move || this.0.window.card(&this.0.machine.borrow().id)
+        };
+        let found = card.clone();
+        pill.connect("settings", move || found().iter().for_each(|card| card.show_settings()));
+        let found = card.clone();
+        pill.connect("shut-down", move || found().iter().for_each(|card| card.shut_down()));
+        pill.connect("force-off", move || card().iter().for_each(|card| card.on_force()));
+    }
+
+    fn toggle_bar_hides(&self) {
+        let hides = {
+            let mut machine = self.0.machine.borrow_mut();
+            machine.bar_stays = !machine.bar_stays;
+            machine.bar_hides()
+        };
+        self.0.pill.set_hides(hides);
+        self.0.window.save_machine(&self.0.machine.borrow());
+        self.call_header(false);
     }
 
     pub fn widget(&self) -> &adw::NavigationPage {
@@ -286,6 +309,7 @@ impl ScreenPage {
         if let Some(screen) = self.screen() {
             screen.set_overlay(wanted);
         }
+        self.0.pill.set_overlay(wanted);
         self.0.window.save_machine(&self.0.machine.borrow());
     }
 
@@ -304,13 +328,12 @@ impl ScreenPage {
         let parts = &self.0;
         let fullscreen = parts.window.widget().is_fullscreen();
         self.call_header(false);
-        let button = &parts.fullscreen_button;
-        button.set_icon_name(if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" });
-        button.set_tooltip_text(Some(&if fullscreen {
+        let tooltip = if fullscreen {
             format!("Leave Fullscreen ({FULLSCREEN_KEYS})")
         } else {
             format!("Fullscreen ({FULLSCREEN_KEYS})")
-        }));
+        };
+        parts.pill.set_fullscreen(fullscreen, &tooltip);
         if fullscreen {
             let text = format!("{FULLSCREEN_KEYS} leaves fullscreen. So does the top edge of the screen.");
             parts.window.toast(&text, adw::ToastPriority::Normal);
@@ -341,9 +364,6 @@ impl ScreenPage {
             parts.window.toast(text, adw::ToastPriority::Normal);
         }
         parts.header_hid.set(hides);
-        if parts.toolbar.is_extend_content_to_top_edge() != hides {
-            parts.toolbar.set_extend_content_to_top_edge(hides);
-        }
         let reveal = !hides || parts.header_called.get();
         if parts.toolbar.reveals_top_bars() != reveal {
             parts.toolbar.set_reveal_top_bars(reveal);
@@ -415,7 +435,7 @@ impl ScreenPage {
             self.forget_header_wait();
             return;
         }
-        let menu_open = parts.fullscreen_button.popover().is_some_and(|menu| menu.is_visible());
+        let menu_open = parts.pill.menu_open();
         // In fullscreen the pointer has nowhere to go but back.
         if !menu_open && !parts.window.widget().is_fullscreen() {
             self.call_header_after(LEFT, false);
@@ -539,13 +559,16 @@ impl ScreenPage {
             }
             _ => "Click the screen to send it keys".to_owned(),
         };
-        if hint != self.0.title.subtitle() {
-            self.0.title.set_subtitle(&hint);
+        if hint != self.0.pill.hint() {
+            self.0.pill.set_hint(&hint);
+        }
+        if let Some(status) = status {
+            self.0.pill.allow_shut_down(status.state == State::Running && !status.busy);
         }
         self.follow_header();
         let problem = screen.capture_problem();
-        self.0.capture_button.set_sensitive(problem.is_none());
+        self.0.pill.capture.set_sensitive(problem.is_none());
         let tooltip = format!("Capture Mouse ({CAPTURE_KEYS})");
-        self.0.capture_button.set_tooltip_text(Some(problem.unwrap_or(&tooltip)));
+        self.0.pill.capture.set_tooltip_text(Some(problem.unwrap_or(&tooltip)));
     }
 }

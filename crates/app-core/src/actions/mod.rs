@@ -2,6 +2,7 @@
 //! the app watches the small file it leaves.
 
 mod amd_files;
+mod amd_package;
 mod amd_start;
 mod api_stage;
 mod desktop;
@@ -23,6 +24,7 @@ mod ubuntu;
 mod window_speed;
 
 use amd_files::{bring_amd_driver_up_to_date, complete_host_driver};
+use amd_package::register_amd_package;
 pub use desktop::{apply_share, boots, rebooted};
 use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
@@ -235,7 +237,10 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
             place_driver_files(task)?;
             place_profile_store(task)
         }
-        Some(GpuMaker::Amd) => bring_amd_driver_up_to_date(task),
+        Some(GpuMaker::Amd) => {
+            bring_amd_driver_up_to_date(task)?;
+            register_amd_package(task)
+        }
         // Intel's support is new, so there is no earlier layout of its driver to bring up to date. The
         // guest has the loaders from install, and this puts back any it lacks. Another maker's files
         // would put a driver in the guest that isn't its card's.

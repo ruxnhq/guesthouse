@@ -3,9 +3,11 @@
 
 use super::Window;
 use crate::common::in_background;
+use crate::notify;
 use gtk::glib;
 use guesthouse_app_core::actions::rebooted;
 use guesthouse_app_core::context::Context;
+use guesthouse_app_core::ending;
 use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::process_stat::Seen;
 use guesthouse_app_core::processes::all_leftovers;
@@ -29,6 +31,9 @@ pub struct RefreshState {
     running_before: BTreeMap<String, (u8, Seen)>,
     leftovers_before: BTreeMap<u8, u64>,
     problem: Option<String>,
+    /// Whether the machines have been looked at once. What a machine already said before the app
+    /// started is old news: its card shows it, and nothing announces it again.
+    looked: bool,
 }
 
 struct Report {
@@ -93,7 +98,7 @@ impl Window {
         let running_before = state.running_before.clone();
         drop(state);
         let machines: Vec<Machine> =
-            self.0.rows.borrow().values().map(|row| row.machine().borrow().clone()).collect();
+            self.0.cards.borrow().values().map(|row| row.machine().borrow().clone()).collect();
         let context = self.context();
         let looking = context.clone();
         let this = self.clone();
@@ -121,7 +126,7 @@ impl Window {
     /// A task changes these on disk, and a stale copy here would write them back.
     fn take_saved(&self, saved: &[Machine]) {
         for machine in saved {
-            if let Some(row) = self.0.rows.borrow().get(&machine.id) {
+            if let Some(row) = self.0.cards.borrow().get(&machine.id) {
                 let handle = row.machine();
                 let mut current = handle.borrow_mut();
                 current.installing = machine.installing;
@@ -141,7 +146,7 @@ impl Window {
             self.toast("The VM was left paused. Resuming it.", adw::ToastPriority::Normal);
             self.launch("resume", machine, &[], None);
         }
-        let any_machine = self.0.rows.borrow().values().next().map(|row| row.machine());
+        let any_machine = self.0.cards.borrow().values().next().map(|row| row.machine());
         for (slot, file) in &report.left {
             if let Some(machine) = any_machine.as_ref().filter(|_| leftovers_before.get(slot) == Some(file)) {
                 let machine = machine.borrow().clone();
@@ -157,11 +162,18 @@ impl Window {
     }
 
     fn show_machine_status(&self, id: &str, status: &Status, vm_running: bool) {
-        let rows = self.0.rows.borrow();
+        let rows = self.0.cards.borrow();
         // A row can be gone if it was deleted while this was being read.
         let Some(row) = rows.get(id) else { return };
-        if !status.error.is_empty() && status.error != row.status().error {
+        let looked = self.0.refresh.borrow().looked;
+        let before = row.status();
+        if looked && !status.error.is_empty() && status.error != before.error {
             self.problem(&status.error);
+        }
+        if looked
+            && let Some((title, body)) = notify::of_change(&row.machine().borrow().name, &before, status)
+        {
+            notify::send(self, id, &title, &body);
         }
         row.set_status(status, vm_running);
         if let Some(settings) = self.0.settings.borrow().as_ref().filter(|dialog| dialog.machine_id() == id) {
@@ -184,14 +196,32 @@ impl Window {
             Some((id.clone(), status.slot.zip(status.qemu).filter(|_| status.state == State::Running)?))
         };
         let running: BTreeMap<String, (u8, Seen)> = report.statuses.iter().filter_map(up).collect();
-        let before = std::mem::replace(&mut self.0.refresh.borrow_mut().running_before, running);
+        let before = std::mem::replace(&mut self.0.refresh.borrow_mut().running_before, running.clone());
+        // QEMU says why it's shutting down only as it goes, so something listens from the start.
+        for (id, (slot, _)) in &running {
+            if !before.contains_key(id) {
+                ending::watch(&self.0.context, *slot);
+            }
+        }
         for (id, (slot, _)) in before {
             let gone = report.statuses.get(&id).is_some_and(|found| found.state == State::Off && !found.busy);
-            let machine = self.0.rows.borrow().get(&id).map(|row| row.machine().borrow().clone());
+            let machine = self.0.cards.borrow().get(&id).map(|row| row.machine().borrow().clone());
             if let Some(machine) = machine.filter(|_| gone) {
                 note_if_stopped_by_itself(&self.0.context, &machine, slot);
             }
         }
+    }
+
+    /// The icon in the tray names the machines that are running.
+    fn tell_the_tray(&self, report: &Report) {
+        let tray = self.0.tray.borrow();
+        let Some(tray) = tray.as_ref() else { return };
+        let cards = self.0.cards.borrow();
+        let is_running = |(id, status): (&String, &Status)| {
+            (status.state == State::Running)
+                .then(|| cards.get(id).map(|card| card.machine().borrow().name.clone()))?
+        };
+        tray.set_running(report.statuses.iter().filter_map(is_running).collect());
     }
 
     fn show_status(&self, report: Report) {
@@ -212,5 +242,7 @@ impl Window {
         for (id, status) in &report.statuses {
             self.show_machine_status(id, status, report.vm_running);
         }
+        self.0.refresh.borrow_mut().looked = true;
+        self.tell_the_tray(&report);
     }
 }

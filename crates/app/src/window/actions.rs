@@ -1,11 +1,9 @@
-//! The window's actions, and the About and shortcuts dialogs they lead to.
+//! The window's actions, and the shortcuts dialog one of them leads to.
 
 use super::Window;
-use super::machine_row::MachineRow;
-use crate::application::APP_ID;
+use super::machine_card::MachineCard;
 use adw::prelude::*;
 use gtk::gio;
-use guesthouse_app_core::updates::VERSION;
 
 /// Keys the guest must get while its screen is up, so these actions are off then.
 const HOST_ACCELS: [(&str, &str); 4] = [
@@ -14,9 +12,6 @@ const HOST_ACCELS: [(&str, &str); 4] = [
     ("quit", "<Control>q"),
     ("shortcuts", "<Control>question"),
 ];
-const WEBSITE: &str = "https://github.com/xnixy/guesthouse";
-const ISSUES: &str = "https://github.com/xnixy/guesthouse/issues";
-const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const SHORTCUTS_WIDTH: i32 = 480;
 const SHORTCUTS_HEIGHT: i32 = 520;
 const SCREEN_SHORTCUTS: [(&str, &str); 4] = [
@@ -40,11 +35,13 @@ fn add(window: &Window, name: &str, run: impl Fn(&Window) + 'static) {
 pub fn add_actions(window: &Window) {
     add(window, "new-machine", on_new_machine_key);
     add(window, "settings", on_settings_key);
-    add(window, "quit", |window| window.widget().close());
+    add(window, "quit", Window::quit);
     add(window, "shortcuts", show_shortcuts);
     add(window, "setup", Window::show_setup);
     add(window, "log", Window::show_log);
-    add(window, "about", show_about);
+    add(window, "about", crate::about::show);
+    add(window, "preferences", crate::preferences::show);
+    add(window, "report", crate::report_dialog::show);
     add(window, "check-updates", Window::check_for_updates);
     add(window, "update", Window::update);
     if let Some(application) = window.widget().application() {
@@ -74,21 +71,13 @@ fn on_new_machine_key(window: &Window) {
     }
 }
 
-/// The row with the focus, which a click gives it too. With one machine there's no doubt.
-fn current_row(window: &Window) -> Option<MachineRow> {
-    let rows = window.0.rows.borrow();
-    let mut widget = gtk::prelude::GtkWindowExt::focus(window.widget());
-    while let Some(found) = widget {
-        if let Some(row) = rows.values().find(|row| row.widget().upcast_ref::<gtk::Widget>() == &found) {
-            return Some(row.clone());
-        }
-        widget = found.parent();
-    }
-    (rows.len() == 1).then(|| rows.values().next().cloned()).flatten()
+/// The machine the hero shows, which a click on a card makes it.
+fn current_row(window: &Window) -> Option<MachineCard> {
+    window.0.library.hero().chosen()
 }
 
 fn on_settings_key(window: &Window) {
-    if has_dialog(window) || window.0.rows.borrow().is_empty() {
+    if has_dialog(window) || window.0.cards.borrow().is_empty() {
         return;
     }
     match current_row(window) {
@@ -134,18 +123,4 @@ fn shortcut_row(title: &str, keys: &str) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(title).build();
     row.add_suffix(&gtk::ShortcutLabel::new(keys));
     row
-}
-
-fn show_about(window: &Window) {
-    let dialog = adw::AboutDialog::builder()
-        .application_name("Guesthouse")
-        .application_icon(APP_ID)
-        .version(VERSION)
-        .comments("Runs VMs on this PC. With its GPU part, Windows gets NVIDIA's own driver on the card the host keeps using.")
-        .license_type(gtk::License::Gpl20)
-        .website(WEBSITE)
-        .issue_url(ISSUES)
-        .build();
-    dialog.add_link("Discord", DISCORD);
-    dialog.present(Some(window.widget()));
 }

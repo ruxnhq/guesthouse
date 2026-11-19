@@ -10,6 +10,8 @@ use std::path::Path;
 const BUTTON_LEFT: u32 = 272;
 const BUTTON_RIGHT: u32 = 273;
 const BUTTON_MIDDLE: u32 = 274;
+const BUTTON_SIDE: u32 = 275;
+const BUTTON_EXTRA: u32 = 276;
 
 pub struct ForwardedInput {
     stream: UnixStream,
@@ -46,6 +48,8 @@ impl ForwardedInput {
         let code = match name {
             "right" => BUTTON_RIGHT,
             "middle" => BUTTON_MIDDLE,
+            "side" => BUTTON_SIDE,
+            "extra" => BUTTON_EXTRA,
             _ => BUTTON_LEFT,
         };
         self.send(&format!("b {code} {}", u8::from(down)));
@@ -78,12 +82,14 @@ mod tests {
         input.move_to(12.5, 7.0);
         input.button("left", true);
         input.button("right", false);
+        input.button("side", true);
+        input.button("extra", false);
         input.key(30, true);
         input.scroll(-1);
         drop(input);
         let mut text = String::new();
         session.read_to_string(&mut text).unwrap();
-        assert_eq!(text, "m 12.5 7.0\nb 272 1\nb 273 0\nk 30 1\na 0 -1\n");
+        assert_eq!(text, "m 12.5 7.0\nb 272 1\nb 273 0\nb 275 1\nb 276 0\nk 30 1\na 0 -1\n");
     }
 
     #[test]

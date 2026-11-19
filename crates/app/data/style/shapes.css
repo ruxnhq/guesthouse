@@ -1,0 +1,260 @@
+/* The shapes of the app's widgets, the same in dark and light. Colours come by name from the
+   palette loaded before this.
+
+   Nothing here gives a window, a page or the guest's screen a background: the viewer makes its
+   window see-through to show the guest's own surface under it. */
+
+/* The bar at the top is part of the page, not a strip over it. */
+headerbar {
+  /* Said here too, as a desktop's own gtk.css can colour header bars. */
+  background: @headerbar_bg_color;
+  color: @headerbar_fg_color;
+  min-height: 52px;
+  box-shadow: none;
+  border: none;
+}
+
+/* The window's own buttons, round and quiet, wherever the desktop's layout puts them. */
+windowcontrols > button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  margin: 0 2px;
+  border-radius: 999px;
+}
+
+windowcontrols > button > image {
+  padding: 7px;
+  border-radius: 999px;
+  background: alpha(@window_fg_color, 0.08);
+}
+
+windowcontrols > button:hover > image {
+  background: alpha(@window_fg_color, 0.16);
+}
+
+windowcontrols > button.close:hover > image {
+  background: @destructive_bg_color;
+  color: @destructive_fg_color;
+}
+
+/* Buttons are pills. The one that matters most on a page is filled. */
+button {
+  border-radius: 999px;
+}
+
+button.text-button {
+  padding: 8px 18px;
+  font-weight: 500;
+}
+
+button.suggested-action {
+  background: @primary_bg_color;
+  color: @primary_fg_color;
+  font-weight: 600;
+}
+
+button.destructive-action {
+  background: transparent;
+  color: @destructive_color;
+  box-shadow: inset 0 0 0 1px @hairline;
+}
+
+/* Rows sit in rounded panels with a hairline round them. */
+list.boxed-list,
+.card {
+  border-radius: 20px;
+  box-shadow: 0 0 0 1px @hairline;
+}
+
+list.boxed-list > row {
+  min-height: 60px;
+}
+
+preferencesgroup > box > box > label.title {
+  font-size: 0.8em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+/* Fields and what opens a list of choices. */
+entry,
+spinbutton,
+dropdown > button,
+row.combo button {
+  border-radius: 12px;
+}
+
+/* Menus and lists of choices: a rounded panel, with rounded rows in it. */
+popover > contents {
+  padding: 6px;
+  border-radius: 18px;
+  box-shadow:
+    0 0 0 1px @hairline,
+    0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+popover modelbutton,
+popover listview > row,
+popover list > row {
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+/* A dialog over the window. */
+dialog.background,
+floating-sheet > sheet,
+dialog > sheet {
+  border-radius: 24px;
+}
+
+/* Titles are tight and heavy. */
+.title-1,
+.title-2,
+statuspage .title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* A dialog's pages, named down its side. */
+.navigation-sidebar {
+  padding: 6px;
+  background: none;
+}
+
+.navigation-sidebar > row {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-weight: 500;
+}
+
+.navigation-sidebar > row:selected {
+  background: @field_bg_color;
+  color: @window_fg_color;
+}
+
+/* Word of an update: a pill under the bar, not a strip across the window. */
+banner > revealer > widget {
+  margin: 2px 20px 8px;
+  padding: 4px 6px 4px 18px;
+  border-radius: 999px;
+  background: @card_bg_color;
+  color: @window_fg_color;
+  box-shadow: 0 0 0 1px @hairline;
+}
+
+/* Holding the look against a desktop's own theme.
+
+   A theme in the user's gtk.css can restyle anything, and it wins wherever this sheet says
+   nothing: this sheet comes first property by property, not rule by rule. So what the app's look
+   depends on is said in full here, including what a plain desktop never needed saying. */
+
+/* The window's buttons: a theme may swap them for pictures and hide the icons. */
+windowcontrols {
+  border-spacing: 4px;
+  padding: 0 6px;
+  margin: 0;
+}
+
+windowcontrols > button {
+  margin: 0 2px;
+  border: none;
+  outline-offset: 0;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: @window_fg_color;
+  opacity: 1;
+}
+
+windowcontrols > button > image {
+  margin: 0;
+  background-image: none;
+  color: @window_fg_color;
+  -gtk-icon-size: 16px;
+}
+
+/* Switches. */
+switch {
+  min-width: 46px;
+  min-height: 20px;
+  margin: 0;
+  padding: 3px;
+  border: none;
+  border-radius: 999px;
+  outline-offset: 2px;
+  background-color: @field_bg_color;
+  background-image: none;
+  background-clip: border-box;
+  box-shadow: inset 0 0 0 1px @hairline;
+  color: transparent;
+  font-size: 0;
+}
+
+switch:checked {
+  background-color: @accent_bg_color;
+  box-shadow: none;
+}
+
+switch:disabled {
+  filter: opacity(0.45);
+}
+
+switch > slider {
+  min-width: 20px;
+  min-height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: alpha(@window_fg_color, 0.75);
+  background-image: none;
+  box-shadow: none;
+}
+
+switch:checked > slider {
+  margin: 0;
+  background-color: @accent_fg_color;
+}
+
+/* A dialog, and the two sides of one with its pages named down the side: solid, each its own
+   shade, with bars that take the colour of what they sit on. */
+floating-sheet > sheet,
+bottom-sheet > sheet,
+dialog > sheet {
+  background-color: @dialog_bg_color;
+  background-image: none;
+  color: @dialog_fg_color;
+}
+
+navigation-split-view > .sidebar-pane {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background-color: @window_bg_color;
+  background-image: none;
+  box-shadow: none;
+}
+
+navigation-split-view > .content-pane {
+  border: none;
+  background-color: @dialog_bg_color;
+  background-image: none;
+  box-shadow: none;
+}
+
+floating-sheet headerbar,
+bottom-sheet headerbar,
+dialog headerbar {
+  background-color: transparent;
+  background-image: none;
+}
+
+list.navigation-sidebar,
+list.navigation-sidebar > row {
+  border: none;
+  background-image: none;
+  box-shadow: none;
+}

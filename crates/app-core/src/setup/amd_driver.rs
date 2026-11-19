@@ -51,7 +51,7 @@ fn display_infs(paths: &str) -> Vec<&str> {
 }
 
 /// Whether the INF has a line for this AMD device, whatever its subsystem and revision.
-fn lists_device(inf: &str, device: u32) -> bool {
+pub(super) fn lists_device(inf: &str, device: u32) -> bool {
     let wanted = format!("PCI\\VEN_1002&DEV_{device:04X}");
     inf.to_uppercase().contains(&wanted)
 }

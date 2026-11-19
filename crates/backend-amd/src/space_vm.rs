@@ -12,9 +12,9 @@ use crate::device::Device;
 use crate::fault::{self, Fault};
 use crate::fence_ib::{FenceIbs, Writer};
 use crate::memory::{self, GemHandle, MapFlags};
+use crate::reset::{self, ContextCalls, Contexts};
 use crate::run_wait::{self, Patience, Waited};
 use crate::submit::{self, Context, Ib, Syncobj};
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io;
@@ -134,8 +134,9 @@ pub enum Origin {
 pub struct SpaceVm {
     file: File,
     books: Books,
-    /// One amdgpu context for each engine family, made on first use. Closing the file frees them.
-    contexts: HashMap<u32, Context>,
+    /// One amdgpu context for each engine family, made on first use and again after a reset.
+    /// Closing the file frees them.
+    contexts: Contexts<Context>,
     /// Whether work here has faulted, after which nothing more is run here.
     faults: fault::Watch,
     /// The command buffers that have the card write a fence, made on first use.
@@ -182,7 +183,7 @@ impl SpaceVm {
         Ok(Self {
             file: device.open_again()?,
             books: Books::default(),
-            contexts: HashMap::new(),
+            contexts: Contexts::default(),
             faults: fault::Watch::default(),
             fence_ibs: None,
             on_card: VecDeque::new(),
@@ -219,27 +220,42 @@ impl SpaceVm {
     /// Runs command buffers already mapped here on the engine family `ip_type`, in order, and waits
     /// for the last to retire, as long as `patience` allows. Nothing is run once work here has
     /// faulted. amdgpu can record a fault a moment after its run retires, so there is a look before
-    /// a run as well as after it.
-    pub fn run(&mut self, ip_type: u32, ibs: &[Ib], patience: Patience) -> io::Result<Ran> {
+    /// a run as well as after it. `queue` is the guest's queue the work is from, or `None` for the
+    /// daemon's own.
+    pub fn run(
+        &mut self,
+        ip_type: u32,
+        queue: Option<u32>,
+        ibs: &[Ib],
+        patience: Patience,
+    ) -> io::Result<Ran> {
         if let Some(fault) = self.faults.look(&self.file) {
             return Ok(Ran::Faulted(fault));
         }
-        let ran = self.submit_and_wait(ip_type, ibs, patience);
+        let ran = self.submit_and_wait(ip_type, queue, ibs, patience);
         match (ran, self.faults.look(&self.file)) {
             (Ok(Ran::Retired), Some(fault)) => Ok(Ran::Faulted(fault)),
             (ran, _) => ran,
         }
     }
 
-    fn submit_and_wait(&mut self, ip_type: u32, ibs: &[Ib], patience: Patience) -> io::Result<Ran> {
-        let context = context_for(&mut self.contexts, &self.file, ip_type)?;
+    fn submit_and_wait(
+        &mut self,
+        ip_type: u32,
+        queue: Option<u32>,
+        ibs: &[Ib],
+        patience: Patience,
+    ) -> io::Result<Ran> {
         let signal = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
         let buffers = self.books.handles();
-        let ran = match submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &signal) {
+        let submitted = self.contexts.submit(&self.file, ip_type, queue, |context| {
+            submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &signal).map(|_| ())
+        });
+        let ran = match submitted {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(Ran::Refused),
             Err(error) => Err(step("submitting", error)),
-            Ok(_) => signal
+            Ok(()) => signal
                 .arm_eventfd(&self.file)
                 .map_err(|error| step("arming the eventfd", error))
                 .and_then(|event| run_wait::wait_for_run(&event, patience, ip_type))
@@ -296,12 +312,14 @@ impl SpaceVm {
                 fault.address, fault.status
             )));
         }
-        let context = context_for(&mut self.contexts, &self.file, ip_type)?;
         let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
         let mut buffers = self.books.handles();
         buffers.push(fence_ibs.handle());
-        match submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &retired) {
+        let submitted = self.contexts.submit(&self.file, ip_type, Some(fence.queue), |context| {
+            submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &retired).map(|_| ())
+        });
+        match submitted {
             Ok(_) => {
                 self.on_card.push_back(OnCard { slot, retired, fence: Some(fence) });
                 Ok(())
@@ -321,6 +339,7 @@ impl SpaceVm {
 
     /// Forgets the fences of a queue that has gone.
     pub fn forget_queue(&mut self, queue: u32) {
+        self.contexts.forget_queue(queue);
         self.retired.retain(|fence| fence.queue != queue);
         for run in &mut self.on_card {
             run.fence = run.fence.filter(|fence| fence.queue != queue);
@@ -407,18 +426,32 @@ impl SpaceVm {
     }
 }
 
-/// The space's context for an engine family, made on first use.
-fn context_for<'a>(
-    contexts: &'a mut HashMap<u32, Context>,
-    file: &File,
-    ip_type: u32,
-) -> io::Result<&'a Context> {
-    Ok(match contexts.entry(ip_type) {
-        Entry::Occupied(slot) => slot.into_mut(),
-        Entry::Vacant(slot) => {
-            slot.insert(Context::create(file).map_err(|error| step("making a context", error))?)
+impl ContextCalls for File {
+    type Context = Context;
+
+    fn make(&self) -> io::Result<Context> {
+        Context::create(self)
+    }
+
+    fn spoiled(&self, context: &Context, error: &io::Error) -> bool {
+        let flags = context.reset_flags(self).ok();
+        let spoiled = reset::spoiled_by_reset(error, flags);
+        if spoiled {
+            let flag = |bit| flags.map_or("unknown".to_string(), |flags| (flags & bit != 0).to_string());
+            log::error!(
+                "amdgpu refused work after a reset ({error}). Video memory lost: {}, this space's \
+                 work hung the card: {}. The space's contexts are made again, and guest queues from \
+                 before the reset fail",
+                flag(reset::FLAG_VRAM_LOST),
+                flag(reset::FLAG_GUILTY)
+            );
         }
-    })
+        spoiled
+    }
+
+    fn free(&self, context: Context) {
+        context.destroy(self);
+    }
 }
 
 /// `error`, saying which step it came from.

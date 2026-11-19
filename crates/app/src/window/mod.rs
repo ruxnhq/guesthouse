@@ -2,19 +2,21 @@
 //! saving machines. The pages it shows are modules of their own.
 
 mod actions;
+mod hero;
 mod keys;
 mod library_page;
-mod machine_row;
+mod machine_card;
 mod refresh;
 mod screen_hdr;
 mod updates;
 
-pub use machine_row::{MachineHandle, MachineRow};
+pub use machine_card::{MachineCard, MachineHandle};
 
 use crate::common::in_background;
 use crate::log_dialog;
 use crate::new_machine::NewMachineDialog;
 use crate::settings::SettingsDialog;
+use crate::tray::{Asked, Tray};
 use crate::viewer::ScreenPage;
 use crate::wizard;
 use adw::prelude::*;
@@ -40,18 +42,18 @@ use std::thread;
 const DEFAULT_SIZE: (i32, i32) = (1120, 720);
 const SMALLEST_WINDOW: (i32, i32) = (360, 300);
 const TOAST_SECONDS: u32 = 6;
+/// The preference that asks for the icon in the tray.
+pub const TRAY: &str = "tray";
+/// How long after a login started the app its machines start, so what's already running is known.
+const LOGIN_START_AFTER_SECONDS: u32 = 3;
 const PROBLEM_SECONDS: u32 = 10;
-/// In fullscreen the viewer's header lies over the picture, and it has no background of its own.
-const STYLE: &str = ".screen-header { background: @headerbar_bg_color; }
-.machine-thumbnail { border-radius: 6px; }";
-
 struct Inner {
     context: Arc<Context>,
     window: adw::ApplicationWindow,
     toasts: adw::ToastOverlay,
     pages: adw::NavigationView,
     library: LibraryPage,
-    rows: RefCell<BTreeMap<String, MachineRow>>,
+    cards: RefCell<BTreeMap<String, MachineCard>>,
     load_errors: RefCell<Vec<String>>,
     settings: RefCell<Option<SettingsDialog>>,
     new_machine: RefCell<Option<NewMachineDialog>>,
@@ -62,6 +64,11 @@ struct Inner {
     screen_watch: OnceCell<Option<Rc<screen_hdr::ScreenWatch>>>,
     /// A newer release, once a check has found one.
     newer: RefCell<Option<String>>,
+    /// The icon in the desktop's tray, while the preferences ask for one and the desktop has a
+    /// place for it. With it there, closing the window hides it and the app runs on.
+    tray: RefCell<Option<Tray>>,
+    /// What keeps the app running with its window hidden.
+    hold: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
 }
 
 /// A handle to the window, which any page can hold.
@@ -94,7 +101,7 @@ impl Window {
             toasts,
             pages,
             library,
-            rows: RefCell::default(),
+            cards: RefCell::default(),
             load_errors: RefCell::default(),
             settings: RefCell::default(),
             new_machine: RefCell::default(),
@@ -104,9 +111,15 @@ impl Window {
             refresh: RefCell::default(),
             screen_watch: OnceCell::new(),
             newer: RefCell::default(),
+            tray: RefCell::default(),
+            hold: RefCell::default(),
         }));
-        this.add_style();
+        crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
+        if prefs.get(TRAY) == Some(&Value::Bool(true)) {
+            this.set_tray(true, crate::login::started_at_login());
+        }
         this.0.library.connect_new_machine(&this);
+        this.connect_chosen();
         keys::add_host_keys(&this);
         actions::add_actions(&this);
         this.connect_close();
@@ -116,17 +129,6 @@ impl Window {
         this
     }
 
-    fn add_style(&self) {
-        let style = gtk::CssProvider::new();
-        style.load_from_string(STYLE);
-        // Above USER, as a theme's gtk.css can make header bars see-through.
-        gtk::style_context_add_provider_for_display(
-            &WidgetExt::display(&self.0.window),
-            &style,
-            gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
-        );
-    }
-
     fn connect_close(&self) {
         let this = self.clone();
         self.0.window.connect_close_request(move |_| {
@@ -134,8 +136,63 @@ impl Window {
                 page.save_thumbnail_now();
             }
             this.remember_size();
+            // With the icon in the tray the app stays, and the icon brings the window back.
+            if this.has_tray() {
+                this.0.window.set_visible(false);
+                return glib::Propagation::Stop;
+            }
             glib::Propagation::Proceed
         });
+    }
+
+    pub fn has_tray(&self) -> bool {
+        self.0.tray.borrow().is_some()
+    }
+
+    /// Puts the app's icon in the tray or takes it out, and says whether it's there now. A desktop
+    /// with no tray leaves it out. `waits` is for a run a login started, when the tray may not
+    /// be up yet.
+    pub fn set_tray(&self, wanted: bool, waits: bool) -> bool {
+        if wanted && !self.has_tray() {
+            let icons = self.0.context.paths.runtime.join("icons");
+            let Some((tray, asks)) = Tray::start(icons, waits) else { return false };
+            *self.0.tray.borrow_mut() = Some(tray);
+            *self.0.hold.borrow_mut() = self.0.window.application().map(|application| application.hold());
+            let this = self.clone();
+            glib::spawn_future_local(async move {
+                while let Ok(asked) = asks.recv().await {
+                    match asked {
+                        Asked::Show => this.present(),
+                        Asked::Quit => this.quit(),
+                    }
+                }
+            });
+        } else if !wanted && self.has_tray() {
+            self.drop_tray();
+            // Nothing else would bring a hidden window back.
+            self.present();
+        }
+        self.has_tray()
+    }
+
+    fn drop_tray(&self) {
+        let tray = self.0.tray.borrow_mut().take();
+        if let Some(tray) = tray {
+            tray.stop();
+        }
+        self.0.hold.borrow_mut().take();
+    }
+
+    /// Ends the app, whether or not its icon would have kept it running. The machines run on.
+    pub fn quit(&self) {
+        if let Some(page) = self.0.screen_page.borrow().as_ref() {
+            page.save_thumbnail_now();
+        }
+        self.remember_size();
+        self.drop_tray();
+        if let Some(application) = self.0.window.application() {
+            application.quit();
+        }
     }
 
     fn remember_size(&self) {
@@ -183,17 +240,76 @@ impl Window {
         self.show_problems();
     }
 
+    /// Makes this the machine the hero shows, and the one the keyboard's shortcuts are for.
+    fn choose(&self, card: Option<&MachineCard>) {
+        self.0.library.hero().choose(card);
+        self.0.library.mark_chosen(card.map(MachineCard::widget));
+    }
+
+    /// A card says something about its machine changed, which the hero shows too if it's chosen.
+    pub(super) fn card_changed(&self, card: &MachineCard) {
+        let hero = self.0.library.hero();
+        if hero.shows(card) {
+            hero.refresh();
+        }
+    }
+
+    /// A card has a new picture of its machine's screen, which the hero shows too if it's chosen.
+    pub(super) fn card_picture_changed(&self, card: &MachineCard) {
+        let hero = self.0.library.hero();
+        if hero.shows(card) {
+            hero.show_picture();
+        }
+    }
+
+    fn connect_chosen(&self) {
+        let this = self.clone();
+        self.0.library.connect_chosen(move |clicked| {
+            let card = this.0.cards.borrow().values().find(|card| card.widget() == clicked).cloned();
+            this.choose(card.as_ref());
+        });
+    }
+
+    /// Starts the machines set to start with the PC, once the first look at what's running is in:
+    /// one that a login finds already running is left alone.
+    pub fn start_machines_for_login(&self) {
+        let this = self.clone();
+        glib::timeout_add_seconds_local_once(LOGIN_START_AFTER_SECONDS, move || {
+            let wanted: Vec<MachineCard> = this
+                .0
+                .cards
+                .borrow()
+                .values()
+                .filter(|card| card.machine().borrow().start_with_pc)
+                .filter(|card| card.shown().is_off() && card.shown().can_start)
+                .cloned()
+                .collect();
+            for card in wanted {
+                card.on_start();
+            }
+        });
+    }
+
+    /// The card of the machine with this id, which is where its actions are.
+    pub fn card(&self, id: &str) -> Option<MachineCard> {
+        self.0.cards.borrow().get(id).cloned()
+    }
+
     fn show_problems(&self) {
         let errors = self.0.load_errors.borrow();
-        self.0.library.show(!self.0.rows.borrow().is_empty(), &errors);
+        self.0.library.show(!self.0.cards.borrow().is_empty(), &errors);
     }
 
     pub fn add_machine(&self, machine: Machine) -> MachineHandle {
         let id = machine.id.clone();
-        let row = MachineRow::new(self, machine);
+        let row = MachineCard::new(self, machine);
         let handle = row.machine();
         self.0.library.add(row.widget());
-        self.0.rows.borrow_mut().insert(id, row);
+        let first = self.0.library.hero().chosen().is_none();
+        self.0.cards.borrow_mut().insert(id, row.clone());
+        if first {
+            self.choose(Some(&row));
+        }
         self.show_problems();
         handle
     }
@@ -218,8 +334,13 @@ impl Window {
     }
 
     fn on_removed(&self, id: &str) {
-        if let Some(row) = self.0.rows.borrow_mut().remove(id) {
-            self.0.library.remove(row.widget());
+        let removed = self.0.cards.borrow_mut().remove(id);
+        if let Some(card) = removed {
+            self.0.library.remove(card.widget());
+            if self.0.library.hero().shows(&card) {
+                let next = self.0.cards.borrow().values().next().cloned();
+                self.choose(next.as_ref());
+            }
         }
         self.show_problems();
     }
@@ -272,7 +393,7 @@ impl Window {
     }
 
     pub fn show_thumbnail(&self, id: &str) {
-        if let Some(row) = self.0.rows.borrow().get(id) {
+        if let Some(row) = self.0.cards.borrow().get(id) {
             row.show_thumbnail();
         }
     }
@@ -321,6 +442,13 @@ impl Window {
         }
     }
 
+    /// Turns the open settings to the page of this name, for the page checks.
+    pub fn show_settings_page(&self, name: &str) {
+        if let Some(settings) = self.0.settings.borrow().as_ref() {
+            settings.show_page(name);
+        }
+    }
+
     pub fn show_log(&self) {
         log_dialog::show(self);
     }
@@ -337,7 +465,7 @@ impl Window {
 
     pub fn show_settings(&self, machine: MachineHandle) {
         let id = machine.borrow().id.clone();
-        let status = self.0.rows.borrow().get(&id).map(MachineRow::status).unwrap_or_default();
+        let status = self.0.cards.borrow().get(&id).map(MachineCard::status).unwrap_or_default();
         self.note_screen_hdr();
         let dialog = SettingsDialog::new(self, machine);
         dialog.set_status(&status);

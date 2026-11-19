@@ -5,6 +5,10 @@ all-features = true
 
 [advisories]
 version = 2
+# Three pieces of zbus 5, which have moved inside zbus 6 and get no releases of their own any
+# more. That is all these say: nothing is known to be wrong with the code. They come with ksni,
+# the tray's library, which is still on zbus 5, and go from this list when it moves on.
+ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
 
 [licenses]
 version = 2
@@ -18,6 +22,8 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # ksni, which speaks the tray's protocol for the app's icon.
+    "Unlicense",
 ]
 
 [bans]

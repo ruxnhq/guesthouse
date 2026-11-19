@@ -12,7 +12,8 @@ const ACTION: &str = "monitor";
 
 pub struct Monitors {
     window: Window,
-    button: adw::SplitButton,
+    /// The part of the viewer's menu the monitors are listed in.
+    items: gio::Menu,
     chosen: Rc<RefCell<String>>,
     handler: RefCell<Option<glib::SignalHandlerId>>,
 }
@@ -22,12 +23,12 @@ fn all_monitors(display: &gdk::Display) -> Vec<gdk::Monitor> {
 }
 
 impl Monitors {
-    pub fn new(window: &Window, button: &adw::SplitButton) -> Rc<Self> {
+    pub fn new(window: &Window, items: &gio::Menu) -> Rc<Self> {
         let saved = read_prefs(&window.context()).get("monitor").and_then(Value::as_str).map(str::to_owned);
         let chosen = Rc::new(RefCell::new(saved.unwrap_or_default()));
         let this = Rc::new(Self {
             window: window.clone(),
-            button: button.clone(),
+            items: items.clone(),
             chosen: chosen.clone(),
             handler: RefCell::default(),
         });
@@ -58,7 +59,8 @@ impl Monitors {
     }
 
     fn list(&self) {
-        let menu = gio::Menu::new();
+        let menu = &self.items;
+        menu.remove_all();
         menu.append(Some("Monitor the Window Is On"), Some("win.monitor::"));
         for monitor in all_monitors(&WidgetExt::display(self.window.widget())) {
             let area = monitor.geometry();
@@ -72,7 +74,6 @@ impl Monitors {
             item.set_action_and_target_value(Some("win.monitor"), Some(&connector.to_variant()));
             menu.append_item(&item);
         }
-        self.button.set_menu_model(Some(&menu));
     }
 
     /// The monitor picked in the menu, if it's still plugged in.

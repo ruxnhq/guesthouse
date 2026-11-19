@@ -4,6 +4,7 @@ mod check_page;
 mod done_page;
 mod driver_page;
 
+use crate::rows::{bottom_bar, page_heading};
 use crate::window::Window;
 use adw::prelude::*;
 use std::rc::Rc;
@@ -12,7 +13,7 @@ use std::rc::Rc;
 const STEPS: u32 = 2;
 const SIZE: i32 = 640;
 
-/// What every step has: a title with its number, a Next button, and rows to fill.
+/// What every step has: its number and its name in large letters, rows to fill, and Next under them.
 pub struct Step {
     page: adw::NavigationPage,
     next: gtk::Button,
@@ -23,13 +24,15 @@ impl Step {
     fn new(title: &str, tag: &str, number: u32) -> Self {
         let next = gtk::Button::builder().label("Next").sensitive(false).build();
         next.add_css_class("suggested-action");
-        let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&adw::WindowTitle::new(title, &format!("Step {number} of {STEPS}"))));
-        header.pack_end(&next);
         let content = adw::PreferencesPage::new();
+        content.set_vexpand(true);
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&page_heading(&format!("Step {number} of {STEPS}"), title));
+        column.append(&content);
         let toolbar = adw::ToolbarView::new();
-        toolbar.set_content(Some(&content));
-        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&column));
+        toolbar.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());
+        toolbar.add_bottom_bar(&bottom_bar(&[&next]));
         let page = adw::NavigationPage::builder().title(title).tag(tag).child(&toolbar).build();
         Self { page, next, content }
     }

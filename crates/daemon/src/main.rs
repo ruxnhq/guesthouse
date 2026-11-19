@@ -108,7 +108,12 @@ fn serve_amd(
         node,
         memory_device,
     );
-    serve_on_render_node::<AmdBackend>(slot, project, &setup, needs, |_| {})
+    let run_folder = slot.run_folder(&project);
+    serve_on_render_node::<AmdBackend>(slot, project, &setup, needs, |backend| {
+        if env::var_os(guesthouse_backend_amd::IB_DUMP_VARIABLE).is_some() {
+            backend.keep_command_buffers(&run_folder, guesthouse_daemon::logger::started());
+        }
+    })
 }
 
 /// Starts the Intel backend on `card`, or with none, on the card in the Intel setup file, and

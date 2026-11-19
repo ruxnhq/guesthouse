@@ -3,7 +3,7 @@
 use crate::common::{choose_file, in_background};
 use crate::disk_place_row::DiskPlaceRow;
 use crate::driver_row::DriverRow;
-use crate::rows::{choice_row, number_row, row_button};
+use crate::rows::{bottom_bar, choice_row, number_row, page_heading, row_button};
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::account::{default_user, name_problem, password_problem};
@@ -106,10 +106,7 @@ impl NewMachineDialog {
         let create_button = gtk::Button::builder().label("Create").sensitive(false).build();
         create_button.add_css_class("suggested-action");
         let cancel = gtk::Button::with_label("Cancel");
-        let header =
-            adw::HeaderBar::builder().show_end_title_buttons(false).show_start_title_buttons(false).build();
-        header.pack_start(&cancel);
-        header.pack_end(&create_button);
+        let header = adw::HeaderBar::builder().show_title(false).build();
         let page = adw::PreferencesPage::new();
         let disc = adw::PreferencesGroup::new();
         page.add(&disc);
@@ -119,6 +116,7 @@ impl NewMachineDialog {
         iso_row.add_suffix(&choose);
         disc.add(&iso_row);
         let verdict = adw::ActionRow::builder().visible(false).activatable(false).build();
+        verdict.add_css_class("verdict");
         disc.add(&verdict);
         let hardware = adw::PreferencesGroup::new();
         hardware.set_sensitive(false);
@@ -153,12 +151,14 @@ impl NewMachineDialog {
             .build();
         note.add_css_class("dim-label");
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&page_heading("", "New Machine"));
         column.append(&page);
         column.append(&note);
         page.set_vexpand(true);
         let toolbar = adw::ToolbarView::new();
         toolbar.set_content(Some(&column));
         toolbar.add_top_bar(&header);
+        toolbar.add_bottom_bar(&bottom_bar(&[&cancel, &create_button]));
         let dialog = adw::Dialog::builder()
             .title("New Machine")
             .content_width(WIDTH)

@@ -179,6 +179,12 @@ mod imp {
             let at = self.picture_at.get();
             let (left, top) = (at.x, at.y);
             let (right, bottom) = (at.x + at.width as f32, at.y + at.height as f32);
+            // Something that spans the whole frame, though it shows nothing. GTK clears only as far
+            // as what a window draws reaches. A window has its shadow and border round everything,
+            // but in fullscreen or maximised the see-through window has neither, and bars left
+            // from the picture's last shape stayed on screen outside what was still drawn.
+            let all = graphene::Rect::new(0.0, 0.0, width, height);
+            snapshot.append_node(gsk::ColorNode::new(&gtk::gdk::RGBA::TRANSPARENT, &all));
             let black = gtk::gdk::RGBA::BLACK;
             for (x, y, w, h) in [
                 (0.0, 0.0, width, top),

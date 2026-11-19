@@ -45,13 +45,17 @@ pub fn application(context: Arc<Context>, started: impl Fn(&Window) + 'static) -
         let mut slot = window.borrow_mut();
         let window = slot.get_or_insert_with(|| {
             let window = Window::new(application, context.clone());
-            window.present();
+            // A run that a login started stays out of the way when there's an icon to call it by.
+            if !(crate::login::started_at_login() && window.has_tray()) {
+                window.present();
+            }
             window.note_screen_hdr();
             window.offer_setup();
             window.say_if_there_is_an_update();
             started(&window);
             window
         });
+        // Started again while it runs: that's someone asking for the window.
         window.present();
     });
     application.connect_startup(move |_| {
@@ -75,5 +79,12 @@ pub fn run() -> glib::ExitCode {
         }
     };
     log_panics(&context);
-    application(context, |_| {}).run()
+    let at_login = crate::login::started_at_login();
+    let application = application(context, move |window| {
+        if at_login {
+            window.start_machines_for_login();
+        }
+    });
+    // GTK would refuse the autostart file's own argument, and the app takes no others.
+    application.run_with_args::<&str>(&[])
 }

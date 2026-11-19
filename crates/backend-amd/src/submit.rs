@@ -20,9 +20,11 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 // Context op and offsets.
 const CTX_OP_ALLOC: u32 = 1;
 const CTX_OP_FREE: u32 = 2;
+const CTX_OP_QUERY_STATE2: u32 = 4;
 const CTX_IN_OP: usize = 0;
 const CTX_IN_CTX_ID: usize = 8;
 const CTX_OUT_CTX_ID: usize = 0;
+const CTX_OUT_FLAGS: usize = 0;
 const CTX_REQUEST_SIZE: usize = 16;
 
 // Chunk ids.
@@ -91,6 +93,16 @@ impl Context {
 
     pub fn id(&self) -> u32 {
         self.id
+    }
+
+    /// What amdgpu says has happened to the context since it was made: the
+    /// `AMDGPU_CTX_QUERY2_FLAGS_*` bits, such as a reset or lost video memory.
+    pub fn reset_flags(&self, file: &impl AsRawFd) -> io::Result<u64> {
+        let mut request = [0u8; CTX_REQUEST_SIZE];
+        put32(&mut request, CTX_IN_OP, CTX_OP_QUERY_STATE2);
+        put32(&mut request, CTX_IN_CTX_ID, self.id);
+        ioctl::drm_ioctl(file, call::ctx(), &mut request)?;
+        Ok(get64(&request, CTX_OUT_FLAGS))
     }
 
     pub fn destroy(&self, file: &impl AsRawFd) {

@@ -11,12 +11,15 @@
 
 use super::dmabuf_feedback::{self, Reading};
 use super::frames::SlotFrame;
+pub use super::stall::Stall;
+use super::stall::StallWatch;
 use gdk_wayland::prelude::*;
 use gdk_wayland::{WaylandDisplay, WaylandSurface};
 use gtk::gdk;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::AsFd;
 use std::sync::OnceLock;
+use std::time::Instant;
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -454,6 +457,8 @@ pub struct OwnSurface {
     /// The guest's reference white last used, for a frame that comes without one.
     last_reference: Option<u32>,
     place: Option<(i32, i32, i32, i32)>,
+    /// Whether the frames sent reach the screen.
+    stall: StallWatch,
 }
 
 impl OwnSurface {
@@ -526,6 +531,7 @@ impl OwnSurface {
             showing: None,
             last_reference: None,
             place: None,
+            stall: StallWatch::default(),
         })
     }
 
@@ -683,7 +689,22 @@ impl OwnSurface {
         }
         self.surface.commit();
         let _ = self.queue.flush();
+        // Only a compositor that says what it showed can be watched.
+        if self.presentation.is_some() {
+            self.stall.sent(Instant::now());
+        }
         Ok(())
+    }
+
+    /// Whether the frames sent reach the screen, as far as the compositor has said by now. Call
+    /// [`Self::catch_up`] first. A window nobody can see is shown no frames, and that isn't looked
+    /// into.
+    pub fn watch(&mut self, now: Instant, seen: bool) -> Option<Stall> {
+        if !seen {
+            self.stall.nothing_awaited();
+            return None;
+        }
+        self.stall.check(now, self.events.presented)
     }
 
     /// Asks the compositor for a buffer of this frame's slot. The answer comes back on the queue.
@@ -724,6 +745,7 @@ impl OwnSurface {
         self.surface.attach(None, 0, 0);
         self.surface.commit();
         let _ = self.queue.flush();
+        self.stall.nothing_awaited();
         for (_, release) in self.events.held.drain() {
             release();
         }

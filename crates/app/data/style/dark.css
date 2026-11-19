@@ -1,0 +1,36 @@
+/* The dark colours, under the names libadwaita reads its own from. */
+@define-color window_bg_color #07080a;
+@define-color window_fg_color #f4f5f7;
+@define-color view_bg_color #101216;
+@define-color view_fg_color #f4f5f7;
+@define-color headerbar_bg_color #07080a;
+@define-color headerbar_fg_color #f4f5f7;
+@define-color headerbar_border_color transparent;
+@define-color headerbar_backdrop_color #07080a;
+@define-color headerbar_shade_color transparent;
+@define-color sidebar_bg_color #07080a;
+@define-color sidebar_fg_color #f4f5f7;
+@define-color sidebar_backdrop_color #07080a;
+@define-color card_bg_color #101216;
+@define-color card_fg_color #f4f5f7;
+@define-color card_shade_color rgba(255, 255, 255, 0.09);
+@define-color dialog_bg_color #101216;
+@define-color dialog_fg_color #f4f5f7;
+@define-color popover_bg_color #14171c;
+@define-color popover_fg_color #f4f5f7;
+@define-color popover_shade_color rgba(255, 255, 255, 0.09);
+@define-color shade_color rgba(0, 0, 0, 0.5);
+@define-color accent_color #8fb4ff;
+@define-color accent_bg_color #8fb4ff;
+@define-color accent_fg_color #07122b;
+@define-color destructive_color #ff8f85;
+@define-color destructive_bg_color #ff8f85;
+@define-color destructive_fg_color #2a0704;
+@define-color success_color #74d3a0;
+@define-color warning_color #f5c26b;
+@define-color error_color #ff8f85;
+/* The app's own: a line between things, and the fill of a field or a quiet button. */
+@define-color hairline rgba(255, 255, 255, 0.09);
+@define-color field_bg_color #1a1d23;
+@define-color primary_bg_color #f4f5f7;
+@define-color primary_fg_color #07080a;

@@ -354,7 +354,15 @@ impl Screen {
 
     /// The guest's own frames win, and QEMU's are only looked at until they come.
     fn next_texture(&self) -> Option<gdk::Texture> {
-        let from_gpu = self.0.gpu.borrow_mut().as_mut().and_then(|source| source.newest());
+        // While the own surface is there or on its way, the guest's frames are its to hand out, and
+        // it gives GTK the ones it can't take. A frame that came in just after it looked would be
+        // drawn by GTK otherwise: a solid window over the surface, which stood still in fullscreen
+        // until the window had something else to draw.
+        let from_gpu = if self.own_awaited() {
+            None
+        } else {
+            self.0.gpu.borrow_mut().as_mut().and_then(|source| source.newest())
+        };
         self.follow_gpu_cursor();
         if from_gpu.is_some() {
             self.0.booting.set(false);
@@ -382,12 +390,14 @@ impl Screen {
         if let Some(cursor) = source.new_cursor() {
             *self.0.guest_pointer.borrow_mut() = Some(cursor);
         }
-        // A pointer set here would show through the capture, which hides the root's.
+        // The guest's pointer set here would show through the capture, which hides the root's. None
+        // would too while a button is held: GTK then looks no further up than the widget under the
+        // pointer, and shows the desktop's.
         let captured = self.captured();
-        let pointer = if self.guest_draws_pointer() {
+        let pointer = if captured || self.guest_draws_pointer() {
             self.0.no_pointer.clone()
         } else {
-            self.0.guest_pointer.borrow().clone().filter(|_| !captured)
+            self.0.guest_pointer.borrow().clone()
         };
         if self.0.picture.cursor() != pointer {
             self.0.picture.set_cursor(pointer.as_ref());

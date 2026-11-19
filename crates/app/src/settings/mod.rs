@@ -16,6 +16,7 @@ mod network;
 mod remove;
 mod sharing;
 mod snapshots;
+mod starting;
 mod token;
 mod usb;
 mod windows_card;
@@ -31,7 +32,7 @@ use std::rc::Rc;
 pub struct Shared {
     window: Window,
     machine: MachineHandle,
-    dialog: adw::PreferencesDialog,
+    dialog: adw::Dialog,
 }
 
 impl Shared {
@@ -52,32 +53,109 @@ impl Shared {
     }
 }
 
-/// The pages, in the order the dialog shows them.
+const WIDTH: i32 = 880;
+const HEIGHT: i32 = 660;
+const SIDEBAR_WIDTH: f64 = 200.0;
+const SMALLEST: (i32, i32) = (360, 300);
+/// Under this the list of pages and the page shown take turns, as there's no room for both.
+const NARROW: f64 = 620.0;
+
+/// The pages, in the order the list beside them names them.
 struct Pages {
     general: adw::PreferencesPage,
     display: adw::PreferencesPage,
     storage: adw::PreferencesPage,
     network: adw::PreferencesPage,
     devices: adw::PreferencesPage,
+    list: gtk::ListBox,
+}
+
+/// A bar with the dialog's close button over a page of the dialog.
+fn under_a_bar(content: &impl IsA<gtk::Widget>) -> adw::ToolbarView {
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(content));
+    view
 }
 
 impl Pages {
-    fn new(dialog: &adw::PreferencesDialog, kind: Kind) -> Self {
-        let add = |name: &str, title: &str, icon: &str| {
-            let page = adw::PreferencesPage::builder().name(name).title(title).icon_name(icon).build();
-            dialog.add(&page);
+    /// Fills the dialog with a list of its pages down the side and the chosen page beside it.
+    fn new(dialog: &adw::Dialog, machine_name: &str, kind: Kind) -> Self {
+        let stack = gtk::Stack::new();
+        let list = gtk::ListBox::new();
+        list.add_css_class("navigation-sidebar");
+        let add = |name: &str, title: &str| {
+            let page = adw::PreferencesPage::builder().name(name).title(title).build();
+            stack.add_named(&page, Some(name));
+            let row = gtk::ListBoxRow::builder()
+                .name(name)
+                .child(&gtk::Label::builder().label(title).xalign(0.0).build())
+                .build();
+            list.append(&row);
             page
         };
         let pages = Self {
-            general: add("general", "General", "computer-symbolic"),
-            display: add("display", "Display", "video-display-symbolic"),
-            storage: add("storage", "Storage", "drive-harddisk-symbolic"),
-            network: add("network", "Network", "network-wired-symbolic"),
-            devices: add("devices", "Devices", "media-removable-symbolic"),
+            general: add("general", "General"),
+            display: add("display", "Display"),
+            storage: add("storage", "Storage"),
+            network: add("network", "Network"),
+            devices: add("devices", "Devices"),
+            list,
         };
         // Ubuntu's network is fixed, so its page would be empty.
-        pages.network.set_visible(kind != Kind::Linux);
+        if kind == Kind::Linux
+            && let Some(row) = pages.row("network")
+        {
+            row.set_visible(false);
+        }
+        let shown = adw::NavigationPage::builder().child(&under_a_bar(&stack)).title("General").build();
+        let listed = adw::NavigationPage::builder()
+            .child(&under_a_bar(&gtk::ScrolledWindow::builder().child(&pages.list).build()))
+            .title(machine_name)
+            .build();
+        let split = adw::NavigationSplitView::builder()
+            .sidebar(&listed)
+            .content(&shown)
+            .min_sidebar_width(SIDEBAR_WIDTH)
+            .max_sidebar_width(SIDEBAR_WIDTH)
+            .build();
+        let (showing, chosen) = (split.clone(), shown.clone());
+        pages.list.connect_row_selected(move |_, row| {
+            let Some(row) = row else { return };
+            let name = row.widget_name();
+            stack.set_visible_child_name(&name);
+            if let Some(page) = stack.visible_child().and_downcast::<adw::PreferencesPage>() {
+                chosen.set_title(&page.title());
+            }
+        });
+        // In a narrow window a click on a page's name is what brings the page in.
+        pages.list.connect_row_activated(move |_, _| showing.set_show_content(true));
+        pages.list.select_row(pages.row("general").as_ref());
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            NARROW,
+            adw::LengthUnit::Sp,
+        ));
+        narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
+        dialog.add_breakpoint(narrow);
+        dialog.set_child(Some(&split));
+        dialog.set_content_width(WIDTH);
+        dialog.set_content_height(HEIGHT);
+        // A dialog whose layout changes with its width has to say how small it can get.
+        dialog.set_width_request(SMALLEST.0);
+        dialog.set_height_request(SMALLEST.1);
         pages
+    }
+
+    fn row(&self, name: &str) -> Option<gtk::ListBoxRow> {
+        let mut row = self.list.first_child();
+        while let Some(found) = row {
+            if found.widget_name() == name {
+                return found.downcast().ok();
+            }
+            row = found.next_sibling();
+        }
+        None
     }
 }
 
@@ -93,6 +171,7 @@ struct Parts {
     disk: disk::Disk,
     drives: drives::Drives,
     snapshots: snapshots::Snapshots,
+    _starting: starting::Starting,
     _token: token::Token,
     _account: account::Account,
     _gpu_preview: gpu_preview::GpuPreview,
@@ -103,6 +182,8 @@ struct Parts {
     network: network::Network,
     usb: usb::Usb,
     remove: remove::Remove,
+    /// The names of the pages, down the dialog's side.
+    list: gtk::ListBox,
 }
 
 #[derive(Clone)]
@@ -110,12 +191,17 @@ pub struct SettingsDialog(Rc<Parts>);
 
 impl SettingsDialog {
     pub fn new(window: &Window, machine: MachineHandle) -> Self {
-        let dialog = adw::PreferencesDialog::new();
+        let dialog = adw::Dialog::new();
         dialog.set_title(&format!("{} Settings", machine.borrow().name));
-        let pages = Pages::new(&dialog, machine.borrow().kind);
+        let pages = {
+            let machine = machine.borrow();
+            Pages::new(&dialog, &machine.name, machine.kind)
+        };
+        let list = pages.list.clone();
         let shared = Shared { window: window.clone(), machine, dialog };
         let this = Self(Rc::new(Parts {
             hardware: hardware::Hardware::new(&shared, &pages.general),
+            _starting: starting::Starting::new(&shared, &pages.general),
             windows_card: windows_card::WindowsCard::new(&shared, &pages.general),
             _gpu_preview: gpu_preview::GpuPreview::new(&shared, &pages.general),
             linux_gpu: linux_gpu::LinuxGpu::new(&shared, &pages.general),
@@ -131,6 +217,7 @@ impl SettingsDialog {
             sharing: sharing::Sharing::new(&shared, &pages.devices),
             usb: usb::Usb::new(&shared, &pages.devices),
             shared,
+            list,
         }));
         let window = window.clone();
         this.0.shared.dialog.connect_closed(move |_| window.settings_closed());
@@ -139,6 +226,17 @@ impl SettingsDialog {
 
     pub fn machine_id(&self) -> String {
         self.0.shared.machine.borrow().id.clone()
+    }
+
+    /// Shows the page of this name, as a click on it in the list does.
+    pub fn show_page(&self, name: &str) {
+        let mut row = self.0.list.first_child();
+        while let Some(found) = row {
+            if found.widget_name() == name {
+                self.0.list.select_row(found.downcast_ref::<gtk::ListBoxRow>());
+            }
+            row = found.next_sibling();
+        }
     }
 
     pub fn present(&self) {

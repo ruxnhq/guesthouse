@@ -16,10 +16,6 @@ const CARD_SPACING: u32 = 16;
 /// As many cards side by side as a wide window has room for.
 const CARDS_ACROSS: u32 = 3;
 const BRAND_SPACING: i32 = 8;
-const EMPTY_SPACING: i32 = 18;
-const EMPTY_ICON_SIZE: i32 = 112;
-/// Wide enough that what a machine is reads as a line or two, not a column.
-const EMPTY_WORDS_CHARS: i32 = 66;
 
 pub struct LibraryPage {
     pub page: adw::NavigationPage,
@@ -44,36 +40,6 @@ fn brand() -> gtk::Box {
     brand.append(&name);
     brand.append(&version);
     brand
-}
-
-/// What the library shows with no machine in it: what a machine is, and the way to make one. It's
-/// laid out here and not left to libadwaita's status page, which squeezes its words into a narrow
-/// column on the libadwaita that Ubuntu 24.04 has.
-fn empty_page(description: &str, start: &gtk::Button) -> gtk::Box {
-    let title = gtk::Label::new(Some("No Machines"));
-    title.add_css_class("empty-title");
-    let words = gtk::Label::builder()
-        .label(description)
-        .wrap(true)
-        .justify(gtk::Justification::Center)
-        .max_width_chars(EMPTY_WORDS_CHARS)
-        .build();
-    words.add_css_class("empty-words");
-    let page = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(EMPTY_SPACING)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .margin_top(COLUMN_MARGIN)
-        .margin_bottom(COLUMN_MARGIN)
-        .margin_start(SIDE_MARGIN)
-        .margin_end(SIDE_MARGIN)
-        .build();
-    page.append(&gtk::Image::builder().icon_name(APP_ID).pixel_size(EMPTY_ICON_SIZE).build());
-    page.append(&title);
-    page.append(&words);
-    page.append(start);
-    page
 }
 
 fn main_menu() -> gio::Menu {
@@ -127,7 +93,7 @@ impl LibraryPage {
         let start = gtk::Button::builder().label("New Machine").halign(gtk::Align::Center).build();
         start.add_css_class("pill");
         start.add_css_class("suggested-action");
-        let empty = empty_page(description, &start);
+        let empty = crate::rows::message_page(APP_ID, "No Machines", description, &start);
         let stack = gtk::Stack::new();
         stack.add_named(&scroller, Some("machines"));
         stack.add_named(&empty, Some("empty"));

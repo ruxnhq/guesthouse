@@ -172,3 +172,19 @@
   font-size: 1.1em;
   opacity: 0.75;
 }
+
+/* A page's name over its rows, and the buttons it ends in. */
+.page-title {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.bottom-bar {
+  padding: 10px 0 18px;
+}
+
+/* What the chosen disc was read as, set apart from the rows round it. */
+row.verdict {
+  background-color: alpha(@accent_bg_color, 0.12);
+}

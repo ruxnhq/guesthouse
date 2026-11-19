@@ -104,3 +104,79 @@ pub fn confirm(
     on_yes(&dialog, answered);
     dialog.present(Some(parent));
 }
+
+/// As wide as a page of preferences, so what's put over or under one lines up with its rows.
+const PAGE_WIDTH: i32 = 600;
+const PAGE_MARGIN: i32 = 12;
+const HEADING_SPACING: i32 = 4;
+const MESSAGE_SPACING: i32 = 18;
+const MESSAGE_ICON_SIZE: i32 = 112;
+const MESSAGE_MARGIN: i32 = 24;
+/// Wide enough that a sentence reads as a line or two, not a column.
+const MESSAGE_CHARS: i32 = 66;
+
+fn page_wide(child: &impl IsA<gtk::Widget>) -> adw::Clamp {
+    adw::Clamp::builder()
+        .child(child)
+        .maximum_size(PAGE_WIDTH)
+        .margin_start(PAGE_MARGIN)
+        .margin_end(PAGE_MARGIN)
+        .build()
+}
+
+/// A page's name in large letters, with a small line over it for where the page is: its step.
+pub fn page_heading(over: &str, title: &str) -> adw::Clamp {
+    let heading = gtk::Box::new(gtk::Orientation::Vertical, HEADING_SPACING);
+    if !over.is_empty() {
+        let over = gtk::Label::builder().label(over).xalign(0.0).build();
+        over.add_css_class("section-label");
+        heading.append(&over);
+    }
+    let title = gtk::Label::builder().label(title).xalign(0.0).wrap(true).build();
+    title.add_css_class("page-title");
+    heading.append(&title);
+    let clamp = page_wide(&heading);
+    clamp.set_margin_top(PAGE_MARGIN);
+    clamp
+}
+
+/// What a page ends in: its buttons, at the right, under its rows.
+pub fn bottom_bar(buttons: &[&gtk::Button]) -> adw::Clamp {
+    let bar = gtk::Box::builder().spacing(PAGE_MARGIN).halign(gtk::Align::End).build();
+    for button in buttons {
+        bar.append(*button);
+    }
+    let clamp = page_wide(&bar);
+    clamp.add_css_class("bottom-bar");
+    clamp
+}
+
+/// A page that says one thing: an icon, a large title, a sentence, and what to do next. It's laid
+/// out here and not left to libadwaita's status page, which squeezes its words into a narrow
+/// column on the libadwaita that Ubuntu 24.04 has.
+pub fn message_page(icon: &str, title: &str, words: &str, next: &gtk::Button) -> gtk::Box {
+    let title = gtk::Label::builder().label(title).wrap(true).justify(gtk::Justification::Center).build();
+    title.add_css_class("empty-title");
+    let words = gtk::Label::builder()
+        .label(words)
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .max_width_chars(MESSAGE_CHARS)
+        .build();
+    words.add_css_class("empty-words");
+    let page = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(MESSAGE_SPACING)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .margin_top(MESSAGE_MARGIN)
+        .margin_bottom(MESSAGE_MARGIN)
+        .margin_start(MESSAGE_MARGIN)
+        .margin_end(MESSAGE_MARGIN)
+        .build();
+    page.append(&gtk::Image::builder().icon_name(icon).pixel_size(MESSAGE_ICON_SIZE).build());
+    page.append(&title);
+    page.append(&words);
+    page.append(next);
+    page
+}

@@ -23,7 +23,7 @@ const HEADLINE_CHARS: i32 = 26;
 pub type MachineHandle = Rc<RefCell<Machine>>;
 
 /// What a machine shows of itself just now, for its card and for the hero.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Shown {
     pub state: State,
     pub busy: bool,
@@ -180,7 +180,7 @@ impl MachineCard {
             frame.set_visible(texture.is_some());
         }
         self.parts.icon.set_visible(texture.is_none());
-        self.window.card_changed(self);
+        self.window.card_picture_changed(self);
     }
 
     /// The words about the machine: the first is its state, the rest are notes.
@@ -234,6 +234,10 @@ impl MachineCard {
             can_start: !status.busy && !blocked && !second,
             can_stop: !status.busy,
         };
+        // This is called each second, and mostly nothing has changed.
+        if *self.shown.borrow() == shown {
+            return;
+        }
         let parts = &self.parts;
         parts.headline.set_label(&shown.headline);
         // The card has room for one thing, so the rest is a pointer away.

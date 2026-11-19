@@ -56,6 +56,7 @@ impl Shared {
 const WIDTH: i32 = 880;
 const HEIGHT: i32 = 660;
 const SIDEBAR_WIDTH: f64 = 200.0;
+const SMALLEST: (i32, i32) = (360, 300);
 /// Under this the list of pages and the page shown take turns, as there's no room for both.
 const NARROW: f64 = 620.0;
 
@@ -140,6 +141,9 @@ impl Pages {
         dialog.set_child(Some(&split));
         dialog.set_content_width(WIDTH);
         dialog.set_content_height(HEIGHT);
+        // A dialog whose layout changes with its width has to say how small it can get.
+        dialog.set_width_request(SMALLEST.0);
+        dialog.set_height_request(SMALLEST.1);
         pages
     }
 

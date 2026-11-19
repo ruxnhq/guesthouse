@@ -186,6 +186,14 @@ impl Window {
         }
     }
 
+    /// A card has a new picture of its machine's screen, which the hero shows too if it's chosen.
+    pub(super) fn card_picture_changed(&self, card: &MachineCard) {
+        let hero = self.0.library.hero();
+        if hero.shows(card) {
+            hero.show_picture();
+        }
+    }
+
     fn connect_chosen(&self) {
         let this = self.clone();
         self.0.library.connect_chosen(move |clicked| {

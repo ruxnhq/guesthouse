@@ -178,6 +178,7 @@ impl Hero {
         *self.0.card.borrow_mut() = card.cloned();
         self.0.root.set_visible(card.is_some());
         self.refresh();
+        self.show_picture();
     }
 
     /// What the machine is, without its state: "Windows with GPU-PV", then one fact each.
@@ -200,13 +201,19 @@ impl Hero {
         parts.specs.set_visible(parts.specs.first_child().is_some());
     }
 
+    /// Puts the chosen machine's last screen behind the words. It's read from its file, so only
+    /// when there may be a new one.
+    pub fn show_picture(&self) {
+        let card = self.0.card.borrow().clone();
+        self.0.picture.set_paintable(card.and_then(|card| card.thumbnail()).as_ref());
+    }
+
     /// Takes in what the chosen machine shows of itself now.
     pub fn refresh(&self) {
         let parts = &self.0;
         let Some(card) = parts.card.borrow().clone() else { return };
         let shown = card.shown();
         parts.name.set_label(&card.machine().borrow().name);
-        parts.picture.set_paintable(card.thumbnail().as_ref());
         parts.state.set_label(shown.state.name());
         parts.spinner.set_visible(shown.busy);
         parts.dot.set_visible(!shown.busy);

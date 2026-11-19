@@ -160,3 +160,15 @@
   background: rgba(255, 255, 255, 0.08);
   font-size: 0.9em;
 }
+
+/* The library with nothing in it. */
+.empty-title {
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.empty-words {
+  font-size: 1.1em;
+  opacity: 0.75;
+}

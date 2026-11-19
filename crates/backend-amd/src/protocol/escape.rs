@@ -57,7 +57,7 @@ const SERVICE_3: u32 = 3;
 /// ulEscapeReturnCode for an escape that is done.
 const RETURN_DONE: u32 = 0;
 /// A payload's byte counts, ahead of its input and its output.
-const COUNT_SIZE: usize = 4;
+pub(crate) const COUNT_SIZE: usize = 4;
 /// ulEscapeReturnCode for a failed escape. Zero is done, and the guest takes any other value as a
 /// failure.
 const RETURN_FAILED: u32 = 2;
@@ -198,12 +198,77 @@ fn reply(data: &mut [u8], needed: &Needed) -> bool {
     true
 }
 
+/// Whether the user-mode driver's wrapper is in front of the escape.
+fn is_wrapped(data: &[u8]) -> bool {
+    data.len() >= WRAPPER_SIZE
+        && dword(data, 0) == Some(WRAPPER_KIND)
+        && dword(data, WRAPPER_VERSION_AT) == Some(WRAPPER_VERSION)
+}
+
 /// The escape inside its wrapper, or the whole buffer when it came without one.
 pub fn unwrapped(data: &mut [u8]) -> &mut [u8] {
-    let wrapped = data.len() >= WRAPPER_SIZE
-        && dword(data, 0) == Some(WRAPPER_KIND)
-        && dword(data, WRAPPER_VERSION_AT) == Some(WRAPPER_VERSION);
-    if wrapped { &mut data[WRAPPER_SIZE..] } else { data }
+    if is_wrapped(data) { &mut data[WRAPPER_SIZE..] } else { data }
+}
+
+/// [`unwrapped`], for a buffer that is only read.
+fn unwrapped_to_read(data: &[u8]) -> &[u8] {
+    if is_wrapped(data) { &data[WRAPPER_SIZE..] } else { data }
+}
+
+/// One of a payload's two byte counts, as far as the buffer holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Count {
+    /// The buffer ends before the count.
+    Missing,
+    /// The count, with that many bytes after it in the buffer.
+    Fits(u32),
+    /// The count, with fewer bytes than that after it. Whatever would follow them can't be placed.
+    PastEnd(u32),
+}
+
+/// How an escape is framed, read from it as it came, for the log. No answer is made from this: the
+/// counts are read where the payload's shape puts them, whether or not this escape's payload has
+/// that shape, and each says whether the buffer bears it out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Framing {
+    /// The user-mode driver's wrapper is in front.
+    pub wrapped: bool,
+    /// The code as it was sent, where [`EscapeCode`] is the one the kernel driver dispatches. `None`
+    /// for a buffer too short for a header.
+    pub code_sent: Option<u32>,
+    /// The count ahead of the input.
+    pub input: Count,
+    /// The count ahead of the output, which is [`Count::Missing`] unless the input fits.
+    pub output: Count,
+}
+
+/// Reads an escape's framing, inside its wrapper if it has one.
+pub fn framing(data: &[u8]) -> Framing {
+    let escape = unwrapped_to_read(data);
+    let count_at = |at: usize| match dword(escape, at) {
+        None => Count::Missing,
+        Some(count) => {
+            let end = (at + COUNT_SIZE).checked_add(count as usize);
+            if end.is_some_and(|end| end <= escape.len()) {
+                Count::Fits(count)
+            } else {
+                Count::PastEnd(count)
+            }
+        }
+    };
+    let input = count_at(HEADER_SIZE);
+    let output = match input {
+        Count::Fits(bytes) => count_at(HEADER_SIZE + COUNT_SIZE + bytes as usize),
+        Count::Missing | Count::PastEnd(_) => Count::Missing,
+    };
+    let code_sent = if escape.len() >= HEADER_SIZE { dword(escape, ESCAPE_CODE) } else { None };
+    Framing { wrapped: is_wrapped(data), code_sent, input, output }
+}
+
+/// The payload after the header, inside the wrapper if there is one. Empty for a buffer that ends
+/// with its header or before.
+pub fn payload(data: &[u8]) -> &[u8] {
+    unwrapped_to_read(data).get(HEADER_SIZE..).unwrap_or_default()
 }
 
 /// Answers an escape in place, inside its wrapper if it has one. Returns how, or why it couldn't be
@@ -419,6 +484,63 @@ mod tests {
         assert!(!answered.done);
         assert_eq!(dword(&data, WRAPPER_SIZE + RETURN_CODE), Some(RETURN_FAILED));
         assert_eq!(dword(&data, 0), Some(WRAPPER_KIND));
+    }
+
+    #[test]
+    fn the_framing_is_read_from_inside_the_wrapper() {
+        let mut bare = needed_escape(0x5D);
+        put_dword(&mut bare, ESCAPE_CODE, 0x0100_2603);
+        let read = Framing {
+            wrapped: false,
+            code_sent: Some(0x0100_2603),
+            input: Count::Fits(0x20),
+            output: Count::Fits(0x60),
+        };
+        assert_eq!(framing(&bare), read);
+        assert_eq!(framing(&wrapped(&bare)), Framing { wrapped: true, ..read });
+        assert_eq!(payload(&bare).len(), 2 * COUNT_SIZE + 0x20 + 0x60);
+        assert_eq!(payload(&wrapped(&bare)), payload(&bare));
+        // The kernel driver dispatches this one under another service, and the framing still says
+        // what was sent.
+        assert_eq!(parse(&bare).unwrap().service, SERVICE_3);
+    }
+
+    #[test]
+    fn a_count_the_buffer_does_not_bear_out_says_so() {
+        let whole = needed_escape(0x62);
+        let mut short_output = whole.clone();
+        short_output.pop();
+        assert_eq!(framing(&short_output).input, Count::Fits(0x20));
+        assert_eq!(framing(&short_output).output, Count::PastEnd(0x20));
+
+        // The input's count runs past the end, so nothing says where the output's count would be.
+        let mut long_input = whole.clone();
+        put_dword(&mut long_input, HEADER_SIZE, 0x1000);
+        assert_eq!(framing(&long_input).input, Count::PastEnd(0x1000));
+        assert_eq!(framing(&long_input).output, Count::Missing);
+        put_dword(&mut long_input, HEADER_SIZE, u32::MAX);
+        assert_eq!(framing(&long_input).input, Count::PastEnd(u32::MAX));
+
+        let no_output_count = &whole[..HEADER_SIZE + COUNT_SIZE + 0x20 + 3];
+        assert_eq!(framing(no_output_count).input, Count::Fits(0x20));
+        assert_eq!(framing(no_output_count).output, Count::Missing);
+
+        let header_only = &whole[..HEADER_SIZE];
+        assert_eq!(framing(header_only).code_sent, Some(0x0300_6203));
+        assert_eq!(
+            (framing(header_only).input, framing(header_only).output),
+            (Count::Missing, Count::Missing)
+        );
+        assert!(payload(header_only).is_empty());
+    }
+
+    #[test]
+    fn a_buffer_too_short_for_a_header_has_no_code_and_no_payload() {
+        let short = &needed_escape(0x62)[..HEADER_SIZE - 1];
+        let read = Framing { wrapped: false, code_sent: None, input: Count::Missing, output: Count::Missing };
+        assert_eq!(framing(short), read);
+        assert!(payload(short).is_empty());
+        assert_eq!(framing(&[]), read);
     }
 
     #[test]

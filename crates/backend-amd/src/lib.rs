@@ -35,7 +35,9 @@ mod screen_copy;
 mod sdma_copy;
 mod space_vm;
 mod submit;
+mod traffic;
 mod udmabuf;
+mod watch;
 
 pub use device::{Device, Mapping};
 pub use fence_ib::{Writer as FenceWriter, words as fence_words, writer_for as fence_writer_for};
@@ -506,6 +508,30 @@ fn unmapped_dma_reach(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ibs: &[Ib
     named.find(|reach| !space.covers(reach.address, reach.bytes))
 }
 
+/// Answers an escape where it lies, and logs how. Every escape has an `amd escape` line at debug,
+/// which says the same and more of the ones that get no line of their own here.
+fn answer_escape(process: u32, data: &mut [u8]) {
+    // The answer is written into the buffer the escape came in, so the log takes its copy first.
+    let asked = traffic::escape_asked(process, data);
+    let answered = protocol::escape::answer(data);
+    match &answered {
+        Ok(answered) if !answered.done && answered.code.needed_by_the_guest() => log::warn!(
+            "escape from {process}: service {} subfunction {:#x}, not shaped as the guest's driver \
+             sends it, answered as failed; the guest can't go on without it",
+            answered.code.service,
+            answered.code.subfunction
+        ),
+        Ok(_) => {}
+        Err(refused) => log::info!(
+            "an escape from {process} is {} ({} bytes, starting {})",
+            refused.0,
+            data.len(),
+            protocol::bytes::first_dwords(data, 4)
+        ),
+    }
+    traffic::escape_answered(process, asked, &answered);
+}
+
 /// Builds the facts the guest is told from the card's own readings.
 fn facts_from(info: &DeviceInfo) -> AdapterFacts {
     AdapterFacts {
@@ -788,30 +814,7 @@ impl Backend for AmdBackend {
 
     /// The answer is in the escape's own header. The trait has no status to return beside it.
     fn escape(&mut self, process: u32, data: &mut [u8], _books: &GuestBooks<'_>) {
-        match protocol::escape::answer(data) {
-            Ok(answered) if answered.done => log::debug!(
-                "escape from {process}: service {} subfunction {:#x}, answered as done",
-                answered.code.service,
-                answered.code.subfunction
-            ),
-            Ok(answered) if answered.code.needed_by_the_guest() => log::warn!(
-                "escape from {process}: service {} subfunction {:#x}, not shaped as the guest's driver \
-                 sends it, answered as failed; the guest can't go on without it",
-                answered.code.service,
-                answered.code.subfunction
-            ),
-            Ok(answered) => log::debug!(
-                "escape from {process}: service {} subfunction {:#x}, answered as failed",
-                answered.code.service,
-                answered.code.subfunction
-            ),
-            Err(refused) => log::info!(
-                "an escape from {process} is {} ({} bytes, starting {})",
-                refused.0,
-                data.len(),
-                protocol::bytes::first_dwords(data, 4)
-            ),
-        }
+        answer_escape(process, data);
     }
 
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {

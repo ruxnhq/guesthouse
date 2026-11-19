@@ -9,7 +9,7 @@ use crate::iso::any_iso_maker;
 use crate::library::INSTALL_ROOM_GIB;
 use crate::linux::amd::amd_cards;
 use crate::linux::driver_versions::{branch_refusal, branch_refusal_among, untested_warning};
-use crate::machine::{MIN_RAM_GIB, Machine};
+use crate::machine::{Kind, MIN_RAM_GIB, Machine, load_all};
 use crate::setup::intel::{intel_cards_on_i915, supported_intel_cards, xe_force_probe};
 use crate::usb::sysfs_text;
 use crate::vm_args::on_path;
@@ -493,16 +493,21 @@ pub fn existing_parent(path: &Path) -> PathBuf {
     path.ancestors().find(|folder| folder.exists()).unwrap_or(Path::new("/")).to_owned()
 }
 
-/// Judges the disk: `room` is what is free in `place`.
-fn judge_disk(room: f64, place: &Path) -> Check {
+/// Judges the disk: `room` is what is free in `place`. Only a new Windows machine needs that much, so
+/// with one made already, too little is a warning.
+fn judge_disk(room: f64, place: &Path, windows_made: bool) -> Check {
     const TITLE: &str = "Free disk";
     let need = INSTALL_ROOM_GIB + DRIVER_ROOM_GIB;
     let text = format!("{room:.0} GiB free in {}.", place.display());
-    if room < need as f64 {
-        let fix = format!("A Windows machine needs {need} GiB. Free some space there.");
-        return Check::new(TITLE, CheckState::Failed, text, fix);
+    if room >= need as f64 {
+        return Check::ok(TITLE, text);
     }
-    Check::ok(TITLE, text)
+    if windows_made {
+        let fix = format!("A new Windows machine needs {need} GiB. The ones made already still start.");
+        return Check::new(TITLE, CheckState::Warning, text, fix);
+    }
+    let fix = format!("A Windows machine needs {need} GiB. Free some space there.");
+    Check::new(TITLE, CheckState::Failed, text, fix)
 }
 
 fn check_disk(context: &Context) -> Check {
@@ -517,7 +522,8 @@ fn check_disk(context: &Context) -> Check {
             fix,
         );
     }
-    judge_disk(free_gib(&place).unwrap_or(0.0), &place)
+    let windows_made = load_all(context).0.iter().any(|machine| machine.kind == Kind::Windows);
+    judge_disk(free_gib(&place).unwrap_or(0.0), &place, windows_made)
 }
 
 pub fn check_pc(context: &Context) -> Vec<Check> {
@@ -928,8 +934,15 @@ mod tests {
     #[test]
     fn the_driver_needs_room_too() {
         let place = Path::new("/");
-        assert_eq!(judge_disk(INSTALL_ROOM_GIB as f64, place).state, CheckState::Failed);
-        assert_eq!(judge_disk((INSTALL_ROOM_GIB + DRIVER_ROOM_GIB) as f64, place).state, CheckState::Ok);
+        assert_eq!(judge_disk(INSTALL_ROOM_GIB as f64, place, false).state, CheckState::Failed);
+        let room = (INSTALL_ROOM_GIB + DRIVER_ROOM_GIB) as f64;
+        assert_eq!(judge_disk(room, place, false).state, CheckState::Ok);
+    }
+
+    #[test]
+    fn with_a_windows_machine_made_too_little_room_is_only_a_warning() {
+        let found = judge_disk(42.0, Path::new("/"), true);
+        assert!(found.state == CheckState::Warning && found.fix.contains("new Windows machine"), "{found:?}");
     }
 
     #[test]

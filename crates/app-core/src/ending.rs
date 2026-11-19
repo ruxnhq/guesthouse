@@ -56,6 +56,9 @@ fn listen(socket: &Path, note: &Path) -> Option<()> {
 pub fn watch(context: &Context, slot: u8) {
     let socket = context.run_folder(Some(slots::number(slot))).join(WATCH_SOCKET);
     let note = reason_file(context, slot);
+    // A VM the app itself stopped leaves its reason behind, as nobody asks why that one went. It
+    // mustn't be there to be read as this VM's, even if this VM's monitor can't be listened to.
+    let _ = fs::remove_file(&note);
     thread::spawn(move || listen(&socket, &note));
 }
 
@@ -115,6 +118,18 @@ mod tests {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "guest-shutdown\n").unwrap();
         assert_eq!(take_reason(&context, 1).as_deref(), Some(GUEST_SHUTDOWN));
+        assert_eq!(take_reason(&context, 1), None);
+    }
+
+    #[test]
+    fn a_reason_left_by_the_vm_before_is_gone_once_the_next_is_watched() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let file = reason_file(&context, 1);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, GUEST_SHUTDOWN).unwrap();
+        // No monitor answers here, as with an engine that has none to listen on.
+        watch(&context, 1);
         assert_eq!(take_reason(&context, 1), None);
     }
 

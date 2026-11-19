@@ -540,6 +540,13 @@ async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     glib::timeout_future(SETTLE).await;
     shot_after_paint(&window, &folder, "19-log").await;
     close_dialogs(&window).await;
+    for (action, name) in [("preferences", "19b-preferences"), ("about", "19c-about")] {
+        gtk::prelude::ActionGroupExt::activate_action(window.widget(), action, None);
+        glib::timeout_future(SETTLE).await;
+        check(&failures, window.widget().visible_dialog().is_some(), &format!("{action} opens a sheet"));
+        shot_after_paint(&window, &folder, name).await;
+        close_dialogs(&window).await;
+    }
     let released = Arc::new(AtomicU64::new(0));
     fake_frames::serve(&context.run_folder(None), released.clone());
     let mut vm = pretend_vm(&context, &machines[1].borrow());

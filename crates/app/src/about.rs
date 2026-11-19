@@ -13,9 +13,9 @@ const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const WHAT_IT_IS: &str = "Runs VMs on this PC. With its GPU part, Windows gets NVIDIA's own driver on the card the host keeps using.";
 const LICENCE: &str = "Free software, under the GNU General Public License, version 2 or later.";
 const WIDTH: i32 = 440;
-const ICON_SIZE: i32 = 96;
-const SPACING: i32 = 14;
-const MARGIN: i32 = 28;
+const ICON_SIZE: i32 = 72;
+const SPACING: i32 = 12;
+const MARGIN: i32 = 20;
 
 /// A row that opens a page in the browser.
 fn link_row(window: &Window, title: &str, address: &'static str) -> adw::ActionRow {
@@ -47,6 +47,7 @@ pub fn show(window: &Window) {
     column.append(&centred("Guesthouse", "title-1"));
     column.append(&centred(VERSION, "dim-label"));
     column.append(&centred(WHAT_IT_IS, "body"));
+    column.append(&centred(LICENCE, "caption"));
     let links = [
         link_row(window, "Website", WEBSITE),
         link_row(window, "Report a Problem", ISSUES),
@@ -54,7 +55,6 @@ pub fn show(window: &Window) {
     ];
     let links: Vec<&gtk::Widget> = links.iter().map(|row| row.upcast_ref()).collect();
     column.append(&boxed_rows(&links));
-    column.append(&centred(LICENCE, "caption"));
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());
     view.set_content(Some(

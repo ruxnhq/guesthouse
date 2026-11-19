@@ -120,9 +120,10 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     let plenty_kib = PLENTY_OF_GIB << 20;
     context.meminfo =
         scratch.write("meminfo", format!("MemTotal: {plenty_kib} kB\nMemAvailable: {plenty_kib} kB\n"));
-    // Nor does it lack the jail or its cards' devices, whatever this PC has.
+    // Nor does it lack the jail, its cards' devices or udmabuf's room, whatever this PC has.
     context.jail_support = || guesthouse_jail::Support { landlock_abi: 10, seccomp: true };
     context.may_open = |_| true;
     context.security_modules = scratch.write("lsm", "capability,landlock");
+    context.udmabuf_limit = scratch.path("udmabuf-limit");
     context
 }

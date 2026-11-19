@@ -15,6 +15,7 @@ use crate::usb::sysfs_text;
 use crate::vm_args::on_path;
 use guesthouse_backend_nvidia::profile::BRANCHES;
 use rustix::fs::{Access, access};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -343,6 +344,8 @@ fn check_kvm(context: &Context) -> Check {
 fn check_amd_memory(context: &Context) -> Option<Check> {
     const TITLE: &str = "AMD card's guest memory";
     const SLOWER: &str = "Windows on the AMD card works without it, only slower.";
+    // So that a guest's largest buffers aren't refused.
+    const WANTED_LIMIT_MIB: u64 = 16384;
     if amd_cards(context).is_empty() {
         return None;
     }
@@ -356,6 +359,18 @@ fn check_amd_memory(context: &Context) -> Option<Check> {
             "It usually belongs to the kvm group: run sudo usermod -aG kvm $USER, then log in again. {SLOWER}"
         );
         return Some(Check::new(TITLE, CheckState::Warning, format!("This user cannot open {device}."), fix));
+    }
+    let limit =
+        fs::read_to_string(&context.udmabuf_limit).ok().and_then(|text| text.trim().parse::<u64>().ok());
+    if let Some(limit) = limit.filter(|limit| *limit < WANTED_LIMIT_MIB) {
+        let setting = context.udmabuf_limit.display();
+        let fix = format!(
+            "Larger buffers go to the card the slow way, which costs the daemon more CPU. Raise it with \
+             echo {WANTED_LIMIT_MIB} | sudo tee {setting}, and keep it with \
+             udmabuf.size_limit_mb={WANTED_LIMIT_MIB} on the kernel's command line."
+        );
+        let text = format!("{device} makes buffers of at most {limit} MiB.");
+        return Some(Check::new(TITLE, CheckState::Warning, text, fix));
     }
     Some(Check::ok(TITLE, format!("{device} can be opened.")))
 }
@@ -794,6 +809,16 @@ mod tests {
         assert!(found.state == CheckState::Warning && found.fix.contains("module"));
         fs::write(&context.udmabuf, "").unwrap();
         fs::set_permissions(&context.udmabuf, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(check_amd_memory(&context).unwrap().state, CheckState::Ok);
+        fs::write(&context.udmabuf_limit, "64\n").unwrap();
+        let found = check_amd_memory(&context).unwrap();
+        assert!(
+            found.state == CheckState::Warning
+                && found.text.contains("64 MiB")
+                && found.fix.contains("size_limit_mb=16384"),
+            "{found:?}"
+        );
+        fs::write(&context.udmabuf_limit, "16384\n").unwrap();
         assert_eq!(check_amd_memory(&context).unwrap().state, CheckState::Ok);
         fs::set_permissions(&context.udmabuf, fs::Permissions::from_mode(0o000)).unwrap();
         let found = check_amd_memory(&context).unwrap();

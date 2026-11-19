@@ -66,6 +66,8 @@ pub struct Context {
     pub kvm: PathBuf,
     /// Makes a dma-buf of a guest's memory. An AMD card takes the memory faster that way.
     pub udmabuf: PathBuf,
+    /// The largest dma-buf udmabuf makes, in MiB.
+    pub udmabuf_limit: PathBuf,
     /// The kernel's security modules that are on, Landlock among them or not.
     pub security_modules: PathBuf,
     pub driver_version_file: PathBuf,
@@ -111,6 +113,7 @@ impl Context {
             drm_class: "/sys/class/drm".into(),
             kvm: "/dev/kvm".into(),
             udmabuf: "/dev/udmabuf".into(),
+            udmabuf_limit: "/sys/module/udmabuf/parameters/size_limit_mb".into(),
             security_modules: "/sys/kernel/security/lsm".into(),
             driver_version_file: "/sys/module/nvidia/version".into(),
             meminfo: "/proc/meminfo".into(),

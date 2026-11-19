@@ -1,0 +1,122 @@
+/* The shapes of the app's widgets, the same in dark and light. Colours come by name from the
+   palette loaded before this.
+
+   Nothing here gives a window, a page or the guest's screen a background: the viewer makes its
+   window see-through to show the guest's own surface under it. */
+
+window {
+  font-family: "Geist", "Inter", "Adwaita Sans", "Cantarell", sans-serif;
+}
+
+/* The bar at the top is part of the page, not a strip over it. */
+headerbar {
+  /* Said here too, as a desktop's own gtk.css can colour header bars. */
+  background: @headerbar_bg_color;
+  color: @headerbar_fg_color;
+  min-height: 52px;
+  box-shadow: none;
+  border: none;
+}
+
+/* The window's own buttons, round and quiet, wherever the desktop's layout puts them. */
+windowcontrols > button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  margin: 0 2px;
+  border-radius: 999px;
+}
+
+windowcontrols > button > image {
+  padding: 7px;
+  border-radius: 999px;
+  background: alpha(@window_fg_color, 0.08);
+}
+
+windowcontrols > button:hover > image {
+  background: alpha(@window_fg_color, 0.16);
+}
+
+windowcontrols > button.close:hover > image {
+  background: @destructive_bg_color;
+  color: @destructive_fg_color;
+}
+
+/* Buttons are pills. The one that matters most on a page is filled. */
+button {
+  border-radius: 999px;
+}
+
+button.text-button {
+  padding: 8px 18px;
+  font-weight: 500;
+}
+
+button.suggested-action {
+  background: @primary_bg_color;
+  color: @primary_fg_color;
+  font-weight: 600;
+}
+
+button.destructive-action {
+  background: transparent;
+  color: @destructive_color;
+  box-shadow: inset 0 0 0 1px @hairline;
+}
+
+/* Rows sit in rounded panels with a hairline round them. */
+list.boxed-list,
+.card {
+  border-radius: 20px;
+  box-shadow: 0 0 0 1px @hairline;
+}
+
+list.boxed-list > row {
+  min-height: 60px;
+}
+
+preferencesgroup > box > box > label.title {
+  font-size: 0.8em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+/* Fields and what opens a list of choices. */
+entry,
+spinbutton,
+dropdown > button,
+row.combo button {
+  border-radius: 12px;
+}
+
+/* Menus and lists of choices: a rounded panel, with rounded rows in it. */
+popover > contents {
+  padding: 6px;
+  border-radius: 18px;
+  box-shadow:
+    0 0 0 1px @hairline,
+    0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+popover modelbutton,
+popover listview > row,
+popover list > row {
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+/* A dialog over the window. */
+dialog.background,
+floating-sheet > sheet,
+dialog > sheet {
+  border-radius: 24px;
+}
+
+/* Titles are tight and heavy. */
+.title-1,
+.title-2,
+statuspage .title {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}

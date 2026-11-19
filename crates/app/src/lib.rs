@@ -12,6 +12,7 @@ pub mod new_machine;
 pub mod report_dialog;
 pub mod rows;
 pub mod settings;
+pub mod theme;
 pub mod viewer;
 pub mod window;
 pub mod wizard;

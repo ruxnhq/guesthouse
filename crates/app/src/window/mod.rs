@@ -105,6 +105,7 @@ impl Window {
             screen_watch: OnceCell::new(),
             newer: RefCell::default(),
         }));
+        crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
         this.add_style();
         this.0.library.connect_new_machine(&this);
         keys::add_host_keys(&this);

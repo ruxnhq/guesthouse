@@ -1,5 +1,6 @@
 //! Looks at this PC. Nothing here changes anything.
 
+use super::access::{check_jail, check_render_nodes};
 use super::cards::{Card, Support, amd_support, card_in_use, find_cards};
 use crate::context::Context;
 use crate::gpu_maker::GpuMaker;
@@ -115,15 +116,20 @@ pub fn gpu_verdict(checks: &[Check]) -> GpuVerdict {
 }
 
 impl Check {
-    fn new(title: &str, state: CheckState, text: impl Into<String>, fix: impl Into<String>) -> Self {
+    pub(super) fn new(
+        title: &str,
+        state: CheckState,
+        text: impl Into<String>,
+        fix: impl Into<String>,
+    ) -> Self {
         Self { title: title.to_owned(), state, text: text.into(), fix: fix.into(), part: Part::Pc }
     }
 
-    fn ok(title: &str, text: impl Into<String>) -> Self {
+    pub(super) fn ok(title: &str, text: impl Into<String>) -> Self {
         Self::new(title, CheckState::Ok, text, "")
     }
 
-    fn about(self, part: Part) -> Self {
+    pub(super) fn about(self, part: Part) -> Self {
         Self { part, ..self }
     }
 }
@@ -501,8 +507,10 @@ fn check_disk(context: &Context) -> Check {
 
 pub fn check_pc(context: &Context) -> Vec<Check> {
     let mut checks = check_cards(context);
+    checks.extend(check_render_nodes(context));
     checks.extend(nvidia_checks(context));
     checks.push(check_kvm(context));
+    checks.extend(check_jail(context));
     checks.extend(check_amd_memory(context));
     checks.extend([
         check_qemu(context),
@@ -541,10 +549,12 @@ pub struct HostReport {
 
 pub fn check_host(context: &Context) -> HostReport {
     let mut deciding = check_cards(context);
+    deciding.extend(check_render_nodes(context));
     if !find_cards(context).is_empty() {
         deciding.push(check_host_driver(context).about(Part::Nvidia));
     }
     deciding.push(check_kvm(context));
+    deciding.extend(check_jail(context));
     deciding.extend(check_driver_branch(context).filter(|_| !find_cards(context).is_empty()));
     let gpu = gpu_verdict(&deciding).any();
     deciding.extend(check_amd_memory(context));

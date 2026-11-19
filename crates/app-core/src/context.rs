@@ -9,6 +9,8 @@ use crate::monitor::{Monitor, QmpMonitor};
 use crate::paths::Paths;
 use crate::vm_args::VmPlan;
 use guesthouse_daemon::slot::Slot;
+use guesthouse_jail::Support;
+use rustix::fs::{Access, access};
 use std::fs::{self, DirBuilder, Permissions};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -17,6 +19,11 @@ use std::sync::Arc;
 const PRIVATE_FOLDER: u32 = 0o700;
 /// Where pci.ids is kept: hwdata on Fedora and Arch, misc on Debian and Ubuntu.
 const PCI_NAMES: [&str; 2] = ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"];
+
+/// Whether this user can open a device to read and write it.
+fn may_open_here(device: &Path) -> bool {
+    access(device, Access::READ_OK | Access::WRITE_OK).is_ok()
+}
 
 /// The first of these that is there, or the first if none is.
 fn first_present(paths: &[&str]) -> PathBuf {
@@ -59,12 +66,18 @@ pub struct Context {
     pub kvm: PathBuf,
     /// Makes a dma-buf of a guest's memory. An AMD card takes the memory faster that way.
     pub udmabuf: PathBuf,
+    /// The kernel's security modules that are on, Landlock among them or not.
+    pub security_modules: PathBuf,
     pub driver_version_file: PathBuf,
     pub meminfo: PathBuf,
     /// Makes a GPU guest's memory and claims its RAM. A test has no gigabytes to spare.
     pub reserve_memory: fn(&Context, Slot, u64) -> crate::Result<GuestMemory>,
     /// What this PC offers a GPU machine's jail. A test's pretend programs can't be jailed.
     pub jail_offer: fn(&VmPlan) -> Offer,
+    /// What this kernel has of the jail's parts, which setup warns about before any start.
+    pub jail_support: fn() -> Support,
+    /// Whether this user can open a card's device. A test's cards have none.
+    pub may_open: fn(&Path) -> bool,
     /// Stands in for what this PC can give a GPU machine, which depends on everything else running.
     pub ram_limit: Option<u64>,
     pub bridge: BridgeHost,
@@ -98,10 +111,13 @@ impl Context {
             drm_class: "/sys/class/drm".into(),
             kvm: "/dev/kvm".into(),
             udmabuf: "/dev/udmabuf".into(),
+            security_modules: "/sys/kernel/security/lsm".into(),
             driver_version_file: "/sys/module/nvidia/version".into(),
             meminfo: "/proc/meminfo".into(),
             reserve_memory: GuestMemory::claim,
             jail_offer: Offer::here,
+            jail_support: Support::probe,
+            may_open: may_open_here,
             ram_limit: None,
             bridge: BridgeHost::default(),
             monitor: Arc::new(QmpMonitor),

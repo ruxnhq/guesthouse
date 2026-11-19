@@ -2,14 +2,15 @@
 //! saving machines. The pages it shows are modules of their own.
 
 mod actions;
+mod hero;
 mod keys;
 mod library_page;
-mod machine_row;
+mod machine_card;
 mod refresh;
 mod screen_hdr;
 mod updates;
 
-pub use machine_row::{MachineHandle, MachineRow};
+pub use machine_card::{MachineCard, MachineHandle};
 
 use crate::common::in_background;
 use crate::log_dialog;
@@ -42,8 +43,7 @@ const SMALLEST_WINDOW: (i32, i32) = (360, 300);
 const TOAST_SECONDS: u32 = 6;
 const PROBLEM_SECONDS: u32 = 10;
 /// In fullscreen the viewer's header lies over the picture, and it has no background of its own.
-const STYLE: &str = ".screen-header { background: @headerbar_bg_color; }
-.machine-thumbnail { border-radius: 6px; }";
+const STYLE: &str = ".screen-header { background: @headerbar_bg_color; }";
 
 struct Inner {
     context: Arc<Context>,
@@ -51,7 +51,7 @@ struct Inner {
     toasts: adw::ToastOverlay,
     pages: adw::NavigationView,
     library: LibraryPage,
-    rows: RefCell<BTreeMap<String, MachineRow>>,
+    cards: RefCell<BTreeMap<String, MachineCard>>,
     load_errors: RefCell<Vec<String>>,
     settings: RefCell<Option<SettingsDialog>>,
     new_machine: RefCell<Option<NewMachineDialog>>,
@@ -94,7 +94,7 @@ impl Window {
             toasts,
             pages,
             library,
-            rows: RefCell::default(),
+            cards: RefCell::default(),
             load_errors: RefCell::default(),
             settings: RefCell::default(),
             new_machine: RefCell::default(),
@@ -108,6 +108,7 @@ impl Window {
         crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
         this.add_style();
         this.0.library.connect_new_machine(&this);
+        this.connect_chosen();
         keys::add_host_keys(&this);
         actions::add_actions(&this);
         this.connect_close();
@@ -184,17 +185,43 @@ impl Window {
         self.show_problems();
     }
 
+    /// Makes this the machine the hero shows, and the one the keyboard's shortcuts are for.
+    fn choose(&self, card: Option<&MachineCard>) {
+        self.0.library.hero().choose(card);
+        self.0.library.mark_chosen(card.map(MachineCard::widget));
+    }
+
+    /// A card says something about its machine changed, which the hero shows too if it's chosen.
+    pub(super) fn card_changed(&self, card: &MachineCard) {
+        let hero = self.0.library.hero();
+        if hero.shows(card) {
+            hero.refresh();
+        }
+    }
+
+    fn connect_chosen(&self) {
+        let this = self.clone();
+        self.0.library.connect_chosen(move |clicked| {
+            let card = this.0.cards.borrow().values().find(|card| card.widget() == clicked).cloned();
+            this.choose(card.as_ref());
+        });
+    }
+
     fn show_problems(&self) {
         let errors = self.0.load_errors.borrow();
-        self.0.library.show(!self.0.rows.borrow().is_empty(), &errors);
+        self.0.library.show(!self.0.cards.borrow().is_empty(), &errors);
     }
 
     pub fn add_machine(&self, machine: Machine) -> MachineHandle {
         let id = machine.id.clone();
-        let row = MachineRow::new(self, machine);
+        let row = MachineCard::new(self, machine);
         let handle = row.machine();
         self.0.library.add(row.widget());
-        self.0.rows.borrow_mut().insert(id, row);
+        let first = self.0.library.hero().chosen().is_none();
+        self.0.cards.borrow_mut().insert(id, row.clone());
+        if first {
+            self.choose(Some(&row));
+        }
         self.show_problems();
         handle
     }
@@ -219,8 +246,13 @@ impl Window {
     }
 
     fn on_removed(&self, id: &str) {
-        if let Some(row) = self.0.rows.borrow_mut().remove(id) {
-            self.0.library.remove(row.widget());
+        let removed = self.0.cards.borrow_mut().remove(id);
+        if let Some(card) = removed {
+            self.0.library.remove(card.widget());
+            if self.0.library.hero().shows(&card) {
+                let next = self.0.cards.borrow().values().next().cloned();
+                self.choose(next.as_ref());
+            }
         }
         self.show_problems();
     }
@@ -273,7 +305,7 @@ impl Window {
     }
 
     pub fn show_thumbnail(&self, id: &str) {
-        if let Some(row) = self.0.rows.borrow().get(id) {
+        if let Some(row) = self.0.cards.borrow().get(id) {
             row.show_thumbnail();
         }
     }
@@ -338,7 +370,7 @@ impl Window {
 
     pub fn show_settings(&self, machine: MachineHandle) {
         let id = machine.borrow().id.clone();
-        let status = self.0.rows.borrow().get(&id).map(MachineRow::status).unwrap_or_default();
+        let status = self.0.cards.borrow().get(&id).map(MachineCard::status).unwrap_or_default();
         self.note_screen_hdr();
         let dialog = SettingsDialog::new(self, machine);
         dialog.set_status(&status);

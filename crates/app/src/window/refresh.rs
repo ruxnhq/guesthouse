@@ -93,7 +93,7 @@ impl Window {
         let running_before = state.running_before.clone();
         drop(state);
         let machines: Vec<Machine> =
-            self.0.rows.borrow().values().map(|row| row.machine().borrow().clone()).collect();
+            self.0.cards.borrow().values().map(|row| row.machine().borrow().clone()).collect();
         let context = self.context();
         let looking = context.clone();
         let this = self.clone();
@@ -121,7 +121,7 @@ impl Window {
     /// A task changes these on disk, and a stale copy here would write them back.
     fn take_saved(&self, saved: &[Machine]) {
         for machine in saved {
-            if let Some(row) = self.0.rows.borrow().get(&machine.id) {
+            if let Some(row) = self.0.cards.borrow().get(&machine.id) {
                 let handle = row.machine();
                 let mut current = handle.borrow_mut();
                 current.installing = machine.installing;
@@ -141,7 +141,7 @@ impl Window {
             self.toast("The VM was left paused. Resuming it.", adw::ToastPriority::Normal);
             self.launch("resume", machine, &[], None);
         }
-        let any_machine = self.0.rows.borrow().values().next().map(|row| row.machine());
+        let any_machine = self.0.cards.borrow().values().next().map(|row| row.machine());
         for (slot, file) in &report.left {
             if let Some(machine) = any_machine.as_ref().filter(|_| leftovers_before.get(slot) == Some(file)) {
                 let machine = machine.borrow().clone();
@@ -157,7 +157,7 @@ impl Window {
     }
 
     fn show_machine_status(&self, id: &str, status: &Status, vm_running: bool) {
-        let rows = self.0.rows.borrow();
+        let rows = self.0.cards.borrow();
         // A row can be gone if it was deleted while this was being read.
         let Some(row) = rows.get(id) else { return };
         if !status.error.is_empty() && status.error != row.status().error {
@@ -187,7 +187,7 @@ impl Window {
         let before = std::mem::replace(&mut self.0.refresh.borrow_mut().running_before, running);
         for (id, (slot, _)) in before {
             let gone = report.statuses.get(&id).is_some_and(|found| found.state == State::Off && !found.busy);
-            let machine = self.0.rows.borrow().get(&id).map(|row| row.machine().borrow().clone());
+            let machine = self.0.cards.borrow().get(&id).map(|row| row.machine().borrow().clone());
             if let Some(machine) = machine.filter(|_| gone) {
                 note_if_stopped_by_itself(&self.0.context, &machine, slot);
             }

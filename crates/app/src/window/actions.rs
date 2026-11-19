@@ -1,7 +1,7 @@
 //! The window's actions, and the About and shortcuts dialogs they lead to.
 
 use super::Window;
-use super::machine_row::MachineRow;
+use super::machine_card::MachineCard;
 use crate::application::APP_ID;
 use adw::prelude::*;
 use gtk::gio;
@@ -74,21 +74,13 @@ fn on_new_machine_key(window: &Window) {
     }
 }
 
-/// The row with the focus, which a click gives it too. With one machine there's no doubt.
-fn current_row(window: &Window) -> Option<MachineRow> {
-    let rows = window.0.rows.borrow();
-    let mut widget = gtk::prelude::GtkWindowExt::focus(window.widget());
-    while let Some(found) = widget {
-        if let Some(row) = rows.values().find(|row| row.widget().upcast_ref::<gtk::Widget>() == &found) {
-            return Some(row.clone());
-        }
-        widget = found.parent();
-    }
-    (rows.len() == 1).then(|| rows.values().next().cloned()).flatten()
+/// The machine the hero shows, which a click on a card makes it.
+fn current_row(window: &Window) -> Option<MachineCard> {
+    window.0.library.hero().chosen()
 }
 
 fn on_settings_key(window: &Window) {
-    if has_dialog(window) || window.0.rows.borrow().is_empty() {
+    if has_dialog(window) || window.0.cards.borrow().is_empty() {
         return;
     }
     match current_row(window) {

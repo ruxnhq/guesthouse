@@ -1,9 +1,13 @@
 use super::*;
+use crate::gpu_maker::GpuMaker;
 use crate::host::{RamField, physical_cores};
 use crate::iso::stand_in::{make_iso, wim};
+use crate::linux::amd::stand_in::{fake_graphics, fake_render_node};
 use crate::machine::load;
 use crate::settings::driver_folder;
 use crate::settings::read_setup;
+use crate::setup::amd::{NO_AMD_SETUP, amd_driver_folder};
+use crate::setup::amd_driver::stand_in::{IGPU, OLDER, make_installer};
 use crate::setup::cards::stand_in::{NAMES, fake_pci};
 use crate::setup::checks::{Check, CheckState, Part};
 use crate::setup::driver::stand_in::good_installer;
@@ -133,6 +137,63 @@ fn a_recorded_intel_card_is_offered_when_one_is_named_and_wants_intels_driver() 
     let nvidia = with_cards(&scratch, &[("0000:01:00.0", 0x2B85)]);
     let refused = failure_of(said(&nvidia, &format!("new Rtx --iso {disc} --intel-driver /x.exe")).1);
     assert_eq!(refused, "--intel-driver is for a Windows machine on an Intel card.");
+}
+
+const AMD_IGPU: &str = "0000:7c:00.0";
+const RDNA3_GRAPHICS: u32 = 11;
+
+/// A PC whose only card is an AMD one GPU-PV handles.
+fn with_an_amd_card(scratch: &Scratch) -> Context {
+    let mut context = with_cards(scratch, &[]);
+    context.drm_class = scratch.path("drm");
+    context.install_room = Some(0);
+    fake_render_node(scratch, 128, AMD_IGPU, "0x1002", IGPU);
+    fake_graphics(scratch, AMD_IGPU, RDNA3_GRAPHICS);
+    context
+}
+
+/// A PC with no desktop has no dialog to give AMD's installer to, so `new` takes it.
+#[test]
+fn a_windows_machine_on_an_amd_card_is_made_with_the_driver_from_amds_installer() {
+    let scratch = Scratch::new();
+    let context = with_an_amd_card(&scratch);
+    let data = wim(&["Windows 11 Pro"], 26300, 9);
+    let disc = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
+    let words = format!("new Win --iso {disc} --amd-card {AMD_IGPU}");
+    assert!(failure_of(said(&context, &words).1).contains(NO_AMD_SETUP), "it has no driver yet");
+    let installer = make_installer(&scratch, &[0x7550]);
+    let (out, result) = said(&context, &format!("{words} --amd-driver {installer}"));
+    assert_eq!(result, Ok(()), "{out}");
+    let folder = amd_driver_folder(&context).expect("the driver is written down");
+    assert!(out.contains("Reading AMD's installer\nTaking out the driver for AMD card 13c0\n"), "{out}");
+    assert!(out.contains(&format!("AMD's driver {OLDER} is in {}.\n", folder.display())), "{out}");
+    let machine = load(&context, "win").unwrap();
+    assert_eq!((machine.amd_gpu.as_str(), machine.windows_maker()), (AMD_IGPU, Some(GpuMaker::Amd)));
+}
+
+#[test]
+fn amds_installer_is_refused_where_it_is_no_use_and_nothing_is_made() {
+    let scratch = Scratch::new();
+    let data = wim(&["Windows 11 Pro"], 26300, 9);
+    let disc = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
+    let not_for_amd = "--amd-driver is for a Windows machine on an AMD card.";
+    let nvidia = with_cards(&scratch, &[("0000:01:00.0", 0x2B85)]);
+    let refused = failure_of(said(&nvidia, &format!("new Rtx --iso {disc} --amd-driver /x.exe")).1);
+    assert_eq!(refused, not_for_amd);
+    let plain = format!("new Tiny --iso {} --amd-driver /x.exe", plain_disc(&scratch));
+    assert_eq!(failure_of(said(&nvidia, &plain).1), not_for_amd);
+    let context = with_an_amd_card(&scratch);
+    let other_file = format!("new Win --iso {disc} --amd-card {AMD_IGPU} --amd-driver {disc}");
+    assert_eq!(failure_of(said(&context, &other_file).1), "This file is not AMD's driver installer.");
+    let installer = make_installer(&scratch, &[0x7550]);
+    let both =
+        format!("new Win --iso {disc} --amd-card {AMD_IGPU} --amd-driver {installer} --intel-driver /x.exe");
+    assert_eq!(
+        failure_of(said(&context, &both).1),
+        "--intel-driver is for a Windows machine on an Intel card."
+    );
+    assert!(amd_driver_folder(&context).is_none());
+    assert!(load_all(&nvidia).0.is_empty() && load_all(&context).0.is_empty(), "nothing was made");
 }
 
 #[test]

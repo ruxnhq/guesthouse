@@ -145,21 +145,19 @@ pub fn unpack_amd(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod stand_in {
     use super::*;
-    use crate::setup::amd::amd_driver_folder;
-    use crate::setup::amd_guest_folder::missing_files;
     use crate::setup::amd_guest_folder::stand_in::lay_out_driver;
-    use crate::testing::{Scratch, scratch_context};
+    use crate::testing::Scratch;
     use std::process::Stdio;
 
-    const IGPU: u32 = 0x13C0;
-    const NEWER: &str = AMD_WINDOWS_DRIVERS[0];
-    const OLDER: &str = AMD_WINDOWS_DRIVERS[1];
-    const NEWER_FOLDER: &str = "B026716";
+    pub const IGPU: u32 = 0x13C0;
+    pub const NEWER: &str = AMD_WINDOWS_DRIVERS[0];
+    pub const OLDER: &str = AMD_WINDOWS_DRIVERS[1];
+    pub const NEWER_FOLDER: &str = "B026716";
     const OLDER_FOLDER: &str = "B026715";
 
-    fn inf(version: &str, devices: &[u32]) -> String {
+    pub fn inf(version: &str, devices: &[u32]) -> String {
         let mut text = format!("[Version]\nDriverVer=10/28/2026, {version}\n[ATI.Mfg.NTamd64]\n");
         for device in devices {
             text += &format!("\"%AMD{device:04X}.1%\" = ati2mtag_X, PCI\\VEN_1002&DEV_{device:04X}&REV_C1\n");
@@ -170,7 +168,7 @@ mod tests {
     /// An archive laid out like AMD's combined installer, which 7z can read: the newer cards' driver,
     /// listing `devices`, with Vulkan and OpenGL in folders of their own, and the older cards',
     /// listing the iGPU, with everything in one folder.
-    fn make_installer(scratch: &Scratch, devices: &[u32]) -> String {
+    pub fn make_installer(scratch: &Scratch, devices: &[u32]) -> String {
         let packages =
             [("Display", NEWER, devices, NEWER_FOLDER), ("Display2", OLDER, &[IGPU][..], OLDER_FOLDER)];
         for (display, version, devices, folder) in packages {
@@ -191,6 +189,15 @@ mod tests {
         assert!(done.unwrap().success());
         path.display().to_string()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stand_in::{IGPU, NEWER, NEWER_FOLDER, OLDER, inf, make_installer};
+    use super::*;
+    use crate::setup::amd::amd_driver_folder;
+    use crate::setup::amd_guest_folder::missing_files;
+    use crate::testing::{Scratch, scratch_context};
 
     #[test]
     fn a_package_is_judged_by_its_version_and_by_listing_the_card() {

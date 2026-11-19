@@ -13,7 +13,8 @@ guesthouse-vm command NAME
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
-                       [--intel-driver PATH] [--remote-desktop on|off] [--ssh on|off]
+                       [--amd-driver PATH] [--intel-driver PATH]
+                       [--remote-desktop on|off] [--ssh on|off]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
 
@@ -37,7 +38,7 @@ NAME is a machine's id, or its name in any case. If a name fits two machines, it
 
 The disc decides what the machine is, as it does in the app's New Machine dialog: a Windows 11 Pro disc is a Windows machine with GPU-PV, an Ubuntu server disc is Ubuntu, and anything else is a plain VM that you install by hand. `new` says which it found. `--kind` is there to say what you expect, and it refuses if the disc is something else here. A disc that would be Windows or Ubuntu on a PC with the GPU part is a plain VM on a PC without it, and `new` says so.
 
-What you don't give, you get as the dialog would start you: the sizes for that kind, with RAM as high as this PC allows, and for Windows the NVIDIA card, or an AMD or Intel card by its address with `--amd-card`. For an Intel card, `--intel-driver` takes Intel's installer and unpacks the card's driver from it, as the dialog does when it asks for the installer. The dialog's refusals come out as they are, in plain words, and nothing is made.
+What you don't give, you get as the dialog would start you: the sizes for that kind, with RAM as high as this PC allows, and for Windows the NVIDIA card, or an AMD or Intel card by its address with `--amd-card`. For an AMD card, `--amd-driver` takes AMD's installer and unpacks the card's driver from it, as the dialog does when it asks for the installer, and `--intel-driver` does the same with Intel's for an Intel card. `--amd-driver` takes the place of an AMD driver that was unpacked before, and every AMD machine on this PC uses the one that's there. The dialog's refusals come out as they are, in plain words, and nothing is made.
 
 A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--remote-desktop off` and `--ssh on` change that, and [Getting in](#getting-in) says how you reach either. SSH needs OpenSSH for Windows, which comes with a release. A build from source may not have it, and then `new` refuses `--ssh on` and says why.
 
@@ -73,7 +74,7 @@ These are the settings pages' own checks, and a running machine refuses what the
 
 ## Setup
 
-`setup` does what the first-run wizard does for GPU machines. It looks at the PC and prints each check as the wizard shows it, and stops if one failed. It then copies NVIDIA's driver files from the installer you give with `--driver`, which is the `.exe` for the version it names, and writes down the card. With more than one NVIDIA card it takes the best supported one, as the wizard does, unless you name one with `--card`. The wizard has no way to choose, so that part is only here. An AMD card's driver is still unpacked in the app, in the New Machine dialog.
+`setup` does what the first-run wizard does for GPU machines. It looks at the PC and prints each check as the wizard shows it, and stops if one failed. It then copies NVIDIA's driver files from the installer you give with `--driver`, which is the `.exe` for the version it names, and writes down the card. With more than one NVIDIA card it takes the best supported one, as the wizard does, unless you name one with `--card`. The wizard has no way to choose, so that part is only here. An AMD or Intel card's driver isn't part of `setup`. `new` unpacks it, with `--amd-driver` or `--intel-driver`.
 
 I couldn't run `setup` on a real card, because the PC I tried this on has none. Its checks, the copy of the driver and the choice of the card are tested with pretend cards.
 

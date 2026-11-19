@@ -33,7 +33,7 @@ On an RX 9070 XT, Superposition at 720p Low went from 21,920 to 36,903 with the 
 ## Setting it up
 
 1. Download AMD's Windows driver installer for your card from AMD's site. AMD ships each release in packages for different generations, so get the one that lists your card.
-2. In the app, make a new Windows machine and pick the AMD card. When there's no AMD driver yet, the dialog asks for the installer and unpacks it for you.
+2. In the app, make a new Windows machine and pick the AMD card. When there's no AMD driver yet, the dialog asks for the installer and unpacks it for you. On a PC with no desktop, `guesthouse-vm new` does the same when you give it the installer with `--amd-driver`. [Without a window](headless.md) has the rest.
 3. Install as usual. Windows comes up with AMD's driver.
 
 For full speed your user has to be able to open `/dev/udmabuf`. The daemon gives the guest's memory to the card through it. On most distros it belongs to the `kvm` group, so `sudo usermod -aG kvm $USER` and a new login do it. The app's checks and the installer tell you when it can't be opened. Without it Windows still runs, only slower.

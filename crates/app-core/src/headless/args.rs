@@ -6,7 +6,7 @@ use std::fmt;
 const NO_WAIT: &str = "--no-wait";
 const YES: &str = "--yes";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 11] = [
+const NEW_OPTIONS: [&str; 12] = [
     "--iso",
     "--kind",
     "--disk",
@@ -15,6 +15,7 @@ const NEW_OPTIONS: [&str; 11] = [
     "--ram",
     "--user",
     "--amd-card",
+    "--amd-driver",
     "--intel-driver",
     "--remote-desktop",
     "--ssh",
@@ -32,6 +33,8 @@ pub(super) struct NewOptions<'a> {
     pub ram: Option<&'a str>,
     pub user: Option<&'a str>,
     pub amd_card: Option<&'a str>,
+    /// AMD's installer, which the dialog asks for when the card is AMD's and has no driver yet.
+    pub amd_driver: Option<&'a str>,
     /// Intel's installer, which the dialog asks for when the card is Intel's.
     pub intel_driver: Option<&'a str>,
     /// On or off, for a Windows machine.
@@ -165,6 +168,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 ram: split.value("--ram"),
                 user: split.value("--user"),
                 amd_card: split.value("--amd-card"),
+                amd_driver: split.value("--amd-driver"),
                 intel_driver: split.value("--intel-driver"),
                 remote_desktop: split.value("--remote-desktop"),
                 ssh: split.value("--ssh"),

@@ -16,6 +16,7 @@ use crate::library::{NewMachine, create, delete, folders_text, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
 use crate::remote_access::{Access, Service};
 use crate::render_cards::render_card;
+use crate::setup::amd_driver::{read_amd_installer, unpack_amd};
 use crate::setup::checks::machine_gpu_warning;
 use crate::setup::driver::Extraction;
 use crate::setup::intel_driver::{read_intel_installer, unpack_intel};
@@ -90,6 +91,25 @@ fn card_for(context: &Context, named: Option<&str>) -> Result<(String, GpuMaker)
     Err(Failure(format!("There is no card at {pci} to use. The cards are {}.", cards.join(", "))))
 }
 
+/// Takes the card's driver out of AMD's installer, as the dialog's driver row does, saying how far
+/// it is.
+fn unpack_amd_driver(context: &Context, pci: &str, installer: &str, out: &mut dyn Write) -> Result<()> {
+    let card = render_card(context, GpuMaker::Amd, pci)
+        .ok_or_else(|| Failure(format!("There is no AMD card at {pci} to unpack AMD's driver for.")))?;
+    writeln!(out, "Reading AMD's installer")?;
+    let package = read_amd_installer(installer, card.device)?;
+    writeln!(out, "Taking out the driver for {}", card.name)?;
+    let (said, out) = (Cell::new(0), RefCell::new(out));
+    let folder = unpack_amd(&Extraction::new(installer), context, &package, &|percent| {
+        let step = percent / PERCENT_STEP;
+        if step > said.get() {
+            said.set(step);
+            let _ = writeln!(out.borrow_mut(), "{percent}%");
+        }
+    })?;
+    Ok(writeln!(out.borrow_mut(), "AMD's driver {} is in {}.", package.version, folder.display())?)
+}
+
 /// Takes the card's drivers out of Intel's installer, as the dialog's driver row does, saying how
 /// far it is.
 fn unpack_intel_driver(context: &Context, pci: &str, installer: &str, out: &mut dyn Write) -> Result<()> {
@@ -151,11 +171,18 @@ pub(super) fn new_machine(
     }
     // An Intel card is told from an AMD one by its maker, as both are named by address.
     let card = windows.then(|| card_for(context, options.amd_card)).transpose()?;
-    if let Some(installer) = options.intel_driver {
-        match &card {
-            Some((pci, GpuMaker::Intel)) => unpack_intel_driver(context, pci, installer, out)?,
-            _ => return Err(Failure::new("--intel-driver is for a Windows machine on an Intel card.")),
-        }
+    // Both are judged before either is unpacked, so naming the two doesn't unpack one and then refuse the other.
+    if options.amd_driver.is_some() && !matches!(card, Some((_, GpuMaker::Amd))) {
+        return Err(Failure::new("--amd-driver is for a Windows machine on an AMD card."));
+    }
+    if options.intel_driver.is_some() && !matches!(card, Some((_, GpuMaker::Intel))) {
+        return Err(Failure::new("--intel-driver is for a Windows machine on an Intel card."));
+    }
+    if let (Some(installer), Some((pci, _))) = (options.amd_driver, &card) {
+        unpack_amd_driver(context, pci, installer, out)?;
+    }
+    if let (Some(installer), Some((pci, _))) = (options.intel_driver, &card) {
+        unpack_intel_driver(context, pci, installer, out)?;
     }
     let sizes = sizes_for_disc(&disc);
     let field = if windows {

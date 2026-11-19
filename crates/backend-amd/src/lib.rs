@@ -69,7 +69,7 @@ use guesthouse_backend::{
     RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, StandardSurface,
     Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
 };
-use nodes::nodes;
+use nodes::{Node, nodes};
 use run_wait::Patience;
 use screen_copy::{CopyPlan, PIXEL_BYTES};
 use sdma_copy::{EngineForm, LinearCopy, TiledCopy};
@@ -575,6 +575,31 @@ fn registry_answer(name: &RegistryName) -> Option<RegistryValue> {
     value
 }
 
+/// Reads a submission as far as the card's readings go, and logs what its private data holds: the
+/// engine behind its node and the command buffers it names, or `None` for one its queue fails on.
+fn submission_read(info: &DeviceInfo, work: &Work<'_>) -> Option<(Node, Vec<Ib>)> {
+    // The kernel driver fails a submission whose private data is wrong, and the guest then
+    // treats the device as lost, so the queue stops here the same way.
+    let submission = match protocol::command_data::check(work.private) {
+        Ok(submission) => submission,
+        Err(refused) => {
+            log::warn!("refused a submission on queue {:#x}: {}", work.queue, refused.0);
+            traffic::submission_refused(work, refused.0);
+            return None;
+        }
+    };
+    let Some(node) = nodes(&info.engines).get(work.node as usize).copied() else {
+        log::warn!("work for node {}, which this card hasn't got", work.node);
+        return None;
+    };
+    let ibs: Vec<Ib> = protocol::command_data::command_buffers(work.private)
+        .into_iter()
+        .map(|buffer| Ib { address: buffer.address, bytes: buffer.bytes })
+        .collect();
+    traffic::submission(work, node.ip_type, &submission, &ibs);
+    Some((node, ibs))
+}
+
 /// Builds the facts the guest is told from the card's own readings.
 fn facts_from(info: &DeviceInfo) -> AdapterFacts {
     AdapterFacts {
@@ -897,20 +922,9 @@ impl Backend for AmdBackend {
     }
 
     fn start_work(&mut self, _host: &mut dyn HostServices, work: &Work<'_>) -> WorkStart {
-        // The kernel driver fails a submission whose private data is wrong, and the guest then
-        // treats the device as lost, so the queue stops here the same way.
-        if let Err(refused) = protocol::command_data::check(work.private) {
-            log::warn!("refused a submission on queue {:#x}: {}", work.queue, refused.0);
-            return WorkStart::QueueFailed;
-        }
-        let Some(node) = nodes(&self.device.info().engines).get(work.node as usize).copied() else {
-            log::warn!("work for node {}, which this card hasn't got", work.node);
+        let Some((node, mut ibs)) = submission_read(self.device.info(), work) else {
             return WorkStart::QueueFailed;
         };
-        let mut ibs: Vec<Ib> = protocol::command_data::command_buffers(work.private)
-            .into_iter()
-            .map(|buffer| Ib { address: buffer.address, bytes: buffer.bytes })
-            .collect();
         if ibs.is_empty() || !work.may_run || work.queue_failed {
             return WorkStart::Finished;
         }
@@ -941,7 +955,6 @@ impl Backend for AmdBackend {
             );
             return WorkStart::QueueFailed;
         }
-        log::debug!("run on engine family {} in space {:?}: {:x?}", node.ip_type, work.space, ibs);
         let card = self.device.info();
         let writer = fence_ib::writer_for(node.ip_type, card.details.gfx_version.0)
             .filter(|_| space.vm.holds(work.fence_gpu_address, FENCE_BYTES));

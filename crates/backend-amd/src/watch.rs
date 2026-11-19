@@ -90,6 +90,28 @@ impl fmt::Display for HexNumber {
     }
 }
 
+/// Values with a space between them, as a line lists them inside brackets.
+pub struct Spaced<I>(pub I);
+
+impl<I: Iterator<Item: fmt::Display> + Clone> fmt::Display for Spaced<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, value) in self.0.clone().enumerate() {
+            let space = if index == 0 { "" } else { " " };
+            write!(f, "{space}{value}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The first `most` dwords of a buffer in hex. A short last dword is read as if padded with zeros.
+pub fn dwords(bytes: &[u8], most: usize) -> Spaced<impl Iterator<Item = HexNumber> + Clone + '_> {
+    Spaced(bytes.chunks(size_of::<u32>()).take(most).map(|chunk| {
+        let mut dword = [0; size_of::<u32>()];
+        dword[..chunk.len()].copy_from_slice(chunk);
+        HexNumber(u32::from_le_bytes(dword))
+    }))
+}
+
 /// A bool as the lines write it.
 pub fn bit(value: bool) -> u8 {
     value.into()
@@ -186,6 +208,21 @@ mod tests {
         assert_eq!(OrDash(Some(HexNumber(0x1F))).to_string(), "0x1f");
         assert_eq!(OrDash::<u8>(None).to_string(), "-");
         assert_eq!((bit(true), bit(false)), (1, 0));
+    }
+
+    #[test]
+    fn a_list_has_spaces_between_and_none_around() {
+        assert_eq!(Spaced([5, 4, 0].iter()).to_string(), "5 4 0");
+        assert_eq!(Spaced([7].iter()).to_string(), "7");
+        assert_eq!(Spaced(std::iter::empty::<u8>()).to_string(), "");
+    }
+
+    #[test]
+    fn dwords_stop_at_their_limit_and_pad_a_short_last_one() {
+        let bytes = [1, 0, 0, 0, 0xEF, 0xBE, 0xAD, 0xDE, 0x34, 0x12];
+        assert_eq!(dwords(&bytes, 4).to_string(), "0x1 0xdeadbeef 0x1234");
+        assert_eq!(dwords(&bytes, 1).to_string(), "0x1");
+        assert_eq!(dwords(&[], 4).to_string(), "");
     }
 
     #[test]

@@ -1,19 +1,22 @@
 //! One log line for each exchange with the guest's driver, in a fixed form a tester's log can be
 //! searched by: `amd <kind> name=value ...`.
 //!
-//! The kinds so far are `escape`, `query` and `registry`. All of the lines are at debug, so they are
-//! in the log only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A line names
-//! only what the protocol modules read; the rest of a buffer is in its `amd dump` line, whole up to
-//! 4 KiB. A registry lookup left to the core has neither line: a guest makes them by the hundred
-//! thousand as it starts, and the core logs each name it finds no value for. A value this backend
-//! gives has a `registry` line with its name.
+//! The kinds so far are `escape`, `query`, `registry` and `submit`. All of the lines are at debug, so
+//! they are in the log only with `GUESTHOUSE_VERBOSE`, and nothing is read for them without it. A
+//! line names only what the protocol modules read; the rest of a buffer is in its `amd dump` line,
+//! whole up to 4 KiB. A submission has no dump, as a busy guest makes thousands a second. A registry
+//! lookup left to the core has neither line: a guest makes them by the hundred thousand as it
+//! starts, and the core logs each name it finds no value for. A value this backend gives has a
+//! `registry` line with its name.
 //!
 //! Nothing here writes to a buffer of the guest's or decides an answer: every function takes what
 //! it logs by shared reference, after the answer is made or, for an escape, before and after.
 
+use crate::protocol::command_data::Submission;
 use crate::protocol::escape::{self, Answered, Count, Framing};
-use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, bit, dump, watching};
-use guesthouse_backend::{RegistryName, RegistryValue, Status, VendorQuery};
+use crate::submit::Ib;
+use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, Spaced, bit, dump, dwords, watching};
+use guesthouse_backend::{RegistryName, RegistryValue, Status, VendorQuery, Work, WorkSource};
 use guesthouse_messages::adapter::AdapterQuery;
 use std::fmt;
 
@@ -21,6 +24,9 @@ use std::fmt;
 const ESCAPE_BYTES_SHOWN: usize = 32;
 /// How many bytes of the data that came with a query a line shows.
 const QUERY_BYTES_SHOWN: usize = 32;
+/// How many dwords a line shows of a submission that was refused: its header, and most of what its
+/// first record can hold.
+const REFUSED_DWORDS_SHOWN: usize = 16;
 
 /// An escape as the guest sent it, kept from before its answer was written into the same buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,10 +189,110 @@ impl fmt::Display for RegistryLine<'_> {
     }
 }
 
+/// Logs a submission whose private data was taken: what the check read from it, and the command
+/// buffers it names. Whether it runs follows from the line and from any warning after it: one with
+/// no buffers, or that may not run, or on a queue that failed, is finished without running. One for
+/// a node the card hasn't got has only its warning, as there is no engine family to name.
+pub fn submission(work: &Work<'_>, engine_family: u32, submission: &Submission, buffers: &[Ib]) {
+    log::debug!("{}", SubmitLine { work, engine_family, submission, buffers });
+}
+
+/// Logs a submission whose private data was refused, with how it starts.
+pub fn submission_refused(work: &Work<'_>, why: &str) {
+    log::debug!("{}", RefusedSubmitLine { work, why });
+}
+
+/// How a check of private data came out, as `check=`, with why for data that was refused.
+enum Check<'a> {
+    Taken,
+    Refused(&'a str),
+}
+
+impl fmt::Display for Check<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Taken => f.write_str("check=taken"),
+            Self::Refused(why) => write!(f, "check=refused why=\"{why}\""),
+        }
+    }
+}
+
+/// What the core says of a submission, which both of its lines start with.
+struct WorkText<'a>(&'a Work<'a>);
+
+impl fmt::Display for WorkText<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let work = self.0;
+        let source = match work.source {
+            WorkSource::HardwareQueue => "hardware-queue",
+            WorkSource::Context => "context",
+        };
+        write!(
+            f,
+            "{PREFIX} submit source={source} queue={:#x} node={} hint={:#x} fence_value={} length={}",
+            work.queue,
+            work.node,
+            work.client_hint,
+            work.fence_value,
+            work.private.len()
+        )
+    }
+}
+
+struct SubmitLine<'a> {
+    work: &'a Work<'a>,
+    /// amdgpu's `HW_IP_*` behind the node.
+    engine_family: u32,
+    submission: &'a Submission,
+    buffers: &'a [Ib],
+}
+
+impl fmt::Display for SubmitLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { work, engine_family, submission, buffers } = self;
+        write!(
+            f,
+            "{} {} client={} opcodes=[{}] engine_family={engine_family} space={} buffers=[{}] may_run={} \
+             queue_failed={}",
+            WorkText(work),
+            Check::Taken,
+            submission.client,
+            Spaced(submission.opcodes.iter()),
+            work.space.0,
+            Spaced(buffers.iter().map(BufferText)),
+            bit(work.may_run),
+            bit(work.queue_failed)
+        )
+    }
+}
+
+/// A command buffer, as `address:bytes`.
+struct BufferText<'a>(&'a Ib);
+
+impl fmt::Display for BufferText<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#x}:{:#x}", self.0.address, self.0.bytes)
+    }
+}
+
+struct RefusedSubmitLine<'a> {
+    work: &'a Work<'a>,
+    why: &'a str,
+}
+
+impl fmt::Display for RefusedSubmitLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { work, why } = self;
+        let first = dwords(work.private, REFUSED_DWORDS_SHOWN);
+        write!(f, "{} {} first=[{first}]", WorkText(work), Check::Refused(why))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::bytes::put_dword;
+    use crate::protocol::bytes::{put_dword, put_qword};
+    use crate::protocol::command_data;
     use crate::protocol::escape::{COUNT_SIZE, HEADER_SIZE, WRAPPER_KIND, WRAPPER_SIZE, WRAPPER_VERSION};
     use crate::watch::lines;
     use log::Level;
@@ -454,6 +560,197 @@ mod tests {
             assert_eq!(ours, 2, "{lines:?}");
         }
         assert_eq!(answers, queries().len() - 1, "only the last is left to the core");
+    }
+
+    fn work_with(private: &[u8]) -> Work<'_> {
+        Work {
+            source: WorkSource::HardwareQueue,
+            queue: 0x4000_0010,
+            space: guesthouse_backend::SpaceId(3),
+            node: 1,
+            client_hint: 0x6,
+            context_queues: 1,
+            private,
+            commands: None,
+            fence: 0,
+            fence_gpu_address: 0,
+            fence_value: 12,
+            may_run: true,
+            queue_failed: false,
+        }
+    }
+
+    /// A submission's private data: client 2, with a DMA buffer record and a tracking record.
+    fn submission_data() -> Vec<u8> {
+        const DMA_BUFFER: (u32, usize) = (0, 0x40);
+        const DMA_BUFFER_BYTES_AT: usize = 0x08;
+        const DMA_BUFFER_ADDRESS_AT: usize = 0x18;
+        const TRACKING: (u32, usize) = (8, 0x20);
+        const HEADER: usize = 8;
+        let mut data = vec![0u8; HEADER + DMA_BUFFER.1 + TRACKING.1];
+        put_dword(&mut data, 0, 2);
+        put_dword(&mut data, 4, 2);
+        for (at, (opcode, length)) in [(HEADER, DMA_BUFFER), (HEADER + DMA_BUFFER.1, TRACKING)] {
+            put_dword(&mut data, at, opcode);
+            put_dword(&mut data, at + 4, length as u32);
+        }
+        put_dword(&mut data, HEADER + DMA_BUFFER_BYTES_AT, 0x40);
+        put_qword(&mut data, HEADER + DMA_BUFFER_ADDRESS_AT, 0x10_0000);
+        data
+    }
+
+    #[test]
+    fn a_submission_says_what_the_check_read_and_which_buffers_it_names() {
+        let data = submission_data();
+        let submission = command_data::check(&data).unwrap();
+        let buffers: Vec<Ib> = command_data::command_buffers(&data)
+            .into_iter()
+            .map(|buffer| Ib { address: buffer.address, bytes: buffer.bytes })
+            .collect();
+        let work = work_with(&data);
+        let line = SubmitLine { work: &work, engine_family: 2, submission: &submission, buffers: &buffers };
+        assert_eq!(
+            line.to_string(),
+            "amd submit source=hardware-queue queue=0x40000010 node=1 hint=0x6 fence_value=12 length=104 \
+             check=taken client=2 opcodes=[0 8] engine_family=2 space=3 buffers=[0x100000:0x40] may_run=1 \
+             queue_failed=0"
+        );
+        let two = [buffers[0], Ib { address: 0x20_0000, bytes: 0x80 }];
+        let line = SubmitLine { work: &work, engine_family: 2, submission: &submission, buffers: &two };
+        assert!(line.to_string().contains(" buffers=[0x100000:0x40 0x200000:0x80] "), "{line}");
+    }
+
+    #[test]
+    fn the_empty_marker_and_a_context_submission_that_may_not_run_read_plainly() {
+        let data = [0xAA, 0, 0, 0, 0, 0, 0, 0];
+        let submission = command_data::check(&data).unwrap();
+        let work =
+            Work { source: WorkSource::Context, may_run: false, queue_failed: true, ..work_with(&data) };
+        let line = SubmitLine { work: &work, engine_family: 0, submission: &submission, buffers: &[] };
+        assert_eq!(
+            line.to_string(),
+            "amd submit source=context queue=0x40000010 node=1 hint=0x6 fence_value=12 length=8 check=taken \
+             client=170 opcodes=[] engine_family=0 space=3 buffers=[] may_run=0 queue_failed=1"
+        );
+    }
+
+    #[test]
+    fn a_refused_submission_shows_why_and_how_it_starts() {
+        let mut data = submission_data();
+        put_dword(&mut data, 8, 7);
+        let why = command_data::check(&data).unwrap_err().0;
+        let work = work_with(&data);
+        assert_eq!(
+            RefusedSubmitLine { work: &work, why }.to_string(),
+            "amd submit source=hardware-queue queue=0x40000010 node=1 hint=0x6 fence_value=12 length=104 \
+             check=refused why=\"the opcode is unknown\" first=[0x2 0x2 0x7 0x40 0x40 0x0 0x0 0x0 0x100000 \
+             0x0 0x0 0x0 0x0 0x0 0x0 0x0]"
+        );
+        let short = work_with(&[1, 2, 3]);
+        let line = RefusedSubmitLine { work: &short, why: "the header is cut short" }.to_string();
+        assert!(line.ends_with(" length=3 check=refused why=\"the header is cut short\" first=[0x30201]"));
+    }
+
+    #[test]
+    fn a_submission_has_one_line_and_none_with_debug_lines_off() {
+        let data = submission_data();
+        let submission = command_data::check(&data).unwrap();
+        let work = work_with(&data);
+        let both = || {
+            super::submission(&work, 0, &submission, &[]);
+            submission_refused(&work, "the opcode is unknown");
+        };
+        both();
+        let lines = lines::logged(both);
+        let debug = lines::at(Level::Debug, &lines);
+        assert_eq!(debug.len(), 2, "{lines:?}");
+        assert!(debug[0].contains(" check=taken "), "{lines:?}");
+        assert!(debug[1].contains(" check=refused "), "{lines:?}");
+        assert!(lines::logged(|| {}).is_empty(), "a line from before was kept");
+    }
+
+    /// A card with all three engine families, so the guest's nodes are graphics, compute and DMA.
+    fn full_card() -> crate::DeviceInfo {
+        let engines = crate::EngineSet { graphics: true, compute: true, dma: true };
+        crate::DeviceInfo { engines, ..Default::default() }
+    }
+
+    /// What the parts say of a submission with nothing logged: the engine and the buffers, unless
+    /// the check refuses it or the card has no such node.
+    fn read_alone(info: &crate::DeviceInfo, work: &Work<'_>) -> Option<(crate::Node, Vec<Ib>)> {
+        let buffers = command_data::command_buffers(work.private)
+            .into_iter()
+            .map(|buffer| Ib { address: buffer.address, bytes: buffer.bytes })
+            .collect();
+        let engine = crate::nodes::nodes(&info.engines).get(work.node as usize).copied();
+        command_data::check(work.private).ok().and(engine).map(|engine| (engine, buffers))
+    }
+
+    /// A submission to read, the warning it should bring, and what its debug line should hold.
+    struct Read<'a> {
+        private: &'a [u8],
+        node: u32,
+        warning: Option<&'a str>,
+        line_holds: Option<&'a str>,
+    }
+
+    #[test]
+    fn a_submission_is_read_the_same_whether_or_not_it_is_logged() {
+        const NO_SUCH_NODE: u32 = 3;
+        let info = full_card();
+        let taken = submission_data();
+        let empty_marker = [0xAA, 0, 0, 0, 0, 0, 0, 0];
+        let mut refused = submission_data();
+        put_dword(&mut refused, 8, 7);
+        let cases = [
+            Read {
+                private: &taken,
+                node: 1,
+                warning: None,
+                line_holds: Some(" check=taken client=2 opcodes=[0 8] engine_family=1 "),
+            },
+            Read {
+                private: &empty_marker,
+                node: 0,
+                warning: None,
+                line_holds: Some(" check=taken client=170 opcodes=[] engine_family=0 "),
+            },
+            Read {
+                private: &refused,
+                node: 1,
+                warning: Some("refused a submission on queue 0x40000010: the opcode is unknown"),
+                line_holds: Some(" check=refused why=\"the opcode is unknown\" first=[0x2 0x2 0x7 "),
+            },
+            Read {
+                private: &taken,
+                node: NO_SUCH_NODE,
+                warning: Some("work for node 3, which this card hasn't got"),
+                line_holds: None,
+            },
+        ];
+        for Read { private, node, warning, line_holds } in cases {
+            let work = Work { node, ..work_with(private) };
+            let alone = read_alone(&info, &work);
+            assert_eq!(alone.is_some(), warning.is_none());
+            assert_eq!(crate::submission_read(&info, &work), alone, "with debug lines off");
+            let lines = lines::logged(|| assert_eq!(crate::submission_read(&info, &work), alone));
+
+            // The warning is worded as it was, and comes before the line.
+            let warnings: Vec<&str> = warning.into_iter().collect();
+            assert_eq!(lines::at(Level::Warn, &lines), warnings, "{lines:?}");
+            let debug = lines::at(Level::Debug, &lines);
+            assert_eq!(debug.len(), usize::from(line_holds.is_some()), "{lines:?}");
+            if let Some(holds) = line_holds {
+                assert!(debug[0].starts_with("amd submit source=hardware-queue "), "{lines:?}");
+                assert!(debug[0].contains(&format!(" node={node} ")), "{lines:?}");
+                assert!(debug[0].contains(holds), "{lines:?}");
+                assert_eq!(lines.last().unwrap().1, debug[0], "{lines:?}");
+            }
+            assert_eq!(lines.len(), warnings.len() + debug.len(), "{lines:?}");
+        }
+        let (engine, buffers) = read_alone(&info, &work_with(&taken)).unwrap();
+        assert_eq!(engine.ip_type, crate::info::HW_IP_COMPUTE);
+        assert_eq!(buffers, [Ib { address: 0x10_0000, bytes: 0x40 }]);
     }
 
     #[test]

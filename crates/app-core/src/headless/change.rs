@@ -18,7 +18,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 11] = [
+const SETTINGS: [&str; 12] = [
     "cores",
     "ram",
     "vram",
@@ -30,6 +30,7 @@ const SETTINGS: [&str; 11] = [
     "sound",
     "share",
     "window-speed",
+    "start-unjailed",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -125,6 +126,10 @@ pub(super) fn set(
         "window-speed" => {
             only_for_windows(&machine, key)?;
             machine.window_speed_off = !on_or_off(key, value)?;
+        }
+        "start-unjailed" => {
+            must_be_off(context, &machine)?;
+            machine.start_without_jail = on_or_off(key, value)?;
         }
         "screen" => {
             only_for_windows(&machine, key)?;
@@ -240,6 +245,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
     }
+    line(out, "start-unjailed", &switch(machine.start_without_jail))?;
     if machine.kind != Kind::Linux {
         line(out, "network", &machine.network_mode.name())?;
         if machine.network_mode == Mode::Nat {

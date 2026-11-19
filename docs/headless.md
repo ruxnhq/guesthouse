@@ -55,6 +55,7 @@ What you don't give, you get as the dialog would start you: the sizes for that k
 | `vram` | the video memory cap in GiB, 0 for none | Windows |
 | `sound` | on or off | Windows |
 | `window-speed` | on or off: whether programs in a window are shown without a copy of every frame | Windows |
+| `start-unjailed` | on or off: on lets a machine with a GPU start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |
 | `network` | nat, none or bridged | not Ubuntu |

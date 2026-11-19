@@ -166,3 +166,18 @@ fn show_lists_what_the_kind_of_machine_has() {
         "{windows}"
     );
 }
+
+#[test]
+fn a_machine_can_be_let_start_without_a_jail_and_says_so() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "win", "Win", Kind::Windows);
+    assert!(said(&context, "show win").0.contains("start-unjailed off\n"));
+    let answer = said(&context, "set win start-unjailed on");
+    assert_eq!(answer, ("start-unjailed is now on.\n".to_owned(), Ok(())));
+    assert!(load(&context, "win").unwrap().start_without_jail);
+    assert!(said(&context, "show win").0.contains("start-unjailed on\n"));
+    assert_eq!(said(&context, "set win start-unjailed off").1, Ok(()));
+    assert!(!load(&context, "win").unwrap().start_without_jail);
+    assert_eq!(refused(&context, "set win start-unjailed maybe"), "start-unjailed is on or off.");
+}

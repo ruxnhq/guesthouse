@@ -280,3 +280,21 @@ statuspage .title {
   background: rgba(255, 255, 255, 0.08);
   font-size: 0.9em;
 }
+
+/* A dialog's pages, named down its side. */
+.navigation-sidebar {
+  padding: 6px;
+  background: none;
+}
+
+.navigation-sidebar > row {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-weight: 500;
+}
+
+.navigation-sidebar > row:selected {
+  background: @field_bg_color;
+  color: @window_fg_color;
+}

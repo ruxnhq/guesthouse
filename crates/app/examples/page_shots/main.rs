@@ -130,9 +130,7 @@ async fn shot_after_paint(window: &Window, folder: &Path, name: &str) {
 
 /// Turns the settings to one of their pages.
 fn show_page(window: &Window, name: &str) {
-    if let Some(dialog) = all_of::<adw::PreferencesDialog>(window).last() {
-        dialog.set_visible_page_name(name);
-    }
+    window.show_settings_page(name);
 }
 
 /// Scrolls the topmost scrolled area until this title is near the top.

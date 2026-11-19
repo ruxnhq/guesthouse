@@ -344,6 +344,13 @@ impl Window {
         }
     }
 
+    /// Turns the open settings to the page of this name, for the page checks.
+    pub fn show_settings_page(&self, name: &str) {
+        if let Some(settings) = self.0.settings.borrow().as_ref() {
+            settings.show_page(name);
+        }
+    }
+
     pub fn show_log(&self) {
         log_dialog::show(self);
     }

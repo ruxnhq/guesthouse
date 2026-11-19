@@ -122,10 +122,16 @@ impl<'a> SubmitToQueue<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SubmitToContext<'a> {
     pub context: u32,
+    /// The commands' GPU address and their length in bytes. A length of zero names none.
+    pub commands: u64,
+    pub commands_length: u32,
     pub private: &'a [u8],
 }
 
 impl<'a> SubmitToContext<'a> {
+    const COMMANDS: usize = 0x18;
+    const COMMANDS_LENGTH: usize = 0x20;
+    /// The first of the contexts the work goes to. The guest sends one.
     const CONTEXT: usize = 0x34;
     const PRIVATE_SIZE: usize = 0x140;
     const HISTORY_COUNT: usize = 0x188;
@@ -137,6 +143,8 @@ impl<'a> SubmitToContext<'a> {
         let private_at = Self::HISTORY.saturating_add(history.saturating_mul(4));
         Ok(Self {
             context: u32_at(message, Self::CONTEXT)?,
+            commands: u64_at(message, Self::COMMANDS)?,
+            commands_length: u32_at(message, Self::COMMANDS_LENGTH)?,
             private: clamped(message, private_at, private_size),
         })
     }
@@ -317,6 +325,20 @@ mod tests {
         let parsed = SubmitToQueue::parse(&message).unwrap();
         assert_eq!((parsed.queue, parsed.fence_value), (0x40, 77));
         assert_eq!(parsed.private, b"private");
+    }
+
+    #[test]
+    fn a_context_submission_names_its_commands_context_and_private_data() {
+        let mut message = vec![0; 0x198];
+        set_u64(&mut message, 0x18, 0x6_0000_1000);
+        set_u32(&mut message, 0x20, 0x240);
+        set_u32(&mut message, 0x34, 0x4000_0100);
+        set_u32(&mut message, 0x140, 4);
+        message.extend_from_slice(b"headtail");
+        let parsed = SubmitToContext::parse(&message).unwrap();
+        assert_eq!((parsed.commands, parsed.commands_length), (0x6_0000_1000, 0x240));
+        assert_eq!(parsed.context, 0x4000_0100);
+        assert_eq!(parsed.private, b"head");
     }
 
     #[test]

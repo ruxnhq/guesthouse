@@ -29,6 +29,9 @@ pub struct RefreshState {
     running_before: BTreeMap<String, (u8, Seen)>,
     leftovers_before: BTreeMap<u8, u64>,
     problem: Option<String>,
+    /// Whether the machines have been looked at once. What a machine already said before the app
+    /// started is old news: its card shows it, and nothing announces it again.
+    looked: bool,
 }
 
 struct Report {
@@ -160,7 +163,8 @@ impl Window {
         let rows = self.0.cards.borrow();
         // A row can be gone if it was deleted while this was being read.
         let Some(row) = rows.get(id) else { return };
-        if !status.error.is_empty() && status.error != row.status().error {
+        let looked = self.0.refresh.borrow().looked;
+        if looked && !status.error.is_empty() && status.error != row.status().error {
             self.problem(&status.error);
         }
         row.set_status(status, vm_running);
@@ -212,5 +216,6 @@ impl Window {
         for (id, status) in &report.statuses {
             self.show_machine_status(id, status, report.vm_running);
         }
+        self.0.refresh.borrow_mut().looked = true;
     }
 }

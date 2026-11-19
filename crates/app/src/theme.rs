@@ -3,6 +3,10 @@
 //! libadwaita's look is GNOME's, and most people who run this aren't on GNOME. So the app carries its
 //! look with it and is the same on every desktop. The colours go in under the names libadwaita reads
 //! its own from, which is what lets one set of shapes serve both.
+//!
+//! Someone with a theme of their own may want the app in it, as it was before it had a look. The
+//! preferences can ask for that: then the theme draws everything it knows, and only the widgets
+//! that are the app's own are styled here, in the theme's colours.
 
 use adw::prelude::*;
 use gtk::gio;
@@ -13,8 +17,16 @@ use std::cell::RefCell;
 const DARK: &str = include_str!("../data/style/dark.css");
 const LIGHT: &str = include_str!("../data/style/light.css");
 const SHAPES: &str = include_str!("../data/style/shapes.css");
+const OWN_WIDGETS: &str = include_str!("../data/style/own.css");
+const DESKTOP_NAMES: &str = include_str!("../data/style/desktop.css");
 /// Above USER, as a desktop can write colours of its own into the user's gtk.css.
 const PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 1;
+/// Where an app's own style usually goes, under the desktop's theme and the user's gtk.css. It's
+/// where the app's own widgets go when the desktop's theme is the one wanted.
+const UNDER_THE_THEME: u32 = gtk::STYLE_PROVIDER_PRIORITY_APPLICATION;
+/// The preference that says whose look to use, and what it holds for the desktop's theme.
+pub const LOOK_OF: &str = "look";
+pub const DESKTOP_LOOK: &str = "desktop";
 /// The preference that says which colours to use.
 pub const SCHEME: &str = "scheme";
 /// The preference that says whose accent colour to use, and what it holds for the desktop's.
@@ -28,9 +40,22 @@ const LIGHT_ACCENT: f64 = 0.55;
 /// Red, green and blue, each from 0 to 1.
 type Rgb = (f64, f64, f64);
 
+/// The stylesheet in use and what decides its text.
+struct Look {
+    provider: gtk::CssProvider,
+    display: gtk::gdk::Display,
+    /// The desktop's theme draws the stock widgets, and only the app's own widgets are styled here.
+    desktops: bool,
+    /// The desktop's accent, if that's the one wanted.
+    accent: Option<Rgb>,
+}
+
 thread_local! {
-    /// The stylesheet in use, and the desktop's accent if that's the one wanted.
-    static LOOK: RefCell<Option<(gtk::CssProvider, Option<Rgb>)>> = const { RefCell::new(None) };
+    static LOOK: RefCell<Option<Look>> = const { RefCell::new(None) };
+}
+
+fn desktops_look(prefs: &Fields) -> bool {
+    prefs.get(LOOK_OF).and_then(Value::as_str) == Some(DESKTOP_LOOK)
 }
 
 /// What the preference asks for. Anything else follows the desktop, and is dark where the desktop
@@ -88,24 +113,47 @@ fn accent_style((red, green, blue): Rgb) -> String {
 fn style(dark: bool, accent: Option<Rgb>) -> String {
     let colours = if dark { DARK } else { LIGHT };
     let accent = accent.map(accent_style).unwrap_or_default();
-    format!("{colours}\n{accent}\n{SHAPES}")
+    format!("{colours}\n{accent}\n{SHAPES}\n{OWN_WIDGETS}")
+}
+
+/// Only the app's own widgets, in the theme's colours.
+fn style_under_the_theme() -> String {
+    format!("{DESKTOP_NAMES}\n{OWN_WIDGETS}")
 }
 
 fn load() {
     LOOK.with_borrow(|look| {
-        if let Some((provider, accent)) = look {
-            provider.load_from_string(&style(adw::StyleManager::default().is_dark(), *accent));
-        }
+        let Some(look) = look else { return };
+        let text = if look.desktops {
+            style_under_the_theme()
+        } else {
+            style(adw::StyleManager::default().is_dark(), look.accent)
+        };
+        look.provider.load_from_string(&text);
     });
 }
 
-/// Gives every window on this display the app's look, and keeps it in step with dark and light.
+/// Puts the stylesheet over the desktop's theme or under it, by which look is wanted.
+fn place(look: &Look) {
+    gtk::style_context_remove_provider_for_display(&look.display, &look.provider);
+    let priority = if look.desktops { UNDER_THE_THEME } else { PRIORITY };
+    gtk::style_context_add_provider_for_display(&look.display, &look.provider, priority);
+}
+
+/// Gives every window on this display the look the preferences ask for, and keeps it in step with
+/// dark and light.
 pub fn install(display: &gtk::gdk::Display, prefs: &Fields) {
     let manager = adw::StyleManager::default();
     manager.set_color_scheme(scheme(prefs));
-    let provider = gtk::CssProvider::new();
-    gtk::style_context_add_provider_for_display(display, &provider, PRIORITY);
-    LOOK.set(Some((provider, wanted_accent(prefs))));
+    let desktops = desktops_look(prefs);
+    let look = Look {
+        provider: gtk::CssProvider::new(),
+        display: display.clone(),
+        desktops,
+        accent: if desktops { None } else { wanted_accent(prefs) },
+    };
+    place(&look);
+    LOOK.set(Some(look));
     load();
     manager.connect_dark_notify(|_| load());
 }
@@ -113,10 +161,13 @@ pub fn install(display: &gtk::gdk::Display, prefs: &Fields) {
 /// Takes in changed preferences while the app runs.
 pub fn follow(prefs: &Fields) {
     adw::StyleManager::default().set_color_scheme(scheme(prefs));
-    let accent = wanted_accent(prefs);
+    let desktops = desktops_look(prefs);
+    let accent = if desktops { None } else { wanted_accent(prefs) };
     LOOK.with_borrow_mut(|look| {
-        if let Some((_, old)) = look {
-            *old = accent;
+        if let Some(look) = look {
+            look.desktops = desktops;
+            look.accent = accent;
+            place(look);
         }
     });
     load();
@@ -140,5 +191,13 @@ mod tests {
         assert!(text.find("#8fb4ff").unwrap() < own, "the palette's accent has to come first to lose");
         assert!(own < text.find("headerbar {").unwrap());
         assert!(!style(true, None).contains("accent_bg_color rgb("));
+    }
+
+    #[test]
+    fn under_the_desktops_theme_only_the_apps_own_widgets_are_styled() {
+        let text = style_under_the_theme();
+        assert!(text.contains(".hero") && text.contains(".viewer-pill"));
+        assert!(!text.contains("headerbar {") && !text.contains("switch {"));
+        assert!(!text.contains("window_bg_color #"), "the theme's colours have to stay the theme's");
     }
 }

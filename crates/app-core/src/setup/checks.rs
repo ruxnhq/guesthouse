@@ -23,9 +23,18 @@ const NVIDIA_TOOL: &str = "nvidia-smi";
 /// What an Ubuntu guest's install takes, beyond what any machine does.
 const UBUNTU_TOOLS: [&str; 6] = ["isoinfo", "genisoimage", "openssl", "ssh-keygen", "setarch", "bwrap"];
 const ISO_TOOL: &str = "genisoimage";
-const TOOLS_FIX: &str = "On Fedora: sudo dnf install 7zip genisoimage qemu-img swtpm edk2-ovmf. On Debian or \
-                         Ubuntu: sudo apt install 7zip genisoimage qemu-utils swtpm ovmf. On Arch: sudo pacman -S \
-                         7zip cdrtools qemu-img swtpm edk2-ovmf.";
+const FIRMWARE: &str = "OVMF firmware";
+/// How each system installs a package, in the order `TOOL_PACKAGES` names them.
+const INSTALL_COMMANDS: [&str; 3] =
+    ["On Fedora: sudo dnf install", "On Debian or Ubuntu: sudo apt install", "On Arch: sudo pacman -S"];
+/// The package each of those systems has a tool in.
+const TOOL_PACKAGES: [(&str, [&str; INSTALL_COMMANDS.len()]); 5] = [
+    ("7z", ["7zip", "7zip", "7zip"]),
+    (ISO_TOOL, ["genisoimage", "genisoimage", "cdrtools"]),
+    ("qemu-img", ["qemu-img", "qemu-utils", "qemu-img"]),
+    ("swtpm", ["swtpm", "swtpm", "swtpm"]),
+    (FIRMWARE, ["edk2-ovmf", "ovmf", "edk2-ovmf"]),
+];
 const UBUNTU_TOOLS_FIX: &str = "On Fedora: sudo dnf install genisoimage openssl openssh-clients bubblewrap. On \
                                 Debian or Ubuntu: sudo apt install genisoimage openssl openssh-client bubblewrap. \
                                 On Arch: sudo pacman -S cdrtools openssl openssh bubblewrap.";
@@ -396,12 +405,31 @@ fn check_tools(context: &Context, tools: &[&str]) -> Check {
         .iter()
         .all(|path| path.exists())
     {
-        missing.push("OVMF firmware");
+        missing.push(FIRMWARE);
     }
     if !missing.is_empty() {
-        return Check::new(TITLE, CheckState::Failed, format!("Missing: {}.", missing.join(", ")), TOOLS_FIX);
+        let text = format!("Missing: {}.", missing.join(", "));
+        return Check::new(TITLE, CheckState::Failed, text, tools_fix(&missing));
     }
     Check::ok(TITLE, format!("{} and the OVMF firmware are here.", tools.join(", ")))
+}
+
+/// Names packages only for what is missing. A tool that is here can come from another package than
+/// the one named, and installing that one too can take the first away, with all that needs it.
+fn tools_fix(missing: &[&str]) -> String {
+    let wanted: Vec<_> = TOOL_PACKAGES
+        .iter()
+        .filter(|(tool, _)| missing.contains(tool))
+        .map(|(_, packages)| packages)
+        .collect();
+    if wanted.is_empty() {
+        return String::new();
+    }
+    let commands = INSTALL_COMMANDS.iter().enumerate().map(|(system, command)| {
+        let packages: Vec<&str> = wanted.iter().map(|packages| packages[system]).collect();
+        format!("{command} {}.", packages.join(" "))
+    });
+    commands.collect::<Vec<String>>().join(" ")
 }
 
 /// Arch has no `genisoimage`, and its `mkisofs` takes the same words.
@@ -872,6 +900,38 @@ mod tests {
         assert!(
             found.text.contains("no-such-tool") && found.text.contains("OVMF") && !found.text.contains("sh,")
         );
+    }
+
+    #[test]
+    fn the_fix_names_packages_only_for_what_is_missing() {
+        let found = tools_fix(&[FIRMWARE]);
+        assert_eq!(
+            found,
+            "On Fedora: sudo dnf install edk2-ovmf. On Debian or Ubuntu: sudo apt install ovmf. On Arch: sudo \
+             pacman -S edk2-ovmf."
+        );
+        let found = tools_fix(&["qemu-img", "swtpm"]);
+        assert!(found.contains("apt install qemu-utils swtpm.") && !found.contains("ovmf"), "{found}");
+        assert_eq!(tools_fix(&["no-such-tool"]), "");
+    }
+
+    #[test]
+    fn with_everything_missing_the_fix_names_every_package() {
+        let mut missing = TOOLS.to_vec();
+        missing.push(FIRMWARE);
+        assert_eq!(
+            tools_fix(&missing),
+            "On Fedora: sudo dnf install 7zip genisoimage qemu-img swtpm edk2-ovmf. On Debian or Ubuntu: sudo apt \
+             install 7zip genisoimage qemu-utils swtpm ovmf. On Arch: sudo pacman -S 7zip cdrtools qemu-img swtpm \
+             edk2-ovmf."
+        );
+    }
+
+    #[test]
+    fn every_tool_has_a_package_to_name() {
+        for tool in TOOLS {
+            assert!(TOOL_PACKAGES.iter().any(|(named, _)| *named == tool), "{tool}");
+        }
     }
 
     #[test]

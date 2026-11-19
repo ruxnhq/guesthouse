@@ -16,6 +16,7 @@ mod network;
 mod remove;
 mod sharing;
 mod snapshots;
+mod starting;
 mod token;
 mod usb;
 mod windows_card;
@@ -166,6 +167,7 @@ struct Parts {
     disk: disk::Disk,
     drives: drives::Drives,
     snapshots: snapshots::Snapshots,
+    _starting: starting::Starting,
     _token: token::Token,
     _account: account::Account,
     _gpu_preview: gpu_preview::GpuPreview,
@@ -195,6 +197,7 @@ impl SettingsDialog {
         let shared = Shared { window: window.clone(), machine, dialog };
         let this = Self(Rc::new(Parts {
             hardware: hardware::Hardware::new(&shared, &pages.general),
+            _starting: starting::Starting::new(&shared, &pages.general),
             windows_card: windows_card::WindowsCard::new(&shared, &pages.general),
             _gpu_preview: gpu_preview::GpuPreview::new(&shared, &pages.general),
             linux_gpu: linux_gpu::LinuxGpu::new(&shared, &pages.general),

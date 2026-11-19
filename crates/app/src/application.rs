@@ -75,5 +75,12 @@ pub fn run() -> glib::ExitCode {
         }
     };
     log_panics(&context);
-    application(context, |_| {}).run()
+    let at_login = crate::login::started_at_login();
+    let application = application(context, move |window| {
+        if at_login {
+            window.start_machines_for_login();
+        }
+    });
+    // GTK would refuse the autostart file's own argument, and the app takes no others.
+    application.run_with_args::<&str>(&[])
 }

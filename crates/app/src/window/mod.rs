@@ -41,6 +41,8 @@ use std::thread;
 const DEFAULT_SIZE: (i32, i32) = (1120, 720);
 const SMALLEST_WINDOW: (i32, i32) = (360, 300);
 const TOAST_SECONDS: u32 = 6;
+/// How long after a login started the app its machines start, so what's already running is known.
+const LOGIN_START_AFTER_SECONDS: u32 = 3;
 const PROBLEM_SECONDS: u32 = 10;
 struct Inner {
     context: Arc<Context>,
@@ -189,6 +191,26 @@ impl Window {
         self.0.library.connect_chosen(move |clicked| {
             let card = this.0.cards.borrow().values().find(|card| card.widget() == clicked).cloned();
             this.choose(card.as_ref());
+        });
+    }
+
+    /// Starts the machines set to start with the PC, once the first look at what's running is in:
+    /// one that a login finds already running is left alone.
+    pub fn start_machines_for_login(&self) {
+        let this = self.clone();
+        glib::timeout_add_seconds_local_once(LOGIN_START_AFTER_SECONDS, move || {
+            let wanted: Vec<MachineCard> = this
+                .0
+                .cards
+                .borrow()
+                .values()
+                .filter(|card| card.machine().borrow().start_with_pc)
+                .filter(|card| card.shown().is_off() && card.shown().can_start)
+                .cloned()
+                .collect();
+            for card in wanted {
+                card.on_start();
+            }
         });
     }
 

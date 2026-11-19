@@ -164,6 +164,10 @@ pub struct Machine {
     /// the top edge. Left out of the file when off, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub bar_stays: bool,
+    /// The app starts this machine when a login starts the app. Left out of the file when off, so
+    /// an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub start_with_pc: bool,
     /// The guest's screen keeps the size the machine's settings give it, rather than taking the size
     /// of the viewer's window. Left out of the file when off, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
@@ -251,6 +255,7 @@ impl Machine {
             direct_frames_off: false,
             was_direct_frames: (),
             bar_stays: false,
+            start_with_pc: false,
             window_size_off: false,
             network_mode: Mode::Nat,
             passt: false,

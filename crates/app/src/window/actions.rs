@@ -1,11 +1,9 @@
-//! The window's actions, and the About and shortcuts dialogs they lead to.
+//! The window's actions, and the shortcuts dialog one of them leads to.
 
 use super::Window;
 use super::machine_card::MachineCard;
-use crate::application::APP_ID;
 use adw::prelude::*;
 use gtk::gio;
-use guesthouse_app_core::updates::VERSION;
 
 /// Keys the guest must get while its screen is up, so these actions are off then.
 const HOST_ACCELS: [(&str, &str); 4] = [
@@ -14,9 +12,6 @@ const HOST_ACCELS: [(&str, &str); 4] = [
     ("quit", "<Control>q"),
     ("shortcuts", "<Control>question"),
 ];
-const WEBSITE: &str = "https://github.com/xnixy/guesthouse";
-const ISSUES: &str = "https://github.com/xnixy/guesthouse/issues";
-const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const SHORTCUTS_WIDTH: i32 = 480;
 const SHORTCUTS_HEIGHT: i32 = 520;
 const SCREEN_SHORTCUTS: [(&str, &str); 4] = [
@@ -44,7 +39,7 @@ pub fn add_actions(window: &Window) {
     add(window, "shortcuts", show_shortcuts);
     add(window, "setup", Window::show_setup);
     add(window, "log", Window::show_log);
-    add(window, "about", show_about);
+    add(window, "about", crate::about::show);
     add(window, "preferences", crate::preferences::show);
     add(window, "report", crate::report_dialog::show);
     add(window, "check-updates", Window::check_for_updates);
@@ -128,18 +123,4 @@ fn shortcut_row(title: &str, keys: &str) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(title).build();
     row.add_suffix(&gtk::ShortcutLabel::new(keys));
     row
-}
-
-fn show_about(window: &Window) {
-    let dialog = adw::AboutDialog::builder()
-        .application_name("Guesthouse")
-        .application_icon(APP_ID)
-        .version(VERSION)
-        .comments("Runs VMs on this PC. With its GPU part, Windows gets NVIDIA's own driver on the card the host keeps using.")
-        .license_type(gtk::License::Gpl20)
-        .website(WEBSITE)
-        .issue_url(ISSUES)
-        .build();
-    dialog.add_link("Discord", DISCORD);
-    dialog.present(Some(window.widget()));
 }

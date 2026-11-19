@@ -1,5 +1,7 @@
-//! What the app itself can be told, as opposed to a machine: for now, its colours.
+//! What the app itself can be told, as opposed to a machine: its colours, and whether a login
+//! starts it.
 
+use crate::login;
 use crate::rows::choice_row;
 use crate::theme;
 use crate::window::Window;
@@ -26,8 +28,22 @@ pub fn show(window: &Window) {
     });
     let look = adw::PreferencesGroup::builder().title("Look").build();
     look.add(&colours);
+    let at_login = adw::SwitchRow::builder()
+        .title("Start Guesthouse at login")
+        .subtitle("Machines set to start with this PC start then.")
+        .active(login::starts_at_login())
+        .build();
+    let telling = window.clone();
+    at_login.connect_active_notify(move |row| {
+        if let Err(failure) = login::set_starts_at_login(row.is_active()) {
+            telling.problem(&format!("Could not change what starts at login: {failure}"));
+        }
+    });
+    let starting = adw::PreferencesGroup::builder().title("Starting").build();
+    starting.add(&at_login);
     let page = adw::PreferencesPage::new();
     page.add(&look);
+    page.add(&starting);
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&page));

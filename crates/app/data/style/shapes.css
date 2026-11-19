@@ -298,3 +298,13 @@ statuspage .title {
   background: @field_bg_color;
   color: @window_fg_color;
 }
+
+/* Word of an update: a pill under the bar, not a strip across the window. */
+banner > revealer > widget {
+  margin: 2px 20px 8px;
+  padding: 4px 6px 4px 18px;
+  border-radius: 999px;
+  background: @card_bg_color;
+  color: @window_fg_color;
+  box-shadow: 0 0 0 1px @hairline;
+}

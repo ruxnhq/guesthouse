@@ -690,7 +690,9 @@ mod tests {
     #[test]
     fn a_pc_with_only_an_intel_card_can_run_windows_with_nothing_red_about_nvidia() {
         let scratch = Scratch::new();
-        let context = with_render_nodes(&scratch, &[(128, "0000:03:00.0", "0x8086", 0xE20B)]);
+        let mut context = with_render_nodes(&scratch, &[(128, "0000:03:00.0", "0x8086", 0xE20B)]);
+        // The verdict takes virtualization too, which the PC the tests run on may not have.
+        context.kvm = scratch.write("kvm", "");
         let found = check_cards(&context);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!((found[0].part, found[0].state), (Part::Intel, CheckState::Warning));

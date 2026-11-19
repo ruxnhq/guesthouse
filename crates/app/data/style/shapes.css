@@ -304,3 +304,117 @@ banner > revealer > widget {
   color: @window_fg_color;
   box-shadow: 0 0 0 1px @hairline;
 }
+
+/* Holding the look against a desktop's own theme.
+
+   A theme in the user's gtk.css can restyle anything, and it wins wherever this sheet says
+   nothing: this sheet comes first property by property, not rule by rule. So what the app's look
+   depends on is said in full here, including what a plain desktop never needed saying. */
+
+/* The window's buttons: a theme may swap them for pictures and hide the icons. */
+windowcontrols {
+  border-spacing: 4px;
+  padding: 0 6px;
+  margin: 0;
+}
+
+windowcontrols > button {
+  margin: 0 2px;
+  border: none;
+  outline-offset: 0;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: @window_fg_color;
+  opacity: 1;
+}
+
+windowcontrols > button > image {
+  margin: 0;
+  background-image: none;
+  color: @window_fg_color;
+  -gtk-icon-size: 16px;
+}
+
+/* Switches. */
+switch {
+  min-width: 46px;
+  min-height: 20px;
+  margin: 0;
+  padding: 3px;
+  border: none;
+  border-radius: 999px;
+  outline-offset: 2px;
+  background-color: @field_bg_color;
+  background-image: none;
+  background-clip: border-box;
+  box-shadow: inset 0 0 0 1px @hairline;
+  color: transparent;
+  font-size: 0;
+}
+
+switch:checked {
+  background-color: @accent_bg_color;
+  box-shadow: none;
+}
+
+switch:disabled {
+  filter: opacity(0.45);
+}
+
+switch > slider {
+  min-width: 20px;
+  min-height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: alpha(@window_fg_color, 0.75);
+  background-image: none;
+  box-shadow: none;
+}
+
+switch:checked > slider {
+  margin: 0;
+  background-color: @accent_fg_color;
+}
+
+/* A dialog, and the two sides of one with its pages named down the side: solid, each its own
+   shade, with bars that take the colour of what they sit on. */
+floating-sheet > sheet,
+bottom-sheet > sheet,
+dialog > sheet {
+  background-color: @dialog_bg_color;
+  background-image: none;
+  color: @dialog_fg_color;
+}
+
+navigation-split-view > .sidebar-pane {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background-color: @window_bg_color;
+  background-image: none;
+  box-shadow: none;
+}
+
+navigation-split-view > .content-pane {
+  border: none;
+  background-color: @dialog_bg_color;
+  background-image: none;
+  box-shadow: none;
+}
+
+floating-sheet headerbar,
+bottom-sheet headerbar,
+dialog headerbar {
+  background-color: transparent;
+  background-image: none;
+}
+
+list.navigation-sidebar,
+list.navigation-sidebar > row {
+  border: none;
+  background-image: none;
+  box-shadow: none;
+}

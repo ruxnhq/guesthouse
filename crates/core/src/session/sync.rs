@@ -5,13 +5,13 @@ use crate::deferred::DeferredAction;
 use crate::fences::{FENCE_PAGE, Fence, FenceBlock};
 use crate::sync_table::SyncObject;
 use guesthouse_backend::{Backend, BackendError, GuestMemory};
-use guesthouse_messages::Status;
 use guesthouse_messages::notice::Notice;
 use guesthouse_messages::sync::{
     CreateSyncObject, KIND_CPU_NOTIFICATION, KIND_MONITORED_FENCE, SignalFence, first_handle, open_answer,
     opened_sync_object, paging_queue_answer,
 };
 use guesthouse_messages::wire::{Malformed, put_u32};
+use guesthouse_messages::{MessageHeader, Status};
 
 impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// All fence pages as one block, made the first time something needs it.
@@ -78,6 +78,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             None
         };
         self.sync_objects.insert(handle, fence, gpu_address, event);
+        self.sync_objects.note_holder(handle, MessageHeader::process_of(message)?);
         if let Some((free, most)) = request.tokens() {
             self.sync_objects.set_tokens(handle, free, most);
         }
@@ -97,6 +98,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let handle = self.handles.take();
         let object = self.sync_objects.open(existing, handle).expect("checked just above");
+        self.sync_objects.note_holder(handle, MessageHeader::process_of(message)?);
         open_answer(handle, Status::SUCCESS, object.gpu_address, object.fence, out);
         Ok(())
     }

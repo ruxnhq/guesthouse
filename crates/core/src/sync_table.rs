@@ -28,6 +28,8 @@ pub struct SyncTable {
     by_handle: HashMap<u32, usize>,
     /// Waits in line for each object that has tokens, by the object's place in `objects`.
     lines: HashMap<usize, VecDeque<u64>>,
+    /// The process that made or opened each handle, where the guest said.
+    holders: HashMap<u32, u32>,
 }
 
 impl SyncTable {
@@ -98,8 +100,30 @@ impl SyncTable {
         Some(self.objects[index])
     }
 
+    /// Notes the process a handle was made or opened for.
+    pub fn note_holder(&mut self, handle: u32, process: u32) {
+        if self.by_handle.contains_key(&handle) {
+            self.holders.insert(handle, process);
+        }
+    }
+
+    /// The counter of a monitored fence a process holds a handle to, by the fence's GPU address.
+    pub fn monitored_fence(&self, process: u32, gpu_address: u64) -> Option<u64> {
+        let held = |handle: &u32| self.holders.get(handle) == Some(&process);
+        let handles = self.by_handle.iter().filter(|(handle, _)| held(handle));
+        let mut objects = handles.map(|(_, &index)| &self.objects[index]);
+        let monitored = |object: &&SyncObject| {
+            object.fence != 0
+                && object.gpu_address == gpu_address
+                && object.event.is_none()
+                && object.tokens.is_none()
+        };
+        objects.find(monitored).map(|object| object.fence)
+    }
+
     /// Removes a handle. Returns the object if that was its last.
     pub fn close(&mut self, handle: u32) -> Option<SyncObject> {
+        self.holders.remove(&handle);
         let index = self.by_handle.remove(&handle)?;
         let object = &mut self.objects[index];
         object.references = object.references.saturating_sub(1);
@@ -157,6 +181,38 @@ mod tests {
         table.objects[0].references = u32::MAX;
         assert!(table.open(1, 2).is_some());
         assert_eq!(table.objects[0].references, u32::MAX);
+    }
+
+    #[test]
+    fn a_monitored_fence_is_found_only_for_a_process_that_holds_it() {
+        let mut table = SyncTable::new();
+        table.insert(1, 0x1000, 0x2000, None);
+        table.note_holder(1, 0x40);
+        assert_eq!(table.monitored_fence(0x40, 0x2000), Some(0x1000));
+        assert_eq!(table.monitored_fence(0x40, 0x3000), None, "another address");
+        assert_eq!(table.monitored_fence(0x50, 0x2000), None, "a process that holds no handle to it");
+        table.open(1, 2);
+        table.note_holder(2, 0x50);
+        assert_eq!(table.monitored_fence(0x50, 0x2000), Some(0x1000), "opened");
+        table.close(2);
+        assert_eq!(table.monitored_fence(0x50, 0x2000), None, "closed again");
+    }
+
+    #[test]
+    fn only_a_counting_fence_is_a_monitored_one() {
+        let mut table = SyncTable::new();
+        table.insert(1, 0x1000, 0x2000, Some(0x99));
+        table.insert(2, 0, 0x3000, None);
+        table.insert(3, 0x4000, 0x5000, None);
+        table.set_tokens(3, 1, 1);
+        for handle in 1..=3 {
+            table.note_holder(handle, 0x40);
+        }
+        for address in [0x2000, 0x3000, 0x5000] {
+            assert_eq!(table.monitored_fence(0x40, address), None, "{address:#x}");
+        }
+        table.note_holder(9, 0x40);
+        assert_eq!(table.monitored_fence(0x40, 0), None, "an unknown handle holds nothing");
     }
 
     #[test]

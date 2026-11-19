@@ -112,6 +112,12 @@ pub struct StandIn {
     pub last_commands: Option<CommandBuffer>,
     /// Stands in for a backend whose display driver slots may lie in the guest's own pages.
     pub slots_in_guest_pages: bool,
+    /// Set to be given the commands a context's submission names.
+    pub context_commands: bool,
+    /// A monitored fence's GPU address each submission asks the host about, and what the last
+    /// answer was.
+    pub ask_monitored: Option<u64>,
+    pub monitored_found: Option<Option<u64>>,
 }
 
 #[derive(Debug, Default)]
@@ -192,6 +198,9 @@ impl StandIn {
             work_stays: false,
             last_commands: None,
             slots_in_guest_pages: false,
+            context_commands: false,
+            ask_monitored: None,
+            monitored_found: None,
         }
     }
 
@@ -344,6 +353,10 @@ impl Backend for StandIn {
         self.new_memory_is_zero
     }
 
+    fn runs_context_commands(&self) -> bool {
+        self.context_commands
+    }
+
     fn preserve_contents(
         &mut self,
         _host: &mut dyn HostServices,
@@ -491,6 +504,9 @@ impl Backend for StandIn {
 
     fn start_work(&mut self, host: &mut dyn HostServices, work: &Work<'_>) -> WorkStart {
         self.last_commands = work.commands;
+        if let Some(address) = self.ask_monitored {
+            self.monitored_found = Some(host.monitored_fence(work.space, address));
+        }
         if !self.run_work || !work.may_run || work.queue_failed {
             return WorkStart::Finished;
         }

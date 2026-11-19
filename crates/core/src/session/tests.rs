@@ -938,6 +938,69 @@ mod allocations {
         assert_eq!(session.backend().last_commands, None);
     }
 
+    fn submit_to_context(session: &mut TestSession, context: u32, commands: u64, length: u32) {
+        let mut request = message(Command::SubmitToContext, 0x198);
+        set_u64(&mut request, 0x18, commands);
+        set_u32(&mut request, 0x20, length);
+        set_u32(&mut request, 0x34, context);
+        assert_eq!(send(session, &request), SUCCESS.to_le_bytes());
+    }
+
+    #[test]
+    fn a_backend_that_runs_a_contexts_commands_is_given_them_and_each_submission_counts_up() {
+        let mut session = session();
+        session.backend_mut().context_commands = true;
+        let context = create_context(&mut session, 0);
+        submit_to_context(&mut session, context, 0x6_0001_0040, 0x400);
+        let named = guesthouse_backend::CommandBuffer { address: 0x6_0001_0040, length: 0x400 };
+        assert_eq!(session.backend().last_commands, Some(named));
+        submit_to_context(&mut session, context, 0x6_0001_0040, 0);
+        assert_eq!(session.backend().last_commands, None, "a length of zero names none");
+        // The stand-in finishes each unrun, and the context's queue fence still counts up, so work
+        // that does start after it has a value nothing has written yet.
+        let queue = session.context_queues[&context][0];
+        let fence = session.queues[&queue].fence;
+        assert_eq!(session.memory().read_u64(fence).unwrap(), 2);
+        session.backend_mut().run_work = true;
+        submit_to_context(&mut session, context, 0x6_0001_0040, 0x400);
+        assert_eq!(session.queues[&queue].last_fence, Some(3));
+        assert_eq!(session.memory().read_u64(fence).unwrap(), 2, "running, so not written yet");
+    }
+
+    #[test]
+    fn a_backend_that_doesnt_keeps_its_context_queue_fence_at_one() {
+        let mut session = session();
+        let context = create_context(&mut session, 0);
+        submit_to_context(&mut session, context, 0x6_0001_0040, 0x400);
+        submit_to_context(&mut session, context, 0x6_0001_0040, 0x400);
+        let queue = session.context_queues[&context][0];
+        assert_eq!(session.queues[&queue].last_fence, None);
+        assert_eq!(session.memory().read_u64(session.queues[&queue].fence).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_monitored_fence_is_found_by_its_gpu_address_for_the_process_that_holds_it() {
+        let mut session = session();
+        let (_, gpu_address, fence) = create_fence(&mut session, 0);
+        session.backend_mut().ask_monitored = Some(gpu_address);
+        let context = create_context(&mut session, 0);
+        submit_to_context(&mut session, context, 0, 0);
+        assert_eq!(session.backend().monitored_found, Some(Some(fence)));
+        session.backend_mut().ask_monitored = Some(gpu_address + 8);
+        submit_to_context(&mut session, context, 0, 0);
+        assert_eq!(session.backend().monitored_found, Some(None), "no fence there");
+        // Another process's work may not name it.
+        session.backend_mut().ask_monitored = Some(gpu_address);
+        let mut request = message(Command::CreateContext, 0x34);
+        set_u32(&mut request, 8, PROCESS + 0x1000);
+        let other = u32_at(&send(&mut session, &request), 0x18).unwrap();
+        let mut request = message(Command::SubmitToContext, 0x198);
+        set_u32(&mut request, 8, PROCESS + 0x1000);
+        set_u32(&mut request, 0x34, other);
+        send(&mut session, &request);
+        assert_eq!(session.backend().monitored_found, Some(None));
+    }
+
     #[test]
     fn a_first_lock_waits_for_the_gpu_to_finish_in_its_space() {
         let mut session = session();

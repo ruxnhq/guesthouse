@@ -553,6 +553,9 @@ pub(crate) struct Services<'a, M> {
     gpu_addresses: &'a mut GpuAddresses,
     allocations: &'a HashMap<u32, Allocation>,
     memory: &'a mut M,
+    sync_objects: &'a SyncTable,
+    /// Each process's space.
+    spaces: &'a HashMap<u32, SpaceId>,
 }
 
 impl<M: GuestMemory> Services<'_, M> {
@@ -653,6 +656,11 @@ impl<M: GuestMemory> HostServices for Services<'_, M> {
     fn fence_value(&self, fence: u64) -> Result<u64, MemoryError> {
         self.memory.read_u64(fence)
     }
+
+    fn monitored_fence(&self, space: SpaceId, gpu_address: u64) -> Option<u64> {
+        let (&process, _) = self.spaces.iter().find(|&(_, &held)| held == space)?;
+        self.sync_objects.monitored_fence(process, gpu_address)
+    }
 }
 
 macro_rules! services {
@@ -661,6 +669,8 @@ macro_rules! services {
             &mut $session.gpu_addresses,
             &$session.allocations,
             &mut $session.memory,
+            &$session.sync_objects,
+            &$session.spaces,
         )
     };
 }
@@ -671,8 +681,10 @@ impl<'a, M> Services<'a, M> {
         gpu_addresses: &'a mut GpuAddresses,
         allocations: &'a HashMap<u32, Allocation>,
         memory: &'a mut M,
+        sync_objects: &'a SyncTable,
+        spaces: &'a HashMap<u32, SpaceId>,
     ) -> Self {
-        Self { gpu_addresses, allocations, memory }
+        Self { gpu_addresses, allocations, memory, sync_objects, spaces }
     }
 }
 

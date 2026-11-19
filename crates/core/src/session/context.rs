@@ -304,14 +304,24 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let record = self.queues.get(&queue).ok_or(Malformed)?;
         let (fence, value) = (record.fence, record.last_fence.unwrap_or(0).saturating_add(1));
         self.note_waiting_updates(queue);
-        // This message's own command fields aren't read yet, so the backend is given none.
-        match self.start_on_gpu(queue, WorkSource::Context, request.private, None, value) {
+        // Only a backend that runs them is given the commands. For it, each submission has a value
+        // of its own, as one finished unrun may come before one that runs.
+        let runs_commands = self.backend.runs_context_commands();
+        let commands = (runs_commands && request.commands_length != 0)
+            .then_some(CommandBuffer { address: request.commands, length: request.commands_length });
+        if let Some(commands) = commands {
+            self.note_batch(queue, commands.address, commands.length);
+        }
+        match self.start_on_gpu(queue, WorkSource::Context, request.private, commands, value) {
             GpuTook::Work(_) => {}
             GpuTook::NoRoom => {
                 self.retry_later(message);
                 return Ok(());
             }
             took @ (GpuTook::Nothing | GpuTook::Dropped) => {
+                if runs_commands && let Some(record) = self.queues.get_mut(&queue) {
+                    record.last_fence = Some(value);
+                }
                 self.memory.write_u64(fence, value)?;
                 answer_status(took.status(), out);
                 return Ok(());

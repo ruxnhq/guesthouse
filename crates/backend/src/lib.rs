@@ -253,6 +253,12 @@ pub trait Backend: Sized {
         None
     }
 
+    /// Whether a context's submissions should come with the commands their message names. A backend
+    /// that says no gets none, and finds its commands in its driver's private data if anywhere.
+    fn runs_context_commands(&self) -> bool {
+        false
+    }
+
     /// Prepares work without letting it run. [`WorkStart::Finished`] says nothing reached the GPU,
     /// and [`WorkStart::Ran`] that it all ran already. Either way the backend has done what the guest
     /// would otherwise wait for, except the queue's fence.
@@ -340,4 +346,10 @@ pub trait HostServices {
 
     /// A fence's value, by its guest physical address.
     fn fence_value(&self, fence: u64) -> Result<u64, MemoryError>;
+
+    /// The guest physical address of a monitored fence, by its GPU address, if the process of this
+    /// space holds a sync object with that fence. Only such a fence may be written for the guest.
+    fn monitored_fence(&self, _space: SpaceId, _gpu_address: u64) -> Option<u64> {
+        None
+    }
 }

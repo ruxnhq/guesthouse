@@ -15,6 +15,7 @@ use crate::settings::with_suffix;
 use crate::setup::guest_driver::guest_driver;
 use crate::snapshots::{list_snapshots, snapshots_folder};
 use crate::tasks::{State, slot_of, status};
+use crate::writable_copy::copy_writable;
 use serde_json::json;
 use std::fs::{self, File};
 use std::io::Write;
@@ -191,7 +192,7 @@ pub fn make_disk(context: &Context, machine: &Machine, gib: u32) -> Result<()> {
     }
     let firmware = &context.paths.firmware;
     if !machine.vars.is_empty() {
-        fs::copy(if machine.tpm { &firmware.vars_secure } else { &firmware.vars }, &machine.vars)?;
+        copy_writable(if machine.tpm { &firmware.vars_secure } else { &firmware.vars }, &machine.vars)?;
     }
     let _ = fs::remove_dir_all(machine.tpm_folder(context));
     Ok(())

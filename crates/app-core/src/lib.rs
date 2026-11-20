@@ -70,6 +70,7 @@ pub mod updates;
 pub mod usb;
 pub mod vm_args;
 pub mod vm_host;
+pub mod writable_copy;
 pub mod zones;
 
 pub use failure::{Failure, Result};

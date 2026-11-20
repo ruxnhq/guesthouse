@@ -9,6 +9,7 @@ use crate::failure::{Failure, Result};
 use crate::iso::iso_maker;
 use crate::machine::Machine;
 use crate::snapshots::copy_tree;
+use crate::writable_copy::copy_writable;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -109,7 +110,7 @@ pub fn make_seed(context: &Context, machine: &Machine, kernel_package: &str) -> 
     let answers = fill_template(&template, machine.account(), &hash, &key, kernel_package);
     fs::write(&user_data, answers + "\n")?;
     let meta_data = folder.join("meta-data");
-    fs::copy(sources.join(META_DATA), &meta_data)?;
+    copy_writable(sources.join(META_DATA), &meta_data)?;
     let archive = make_payload(&sources, &folder)?;
     let disc = seed_disc(context, machine);
     output(

@@ -109,8 +109,6 @@ impl ScreenPage {
         pill.fullscreen.set_tooltip_text(Some(&format!("Fullscreen ({FULLSCREEN_KEYS})")));
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(pill.widget());
-        // The pill floats over the screen whether it hides or stays, so the picture never moves.
-        toolbar.set_extend_content_to_top_edge(true);
         let page = adw::NavigationPage::builder()
             .title(&machine.borrow().name)
             .tag("screen")
@@ -350,11 +348,15 @@ impl ScreenPage {
     }
 
     /// Shows the header or not, by what the machine and the window say and where the pointer was.
-    /// The screen always reaches the top edge when the header can hide, so the picture stays where
-    /// it is as the header comes and goes.
+    /// The screen reaches the top edge when the header can hide, so the picture stays where it is as
+    /// the header comes and goes. A header that stays has the screen below it, as over the screen it
+    /// hid the top of the guest's.
     fn follow_header(&self) {
         let parts = &self.0;
         let hides = self.header_hides();
+        if parts.toolbar.is_extend_content_to_top_edge() != hides {
+            parts.toolbar.set_extend_content_to_top_edge(hides);
+        }
         if !hides {
             parts.header_called.set(false);
             self.forget_header_wait();

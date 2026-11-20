@@ -19,7 +19,6 @@ pub struct Pill {
     pub capture: gtk::Button,
     pub fullscreen: gtk::Button,
     more: gtk::MenuButton,
-    controls: gtk::WindowControls,
     /// The monitors fullscreen can go to, which the viewer lists.
     pub monitors: gio::Menu,
     actions: gio::SimpleActionGroup,
@@ -108,7 +107,7 @@ impl Pill {
             actions.add_action(action);
         }
         bar.insert_action_group(GROUP, Some(&actions));
-        Self { bar, hint, capture, fullscreen, more, controls, monitors, actions, overlay, hides, shut_down }
+        Self { bar, hint, capture, fullscreen, more, monitors, actions, overlay, hides, shut_down }
     }
 
     pub fn widget(&self) -> &gtk::WindowHandle {
@@ -148,12 +147,12 @@ impl Pill {
         self.shut_down.set_enabled(allowed);
     }
 
-    /// The window's own buttons have no place in fullscreen, and the fullscreen button leads out.
+    /// The fullscreen button leads out. The window's own buttons stay, so the window can be
+    /// minimised without leaving fullscreen, as it could before the pill.
     pub fn set_fullscreen(&self, fullscreen: bool, tooltip: &str) {
         let icon = if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" };
         self.fullscreen.set_icon_name(icon);
         self.fullscreen.set_tooltip_text(Some(tooltip));
-        self.controls.set_visible(!fullscreen);
     }
 
     /// Whether the menu is open, when the pointer is in it and not gone.

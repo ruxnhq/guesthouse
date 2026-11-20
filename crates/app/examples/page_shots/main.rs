@@ -588,7 +588,7 @@ fn main() -> glib::ExitCode {
     context.paths.binaries = examples.parent().unwrap().to_owned();
     let context = Arc::new(context);
     let walking = context.clone();
-    application(context, move |window| {
+    application(context, None, move |window| {
         // With no browser on the other end, Broadway's frames hardly tick, and a dialog could take
         // longer to animate away than the walk waits for it.
         if let Some(settings) = gtk::Settings::default() {

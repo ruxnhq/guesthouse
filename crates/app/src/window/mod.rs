@@ -8,6 +8,7 @@ mod library_page;
 mod machine_card;
 mod refresh;
 mod screen_hdr;
+mod start_over;
 mod updates;
 
 pub use machine_card::{MachineCard, MachineHandle};

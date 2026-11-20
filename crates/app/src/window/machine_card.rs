@@ -277,6 +277,11 @@ impl MachineCard {
         dialog.present(Some(self.window.widget()));
     }
 
+    /// Whether its machine has a screen to show just now.
+    pub fn has_screen(&self) -> bool {
+        self.shown.borrow().has_screen()
+    }
+
     pub fn show_screen(&self) {
         self.window.show_screen(self.machine.clone());
     }

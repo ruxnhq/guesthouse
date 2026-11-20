@@ -1,5 +1,6 @@
 //! `guesthouse`: the desktop app.
 
+use guesthouse_app::gpu_reset;
 use std::env;
 
 const GTK_DEBUG_VARIABLE: &str = "GDK_DEBUG";
@@ -28,7 +29,10 @@ fn main() -> gtk::glib::ExitCode {
         // SAFETY: nothing else is running yet, and GTK reads this when it starts, which is after this.
         unsafe { env::set_var(GTK_DEBUG_VARIABLE, flags) };
     }
-    guesthouse_app::application::run()
+    let restart = env::var(gpu_reset::VARIABLE).ok().and_then(|note| gpu_reset::Restart::from_value(&note));
+    // SAFETY: nothing else is running yet. Taken out so that nothing the app starts gets it.
+    unsafe { env::remove_var(gpu_reset::VARIABLE) };
+    guesthouse_app::application::run(restart)
 }
 
 #[cfg(test)]

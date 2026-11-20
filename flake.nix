@@ -22,5 +22,11 @@
       nixosModules.default = import ./packaging/nix/module.nix self;
 
       checks.${system}.module = pkgs.testers.runNixOSTest (import ./packaging/nix/test.nix self);
+
+      # Not a check, as it needs nested KVM.
+      legacyPackages.${system} = {
+        machine-test = pkgs.testers.runNixOSTest (import ./packaging/nix/machine-test.nix self);
+        jail-test = pkgs.testers.runNixOSTest (import ./packaging/nix/jail-test.nix self);
+      };
     };
 }

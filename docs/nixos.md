@@ -97,3 +97,11 @@ nix flake update guesthouse
 ```
 
 The flake moves to each release once it's out, so a new release can take a little while to reach it.
+
+## Testing a machine start
+
+Two tests are run by hand, as they need nested KVM, which CI may not have.
+
+- `nix build .#legacyPackages.x86_64-linux.machine-test` boots NixOS in a VM, makes a plain machine and starts it.
+- `nix build .#legacyPackages.x86_64-linux.jail-test` runs a small QEMU in the jail the app builds for a GPU
+  machine. A GPU machine can't be made without a GPU, so the test puts the jail together itself.

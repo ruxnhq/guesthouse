@@ -400,8 +400,12 @@ impl Window {
 
     pub fn show_screen(&self, machine: MachineHandle) {
         actions::allow_host_keys(self, false);
+        let fullscreen = machine.borrow().opens_fullscreen && !self.0.window.is_fullscreen();
         let page = ScreenPage::new(self, machine);
         self.0.pages.push(page.widget());
+        if fullscreen {
+            page.toggle_fullscreen();
+        }
         *self.0.screen_page.borrow_mut() = Some(page);
     }
 

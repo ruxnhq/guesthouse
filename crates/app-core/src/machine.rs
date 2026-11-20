@@ -174,6 +174,10 @@ pub struct Machine {
     /// an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub start_with_pc: bool,
+    /// The viewer goes fullscreen when it opens on this machine. Left out of the file when off, so an
+    /// older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub opens_fullscreen: bool,
     /// The guest's screen keeps the size the machine's settings give it, rather than taking the size
     /// of the viewer's window. Left out of the file when off, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
@@ -269,6 +273,7 @@ impl Machine {
             was_direct_frames: (),
             bar_stays: true,
             start_with_pc: false,
+            opens_fullscreen: false,
             window_size_off: false,
             network_mode: Mode::Nat,
             passt: false,
@@ -754,6 +759,15 @@ mod tests {
         let off = serde_json::to_string(&Machine { window_size_off: true, ..sample() }).unwrap();
         assert!(!serde_json::from_str::<Machine>(&off).unwrap().sizes_to_window());
         assert!(!Machine { kind: Kind::Plain, ..sample() }.sizes_to_window(), "no driver to ask");
+    }
+
+    #[test]
+    fn the_viewer_opens_in_a_window_unless_the_file_says_fullscreen() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("opens_fullscreen"), "an older build refuses a field it doesn't know: {text}");
+        assert!(!serde_json::from_str::<Machine>(&text).unwrap().opens_fullscreen);
+        let on = serde_json::to_string(&Machine { opens_fullscreen: true, ..sample() }).unwrap();
+        assert!(serde_json::from_str::<Machine>(&on).unwrap().opens_fullscreen);
     }
 
     #[test]

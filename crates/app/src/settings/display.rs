@@ -3,7 +3,7 @@
 
 use super::Shared;
 use crate::rows::{choice_row, row_button};
-use crate::viewer::OVERLAY_KEYS;
+use crate::viewer::{FULLSCREEN_KEYS, OVERLAY_KEYS};
 use adw::prelude::*;
 use guesthouse_app_core::display::{
     DisplayState, Driver, DriverPackage, forget_note, read_state, screen_hdr,
@@ -148,6 +148,17 @@ impl Display {
             saving.save();
         });
         group.add(&bar);
+        let fullscreen = adw::SwitchRow::builder()
+            .title("Open in fullscreen")
+            .active(shared.machine.borrow().opens_fullscreen)
+            .subtitle(format!("The viewer goes fullscreen when it opens. {FULLSCREEN_KEYS} leaves it."))
+            .build();
+        let saving = shared.clone();
+        fullscreen.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().opens_fullscreen = row.is_active();
+            saving.save();
+        });
+        group.add(&fullscreen);
         let window_size = adw::SwitchRow::builder()
             .title("Match the window")
             .active(shared.machine.borrow().sizes_to_window())

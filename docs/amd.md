@@ -54,6 +54,8 @@ It's only offered on Phoenix and Strix chips, which are the Radeon 780M, the 890
 
 Know this before you turn it on. Video work that the engine's firmware doesn't take makes amdgpu reset the card's video ring, and a reset hits everything on the host that's using the video engine just then: a browser playing a video, a recording, another machine. A guest has done that, with two encoders opened one after the other in one process. So turn it on only on a host where that's all right.
 
+Two more switches are a stopgap for that reset. Each is off unless set, and does nothing without the first. `GUESTHOUSE_AMD_VIDEO_CLOSE=1` has the daemon close an encode session in the card's firmware when the guest's driver says it's over, which the guest's driver doesn't do itself. `GUESTHOUSE_AMD_VIDEO_REST=1500` leaves the video engine idle for that many milliseconds before a new encode session starts, long enough for amdgpu to power it down. Turn on both, as they were run: with both, RustDesk's codec probe opened six encoders one after the other in one process without a fault, and a RustDesk session encoded 3440x1440 with `hevc_amf`. While the engine rests, nothing else of the guest's reaches the GPU.
+
 A tester ran it on a Radeon 780M with driver 32.0.32015.12012 in the guest:
 
 - HEVC decode through Direct3D 11, and the frames match the software decoder's. H.264 through Direct3D 11 crashes in AMD's driver inside the guest.

@@ -140,6 +140,8 @@ fn serve_amd(
         if on(guesthouse_backend_amd::VIDEO_VARIABLE) {
             backend.offer_video();
         }
+        let rest = env::var(guesthouse_backend_amd::VIDEO_REST_VARIABLE).ok();
+        backend.close_and_rest_video(on(guesthouse_backend_amd::VIDEO_CLOSE_VARIABLE), rest.as_deref());
     })
 }
 

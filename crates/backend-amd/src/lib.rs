@@ -39,6 +39,7 @@ mod submit;
 mod traffic;
 mod udmabuf;
 mod video;
+mod video_close;
 mod video_ib;
 mod watch;
 
@@ -56,6 +57,7 @@ pub use memory::{
 pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
 pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
+pub use video_close::{CLOSE_VARIABLE as VIDEO_CLOSE_VARIABLE, REST_VARIABLE as VIDEO_REST_VARIABLE};
 
 // The buffer calls under harness-facing names, so a proof binary can drive the card without the
 // trait. They are the same functions the trait methods use.
@@ -131,6 +133,9 @@ pub struct AmdBackend {
     video_commands: video_ib::Copied,
     /// The books of the guest's video sessions, when it is offered the card's video engine.
     video: Option<video::Sessions>,
+    /// What is kept of the firmware's encode sessions, when the daemon was asked to close them or
+    /// to rest the engine between them. See [`video_close`].
+    video_close: Option<video_close::Watch>,
 }
 
 /// A run ready to send: its command buffers, the fence writer in `slot` last.
@@ -214,6 +219,7 @@ impl AmdBackend {
             ib_dump: None,
             video_commands: video_ib::Copied::default(),
             video: None,
+            video_close: None,
         })
     }
 
@@ -251,6 +257,37 @@ impl AmdBackend {
              reaches every program on this host that is using the engine"
         );
         true
+    }
+
+    /// Has the daemon close the encode sessions a guest leaves open in the firmware, and rest the
+    /// video engine before a new one for the milliseconds `rest` says: see [`video_close`]. The
+    /// daemon calls this after [`Self::offer_video`], with whether it was started with
+    /// [`VIDEO_CLOSE_VARIABLE`] on and the value of [`VIDEO_REST_VARIABLE`]. Neither does anything
+    /// for a guest that isn't offered video.
+    pub fn close_and_rest_video(&mut self, closes: bool, rest: Option<&str>) {
+        if self.video.is_none() {
+            if closes || rest.is_some() {
+                log::warn!(
+                    "{VIDEO_CLOSE_VARIABLE} and {VIDEO_REST_VARIABLE} do nothing for a guest that isn't \
+                     offered video"
+                );
+            }
+            return;
+        }
+        let rest = video_close::rest_from(rest);
+        if closes {
+            log::warn!(
+                "{VIDEO_CLOSE_VARIABLE} is on, which is an experiment: an encode session the guest leaves \
+                 open is closed on the card when the guest says it is over, or when its queue goes"
+            );
+        }
+        if let Some(rest) = rest {
+            log::warn!(
+                "{VIDEO_REST_VARIABLE} is set, which is an experiment: the video engine rests {rest:?} \
+                 before a new session's first work, and nothing else of the guest's is served meanwhile"
+            );
+        }
+        self.video_close = video_close::Watch::new(closes, rest);
     }
 
     /// Copies a run's command buffers, if that was asked for.
@@ -377,10 +414,86 @@ impl AmdBackend {
         let read = |ib: &Ib, room: &mut [u32]| read_guest_commands(&self.memory, &space.vm, ib, room);
         copy_video_commands(ibs, start_alignment, copied, read)?;
         traffic::video_commands(work, copied);
+        let mut seen = None;
+        if let Some(watch) = &self.video_close {
+            let rest;
+            (seen, rest) = watch.before(work.queue, work.space, copied, Instant::now());
+            if !rest.is_zero() {
+                log::info!("amd video: resting {rest:?} before the session of queue {:#x}", work.queue);
+                std::thread::sleep(rest);
+            }
+        }
         let started = Instant::now();
         let ran = space.vm.run_video(alignment, work.queue, copied, self.patience);
         traffic::video_ran(work, copied, started.elapsed(), &ran);
+        if let Some(watch) = &mut self.video_close
+            && reached_the_engine(&ran)
+        {
+            watch.reached(seen, Instant::now());
+        }
         ran
+    }
+
+    /// Closes the encode session a queue has left open in the firmware, if the daemon was asked to:
+    /// see [`video_close`]. The firmware reads the session's buffer to close it, so one that is no
+    /// longer mapped is left alone: a fault there would cost every program on the card a reset.
+    fn close_video_session(&mut self, queue: u32) {
+        let Some(watch) = &mut self.video_close else { return };
+        let Some((space_id, session)) = watch.take(queue) else { return };
+        if !watch.closes() {
+            return;
+        }
+        let Some(space) = self.spaces.get_mut(&space_id) else { return };
+        if !space.vm.covers(session.address(), video_close::SESSION_BYTES) {
+            log::warn!(
+                "amd video: queue {queue:#x} left a session open whose buffer at {:#x} is no longer mapped, so \
+                 it isn't closed",
+                session.address()
+            );
+            return;
+        }
+        if space.vm.video_stopped() {
+            // The buffer the closing commands would go in may still be read by an earlier run.
+            log::debug!(
+                "amd video: the session of queue {queue:#x} isn't closed, as no video work is run there"
+            );
+            return;
+        }
+        let card = self.device.info();
+        let commands = video_close::close_commands(&session);
+        let copied = &mut self.video_commands;
+        copied.clear();
+        let Ok(room) = copied.place(size_of_val(&commands) as u32, card.ib_alignment.video.start) else {
+            return;
+        };
+        room.copy_from_slice(&commands);
+        let started = Instant::now();
+        let ran = space.vm.run_video(card.va_alignment, queue, copied, self.patience);
+        log::info!(
+            "amd video close queue={queue:#x} session={:#x} task={} took_us={} {}",
+            session.address(),
+            session.task.wrapping_add(1),
+            started.elapsed().as_micros(),
+            traffic::RanText(&ran)
+        );
+        if reached_the_engine(&ran) {
+            watch.reached(None, Instant::now());
+        }
+        self.note_how_it_ran(&ran);
+    }
+
+    /// Takes as ended every session whose context buffer the guest has freed, and closes it if the
+    /// daemon was asked to. Called when a guest's driver says a video session is over, which it
+    /// says after freeing that buffer and without saying which of the firmware's sessions it was.
+    fn end_video_sessions_without_context(&mut self) {
+        let Some(watch) = &self.video_close else { return };
+        let spaces = &self.spaces;
+        let mapped =
+            |space: SpaceId, context: u64| spaces.get(&space).is_some_and(|space| space.vm.holds(context, 1));
+        for queue in watch.ended(mapped) {
+            log::debug!("amd video: the session of queue {queue:#x} has ended");
+            self.close_video_session(queue);
+        }
     }
 
     /// What the core is told of work that was waited for, by how it ran.
@@ -551,6 +664,12 @@ impl AmdBackend {
         self.next_id += 1;
         id
     }
+}
+
+/// Whether a video run got as far as the card's video engine, which then has had work, however it
+/// ended there.
+fn reached_the_engine(ran: &io::Result<Ran>) -> bool {
+    matches!(ran, Ok(Ran::Retired | Ran::Hung | Ran::Faulted(_)))
 }
 
 /// Whether every range lies inside the card's usable addresses, `start..end`.
@@ -933,6 +1052,9 @@ impl Backend for AmdBackend {
         // Closing the space's open takes its VM, and all that was mapped in it, with it.
         self.spaces.remove(&space);
         self.prepared.retain(|_, run| run.space != space);
+        if let Some(watch) = &mut self.video_close {
+            watch.space_gone(space);
+        }
         log::debug!("address space {space:?} closed");
     }
 
@@ -1027,7 +1149,12 @@ impl Backend for AmdBackend {
 
     /// The answer is in the escape's own header. The trait has no status to return beside it.
     fn escape(&mut self, process: u32, data: &mut [u8], _books: &GuestBooks<'_>) {
+        // Read before the answer is written, as that goes into the same buffer.
+        let session_over = self.video_close.is_some() && video_close::says_a_session_is_over(data);
         answer_escape(process, data, self.video.as_mut());
+        if session_over {
+            self.end_video_sessions_without_context();
+        }
     }
 
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
@@ -1069,6 +1196,10 @@ impl Backend for AmdBackend {
     fn all_processes_gone(&mut self) {
         if let Some(video) = &mut self.video {
             video.all_gone();
+        }
+        // The core closes no queue and no space of a guest that restarted.
+        if let Some(watch) = &mut self.video_close {
+            watch.all_gone();
         }
     }
 
@@ -1184,6 +1315,7 @@ impl Backend for AmdBackend {
     }
 
     fn close_queue(&mut self, queue: u32) {
+        self.close_video_session(queue);
         for space in self.spaces.values_mut() {
             space.vm.forget_queue(queue);
         }
@@ -1408,6 +1540,17 @@ mod tests {
             failed(&[Ib { address: 0x1000, bytes: long }], &mut copied),
             "its commands at 0x1000 for 0x10004 bytes are more than the daemon's buffer holds"
         );
+    }
+
+    #[test]
+    fn only_a_video_run_that_was_sent_counts_as_work_the_engine_had() {
+        let fault = fault::Fault { address: 0x3000, status: 1 };
+        for sent in [Ok(Ran::Retired), Ok(Ran::Hung), Ok(Ran::Faulted(fault))] {
+            assert!(reached_the_engine(&sent), "{sent:?}");
+        }
+        // amdgpu kept saying try again, or the commands couldn't be copied or submitted.
+        assert!(!reached_the_engine(&Ok(Ran::Refused)));
+        assert!(!reached_the_engine(&Err(io::Error::other("submitting"))));
     }
 
     #[test]

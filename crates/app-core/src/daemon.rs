@@ -19,8 +19,10 @@ pub const DAEMON_PROGRAM: &str = "guesthouse-daemon";
 /// The sockets QEMU connects to, which the daemon makes once it's ready.
 pub const SOCKETS: [&str; 2] = ["vgpu.sock", "global.sock"];
 pub const OUTPUT_FILE: &str = "daemon.out";
-/// Any value makes the daemon log everything, not only what is unusual.
-const VERBOSE_VARIABLE: &str = "GUESTHOUSE_VERBOSE";
+/// Any value makes the daemon say every ten seconds where the guest's work spends its time, at a
+/// clock read a stage. `GUESTHOUSE_VERBOSE`, which logs everything, is left to the environment the
+/// app was started in.
+const TIMING_VARIABLE: &str = "GUESTHOUSE_TIMING";
 
 /// What it takes to start the daemon for one VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,11 +71,13 @@ impl DaemonStart {
         self.with_intel_test_log()
     }
 
-    /// Intel's support is experimental, and a report of a run is only as good as the daemon's log,
-    /// so the daemon is told to write all of it. The daemon keeps that log under a limit. Take this
-    /// out when Intel's cards are no longer experimental, and the log is quiet again.
+    /// Intel's support is experimental, so a report of a run should say where the time goes. The
+    /// daemon is told to say it every ten seconds, which costs a clock read a stage. It isn't told to
+    /// log everything: that writes a line for each of the guest's messages on the thread that answers
+    /// them, at hundreds of kilobytes a second, and a game waits for it. The log's warnings, summaries
+    /// and the names of the guest's programs are enough to follow a run, and a cut keeps them.
     fn with_intel_test_log(mut self) -> Self {
-        self.environment.insert(VERBOSE_VARIABLE.to_owned(), "1".to_owned());
+        self.environment.insert(TIMING_VARIABLE.to_owned(), "1".to_owned());
         self
     }
 
@@ -201,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn a_guest_on_nvidia_names_no_card_and_one_on_intel_names_its_card_and_asks_for_the_whole_log() {
+    fn a_guest_on_nvidia_names_no_card_and_one_on_intel_names_its_card_and_asks_for_timings() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let start = DaemonStart::new(&context, slots::first(), "16G", None);
@@ -209,10 +213,11 @@ mod tests {
         assert_eq!(on_nvidia, start);
         let on_intel = start.clone().on_card(GpuMaker::Intel, "0000:00:02.0").unwrap();
         assert_eq!(on_intel.environment["GUESTHOUSE_INTEL_CARD"], "0000:00:02.0");
-        assert_eq!(on_intel.environment["GUESTHOUSE_VERBOSE"], "1");
+        assert_eq!(on_intel.environment["GUESTHOUSE_TIMING"], "1");
+        assert!(!on_intel.environment.contains_key("GUESTHOUSE_VERBOSE"), "the whole log costs a game time");
         assert!(!on_intel.environment.contains_key("GUESTHOUSE_AMD_CARD"));
         let on_amd = start.on_card(GpuMaker::Amd, "0000:7c:00.0").unwrap();
-        assert!(!on_amd.environment.contains_key("GUESTHOUSE_VERBOSE"), "only Intel's log is verbose");
+        assert!(!on_amd.environment.contains_key("GUESTHOUSE_TIMING"), "only Intel's starts are timed");
     }
 
     #[test]

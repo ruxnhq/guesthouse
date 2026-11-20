@@ -45,13 +45,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let pid = u32_at(message, PROCESS_ID)?;
         self.guest_pids.insert(handle, pid);
-        // So a later line about this process can be tied to a program in the guest.
+        // So a later line about this process can be tied to a program in the guest. One line a
+        // process, at info level, as the other lines name processes by handle alone.
         match program_name(message) {
             name if name.is_empty() => {
-                log::debug!("process {handle:#x} is guest pid {pid}, which gave no name")
+                log::info!("process {handle:#x} is guest pid {pid}, which gave no name")
             }
             name => {
-                log::debug!("process {handle:#x} is guest pid {pid}, {name}");
+                log::info!("process {handle:#x} is guest pid {pid}, {name}");
                 self.programs.insert(handle, name);
             }
         }

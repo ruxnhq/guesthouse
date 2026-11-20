@@ -7,7 +7,7 @@ use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::{NO_GPU_PART, gpu_ready};
 use crate::host::{free_gib, host_ram_limit, plain_ram_limit};
 use crate::kept_logs;
-use crate::machine::{Kind, Machine, load_all, sorted_names};
+use crate::machine::{Kind, MAX_REFRESH_HZ, MIN_REFRESH_HZ, Machine, load_all, sorted_names};
 use crate::monitor::{Command, failed};
 use crate::network;
 use crate::remote_access::{Access, access_problem, write_access};
@@ -89,6 +89,10 @@ pub struct NewMachine {
     pub cores: u32,
     pub ram_gib: u32,
     pub disk_gib: u32,
+    /// The refresh rate of the monitor it was made on, in Hz, which its screen starts at, so the guest
+    /// doesn't draw frames the monitor can't show. None, or a rate it couldn't run at, keeps the usual
+    /// one, as for a machine made without a desktop.
+    pub refresh_hz: Option<u32>,
     /// The guest account's name, or empty for the one the scripts have always made.
     pub user: String,
     /// Its password, or empty for a random one.
@@ -211,6 +215,10 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     let firmware =
         if new.kind == Kind::Linux { String::new() } else { firmware.to_string_lossy().into_owned() };
     let machine = Machine {
+        refresh_hz: new
+            .refresh_hz
+            .filter(|hz| (MIN_REFRESH_HZ..=MAX_REFRESH_HZ).contains(hz))
+            .unwrap_or_else(|| Machine::new("", "", "", "").refresh_hz),
         cores: new.cores,
         ram_gib: new.ram_gib,
         kind: new.kind,
@@ -410,6 +418,7 @@ mod tests {
             cores: 1,
             ram_gib: 1,
             disk_gib: 2,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
@@ -447,6 +456,7 @@ mod tests {
             cores: 2,
             ram_gib: 2,
             disk_gib: 20,
+            refresh_hz: None,
             user: "ana".into(),
             password: "chosen".into(),
             amd_gpu: None,
@@ -484,6 +494,18 @@ mod tests {
         made.save(&context).unwrap();
         assert_eq!(import_existing(&context).unwrap(), None, "a second run must not import again");
         assert_eq!(load(&context, EXISTING_ID).unwrap().cores, 12);
+    }
+
+    #[test]
+    fn a_machine_starts_at_its_monitor_s_refresh_rate() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let made =
+            create(&context, &NewMachine { refresh_hz: Some(60), ..plain(&scratch, "Sixty", None) }).unwrap();
+        assert_eq!(made.refresh_hz, 60);
+        let made =
+            create(&context, &NewMachine { refresh_hz: Some(500), ..plain(&scratch, "Fast", None) }).unwrap();
+        assert_eq!(made.refresh_hz, 144, "a rate past what the guest can run keeps the usual one");
     }
 
     #[test]
@@ -536,6 +558,7 @@ mod tests {
             cores: 8,
             ram_gib: 16,
             disk_gib: 80,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
@@ -560,6 +583,7 @@ mod tests {
             cores: 2,
             ram_gib: 2,
             disk_gib: 4,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
@@ -585,6 +609,7 @@ mod tests {
             cores: 2,
             ram_gib: 4,
             disk_gib: 64,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
@@ -624,6 +649,7 @@ mod tests {
             cores: 8,
             ram_gib: 8,
             disk_gib: 2,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,
@@ -650,6 +676,7 @@ mod tests {
             cores: 2,
             ram_gib: 4,
             disk_gib: 64,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,

@@ -202,6 +202,7 @@ pub(super) fn new_machine(
         cores: number("--cores", options.cores, sizes.cores.min(physical_cores(&context.cpus)))?,
         ram_gib: number("--ram", options.ram, field.value as u32)?,
         disk_gib: number("--disk", options.disk, sizes.disk)?,
+        refresh_hz: None,
         user: account_name(kind, options.user.unwrap_or_default().trim()),
         password: String::new(),
         amd_gpu: card.as_ref().map(|(pci, _)| pci.clone()),

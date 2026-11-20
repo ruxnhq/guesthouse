@@ -219,6 +219,7 @@ mod tests {
             cores: 1,
             ram_gib: 1,
             disk_gib: 1,
+            refresh_hz: None,
             user: String::new(),
             password: String::new(),
             amd_gpu: None,

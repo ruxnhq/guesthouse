@@ -498,6 +498,7 @@ impl NewMachineDialog {
             cores: parts.cores.value() as u32,
             ram_gib: parts.ram.value() as u32,
             disk_gib: parts.disk.value() as u32,
+            refresh_hz: monitor_hz(parts.window.widget()),
             user: account_name(iso.kind, parts.user.text().trim()),
             password: parts.password.text().to_string(),
             amd_gpu: (iso.kind == Kind::Windows).then(|| self.chosen_card_pci()),
@@ -529,6 +530,15 @@ impl NewMachineDialog {
             },
         );
     }
+}
+
+/// The refresh rate of the monitor a window is on, in whole Hz. GTK gives it in thousandths, as a
+/// monitor runs at 59.94 Hz or 143.98 Hz as often as at a round number.
+fn monitor_hz(window: &impl IsA<gtk::Widget>) -> Option<u32> {
+    let surface = window.native()?.surface()?;
+    let monitor = surface.display().monitor_at_surface(&surface)?;
+    let millihertz = u32::try_from(monitor.refresh_rate()).ok()?;
+    Some((millihertz + 500) / 1000).filter(|hz| *hz > 0)
 }
 
 #[cfg(test)]

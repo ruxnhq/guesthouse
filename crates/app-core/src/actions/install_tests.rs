@@ -285,6 +285,7 @@ fn install_setup(scratch: &Scratch) -> (Context, Machine) {
         cores: 2,
         ram_gib: 4,
         disk_gib: 64,
+        refresh_hz: None,
         user: String::new(),
         password: String::new(),
         amd_gpu: None,

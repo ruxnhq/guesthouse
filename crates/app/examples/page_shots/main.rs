@@ -272,6 +272,7 @@ fn library_machines(context: &Arc<Context>, window: &Window, folder: &Path) -> V
         cores: 2,
         ram_gib: 2,
         disk_gib: 4,
+        refresh_hz: None,
         user: String::new(),
         password: String::new(),
         amd_gpu: None,

@@ -7,7 +7,7 @@ use super::cursor_layer::CursorLayer;
 use super::dbus_frames::DbusFrames;
 use super::forwarded_frames::ForwardedFrames;
 use super::frames::{FrameRoute, FrameSource, thumbnail};
-use super::overlay::PerformanceOverlay;
+use super::overlay::{OverlayChoice, PerformanceOverlay};
 use super::own_screen::{ShownBy, add_see_through_style};
 use super::own_surface::OwnSurface;
 use super::pointer_lock::{PointerLock, pointer_lock};
@@ -83,6 +83,8 @@ pub(super) struct Inner {
     pub(super) capture_input: RefCell<Vec<gtk::EventController>>,
     pub(super) capture_changed: RefCell<Box<dyn Fn()>>,
     pub(super) overlay_wanted: Cell<bool>,
+    /// Where the figures' readings come from.
+    pub(super) overlay_sensors: PathBuf,
     pub(super) overlay: RefCell<Option<PerformanceOverlay>>,
     pub(super) poll_source: RefCell<Option<glib::SourceId>>,
     /// The app's own surface for the frames, while it's in use.
@@ -119,7 +121,7 @@ impl Screen {
         run_folder: PathBuf,
         route: FrameRoute,
         memory_frames: bool,
-        show_overlay: bool,
+        overlay: OverlayChoice,
         direct_frames: bool,
         capture_changed: impl Fn() + 'static,
         log: impl Fn(&str) + 'static,
@@ -188,7 +190,8 @@ impl Screen {
             capture: Cell::default(),
             capture_input: RefCell::default(),
             capture_changed: RefCell::new(Box::new(capture_changed)),
-            overlay_wanted: Cell::new(show_overlay),
+            overlay_wanted: Cell::new(overlay.shown),
+            overlay_sensors: overlay.sensors,
             overlay: RefCell::default(),
             poll_source: RefCell::default(),
             own: RefCell::default(),
@@ -581,7 +584,7 @@ impl Screen {
         let wanted = self.0.overlay_wanted.get() && self.0.root.is_realized();
         let mut overlay = self.0.overlay.borrow_mut();
         if wanted && overlay.is_none() {
-            *overlay = Some(PerformanceOverlay::new(self));
+            *overlay = Some(PerformanceOverlay::new(self, self.0.overlay_sensors.clone()));
         } else if !wanted {
             overlay.take();
         }

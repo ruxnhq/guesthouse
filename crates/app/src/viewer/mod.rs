@@ -39,11 +39,13 @@ use clipboard::SharedClipboard;
 use files::SharedFiles;
 use frames::FrameRoute;
 use gtk::{gdk, glib};
+use guesthouse_app_core::host_sensors::sensors_file;
 use guesthouse_app_core::library::save_thumbnail;
 use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::{State, Status, slot_of};
 use monitors::Monitors;
+use overlay::OverlayChoice;
 use pill::Pill;
 use screen::Screen;
 use std::cell::{Cell, RefCell};
@@ -157,11 +159,12 @@ impl ScreenPage {
                 ScreenPage(parts).on_capture_changed();
             }
         };
+        let context = self.0.window.context();
         let (route, overlay, direct) = {
             let machine = self.0.machine.borrow();
-            (FrameRoute::of(&machine), machine.overlay, machine.direct_frames())
+            let overlay = OverlayChoice { shown: machine.overlay, sensors: sensors_file(&context, &machine) };
+            (FrameRoute::of(&machine), overlay, machine.direct_frames())
         };
-        let context = self.0.window.context();
         // What the screen does with the frames, for a report. A log that can't be written is no
         // reason to stop showing them.
         let log = move |text: &str| {

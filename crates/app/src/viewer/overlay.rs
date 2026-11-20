@@ -8,11 +8,19 @@ use guesthouse_app_core::gpu_sample::{SAMPLE_INTERVAL, Sampler};
 use guesthouse_app_core::host_sensors::HostSensors;
 use guesthouse_app_core::overlay;
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const UPDATE: Duration = Duration::from_secs(1);
 const MARGIN: i32 = 12;
+
+/// Whether the figures are shown when the screen opens, and the file the machine's daemon publishes
+/// its card's readings in.
+pub struct OverlayChoice {
+    pub shown: bool,
+    pub sensors: PathBuf,
+}
 
 pub struct PerformanceOverlay {
     screen: Screen,
@@ -21,8 +29,9 @@ pub struct PerformanceOverlay {
 }
 
 impl PerformanceOverlay {
-    pub fn new(screen: &Screen) -> Self {
-        let sampler = Sampler::start(Box::new(HostSensors::open), SAMPLE_INTERVAL);
+    /// `sensors` is the file the machine's daemon publishes its card's readings in.
+    pub fn new(screen: &Screen, sensors: PathBuf) -> Self {
+        let sampler = Sampler::start(Box::new(move || HostSensors::open_at(&sensors)), SAMPLE_INTERVAL);
         let label = gtk::Label::builder()
             .xalign(0.0)
             .halign(gtk::Align::Start)

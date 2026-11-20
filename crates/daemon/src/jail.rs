@@ -140,9 +140,16 @@ impl Needs {
 
 #[cfg(feature = "nvidia")]
 impl Needs {
-    /// What the real daemon of this slot needs.
-    pub fn of_card(slot: crate::slot::Slot, project: &Path, driver_folder: &Path) -> Self {
-        let snapshot = guesthouse_sensors::snapshot_path();
+    /// What the real daemon of this slot needs, for the NVIDIA card at `card`. Its readings go in
+    /// that card's file.
+    pub fn of_card(
+        slot: crate::slot::Slot,
+        project: &Path,
+        driver_folder: &Path,
+        card: Option<&guesthouse_backend::PciAddress>,
+    ) -> Self {
+        let card = card.map(ToString::to_string);
+        let snapshot = guesthouse_sensors::snapshot_path_for(card.as_deref());
         Self {
             run_folder: slot.run_folder(project),
             shared_files: vec![snapshot],

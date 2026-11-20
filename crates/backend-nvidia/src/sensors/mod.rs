@@ -16,7 +16,8 @@ mod sampler;
 pub use guesthouse_sensors::{SharedSnapshot, Snapshot, SnapshotReader};
 pub use sampler::{FastReadings, Sampler, SensorSource, SlowReadings};
 
-use guesthouse_sensors::{milliseconds_since_epoch, snapshot_path};
+use guesthouse_backend::PciAddress;
+use guesthouse_sensors::{milliseconds_since_epoch, snapshot_path_for};
 use std::io;
 use std::thread;
 use std::time::Instant;
@@ -41,9 +42,10 @@ fn read_forever(snapshot: SharedSnapshot, card_uuid: String) {
     }
 }
 
-/// Opens the shared snapshot and starts this daemon's thread, which waits its turn to read.
-pub fn start(card_uuid: &[u8; 16]) -> io::Result<SharedSnapshot> {
-    let snapshot = SharedSnapshot::open(&snapshot_path())?;
+/// Opens the snapshot the guests on the card at `card` share, and starts this daemon's thread, which
+/// waits its turn to read.
+pub fn start(card_uuid: &[u8; 16], card: Option<&PciAddress>) -> io::Result<SharedSnapshot> {
+    let snapshot = SharedSnapshot::open(&snapshot_path_for(card.map(PciAddress::to_string).as_deref()))?;
     let for_thread = snapshot.try_clone()?;
     let card_uuid = library::uuid_text(card_uuid);
     thread::Builder::new().name("host-sensors".to_owned()).spawn(|| read_forever(for_thread, card_uuid))?;

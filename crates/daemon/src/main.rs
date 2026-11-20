@@ -248,7 +248,7 @@ fn serve_nvidia(
     let run_folder = slot.run_folder(&project);
     let (ram, cap) = (env::var("GUESTHOUSE_RAM").ok(), env::var("GUESTHOUSE_VRAM").ok());
     let memory = SharedMemory::from_environment(slot, guest_ram(ram.as_deref()))?;
-    let needs = Needs::of_card(slot, &project, &setup.driver_folder);
+    let needs = Needs::of_card(slot, &project, &setup.driver_folder, setup.card_address.as_ref());
     needs.prepare()?;
     let locked = lock_files(&needs)?;
     let mut backend: NvidiaBackend<LinuxRm> = start_backend(&setup)?;

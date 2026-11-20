@@ -370,7 +370,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         log::info!("opened the card at {}, device instance {}", place_text(&place), device.instance);
         let mut backend = Self::start(device, host_profile, guest_profile, setup, &host, &infs)?;
         // Readings are a bonus, so a failure here only means going without.
-        match sensors::start(&backend.card_uuid) {
+        match sensors::start(&backend.card_uuid, setup.card_address.as_ref()) {
             Ok(snapshot) => backend.set_sensors(Box::new(snapshot)),
             Err(error) => log::info!("no host sensors: {error}"),
         }

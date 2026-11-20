@@ -1,17 +1,98 @@
 //! Pictures out of the guest: a buffer handed to a viewer as a file, and frames copied between
 //! surfaces in the daemon's own address space.
 //!
-//! Frames in rows at both ends are copied here by the CPU, through its view of each end. That is
-//! right for any memory and quick for the guest's own pages, where Intel's drivers keep nearly
-//! everything. For a picture that stays in the card's memory it is slow, as the CPU reads that
-//! memory uncached, and a copy by the card's copy engine would be the better way;
-//! [`crate::xe::batch::copy_rows`] is its instruction, and nothing sends it yet. A frame in tiles
-//! at either end already goes by the copy engine: see [`super::blits`].
+//! Every frame goes by the card's copy engine where the engine can be given it: see
+//! [`super::blits`]. The CPU copies here only frames in rows at both ends that the engine can't be
+//! given, through its view of each end. The CPU reads the card's memory uncached, at well under a
+//! gigabyte a second, and the daemon answers the guest on the thread that copies, so a frame by
+//! the CPU holds the guest up for milliseconds.
+//!
+//! The time each kind of copy takes is added up and said every [`TALLY_EVERY`] at most, while
+//! copies happen.
 
 use super::CardWork;
 use crate::xe::plan::Backing;
 use guesthouse_backend::{BackendError, SlotCopy, SpaceId, StagingCopy, SurfaceShape};
 use std::os::fd::OwnedFd;
+use std::time::{Duration, Instant};
+
+/// How often the copies' times are said, at most.
+pub const TALLY_EVERY: Duration = Duration::from_secs(10);
+
+/// The kinds of work on a frame that are timed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyKind {
+    /// Rows copied by the CPU.
+    Cpu,
+    /// A copy by the copy engine, from when it was sent to when it was seen to end.
+    Engine,
+    /// Red and blue changed over by the CPU after a copy.
+    Colours,
+}
+
+/// How many, how long in all, and the longest.
+#[derive(Debug, Clone, Copy, Default)]
+struct Tally {
+    count: u64,
+    total: Duration,
+    longest: Duration,
+}
+
+impl Tally {
+    fn add(&mut self, taken: Duration) {
+        self.count += 1;
+        self.total += taken;
+        self.longest = self.longest.max(taken);
+    }
+}
+
+impl std::fmt::Display for Tally {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mean = self.total.checked_div(self.count.max(1) as u32).unwrap_or_default();
+        write!(
+            f,
+            "{} taking {:.1} ms in all, {:.2} ms on average and {:.2} ms at most",
+            self.count,
+            self.total.as_secs_f64() * 1000.0,
+            mean.as_secs_f64() * 1000.0,
+            self.longest.as_secs_f64() * 1000.0
+        )
+    }
+}
+
+/// The time frames took since it was last said.
+#[derive(Debug, Default)]
+pub struct CopyTally {
+    since: Option<Instant>,
+    cpu: Tally,
+    engine: Tally,
+    colours: Tally,
+}
+
+impl CopyTally {
+    /// Adds one, and gives the line to say if [`TALLY_EVERY`] has passed since the last.
+    pub fn add(&mut self, kind: CopyKind, taken: Duration, now: Instant) -> Option<String> {
+        let since = *self.since.get_or_insert(now);
+        match kind {
+            CopyKind::Cpu => self.cpu.add(taken),
+            CopyKind::Engine => self.engine.add(taken),
+            CopyKind::Colours => self.colours.add(taken),
+        }
+        if now.saturating_duration_since(since) < TALLY_EVERY {
+            return None;
+        }
+        let line = format!(
+            "intel work: frames in the last {:.1} s: by the copy engine {}; by the CPU {}; red and blue \
+             changed over {}",
+            now.saturating_duration_since(since).as_secs_f64(),
+            self.engine,
+            self.cpu,
+            self.colours
+        );
+        *self = Self { since: Some(now), ..Self::default() };
+        Some(line)
+    }
+}
 
 /// gmmlib's formats with red first in memory, as a Direct3D 11 `R8G8B8A8` swap chain's back buffer
 /// has: `R8G8B8A8_UNORM` and `R8G8B8A8_UNORM_SRGB`, counted in gmmlib's `GmmFormatTable.h` from 1.
@@ -152,6 +233,22 @@ impl CardWork {
     /// Copies rows between two surfaces mapped in a space, by the CPU. Each end must lie wholly
     /// inside one mapping.
     pub fn copy_rows(&mut self, space: SpaceId, rows: &Rows) -> Result<(), BackendError> {
+        let started = Instant::now();
+        let copied = self.copy_rows_now(space, rows);
+        if copied.is_ok() {
+            self.note_copy(CopyKind::Cpu, started.elapsed());
+        }
+        copied
+    }
+
+    /// Adds a frame's time to the tally, and says the tally when its time has come.
+    pub(super) fn note_copy(&mut self, kind: CopyKind, taken: Duration) {
+        if let Some(line) = self.blits.tally.add(kind, taken, Instant::now()) {
+            log::info!("{line}");
+        }
+    }
+
+    fn copy_rows_now(&mut self, space: SpaceId, rows: &Rows) -> Result<(), BackendError> {
         let wrong = || BackendError::new("a copy whose rows and pitches don't add up");
         let source_extent = rows.extent(rows.source_pitch).ok_or_else(wrong)?;
         let target_extent = rows.extent(rows.target_pitch).ok_or_else(wrong)?;
@@ -195,19 +292,15 @@ impl CardWork {
         let (memory, offset) = held.holding(area.address, extent).ok_or_else(|| {
             BackendError::new(format!("rows to turn at {:#x} aren't all inside one mapping", area.address))
         })?;
-        let mut row = vec![0u8; area.row_bytes as usize];
+        let started = Instant::now();
+        let view = self.cpu_view(memory)?;
+        let row_bytes = area.row_bytes as usize;
         for index in 0..area.rows {
-            let at = offset + index * area.pitch;
-            if !self.cpu_view(memory)?.read(at, &mut row) {
-                return Err(BackendError::new("rows to turn lie past their memory"));
-            }
-            for pixel in row.as_chunks_mut::<4>().0 {
-                pixel.swap(0, 2);
-            }
-            if !self.cpu_view(memory)?.write(at, &row) {
+            if !view.turn_red_and_blue(offset + index * area.pitch, row_bytes) {
                 return Err(BackendError::new("rows to turn lie past their memory"));
             }
         }
+        self.note_copy(CopyKind::Colours, started.elapsed());
         if !self.blits.turned_said {
             self.blits.turned_said = true;
             log::info!(
@@ -226,6 +319,26 @@ mod tests {
     use crate::work::testing::{self, Pages, map_request};
     use crate::xe::plan::BufferUse;
     use guesthouse_backend::{GPU_RANGES, SurfaceShape};
+
+    #[test]
+    fn the_times_of_frames_are_said_once_in_ten_seconds_and_then_start_again() {
+        let mut tally = CopyTally::default();
+        let start = Instant::now();
+        assert_eq!(tally.add(CopyKind::Engine, Duration::from_micros(200), start), None);
+        assert_eq!(tally.add(CopyKind::Cpu, Duration::from_millis(14), start + Duration::from_secs(3)), None);
+        let line = tally.add(CopyKind::Colours, Duration::from_millis(1), start + TALLY_EVERY).unwrap();
+        assert!(line.contains("in the last 10.0 s"), "{line}");
+        assert!(line.contains("by the copy engine 1 taking 0.2 ms in all"), "{line}");
+        assert!(line.contains("by the CPU 1 taking 14.0 ms in all, 14.00 ms on average"), "{line}");
+        assert!(line.contains("changed over 1 taking 1.0 ms"), "{line}");
+        let later = start + TALLY_EVERY + Duration::from_secs(1);
+        assert_eq!(tally.add(CopyKind::Engine, Duration::from_micros(200), later), None, "ten seconds anew");
+        let line = tally.add(CopyKind::Engine, Duration::from_micros(100), start + TALLY_EVERY * 2).unwrap();
+        assert!(
+            line.contains("by the copy engine 2 taking 0.3 ms") && line.contains("by the CPU 0 taking"),
+            "{line}"
+        );
+    }
 
     fn surface(width: u32, height: u32, pitch: u32) -> SurfaceShape {
         SurfaceShape {

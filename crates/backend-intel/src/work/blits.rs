@@ -18,7 +18,7 @@
 //! Ys) is refused, both by [`tiled_bytes`], so the core turns such a copy down, and here.
 
 use super::CardWork;
-use super::copies::Area;
+use super::copies::{Area, CopyKind, CopyTally};
 use crate::protocol::allocation::tile_mode;
 use crate::xe::abi::{EngineInstance, Keying};
 use crate::xe::batch::{self, BlitSide, Tiling};
@@ -176,10 +176,14 @@ pub(super) struct Blits {
     kinds_said: Vec<(Tiling, Tiling)>,
     first_finished_said: bool,
     failures: u64,
+    /// Copies in rows that went by the CPU, as the copy engine wasn't given them.
+    cpu_instead: u64,
     /// Rows of the copy under way's target whose red and blue change over once it ends.
     turn_after: Option<(SpaceId, Area)>,
     /// Whether the log has been told colours are changed over.
     pub(super) turned_said: bool,
+    /// The time frames took, said now and then: see [`super::copies::CopyTally`].
+    pub(super) tally: CopyTally,
 }
 
 impl Blits {
@@ -332,6 +336,7 @@ impl CardWork {
                 now.saturating_duration_since(since)
             );
         }
+        self.note_copy(CopyKind::Engine, now.saturating_duration_since(since));
         if let Some((space, area)) = turn
             && let Err(error) = self.turn_colours(space, &area)
         {
@@ -350,6 +355,19 @@ impl CardWork {
             level,
             "intel work: a copy by the copy engine failed ({} so far): {error}",
             self.blits.failures
+        );
+    }
+
+    /// Says why a copy in rows went by the CPU instead of the copy engine: the first few at info
+    /// level, the rest in the debug log.
+    pub fn note_cpu_instead(&mut self, error: &BackendError) {
+        self.blits.cpu_instead += 1;
+        let level =
+            if self.blits.cpu_instead <= FAILURES_TO_WARN_OF { log::Level::Info } else { log::Level::Debug };
+        log::log!(
+            level,
+            "intel work: a copy in rows goes by the CPU instead ({} so far): {error}",
+            self.blits.cpu_instead
         );
     }
 

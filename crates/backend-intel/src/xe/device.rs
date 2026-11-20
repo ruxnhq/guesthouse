@@ -137,6 +137,24 @@ impl CpuMap {
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.start.add(offset), bytes.len()) };
         true
     }
+
+    /// Changes the first and third byte of each four over, in place, as red and blue in a picture
+    /// of 32-bit pixels. A last part shorter than four is left alone. False, with nothing changed,
+    /// if any of it lies past the end.
+    pub fn turn_red_and_blue(&mut self, offset: u64, length: usize) -> bool {
+        let Some(offset) = self.range(offset, length) else { return false };
+        // SAFETY: the range was checked against the mapping's length. The pixels are read and
+        // written through the pointer, never as a reference, as the guest shares the memory.
+        unsafe {
+            let first = self.start.add(offset).cast::<u32>();
+            for index in 0..length / 4 {
+                let at = first.add(index);
+                let pixel = at.read_unaligned();
+                at.write_unaligned((pixel & 0xFF00_FF00) | ((pixel >> 16) & 0xFF) | ((pixel & 0xFF) << 16));
+            }
+        }
+        true
+    }
 }
 
 impl Drop for CpuMap {
@@ -336,6 +354,18 @@ impl Xe for XeCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn red_and_blue_change_over_in_place_and_nothing_else_does() {
+        let mut bytes: Vec<u8> = (0..20).collect();
+        // SAFETY: the vector outlives the map and is as long as given.
+        let mut map = unsafe { CpuMap::borrowed(bytes.as_mut_ptr(), bytes.len()) };
+        // Two whole pixels from the second byte, and one byte that isn't a pixel.
+        assert!(map.turn_red_and_blue(1, 9));
+        assert!(!map.turn_red_and_blue(12, 9), "past the end");
+        drop(map);
+        assert_eq!(bytes, [0, 3, 2, 1, 4, 7, 6, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    }
 
     #[test]
     fn a_map_refuses_what_lies_past_its_end() {

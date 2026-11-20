@@ -478,26 +478,41 @@ fn no_card() -> std::io::Result<Box<dyn Xe + Send>> {
     Err(std::io::Error::other("there is no card"))
 }
 
-/// Starts a copy on the copy engine, unless it is empty, which is done at once, or it can't be
-/// made, which the log is told.
-fn start_blit(
+/// Starts a copy by the copy engine wherever the engine can be given it, as the CPU reads the
+/// card's memory slowly and the guest waits while it copies. A copy in rows at both ends (`rows`)
+/// that the engine can't be given is done by the CPU at once instead; one in tiles fails, which the
+/// log is told. An empty copy is done at once. `turn` names rows of the target whose red and blue
+/// change over once the copy is done.
+fn start_copy(
     work: &mut CardWork,
     host: &mut dyn HostServices,
     space: SpaceId,
     blit: Result<Blit, String>,
+    rows: Option<Rows>,
+    turn: Option<Area>,
 ) -> StagingStart {
     let started = match blit {
         Ok(blit) if blit.is_empty() => return StagingStart::Finished(Status::SUCCESS),
         Ok(blit) => work.start_blit(host, space, &blit),
         Err(why) => Err(BackendError::new(format!("the copy engine isn't given this copy: {why}"))),
     };
-    match started {
-        Ok(()) => StagingStart::Running,
-        Err(error) => {
-            work.note_blit_failure(&error);
-            StagingStart::Finished(Status::UNSUCCESSFUL)
+    let error = match started {
+        Ok(()) => {
+            work.turn_after_blit(space, turn);
+            return StagingStart::Running;
         }
-    }
+        Err(error) => error,
+    };
+    let Some(rows) = rows else {
+        work.note_blit_failure(&error);
+        return StagingStart::Finished(Status::UNSUCCESSFUL);
+    };
+    work.note_cpu_instead(&error);
+    let copied_rows = work.copy_rows(space, &rows);
+    StagingStart::Finished(copied(copied_rows.and_then(|()| match turn {
+        Some(area) => work.turn_colours(space, &area),
+        None => Ok(()),
+    })))
 }
 
 /// A copy's result as the guest is told it, with the reason in the log.
@@ -985,55 +1000,24 @@ impl Backend for IntelBackend {
         }
     }
 
-    /// Surfaces in rows at both ends by the CPU, at once: see [`work::copies`]. A surface in tiles
-    /// at either end by the copy engine, which [`Backend::poll_staging_copy`] waits for: see
-    /// [`work::blits`]. While listening, what would be copied was never drawn, so the copy is done
-    /// by leaving the target as it is.
+    /// By the copy engine, which [`Backend::poll_staging_copy`] waits for, or by the CPU at once
+    /// for a copy in rows the engine can't be given: see [`start_copy`]. While listening, what would
+    /// be copied was never drawn, so the copy is done by leaving the target as it is.
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {
         self.traffic.copy(if copy.is_screen { "screen" } else { "staging" });
         let Some(work) = &mut self.work else { return StagingStart::Finished(Status::SUCCESS) };
         let turn = colours_turn(&copy.source, &copy.target)
             .then(|| Area::written_by(copy, COPY_PIXEL_BYTES))
             .flatten();
-        if copy.source.tiling.is_some() || copy.target.tiling.is_some() {
-            let started = start_blit(
-                work,
-                host,
-                copy.own_space,
-                Blit::of_staging(copy).map_err(|why| format!("{why}: {copy:?}")),
-            );
-            if started == StagingStart::Running {
-                work.turn_after_blit(copy.own_space, turn);
-            }
-            return started;
-        }
-        let Some(rows) = Rows::of_staging(copy, COPY_PIXEL_BYTES) else {
-            log::warn!("{PREFIX} a copy to a staging surface that this backend can't place: {copy:?}");
-            return StagingStart::Finished(Status::UNSUCCESSFUL);
-        };
-        let copied_rows = work.copy_rows(copy.own_space, &rows);
-        StagingStart::Finished(copied(copied_rows.and_then(|()| match turn {
-            Some(area) => work.turn_colours(copy.own_space, &area),
-            None => Ok(()),
-        })))
+        let blit = Blit::of_staging(copy).map_err(|why| format!("{why}: {copy:?}"));
+        start_copy(work, host, copy.own_space, blit, Rows::of_staging(copy, COPY_PIXEL_BYTES), turn)
     }
 
-    /// A whole frame into a viewer's slot: from rows by the CPU, at once, and from tiles by the
-    /// copy engine.
+    /// A whole frame into a viewer's slot, by the copy engine: see [`start_copy`].
     fn start_slot_copy(&mut self, host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
         let Some(work) = &mut self.work else { return StagingStart::Finished(Status::UNSUCCESSFUL) };
-        if copy.source.tiling.is_some() || copy.slot_tiling.is_some() {
-            return start_blit(
-                work,
-                host,
-                copy.own_space,
-                Blit::of_slot(copy).map_err(|why| format!("{why}: {copy:?}")),
-            );
-        }
-        let Some(rows) = Rows::of_slot(copy, COPY_PIXEL_BYTES) else {
-            return StagingStart::Finished(Status::UNSUCCESSFUL);
-        };
-        StagingStart::Finished(copied(work.copy_rows(copy.own_space, &rows)))
+        let blit = Blit::of_slot(copy).map_err(|why| format!("{why}: {copy:?}"));
+        start_copy(work, host, copy.own_space, blit, Rows::of_slot(copy, COPY_PIXEL_BYTES), None)
     }
 
     /// Only a copy by the copy engine is ever under way; the CPU's are finished when they start.
@@ -1494,7 +1478,9 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_is_copied_into_a_viewers_slot_and_a_tiled_slot_is_refused() {
+    /// A frame in rows goes into a viewer's slot by the copy engine, and by the CPU at once when the
+    /// engine can't be given it, here a slot whose rows aren't a whole number of OWords apart.
+    fn a_frame_goes_into_a_viewers_slot_by_the_copy_engine_or_by_the_cpu_if_it_cant_be() {
         let xe = xe::fake::FakeXe::default();
         let (mut backend, _) = started((Stage::Everything, None), &xe);
         let (frame, slot) = (work::testing::Pages::new(0x1000), work::testing::Pages::new(0x1000));
@@ -1525,9 +1511,20 @@ mod tests {
             slot_tiling: None,
         };
         let mut host = work::testing::FakeHost::default();
-        assert_eq!(backend.start_slot_copy(&mut host, &copy), StagingStart::Finished(Status::SUCCESS));
+        let sent = xe.calls_named("exec").len();
+        assert_eq!(backend.start_slot_copy(&mut host, &copy), StagingStart::Running);
+        assert_eq!(xe.calls_named("exec").len(), sent + 1, "the copy engine was given it");
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
         assert_eq!(slot.bytes()[..512], [9u8; 512]);
         assert_eq!(slot.bytes()[512], 0);
+        slot.write(0, &[0; 0x1000]);
+        let uneven = SlotCopy { slot_pitch: 72, ..copy };
+        assert_eq!(backend.start_slot_copy(&mut host, &uneven), StagingStart::Finished(Status::SUCCESS));
+        assert_eq!(xe.calls_named("exec").len(), sent + 1, "the CPU did this one");
+        for row in 0..8 {
+            assert_eq!(slot.bytes()[row * 72..row * 72 + 64], [9u8; 64], "row {row}");
+            assert_eq!(slot.bytes()[row * 72 + 64..row * 72 + 72], [0u8; 8], "past row {row}");
+        }
         let tiled = SlotCopy { slot_tiling: Some(4), ..copy };
         assert_eq!(backend.start_slot_copy(&mut host, &tiled), StagingStart::Finished(Status::UNSUCCESSFUL));
         let outside = SlotCopy { height: 4096, ..copy };
@@ -1662,14 +1659,40 @@ mod tests {
         assert_eq!(staging.bytes()[..turned.len()], turned[..], "from tiles, by the copy engine");
         let from_rows = StagingCopy { source: red_first(None), source_address: 0x600_0000, ..copy };
         staging.write(0, &[0; 0x2_1000]);
-        assert_eq!(
-            backend.start_staging_copy(&mut host, &from_rows),
-            StagingStart::Finished(Status::SUCCESS)
-        );
-        assert_eq!(staging.bytes()[..turned.len()], turned[..], "from rows, by the CPU");
+        assert_eq!(backend.start_staging_copy(&mut host, &from_rows), StagingStart::Running);
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
+        assert_eq!(staging.bytes()[..turned.len()], turned[..], "from rows, by the copy engine too");
         let as_it_is = StagingCopy { source: shape(256, 130, 1024, None), ..from_rows };
-        assert_eq!(backend.start_staging_copy(&mut host, &as_it_is), StagingStart::Finished(Status::SUCCESS));
+        assert_eq!(backend.start_staging_copy(&mut host, &as_it_is), StagingStart::Running);
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
         assert_eq!(staging.bytes()[..in_rows.len()], in_rows[..]);
+        // A source whose rows the engine can't be given goes by the CPU, turned all the same.
+        staging.write(0, &[0; 0x2_1000]);
+        let uneven = StagingCopy { source: red_first(None), ..from_rows };
+        let uneven = StagingCopy {
+            source: SurfaceShape { pitch: 1032, ..uneven.source },
+            right: 128,
+            bottom: 64,
+            ..uneven
+        };
+        assert_eq!(backend.start_staging_copy(&mut host, &uneven), StagingStart::Finished(Status::SUCCESS));
+        let source = row_frame.bytes();
+        let mut expected = vec![0u8; 1024 * 64];
+        for row in 0..64 {
+            for x in 0..128 {
+                let at = row * 1032 + x * 4;
+                let [red, green, blue, alpha]: [u8; 4] = source[at..at + 4].try_into().unwrap();
+                expected[row * 1024 + x * 4..row * 1024 + x * 4 + 4]
+                    .copy_from_slice(&[blue, green, red, alpha]);
+            }
+        }
+        for row in 0..64 {
+            assert_eq!(
+                staging.bytes()[row * 1024..row * 1024 + 512],
+                expected[row * 1024..row * 1024 + 512],
+                "row {row}"
+            );
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 That's Godot on Vulkan, in Windows, in a VM on Linux. Nothing is passed through. The host keeps the card, and my desktop keeps running on it.
 
-> **Status:** early. 0.7.0 is out. It runs well on my RTX 5090, and testers have run Windows on NVIDIA and AMD cards of their own, [listed below](#cards). AMD is newer, and Intel is an experiment that has run on one Arc B580.
+> **Status:** early. 0.7.1 is out. It runs well on my RTX 5090, and testers have run Windows on NVIDIA and AMD cards of their own, [listed below](#cards). AMD is newer, and Intel is an experiment that has run on one Arc B580.
 
 **[Join the Discord](https://discord.gg/rN3VARayZV)** for questions and chat. Bugs still go in the [issues](https://github.com/xnixy/guesthouse/issues), so they don't get lost.
 

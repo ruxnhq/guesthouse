@@ -1,20 +1,31 @@
-//! The viewer's bar: a pill that floats over the top of the guest's screen, with the way back, what
-//! the keyboard and mouse are doing, and a menu of everything else. It's also what the window is
-//! dragged by and closed from, as the page has no header bar.
+//! The viewer's bar, with the way back, what the keyboard and mouse are doing, and a menu of
+//! everything else. While it stays, in a window, it's a header bar in the desktop's look, and the
+//! guest's screen starts below it. While it hides, as in fullscreen, it's a pill that floats over the
+//! top of the screen when called. The same buttons move from one to the other. Either is what the
+//! window is dragged by and closed from, as the page has no other bar.
 
 use crate::rows::{icon_button, name_for_readers};
 use adw::prelude::*;
 use gtk::gio;
+use std::cell::Cell;
 
 const SPACING: i32 = 4;
 /// Room round the pill for its shadow, and to keep it off the window's edge.
 const MARGIN: i32 = 10;
 const HINT_CHARS: i32 = 44;
-/// The name the pill's actions go by in its menu.
+/// The name the bar's actions go by in its menu.
 const GROUP: &str = "screen";
 
 pub struct Pill {
+    /// What the page's toolbar holds: the header bar and the pill, one of them shown.
+    top: gtk::Box,
+    header: adw::HeaderBar,
+    title: adw::WindowTitle,
     bar: gtk::WindowHandle,
+    pill: gtk::Box,
+    back: gtk::Button,
+    /// Where the pill's buttons start, after what it says.
+    separator: gtk::Separator,
     hint: gtk::Label,
     pub capture: gtk::Button,
     pub fullscreen: gtk::Button,
@@ -26,6 +37,8 @@ pub struct Pill {
     overlay: gio::SimpleAction,
     hides: gio::SimpleAction,
     shut_down: gio::SimpleAction,
+    /// Whether the buttons are on the header bar.
+    docked: Cell<bool>,
 }
 
 /// A button on the pill. One that took the focus from the screen would end the capture it starts.
@@ -110,12 +123,20 @@ impl Pill {
         pill.append(&back);
         pill.append(&name);
         pill.append(&hint);
-        pill.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        let separator = gtk::Separator::new(gtk::Orientation::Vertical);
+        pill.append(&separator);
         pill.append(&capture);
         pill.append(&fullscreen);
         pill.append(&more);
         pill.append(&controls);
         let bar = gtk::WindowHandle::builder().child(&pill).build();
+        let title = adw::WindowTitle::new(machine_name, "");
+        // Its own way back is left out, as the pill's moves onto it.
+        let header =
+            adw::HeaderBar::builder().title_widget(&title).show_back_button(false).visible(false).build();
+        let top = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        top.append(&header);
+        top.append(&bar);
         let actions = gio::SimpleActionGroup::new();
         let overlay = switch("overlay", overlay);
         let hides = switch("hides", hides);
@@ -123,12 +144,32 @@ impl Pill {
         for action in [&overlay, &hides, &shut_down] {
             actions.add_action(action);
         }
-        bar.insert_action_group(GROUP, Some(&actions));
-        Self { bar, hint, capture, fullscreen, more, controls, monitors, actions, overlay, hides, shut_down }
+        // On what holds both, as the menu moves between them.
+        top.insert_action_group(GROUP, Some(&actions));
+        Self {
+            top,
+            header,
+            title,
+            bar,
+            pill,
+            back,
+            separator,
+            hint,
+            capture,
+            fullscreen,
+            more,
+            controls,
+            monitors,
+            actions,
+            overlay,
+            hides,
+            shut_down,
+            docked: Cell::new(false),
+        }
     }
 
-    pub fn widget(&self) -> &gtk::WindowHandle {
-        &self.bar
+    pub fn widget(&self) -> &gtk::Box {
+        &self.top
     }
 
     /// Runs this when the menu's item of this name is chosen.
@@ -150,10 +191,41 @@ impl Pill {
 
     pub fn set_hint(&self, hint: &str) {
         self.hint.set_label(hint);
+        self.title.set_subtitle(hint);
     }
 
     pub fn set_overlay(&self, on: bool) {
         self.overlay.set_state(&on.to_variant());
+    }
+
+    /// The header bar while the bar stays, and the pill while it hides. The way back goes at the
+    /// header bar's start, and the rest at its end, the menu by the window's buttons as on the pill.
+    pub fn set_docked(&self, docked: bool) {
+        if self.docked.replace(docked) == docked {
+            return;
+        }
+        let (back, capture, fullscreen, more) = (&self.back, &self.capture, &self.fullscreen, &self.more);
+        if docked {
+            self.pill.remove(back);
+            self.pill.remove(capture);
+            self.pill.remove(fullscreen);
+            self.pill.remove(more);
+            self.header.pack_start(back);
+            self.header.pack_end(more);
+            self.header.pack_end(fullscreen);
+            self.header.pack_end(capture);
+        } else {
+            self.header.remove(back);
+            self.header.remove(capture);
+            self.header.remove(fullscreen);
+            self.header.remove(more);
+            self.pill.prepend(back);
+            self.pill.insert_child_after(capture, Some(&self.separator));
+            self.pill.insert_child_after(fullscreen, Some(capture));
+            self.pill.insert_child_after(more, Some(fullscreen));
+        }
+        self.header.set_visible(docked);
+        self.bar.set_visible(!docked);
     }
 
     pub fn set_hides(&self, hides: bool) {

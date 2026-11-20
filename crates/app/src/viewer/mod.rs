@@ -134,6 +134,8 @@ impl ScreenPage {
         this.make_screen();
         *this.0.monitors.borrow_mut() = Some(Monitors::new(window, &this.0.pill.monitors));
         this.connect();
+        // The header bar or the pill from the start, not from the first look at the machine.
+        this.follow_header();
         this
     }
 
@@ -367,6 +369,7 @@ impl ScreenPage {
             parts.window.toast(text, adw::ToastPriority::Normal);
         }
         parts.header_hid.set(hides);
+        parts.pill.set_docked(!hides);
         let reveal = !hides || parts.header_called.get();
         if parts.toolbar.reveals_top_bars() != reveal {
             parts.toolbar.set_reveal_top_bars(reveal);

@@ -18,6 +18,7 @@
 //! Ys) is refused, both by [`tiled_bytes`], so the core turns such a copy down, and here.
 
 use super::CardWork;
+use super::copies::Area;
 use crate::protocol::allocation::tile_mode;
 use crate::xe::abi::{EngineInstance, Keying};
 use crate::xe::batch::{self, BlitSide, Tiling};
@@ -175,6 +176,10 @@ pub(super) struct Blits {
     kinds_said: Vec<(Tiling, Tiling)>,
     first_finished_said: bool,
     failures: u64,
+    /// Rows of the copy under way's target whose red and blue change over once it ends.
+    turn_after: Option<(SpaceId, Area)>,
+    /// Whether the log has been told colours are changed over.
+    pub(super) turned_said: bool,
 }
 
 impl Blits {
@@ -201,6 +206,7 @@ impl CardWork {
         space: SpaceId,
         blit: &Blit,
     ) -> Result<(), BackendError> {
+        self.blits.turn_after = None;
         let dwords = blit.dwords(self.blits.mocs).map_err(|batch::NotEncodable(why)| {
             BackendError::new(format!("the copy engine can't be given this copy: {why}: {blit:?}"))
         })?;
@@ -276,6 +282,12 @@ impl CardWork {
         Ok(())
     }
 
+    /// Has red and blue changed over in these rows of the copy under way's target once it ends
+    /// well, as the copy engine moves bytes as they are. See [`super::copies::colours_turn`].
+    pub fn turn_after_blit(&mut self, space: SpaceId, area: Option<Area>) {
+        self.blits.turn_after = area.map(|area| (space, area));
+    }
+
     /// Whether the copy under way has ended: `None` while it runs, then how it went. A run that
     /// passes [`COPY_PATIENCE`] counts as failed, and the next copy waits for it to end all the
     /// same, as it reads the same page.
@@ -289,6 +301,7 @@ impl CardWork {
             return None;
         }
         self.blits.engine.as_mut().expect("found above").running = None;
+        let turn = self.blits.turn_after.take();
         match reached {
             Ok(true) => {}
             Ok(false) => {
@@ -318,6 +331,11 @@ impl CardWork {
                 "intel work: the copy engine's first copy finished after {:?}",
                 now.saturating_duration_since(since)
             );
+        }
+        if let Some((space, area)) = turn
+            && let Err(error) = self.turn_colours(space, &area)
+        {
+            return Some(Err(error));
         }
         Some(Ok(()))
     }
@@ -402,6 +420,7 @@ impl CardWork {
 
     /// Lets everything of the copy engine go, as its space is going.
     pub(super) fn close_copy_engine(&mut self) {
+        self.blits.turn_after = None;
         self.drop_copy_queue();
         let Some(engine) = self.blits.engine.take() else { return };
         if let Err(error) = self.xe.destroy_syncobj(engine.done) {

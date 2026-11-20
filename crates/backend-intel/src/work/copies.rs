@@ -10,8 +10,58 @@
 
 use super::CardWork;
 use crate::xe::plan::Backing;
-use guesthouse_backend::{BackendError, SlotCopy, SpaceId, StagingCopy};
+use guesthouse_backend::{BackendError, SlotCopy, SpaceId, StagingCopy, SurfaceShape};
 use std::os::fd::OwnedFd;
+
+/// gmmlib's formats with red first in memory, as a Direct3D 11 `R8G8B8A8` swap chain's back buffer
+/// has: `R8G8B8A8_UNORM` and `R8G8B8A8_UNORM_SRGB`, counted in gmmlib's `GmmFormatTable.h` from 1.
+const RED_FIRST_FORMATS: [u32; 2] = [0x7E, 0x7F];
+/// The Direct3D formats of the kernel's staging surface, `A8R8G8B8` and `X8R8G8B8`, which are blue
+/// first in memory.
+const BLUE_FIRST_FORMATS: [u32; 2] = [21, 22];
+
+/// Whether a copy goes from a surface of Intel's drivers with red first to the kernel's staging
+/// surface, which has blue first, as a windowed present from a Direct3D 11 `R8G8B8A8` back buffer
+/// does. Bytes moved as they are would show red and blue changed over, and neither the CPU's rows
+/// nor the copy engine change them on the way. Intel's surfaces leave the Direct3D format unknown
+/// and give gmmlib's in their colour; the kernel's give a Direct3D format and the standard colour.
+pub fn colours_turn(source: &SurfaceShape, target: &SurfaceShape) -> bool {
+    source.format == 0
+        && RED_FIRST_FORMATS.contains(&source.colour)
+        && BLUE_FIRST_FORMATS.contains(&target.format)
+        && target.colour == 0
+        && target.tiling.is_none()
+}
+
+/// Rows of a surface in one space: where the first starts, how many bytes of each, how many, and
+/// how far apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Area {
+    pub address: u64,
+    pub row_bytes: u64,
+    pub rows: u64,
+    pub pitch: u64,
+}
+
+impl Area {
+    /// Where a staging copy's rectangle lands in its target. `None` for a target in tiles, or
+    /// numbers that don't add up.
+    pub fn written_by(copy: &StagingCopy, pixel_bytes: u32) -> Option<Self> {
+        if copy.target.tiling.is_some() {
+            return None;
+        }
+        let pixel = u64::from(pixel_bytes);
+        let width = u64::try_from(copy.right.checked_sub(copy.left)?).ok()?;
+        let rows = u64::try_from(copy.bottom.checked_sub(copy.top)?).ok()?;
+        let (left, top) = (u64::try_from(copy.target_left).ok()?, u64::try_from(copy.target_top).ok()?);
+        let pitch = u64::from(copy.target.pitch);
+        let address = copy
+            .target_address
+            .checked_add(top.checked_mul(pitch)?)?
+            .checked_add(left.checked_mul(pixel)?)?;
+        Some(Self { address, row_bytes: width.checked_mul(pixel)?, rows, pitch })
+    }
+}
 
 /// Rows to copy from one GPU address to another in one space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +174,49 @@ impl CardWork {
         }
         Ok(())
     }
+
+    /// Changes red and blue over in every pixel of some rows mapped in a space, by the CPU: the
+    /// first and third byte of each four. The rows must lie wholly inside one mapping. See
+    /// [`colours_turn`] for when.
+    pub fn turn_colours(&mut self, space: SpaceId, area: &Area) -> Result<(), BackendError> {
+        if area.rows == 0 || area.row_bytes == 0 {
+            return Ok(());
+        }
+        let wrong = || BackendError::new("rows to turn whose sizes don't add up");
+        if area.pitch < area.row_bytes || !area.row_bytes.is_multiple_of(4) {
+            return Err(wrong());
+        }
+        let extent = (area.rows - 1)
+            .checked_mul(area.pitch)
+            .and_then(|bytes| bytes.checked_add(area.row_bytes))
+            .ok_or_else(wrong)?;
+        let held =
+            self.spaces.get(&space).ok_or(BackendError::new("turning colours in a space that is closed"))?;
+        let (memory, offset) = held.holding(area.address, extent).ok_or_else(|| {
+            BackendError::new(format!("rows to turn at {:#x} aren't all inside one mapping", area.address))
+        })?;
+        let mut row = vec![0u8; area.row_bytes as usize];
+        for index in 0..area.rows {
+            let at = offset + index * area.pitch;
+            if !self.cpu_view(memory)?.read(at, &mut row) {
+                return Err(BackendError::new("rows to turn lie past their memory"));
+            }
+            for pixel in row.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            if !self.cpu_view(memory)?.write(at, &row) {
+                return Err(BackendError::new("rows to turn lie past their memory"));
+            }
+        }
+        if !self.blits.turned_said {
+            self.blits.turned_said = true;
+            log::info!(
+                "intel work: a copy from a surface with red first into the kernel's staging surface, which \
+                 has blue first, has the two changed over, as each such copy will"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +274,84 @@ mod tests {
             assert_eq!(copied[row * 32..row * 32 + 32], picture[row * 64..row * 64 + 32], "row {row}");
         }
         assert!(copied[4 * 32..].iter().all(|&byte| byte == 0), "nothing past the last row");
+    }
+
+    #[test]
+    fn only_a_red_first_surface_of_intels_into_the_kernels_staging_surface_has_its_colours_changed_over() {
+        let red_first = SurfaceShape { colour: 0x7E, ..surface(8, 4, 32) };
+        let staging = SurfaceShape { format: 21, ..surface(8, 4, 32) };
+        assert!(colours_turn(&red_first, &staging));
+        assert!(colours_turn(
+            &SurfaceShape { colour: 0x7F, ..red_first },
+            &SurfaceShape { format: 22, ..staging }
+        ));
+        assert!(!colours_turn(&surface(8, 4, 32), &staging), "a surface that names no red-first format");
+        assert!(
+            !colours_turn(&SurfaceShape { format: 21, ..red_first }, &staging),
+            "a surface of the kernel's"
+        );
+        assert!(
+            !colours_turn(&red_first, &SurfaceShape { tiling: Some(73), ..staging }),
+            "a target in tiles"
+        );
+        assert!(
+            !colours_turn(&red_first, &SurfaceShape { format: 0, colour: 0x7E, ..staging }),
+            "one of Intel's"
+        );
+    }
+
+    #[test]
+    fn red_and_blue_change_over_in_the_rows_and_nowhere_else() {
+        let (mut work, _xe) = testing::work(Stage::Everything);
+        let space = work.create_space(&GPU_RANGES).unwrap();
+        let target = Pages::new(0x1000);
+        let picture: Vec<u8> = (0..0x1000u32).map(|byte| (byte % 251) as u8).collect();
+        target.write(0, &picture);
+        let to = work.adopt(target.address(), 0x1000).unwrap();
+        work.map(&map_request(space, to, TARGET_AT, 0, 0x1000)).unwrap();
+        // 4 pixels by 3 rows, from the second pixel of the second row, the rows 64 bytes apart.
+        let area = Area { address: TARGET_AT + 64 + 4, row_bytes: 16, rows: 3, pitch: 64 };
+        work.turn_colours(space, &area).unwrap();
+        let mut expected = picture.clone();
+        for row in 0..3 {
+            let start = 64 + 4 + row * 64;
+            for pixel in expected[start..start + 16].as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
+        assert_eq!(target.bytes(), expected);
+        assert!(work.turn_colours(space, &Area { row_bytes: 6, ..area }).is_err(), "not whole pixels");
+        assert!(
+            work.turn_colours(space, &Area { address: TARGET_AT + 0xFE0, ..area }).is_err(),
+            "past the mapping"
+        );
+        assert_eq!(target.bytes(), expected, "neither touched anything");
+    }
+
+    #[test]
+    fn a_staging_copys_rectangle_lands_at_its_corner_in_the_target() {
+        let (mut work, _xe) = testing::work(Stage::Everything);
+        let space = work.create_space(&GPU_RANGES).unwrap();
+        let copy = StagingCopy {
+            source: surface(64, 64, 256),
+            target: surface(64, 64, 512),
+            source_address: SOURCE_AT,
+            target_address: TARGET_AT,
+            left: 2,
+            top: 3,
+            right: 10,
+            bottom: 7,
+            target_left: 5,
+            target_top: 1,
+            target_guest_address: None,
+            is_screen: false,
+            own_space: space,
+        };
+        let area = Area { address: TARGET_AT + 512 + 5 * 4, row_bytes: 8 * 4, rows: 4, pitch: 512 };
+        assert_eq!(Area::written_by(&copy, 4), Some(area));
+        let tiled = StagingCopy { target: SurfaceShape { tiling: Some(73), ..copy.target }, ..copy };
+        assert_eq!(Area::written_by(&tiled, 4), None);
+        assert_eq!(Area::written_by(&StagingCopy { right: 1, ..copy }, 4), None, "inside out");
     }
 
     #[test]

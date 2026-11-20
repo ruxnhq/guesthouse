@@ -72,7 +72,7 @@ use traffic::{QueryOutcome, Traffic};
 use watch::PREFIX;
 use work::CardWork;
 use work::blits::Blit;
-use work::copies::Rows;
+use work::copies::{Area, Rows, colours_turn};
 use xe::abi::Keying;
 use xe::device::Xe;
 use xe::plan::BufferUse;
@@ -992,19 +992,30 @@ impl Backend for IntelBackend {
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {
         self.traffic.copy(if copy.is_screen { "screen" } else { "staging" });
         let Some(work) = &mut self.work else { return StagingStart::Finished(Status::SUCCESS) };
+        let turn = colours_turn(&copy.source, &copy.target)
+            .then(|| Area::written_by(copy, COPY_PIXEL_BYTES))
+            .flatten();
         if copy.source.tiling.is_some() || copy.target.tiling.is_some() {
-            return start_blit(
+            let started = start_blit(
                 work,
                 host,
                 copy.own_space,
                 Blit::of_staging(copy).map_err(|why| format!("{why}: {copy:?}")),
             );
+            if started == StagingStart::Running {
+                work.turn_after_blit(copy.own_space, turn);
+            }
+            return started;
         }
         let Some(rows) = Rows::of_staging(copy, COPY_PIXEL_BYTES) else {
             log::warn!("{PREFIX} a copy to a staging surface that this backend can't place: {copy:?}");
             return StagingStart::Finished(Status::UNSUCCESSFUL);
         };
-        StagingStart::Finished(copied(work.copy_rows(copy.own_space, &rows)))
+        let copied_rows = work.copy_rows(copy.own_space, &rows);
+        StagingStart::Finished(copied(copied_rows.and_then(|()| match turn {
+            Some(area) => work.turn_colours(copy.own_space, &area),
+            None => Ok(()),
+        })))
     }
 
     /// A whole frame into a viewer's slot: from rows by the CPU, at once, and from tiles by the
@@ -1600,6 +1611,65 @@ mod tests {
         assert_eq!(xe.calls_named("exec").len(), sent, "neither reached the card");
         let empty = StagingCopy { right: 0, ..copy };
         assert_eq!(backend.start_staging_copy(&mut host, &empty), StagingStart::Finished(Status::SUCCESS));
+    }
+
+    /// The same present from a Direct3D 11 `R8G8B8A8` back buffer, red first, into the kernel's
+    /// `A8R8G8B8` staging surface, blue first: red and blue change over on the way, by the copy
+    /// engine's path from tiles and by the CPU's from rows, and the rest of each pixel stays. A back
+    /// buffer that names no red-first format goes as it is.
+    #[test]
+    fn a_red_first_back_buffer_reaches_the_blue_first_staging_surface_with_red_and_blue_changed_over() {
+        let xe = xe::fake::FakeXe::default();
+        let (mut backend, _) = started((Stage::Everything, None), &xe);
+        let (in_rows, tiled) = tiled_picture(xe::batch::Tiling::Tile64, 1024, 130, 0x4_0000);
+        let turned: Vec<u8> = in_rows
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[red, green, blue, alpha]| [blue, green, red, alpha])
+            .collect();
+        let tiled_frame = work::testing::Pages::new(0x4_0000);
+        let row_frame = work::testing::Pages::new(0x4_0000);
+        let staging = work::testing::Pages::new(0x2_1000);
+        tiled_frame.write(0, &tiled);
+        row_frame.write(0, &in_rows);
+        let space = backend.create_address_space(&guesthouse_backend::GPU_RANGES).unwrap();
+        for (pages, address) in [(&tiled_frame, 0x400_0000), (&row_frame, 0x600_0000)] {
+            let memory = backend.adopt_host_pages(pages.address(), 0x4_0000).unwrap();
+            backend.map(&work::testing::map_request(space, memory, address, 0, 0x4_0000)).unwrap();
+        }
+        let to = backend.adopt_host_pages(staging.address(), 0x2_1000).unwrap();
+        backend.map(&work::testing::map_request(space, to, 0x800_0000, 0, 0x2_1000)).unwrap();
+        let red_first = |tiling| SurfaceShape { colour: 0x7E, ..shape(256, 130, 1024, tiling) };
+        let copy = StagingCopy {
+            source: red_first(Some(81)),
+            target: SurfaceShape { format: 21, ..shape(256, 130, 1024, None) },
+            source_address: 0x400_0000,
+            target_address: 0x800_0000,
+            left: 0,
+            top: 0,
+            right: 256,
+            bottom: 130,
+            target_left: 0,
+            target_top: 0,
+            target_guest_address: None,
+            is_screen: false,
+            own_space: space,
+        };
+        let mut host = work::testing::FakeHost::default();
+        assert_eq!(backend.start_staging_copy(&mut host, &copy), StagingStart::Running);
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
+        assert_eq!(staging.bytes()[..turned.len()], turned[..], "from tiles, by the copy engine");
+        let from_rows = StagingCopy { source: red_first(None), source_address: 0x600_0000, ..copy };
+        staging.write(0, &[0; 0x2_1000]);
+        assert_eq!(
+            backend.start_staging_copy(&mut host, &from_rows),
+            StagingStart::Finished(Status::SUCCESS)
+        );
+        assert_eq!(staging.bytes()[..turned.len()], turned[..], "from rows, by the CPU");
+        let as_it_is = StagingCopy { source: shape(256, 130, 1024, None), ..from_rows };
+        assert_eq!(backend.start_staging_copy(&mut host, &as_it_is), StagingStart::Finished(Status::SUCCESS));
+        assert_eq!(staging.bytes()[..in_rows.len()], in_rows[..]);
     }
 
     #[test]

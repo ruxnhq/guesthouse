@@ -38,6 +38,7 @@ mod space_vm;
 mod submit;
 mod traffic;
 mod udmabuf;
+mod video;
 mod video_ib;
 mod watch;
 
@@ -54,6 +55,7 @@ pub use memory::{
 };
 pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
+pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
 
 // The buffer calls under harness-facing names, so a proof binary can drive the card without the
 // trait. They are the same functions the trait methods use.
@@ -127,6 +129,8 @@ pub struct AmdBackend {
     ib_dump: Option<ib_dump::Keeper>,
     /// The copy of the video commands being run, kept for its room. See [`video_ib`].
     video_commands: video_ib::Copied,
+    /// The books of the guest's video sessions, when it is offered the card's video engine.
+    video: Option<video::Sessions>,
 }
 
 /// A run ready to send: its command buffers, the fence writer in `slot` last.
@@ -209,6 +213,7 @@ impl AmdBackend {
             udmabuf: Udmabuf::open(),
             ib_dump: None,
             video_commands: video_ib::Copied::default(),
+            video: None,
         })
     }
 
@@ -222,6 +227,30 @@ impl AmdBackend {
             info.device_id, info.pci_revision, info.family, info.details.external_revision
         );
         self.ib_dump = Some(ib_dump::Keeper::new(folder, started, card));
+    }
+
+    /// Offers the guest the card's video engine, where it can be: see [`video`]. The daemon calls
+    /// this when it was started with [`VIDEO_VARIABLE`] on, before the guest is told anything about
+    /// the card. On a card it can't be offered on, a warning says why, and the guest is told what
+    /// it is told without the switch. Returns whether it is offered.
+    pub fn offer_video(&mut self) -> bool {
+        let most = match video::most_throughput(self.device.info()) {
+            Ok(most) => most,
+            Err(why) => {
+                log::warn!("{VIDEO_VARIABLE} is on, but {why}, so the guest is offered no video");
+                return false;
+            }
+        };
+        self.device.offer_video();
+        self.facts.node_count = self.device.info().engines.count();
+        self.facts.engines.video = true;
+        self.video = Some(video::Sessions::new(most));
+        log::warn!(
+            "{VIDEO_VARIABLE} is on, which is an experiment: the guest is offered the card's video engine. \
+             Video work of the guest's that the engine doesn't take can have amdgpu reset it, and a reset \
+             reaches every program on this host that is using the engine"
+        );
+        true
     }
 
     /// Copies a run's command buffers, if that was asked for.
@@ -606,11 +635,17 @@ fn unmapped_dma_reach(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ibs: &[Ib
 }
 
 /// Answers an escape where it lies, and logs how. Every escape has an `amd escape` line at debug,
-/// which says the same and more of the ones that get no line of their own here.
-fn answer_escape(process: u32, data: &mut [u8]) {
+/// which says the same and more of the ones that get no line of their own here. `video` is the
+/// books of the guest's video sessions, if it is offered video, which answer a session's escapes.
+fn answer_escape(process: u32, data: &mut [u8], video: Option<&mut video::Sessions>) {
     // The answer is written into the buffer the escape came in, so the log takes its copy first.
     let asked = traffic::escape_asked(process, data);
-    let answered = protocol::escape::answer(data);
+    let answered = match video {
+        Some(video) => {
+            protocol::escape::answer_with(data, |code, payload| video.answer(process, code, payload))
+        }
+        None => protocol::escape::answer(data),
+    };
     match &answered {
         Ok(answered) if !answered.done && answered.code.needed_by_the_guest() => log::warn!(
             "escape from {process}: service {} subfunction {:#x}, not shaped as the guest's driver \
@@ -728,7 +763,7 @@ fn facts_from(info: &DeviceInfo) -> AdapterFacts {
             graphics: info.engines.graphics,
             compute: info.engines.compute,
             copy: info.engines.dma,
-            video: false,
+            video: info.engines.video,
         },
         guest_driver_version: 0,
     }
@@ -992,7 +1027,7 @@ impl Backend for AmdBackend {
 
     /// The answer is in the escape's own header. The trait has no status to return beside it.
     fn escape(&mut self, process: u32, data: &mut [u8], _books: &GuestBooks<'_>) {
-        answer_escape(process, data);
+        answer_escape(process, data, self.video.as_mut());
     }
 
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
@@ -1023,6 +1058,18 @@ impl Backend for AmdBackend {
     /// The kernel driver writes nothing back into a context's private data, so it is only checked.
     fn context_data_valid(&mut self, process: u32, node: u32, private: &[u8]) -> bool {
         context_taken(process, node, private)
+    }
+
+    fn process_gone(&mut self, process: u32) {
+        if let Some(video) = &mut self.video {
+            video.process_gone(process);
+        }
+    }
+
+    fn all_processes_gone(&mut self) {
+        if let Some(video) = &mut self.video {
+            video.all_gone();
+        }
     }
 
     fn start_work(&mut self, _host: &mut dyn HostServices, work: &Work<'_>) -> WorkStart {

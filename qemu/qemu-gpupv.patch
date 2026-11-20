@@ -9140,3 +9140,113 @@ index d4bf6df..9f72ef1 100644
 -- 
 2.56.0
 
+From 07243d2ef5855070ae0b9dda786d422d5aedcb1d Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Fri, 20 Nov 2026 09:43:18 -0800
+Subject: [PATCH 32/32] hw/misc/nvfwd: take the screen socket open
+
+Guesthouse's launcher opens every unix socket a jailed QEMU needs and
+then refuses it any new one, so a QEMU that has been taken over can't
+reach the session bus or any other socket of the desktop's on a kernel
+whose Landlock can't hold back sockets by path. The device made its
+screen socket itself, which kept a Linux guest's QEMU out of that.
+
+show-fd names a listening socket QEMU was started with, and the device
+takes it in place of making <show>.sock. Without it, the device makes
+the socket as before.
+---
+ hw/misc/nvfwd/nvfwd.c |  1 +
+ hw/misc/nvfwd/nvfwd.h |  1 +
+ hw/misc/nvfwd/show.c  | 41 +++++++++++++++++++++++++++++++++++------
+ 3 files changed, 37 insertions(+), 6 deletions(-)
+
+diff --git a/hw/misc/nvfwd/nvfwd.c b/hw/misc/nvfwd/nvfwd.c
+index e596b97..256d79f 100644
+--- a/hw/misc/nvfwd/nvfwd.c
++++ b/hw/misc/nvfwd/nvfwd.c
+@@ -213,6 +213,7 @@ static const Property nvfwd_props[] = {
+     DEFINE_PROP_STRING("sensord", NvfwdState, sensord_path),
+     DEFINE_PROP_STRING("log", NvfwdState, log_path),
+     DEFINE_PROP_STRING("show", NvfwdState, show_path),
++    DEFINE_PROP_INT32("show-fd", NvfwdState, show_listen_fd, -1),
+     DEFINE_PROP_STRING("card", NvfwdState, card_text),
+     DEFINE_PROP_UINT32("card-minor", NvfwdState, card_minor, 0),
+     DEFINE_PROP_BOOL("trace", NvfwdState, trace, false),
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index 678e234..8812830 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -61,6 +61,7 @@ struct NvfwdState {
+     AllowSet *allow;
+     time_t allow_mtime;
+     char *show_path; /* path prefix: <path>.sock and <path>.display */
++    int32_t show_listen_fd; /* <path>.sock, opened by whoever started QEMU, or -1 */
+     QemuMutex show_lock;
+     QemuThread show_thread;
+     int render, listener, viewer;
+diff --git a/hw/misc/nvfwd/show.c b/hw/misc/nvfwd/show.c
+index a92c67a..bfb7bc6 100644
+--- a/hw/misc/nvfwd/show.c
++++ b/hw/misc/nvfwd/show.c
+@@ -292,11 +292,43 @@ void do_show_rate(NvfwdState *s, struct nvfwd_req *r)
+     r->ret = 0;
+ }
+ 
++/*
++ * The socket viewers connect to. A QEMU that may make no sockets of its own is handed it open, at
++ * show-fd; otherwise it's made here, at <show>.sock.
++ */
++static int show_socket(NvfwdState *s, const char *path, Error **errp)
++{
++    struct sockaddr_un addr = { .sun_family = AF_UNIX };
++    int listening = 0;
++    socklen_t size = sizeof(listening);
++    int fd;
++
++    if (s->show_listen_fd >= 0) {
++        if (getsockopt(s->show_listen_fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &size) || !listening) {
++            error_setg(errp, "nvfwd screen socket: %d is not a listening socket", s->show_listen_fd);
++            return -1;
++        }
++        /* the sensor daemon is started later, and has no use for it */
++        qemu_set_cloexec(s->show_listen_fd);
++        return s->show_listen_fd;
++    }
++    unlink(path);
++    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
++    fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
++    if (fd < 0 || bind(fd, (void *)&addr, sizeof(addr)) || listen(fd, 1)) {
++        error_setg_errno(errp, errno, "nvfwd screen socket");
++        if (fd >= 0) {
++            close(fd);
++        }
++        return -1;
++    }
++    return fd;
++}
++
+ void show_init(NvfwdState *s, Error **errp)
+ {
+     g_autofree char *display = g_strdup_printf("%s.display", s->show_path);
+     g_autofree char *sock = g_strdup_printf("%s.sock", s->show_path);
+-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+     int f = open(display, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+     uint8_t *page;
+     if (f < 0 || ftruncate(f, 4096)) {
+@@ -311,11 +343,8 @@ void show_init(NvfwdState *s, Error **errp)
+     s->show_reading = (uint64_t *)(page + DISPLAY_READING);
+     s->show_rate = (uint64_t *)(page + DISPLAY_RATE);
+     s->show_claimed = (uint32_t *)(page + DISPLAY_CLAIMED);
+-    unlink(sock);
+-    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sock);
+-    s->listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+-    if (s->listener < 0 || bind(s->listener, (void *)&addr, sizeof(addr)) || listen(s->listener, 1)) {
+-        error_setg_errno(errp, errno, "nvfwd screen socket");
++    s->listener = show_socket(s, sock, errp);
++    if (s->listener < 0) {
+         return;
+     }
+     qemu_thread_create(&s->show_thread, "nvfwd-show", show_listen, s, QEMU_THREAD_DETACHED);
+-- 
+2.47.3
+

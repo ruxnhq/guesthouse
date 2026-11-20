@@ -1,5 +1,6 @@
 //! QEMU's arguments, in the order the guest has already seen.
 
+use super::qemu_jail::{GLOBAL_SOCKET, PID_FILE, TPM_SOCKET, VGPU_SOCKET};
 use super::{Boot, DISPLAY_SOCKET, Sound, VmPlan};
 use crate::firmware::format_of;
 use crate::guest_memory::WINDOW_GIB;
@@ -105,15 +106,10 @@ impl VmPlan {
             &format!("hda-output,audiodev={sound_id}"),
         ]));
         arguments.extend(self.screen_arguments(width, height));
+        arguments.extend(self.monitor_arguments());
         if self.passes_unix_sockets() {
-            arguments.extend(self.monitors_on_descriptors());
-        } else {
-            for socket in MONITOR_SOCKETS {
-                arguments.extend(words(&[
-                    "-qmp",
-                    &format!("unix:{},server=on,wait=off", self.in_run_folder(socket)),
-                ]));
-            }
+            // No monitor's path names the run folder then, and the app finds QEMU by this.
+            arguments.extend(words(&["-pidfile", &self.in_run_folder(PID_FILE)]));
         }
         arguments.extend(words(&[
             "-serial",
@@ -170,7 +166,7 @@ impl VmPlan {
             "-device",
             "hv-timesync",
             "-chardev",
-            &self.client_socket("gpg", "global.sock"),
+            &self.client_socket("gpg", GLOBAL_SOCKET),
             // The app's memfds, which the daemon has too: see `guesthouse_daemon::handover`.
             "-object",
             &format!(
@@ -183,7 +179,7 @@ impl VmPlan {
                 window_base()
             ),
             "-chardev",
-            &self.client_socket("gpv", "vgpu.sock"),
+            &self.client_socket("gpv", VGPU_SOCKET),
             "-device",
             &format!("gpupv-vgpu,chardev=gpv,instanceid={VGPU_INSTANCE}"),
             // Shared, because the GPU maps some of the guest's own pages.
@@ -244,7 +240,7 @@ impl VmPlan {
         if self.tpm.is_some() {
             arguments.extend(words(&[
                 "-chardev",
-                &self.client_socket("tpm", "tpm.sock"),
+                &self.client_socket("tpm", TPM_SOCKET),
                 "-tpmdev",
                 "emulator,id=tpm0,chardev=tpm",
                 "-device",

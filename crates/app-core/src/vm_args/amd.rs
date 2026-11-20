@@ -172,6 +172,27 @@ mod tests {
     }
 
     #[test]
+    fn jailed_its_monitors_come_from_the_launcher_and_it_makes_no_socket() {
+        let scratch = Scratch::new();
+        let jail = crate::vm_args::QemuJail {
+            launcher: "/p/guesthouse-jail".into(),
+            namespaces: false,
+            qemu_sandbox: false,
+            sound_socket: None,
+            backing_files: Vec::new(),
+        };
+        for mode in [AmdMode::Native, AmdMode::Venus] {
+            let plan = VmPlan { jail: Some(jail.clone()), ..ubuntu(&scratch, mode) };
+            let command = plan.qemu_command();
+            assert!(command.iter().any(|word| word == "--no-new-unix-sockets"), "{mode:?}");
+            assert_eq!(command.iter().filter(|word| *word == "--unix-listen").count(), 4, "the monitors");
+            assert!(!command.iter().any(|word| word == "--unix-connect"));
+            let arguments = plan.qemu_arguments();
+            assert!(!arguments.iter().any(|word| word.starts_with("unix:")), "{arguments:?}");
+        }
+    }
+
+    #[test]
     fn ubuntu_gets_the_gl_screen_on_the_card_and_nothing_of_nvidias() {
         let scratch = Scratch::new();
         let arguments = ubuntu(&scratch, AmdMode::Native).qemu_arguments();

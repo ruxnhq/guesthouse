@@ -5,7 +5,7 @@
 //! its folder, as a disk made by hand can be. On passt, the launcher starts the real passt and the
 //! stand-in asks it for the gateway's address through the socket it was handed. Bridged, this program
 //! also stands in for the bridge helper, and hands back an open file for the device. With the
-//! forwarded GPU, it's an Ubuntu guest's QEMU, which makes its own frames socket.
+//! forwarded GPU, it's an Ubuntu guest's QEMU, whose input and frames sockets the launcher opens too.
 
 use guesthouse_app_core::linux::card::ForwardedCard;
 use guesthouse_app_core::linux::forwarding::sandbox_runs;
@@ -77,6 +77,20 @@ fn pretend_bridge_helper() {
 
 fn variable(name: &str) -> PathBuf {
     env::var_os(name).map(PathBuf::from).unwrap()
+}
+
+/// The descriptor the forwarded GPU's device is told its frames socket is at.
+fn frames_fd() -> Option<i32> {
+    let words: Vec<String> = env::args().collect();
+    let mut options = words.iter().flat_map(|word| word.split(','));
+    options.find_map(|option| option.strip_prefix("show-fd=")?.parse().ok())
+}
+
+/// The path a socket was opened at, here a listener the launcher left open.
+fn listening_at(fd: i32) -> Option<PathBuf> {
+    // SAFETY: the launcher left this socket open for QEMU, and nothing else here holds it.
+    let listener = unsafe { UnixListener::from_raw_fd(fd) };
+    Some(listener.local_addr().ok()?.as_pathname()?.to_owned())
 }
 
 fn status_says(wanted: [&str; 2]) -> bool {
@@ -151,14 +165,10 @@ fn probe() {
         ("not the home folder", fs::read_dir(variable("PROBE_HOME")).is_err()),
         ("its agent port", TcpListener::bind(("127.0.0.1", port("PROBE_AGENT_PORT"))).is_ok()),
         ("not another port", TcpListener::bind(("127.0.0.1", port("PROBE_OTHER_PORT"))).is_err()),
-        (
-            "no new unix socket",
-            forwarded || unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) } == -1,
-        ),
-        (
-            "its own unix sockets",
-            forwarded || (20..26).all(|fd| fs::read_link(format!("/proc/self/fd/{fd}")).is_ok()),
-        ),
+        ("no new unix socket", unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) } == -1),
+        // Six either way: the four monitors, then the daemon's two, or the forwarded GPU's input and
+        // frames.
+        ("its own unix sockets", (20..26).all(|fd| fs::read_link(format!("/proc/self/fd/{fd}")).is_ok())),
         ("not another device", OpenOptions::new().read(true).write(true).open("/dev/fuse").is_err()),
         ("no ptrace", unsafe { libc::ptrace(libc::PTRACE_ATTACH, libc::getppid(), 0, 0) } == -1),
         ("no new privileges", status_says(["NoNewPrivs:", "1"])),
@@ -169,8 +179,8 @@ fn probe() {
         checks.push(("passt through its socket", passt_answers()));
     }
     if forwarded {
-        let frames = UnixListener::bind(variable("PROBE_RUN").join("show.sock"));
-        checks.push(("its frames socket", frames.is_ok()));
+        let frames = frames_fd().and_then(listening_at);
+        checks.push(("its frames socket", frames == Some(variable("PROBE_RUN").join("show.sock"))));
         checks.push(("not the session bus", UnixStream::connect(variable("PROBE_BUS")).is_err()));
         checks.push(("the driver image", fs::read(variable("PROBE_IMAGE")).is_ok()));
         checks.push(("the old address layout", personality() & ADDR_COMPAT_LAYOUT != 0));
@@ -249,9 +259,10 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     };
     let plan = VmPlan::new(&context, &own, boot, slots::number(3), 0);
     fs::create_dir_all(&plan.run_folder).unwrap();
-    // The daemon's sockets, which the launcher connects to for a QEMU with no sound.
-    let _daemon =
-        ["global.sock", "vgpu.sock"].map(|name| UnixListener::bind(plan.run_folder.join(name)).unwrap());
+    // The daemon's sockets, which the launcher connects to for a Windows QEMU with no sound.
+    let _daemon = (!forwarded).then(|| {
+        ["global.sock", "vgpu.sock"].map(|name| UnixListener::bind(plan.run_folder.join(name)).unwrap())
+    });
     let jail = QemuJail {
         launcher: env!("CARGO_BIN_EXE_guesthouse-jail").into(),
         namespaces,

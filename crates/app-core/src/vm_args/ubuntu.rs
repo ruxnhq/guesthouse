@@ -3,7 +3,7 @@
 //! whether or not it gets the GPU.
 
 use super::arguments::{RELATIVE_MOUSE, words};
-use super::{Boot, DISPLAY_SOCKET, UbuntuBoot, UbuntuInstall, VmPlan};
+use super::{Boot, UbuntuBoot, UbuntuInstall, VmPlan};
 use crate::linux::card::ForwardedCard;
 use crate::text::qemu_value;
 use guesthouse_daemon::slot::Slot;
@@ -24,6 +24,8 @@ const INPUT_PORT: &str = "nvfwd.input";
 const OFF_REASON_NAME: &str = "opt/nvfwd/gpu-off-reason";
 /// Where the guest's frames are offered, as `show.sock` and `show.display`.
 pub const FRAMES_PREFIX: &str = "show";
+/// The first of those, which a jail's launcher opens for QEMU.
+pub(super) const FRAMES_SOCKET: &str = "show.sock";
 /// The guest's keyboard and pointer once it's on the GPU. QEMU's input has no way to its session.
 pub const FORWARDED_INPUT_SOCKET: &str = "forwarded-input.sock";
 pub const INSTALL_LOG: &str = "install-serial.log";
@@ -45,14 +47,6 @@ impl VmPlan {
     fn video_memory_cap(&self, card: &ForwardedCard) -> Option<String> {
         let budget = card.memory_mib.map(crate::settings::video_budget_gib_of).filter(|gib| *gib > 0);
         self.vram.clone().or_else(|| budget.map(|gib| format!("{gib}G")))
-    }
-
-    fn monitors(&self) -> Vec<String> {
-        let sockets = ["qmp.sock", "watch.sock", "input.sock", DISPLAY_SOCKET];
-        let each = sockets.iter().flat_map(|socket| {
-            words(&["-qmp", &format!("unix:{},server=on,wait=off", self.in_run_folder(socket))])
-        });
-        each.collect()
     }
 
     fn install_arguments(&self, install: &UbuntuInstall) -> Vec<String> {
@@ -91,7 +85,7 @@ impl VmPlan {
             "-serial",
             &format!("file:{}", self.in_run_folder(INSTALL_LOG)),
         ]));
-        arguments.extend(self.monitors());
+        arguments.extend(self.monitor_arguments());
         arguments
     }
 
@@ -105,10 +99,7 @@ impl VmPlan {
                     "-device",
                     "virtio-serial-pci",
                     "-chardev",
-                    &format!(
-                        "socket,id=fwdin,path={},server=on,wait=off",
-                        self.in_run_folder(FORWARDED_INPUT_SOCKET)
-                    ),
+                    &self.listening_socket("fwdin", FORWARDED_INPUT_SOCKET),
                     "-device",
                     &format!("virtserialport,chardev=fwdin,name={INPUT_PORT}"),
                 ]));
@@ -137,11 +128,12 @@ impl VmPlan {
             "virtio-blk-pci,drive=nvdriver",
             "-device",
             &format!(
-                "nvfwd,allow={},sensord={},log={},trace=off,nogpu=off,show={},card={},card-minor={}{}",
+                "nvfwd,allow={},sensord={},log={},trace=off,nogpu=off,show={}{},card={},card-minor={}{}",
                 allow_list.display(),
                 sensor_daemon.display(),
                 self.in_run_folder("calls.log"),
                 self.in_run_folder(FRAMES_PREFIX),
+                self.socket_fd(FRAMES_SOCKET).map_or_else(String::new, |fd| format!(",show-fd={fd}")),
                 card.pci,
                 card.minor,
                 self.video_memory_cap(card).map_or_else(String::new, |cap| format!(",max-vram={cap}"))
@@ -192,7 +184,7 @@ impl VmPlan {
             _ => words(&["-vga", "std", "-display", "dbus,p2p=yes"]),
         });
         arguments.extend(words(&["-serial", &format!("file:{}", self.in_run_folder(SERIAL_LOG))]));
-        arguments.extend(self.monitors());
+        arguments.extend(self.monitor_arguments());
         arguments.extend(self.with_gpu_arguments(boot));
         arguments.extend(self.qemu_sandbox_arguments());
         arguments
@@ -307,6 +299,11 @@ mod tests {
         assert!(device(with_gpu()).contains(",card=0000:02:00.0,card-minor=0"));
         // The tester's PC: the 1660 SUPER is the second device file.
         assert!(device(on_card("0000:05:00.0", 1)).contains(",card=0000:05:00.0,card-minor=1"));
+    }
+
+    #[test]
+    fn the_frames_socket_is_the_one_the_viewer_looks_for() {
+        assert_eq!(FRAMES_SOCKET, format!("{FRAMES_PREFIX}.sock"));
     }
 
     #[test]

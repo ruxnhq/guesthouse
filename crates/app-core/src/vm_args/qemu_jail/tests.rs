@@ -355,13 +355,60 @@ fn the_forwarded_gpu_keeps_its_address_layout_and_the_viewers_pid() {
     assert!(at("bwrap") < at("setarch") && at("setarch") < at("/p/guesthouse-jail"));
     assert_eq!(command[at("setarch")..at("setarch") + 3], ["setarch", "x86_64", "-L"]);
     assert!(at("/p/guesthouse-jail") < at("/p/qemu/build/qemu-system-x86_64"));
-    assert!(
-        !command.iter().any(|word| word == "--no-new-unix-sockets"),
-        "the device makes the socket its frames are offered on"
-    );
+    assert!(command.iter().any(|word| word == "--no-new-unix-sockets"), "its frames socket is opened for it");
     assert!(plan.qemu_arguments().ends_with(&["-sandbox".to_owned(), QEMU_SANDBOX.to_owned()]));
     let (_scratch, plain) = ubuntu_with_gpu(false);
     assert_eq!(plain.qemu_command()[..4], ["setarch", "x86_64", "-L", "/p/guesthouse-jail"]);
+}
+
+/// The words after `--unix-listen` or `--unix-connect`: each socket's path and descriptor.
+fn opened(command: &[String], kind: &str) -> Vec<(String, String)> {
+    let at = command.iter().enumerate().filter(|(_, word)| *word == kind).map(|(at, _)| at);
+    at.map(|at| (command[at + 1].clone(), command[at + 2].clone())).collect()
+}
+
+#[test]
+fn the_forwarded_gpu_gets_every_unix_socket_from_the_launcher_and_makes_none() {
+    for namespaces in [false, true] {
+        let (_scratch, plan) = ubuntu_with_gpu(namespaces);
+        let command = plan.qemu_command();
+        assert!(command.iter().any(|word| word == "--no-new-unix-sockets"));
+        let run = |file: &str| plan.run_folder.join(file).display().to_string();
+        let listening: Vec<(String, String)> =
+            ["qmp.sock", "watch.sock", "input.sock", "display.sock", "forwarded-input.sock", "show.sock"]
+                .iter()
+                .zip(20..)
+                .map(|(file, fd)| (run(file), fd.to_string()))
+                .collect();
+        assert_eq!(opened(&command, "--unix-listen"), listening);
+        assert!(opened(&command, "--unix-connect").is_empty(), "no daemon and no TPM");
+        let arguments = plan.qemu_arguments();
+        assert!(
+            !arguments.iter().any(|word| word.starts_with("unix:") || word.contains(",path=")),
+            "{arguments:?}"
+        );
+        assert!(arguments.iter().any(|word| word == "socket,id=monitor3,fd=23,server=on,wait=off"));
+        assert!(arguments.iter().any(|word| word == "socket,id=fwdin,fd=24,server=on,wait=off"));
+        let device = arguments.iter().find(|word| word.starts_with("nvfwd,")).unwrap();
+        assert!(device.contains(&format!(",show={},show-fd=25,", run("show"))), "{device}");
+        // With no monitor path in its words, the app finds it by this.
+        assert!(arguments.iter().any(|word| *word == run(PID_FILE)));
+    }
+}
+
+#[test]
+fn a_linux_guest_on_the_gpu_without_a_jail_makes_its_own_sockets() {
+    let (_scratch, plan) = ubuntu_with_gpu(false);
+    let plan = VmPlan { jail: None, ..plan };
+    let arguments = plan.qemu_arguments();
+    let device = arguments.iter().find(|word| word.starts_with("nvfwd,")).unwrap();
+    assert!(!device.contains("show-fd"), "{device}");
+    let input = format!(
+        "socket,id=fwdin,path={},server=on,wait=off",
+        plan.run_folder.join("forwarded-input.sock").display()
+    );
+    assert!(arguments.contains(&input), "{arguments:?}");
+    assert!(arguments.iter().any(|word| word.starts_with("unix:") && word.contains("/qmp.sock,")));
 }
 
 #[test]

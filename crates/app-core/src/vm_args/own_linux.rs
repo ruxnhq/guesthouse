@@ -169,4 +169,28 @@ mod tests {
         assert!(read.iter().any(|(_, path)| path == std::path::Path::new("/iso/Fedora.iso")), "its disc");
         assert!(rules.paths.iter().any(|(_, path)| path == std::path::Path::new("/m/fedora/vars.fd")));
     }
+
+    #[test]
+    fn jailed_its_tpm_and_frames_sockets_come_from_the_launcher_and_no_daemon_ones() {
+        let scratch = Scratch::new();
+        let plan = plan(&scratch_context(&scratch), own(with_gpu()));
+        let jail = crate::vm_args::QemuJail {
+            launcher: "/p/guesthouse-jail".into(),
+            namespaces: false,
+            qemu_sandbox: false,
+            sound_socket: None,
+            backing_files: Vec::new(),
+        };
+        let plan = VmPlan { jail: Some(jail), tpm: Some("/m/fedora/tpm".into()), ..plan };
+        let command = plan.qemu_command();
+        assert!(command.iter().any(|word| word == "--no-new-unix-sockets"));
+        let tpm = plan.run_folder.join("tpm.sock").display().to_string();
+        let connect = command.iter().position(|word| word == "--unix-connect").unwrap();
+        assert_eq!(command[connect + 1..connect + 3], [tpm, "24".to_owned()]);
+        assert_eq!(command.iter().filter(|word| *word == "--unix-connect").count(), 1, "no daemon sockets");
+        let arguments = plan.qemu_arguments();
+        assert!(arguments.iter().any(|word| word == "socket,id=tpm,fd=24"));
+        assert!(arguments.iter().any(|word| word.starts_with("nvfwd,") && word.contains(",show-fd=25,")));
+        assert!(!arguments.iter().any(|word| word.contains("forwarded-input.sock")), "QEMU's own input");
+    }
 }

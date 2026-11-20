@@ -86,7 +86,7 @@ pub struct Choice {
 fn without_namespaces(plan: &VmPlan, landlock_abi: u32) -> String {
     let mut note = "Jailed, without namespaces: bubblewrap can't make them on this PC.".to_owned();
     // Namespaces hide the session bus and the rest. Without them, only a newer Landlock can, or
-    // QEMU getting its sockets from the launcher, which it can't with sound or the forwarded GPU.
+    // QEMU getting its sockets from the launcher, which it can't with sound.
     if landlock_abi < SOCKETS_BY_PATH_ABI && !plan.can_pass_unix_sockets() {
         note += " This kernel can't keep QEMU from your desktop's sockets without them.";
     }
@@ -213,6 +213,27 @@ mod tests {
         let with_sound = VmPlan { sound: Some(crate::vm_args::Sound { sink: None }), ..plan };
         let loud = choose(&context, &windows(), &with_sound, &offer(4, false)).unwrap();
         assert!(loud.note.contains("desktop's sockets"), "{}", loud.note);
+    }
+
+    #[test]
+    fn the_forwarded_gpu_without_namespaces_is_kept_from_the_desktops_sockets_too() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let ubuntu = Machine { kind: crate::machine::Kind::Linux, ..windows() };
+        let boot = Boot::Ubuntu(crate::vm_args::UbuntuBoot::WithGpu {
+            image: "/store/driver.iso".into(),
+            allow_list: "/p/linux/allow.txt".into(),
+            sensor_daemon: "/p/qemu/nvfwd-sensord".into(),
+            card: crate::linux::card::ForwardedCard {
+                pci: "0000:02:00.0".into(),
+                minor: 0,
+                render_node: None,
+                memory_mib: None,
+            },
+        });
+        let plan = VmPlan::new(&context, &ubuntu, boot, slots::first(), 0);
+        let choice = choose(&context, &ubuntu, &plan, &offer(4, false)).unwrap();
+        assert_eq!(choice.note, "Jailed, without namespaces: bubblewrap can't make them on this PC.");
     }
 
     #[test]

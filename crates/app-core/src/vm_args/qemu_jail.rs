@@ -7,6 +7,7 @@
 
 use super::arguments::{MONITOR_SOCKETS, words};
 use super::forwarding_jail::DEVICES as CARD_NODES;
+use super::ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_SOCKET};
 use super::{Boot, QemuJail, VmPlan};
 use crate::disk_image::backing::backing_files;
 use crate::failure::{Failure, Result};
@@ -15,9 +16,14 @@ use guesthouse_jail::launch::{Launch, Passt, Tap, UnixSocket};
 use guesthouse_jail::{Grant, Network, Plan, Ports};
 use std::path::{Path, PathBuf};
 
-/// Where the launcher leaves QEMU's unix sockets, when it opens them: monitors first, then clients.
+/// Where the launcher leaves QEMU's unix sockets, when it opens them: monitors first, then the rest.
 const FIRST_UNIX_FD: i32 = 20;
-const CLIENT_SOCKETS: [(&str, &str); 3] = [("gpg", "global.sock"), ("gpv", "vgpu.sock"), ("tpm", "tpm.sock")];
+/// The daemon's sockets, which a Windows guest's QEMU connects to.
+pub(super) const GLOBAL_SOCKET: &str = "global.sock";
+pub(super) const VGPU_SOCKET: &str = "vgpu.sock";
+const DAEMON_SOCKETS: [&str; 2] = [GLOBAL_SOCKET, VGPU_SOCKET];
+/// swtpm's, which QEMU connects to.
+pub(super) const TPM_SOCKET: &str = "tpm.sock";
 const RECONNECT_MS: u32 = 500;
 /// QEMU's pid file, which names the run folder in its words when no monitor socket does.
 pub const PID_FILE: &str = "qemu.pid";
@@ -285,74 +291,84 @@ impl VmPlan {
     /// The launcher opens every unix socket QEMU needs, and QEMU may make none, so a QEMU that's been
     /// taken over can't reach the session bus or any other socket of the desktop's, whatever the
     /// kernel's Landlock and with or without namespaces. Only with no sound, as PipeWire's client
-    /// makes its own socket, and only for Windows: the forwarded GPU's device makes the socket its
-    /// frames are offered on.
+    /// makes its own socket.
     pub(super) fn passes_unix_sockets(&self) -> bool {
         self.jail.as_ref().is_some() && self.can_pass_unix_sockets()
     }
 
     /// Whether a jail would hand this QEMU its unix sockets.
     pub fn can_pass_unix_sockets(&self) -> bool {
-        self.sound.is_none() && self.is_gpu()
+        self.sound.is_none()
     }
 
-    fn client_names(&self) -> impl Iterator<Item = (usize, &'static str, &'static str)> + '_ {
-        let tpm = self.tpm.is_some();
-        CLIENT_SOCKETS
-            .into_iter()
-            .enumerate()
-            .filter(move |(_, (id, _))| *id != "tpm" || tpm)
-            .map(|(at, (id, file))| (at, id, file))
-    }
-
+    /// The unix sockets the launcher opens for QEMU, if it opens them, each at its descriptor. All are
+    /// in the run folder: the monitors, the daemon's for a Windows guest, the virtual TPM's, and for
+    /// the forwarded GPU the guest's input and the socket its frames are offered on.
     fn unix_sockets(&self) -> Vec<UnixSocket> {
         if !self.passes_unix_sockets() {
             return Vec::new();
         }
-        let monitors = MONITOR_SOCKETS.iter().enumerate().map(|(at, name)| UnixSocket {
-            path: self.run_folder.join(name),
-            fd: FIRST_UNIX_FD + at as i32,
-            listen: true,
-        });
-        let mut sockets: Vec<UnixSocket> = monitors.collect();
-        let first_client = FIRST_UNIX_FD + MONITOR_SOCKETS.len() as i32;
-        sockets.extend(self.client_names().map(|(at, _, file)| UnixSocket {
-            path: self.run_folder.join(file),
-            fd: first_client + at as i32,
-            listen: false,
-        }));
-        sockets
+        let listening = |file: &'static str| (file, true);
+        let connecting = |file: &'static str| (file, false);
+        let mut files: Vec<(&str, bool)> = MONITOR_SOCKETS.into_iter().map(listening).collect();
+        if self.is_gpu() {
+            files.extend(DAEMON_SOCKETS.map(connecting));
+        }
+        // Ubuntu's own line has no TPM.
+        if self.tpm.is_some() && self.has_machine_line() {
+            files.push(connecting(TPM_SOCKET));
+        }
+        if self.has_forwarded_gpu() {
+            // A Linux the user installed keeps QEMU's own keyboard and pointer.
+            if !self.has_machine_line() {
+                files.push(listening(FORWARDED_INPUT_SOCKET));
+            }
+            files.push(listening(FRAMES_SOCKET));
+        }
+        let at_descriptors = files.into_iter().zip(FIRST_UNIX_FD..);
+        at_descriptors
+            .map(|((file, listen), fd)| UnixSocket { path: self.run_folder.join(file), fd, listen })
+            .collect()
     }
 
-    /// The monitors on the descriptors the launcher opened, and a pid file that names the run folder.
-    pub(super) fn monitors_on_descriptors(&self) -> Vec<String> {
+    /// Where the launcher left this socket of QEMU's, if it opened it.
+    pub(super) fn socket_fd(&self, file: &str) -> Option<i32> {
+        let path = self.run_folder.join(file);
+        self.unix_sockets().into_iter().find(|socket| socket.path == path).map(|socket| socket.fd)
+    }
+
+    /// QEMU's monitors: on the descriptors the launcher opened, or at their paths.
+    pub(super) fn monitor_arguments(&self) -> Vec<String> {
         let mut arguments = Vec::new();
-        for at in 0..MONITOR_SOCKETS.len() {
-            let fd = FIRST_UNIX_FD + at as i32;
-            arguments.extend(words(&[
-                "-chardev",
-                &format!("socket,id=monitor{at},fd={fd},server=on,wait=off"),
-                "-mon",
-                &format!("chardev=monitor{at},mode=control"),
-            ]));
+        for (at, file) in MONITOR_SOCKETS.into_iter().enumerate() {
+            arguments.extend(match self.socket_fd(file) {
+                Some(fd) => words(&[
+                    "-chardev",
+                    &format!("socket,id=monitor{at},fd={fd},server=on,wait=off"),
+                    "-mon",
+                    &format!("chardev=monitor{at},mode=control"),
+                ]),
+                None => words(&["-qmp", &format!("unix:{},server=on,wait=off", self.in_run_folder(file))]),
+            });
         }
-        arguments.extend(words(&["-pidfile", &self.run_folder.join(PID_FILE).display().to_string()]));
         arguments
     }
 
     /// A socket QEMU connects to: on the launcher's descriptor, or by its path.
     pub(super) fn client_socket(&self, id: &str, file: &str) -> String {
-        let first_client = FIRST_UNIX_FD + MONITOR_SOCKETS.len() as i32;
-        let on_fd = self.client_names().find(|(_, name, _)| *name == id);
-        match on_fd {
-            Some((at, _, _)) if self.passes_unix_sockets() => {
-                format!("socket,id={id},fd={}", first_client + at as i32)
-            }
-            _ if id == "tpm" => format!("socket,id={id},path={}", self.run_folder.join(file).display()),
-            _ => format!(
-                "socket,id={id},path={},reconnect-ms={RECONNECT_MS}",
-                self.run_folder.join(file).display()
-            ),
+        let path = self.in_run_folder(file);
+        match self.socket_fd(file) {
+            Some(fd) => format!("socket,id={id},fd={fd}"),
+            None if file == TPM_SOCKET => format!("socket,id={id},path={path}"),
+            None => format!("socket,id={id},path={path},reconnect-ms={RECONNECT_MS}"),
+        }
+    }
+
+    /// A socket QEMU listens on for a device of its own: on the launcher's descriptor, or at its path.
+    pub(super) fn listening_socket(&self, id: &str, file: &str) -> String {
+        match self.socket_fd(file) {
+            Some(fd) => format!("socket,id={id},fd={fd},server=on,wait=off"),
+            None => format!("socket,id={id},path={},server=on,wait=off", self.in_run_folder(file)),
         }
     }
 

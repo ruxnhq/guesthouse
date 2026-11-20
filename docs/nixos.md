@@ -58,12 +58,29 @@ Rebuild, then log in again so the group takes effect. Guesthouse is in the menu,
 
 ## NVIDIA
 
-Use the open kernel modules, as GPU-PV needs them.
+Guesthouse needs NVIDIA's open kernel modules, from a driver branch it has been tested on: 615 or 620.
+NixOS 26.05's own drivers stop at 595, so pin a tested version:
 
 ```nix
-services.xserver.videoDrivers = [ "nvidia" ];
-hardware.nvidia.open = true;
+{ config, ... }:
+{
+  services.xserver.videoDrivers = [ "nvidia" ];
+  hardware.nvidia.open = true;
+  hardware.nvidia.package = config.boot.kernelPackages.nvidiaPackages.mkDriver {
+    version = "615.78.08";
+    sha256_64bit = "sha256-Pj9t3cLudnoIGFMAr3vjyyhuznZpjS3eNSRZl4LQf/4=";
+    openSha256 = "sha256-HBINiOjL0ZJLIAJeNIBYHBnwgUXtNwPPtnFpAI1YwF4=";
+    settingsSha256 = "sha256-inDRpG02sdDgHmlqgu/DsgK8OFdOt1fZIYyXdhlGC/c=";
+    persistencedSha256 = "sha256-RzeR6Ldct6MUxjnXRyThdh5Y3jjMehTVg85MtwuWNX4=";
+  };
+}
 ```
+
+On nixos-unstable, `nvidiaPackages.new_feature` was 615.78.08 when this was written, with no hashes to copy.
+It moves with nixpkgs, so check the version it gives you.
+
+With a driver from another branch, plain machines still work, and the module says so when you rebuild. A
+Linux machine starts without its GPU and tells you why. A Windows machine's GPU hasn't been tried on one.
 
 The package finds the driver's libraries through `/run/opengl-driver/lib`, which `hardware.graphics` fills
 with the driver NixOS has installed.

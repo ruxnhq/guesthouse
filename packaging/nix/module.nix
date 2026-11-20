@@ -11,6 +11,15 @@ self:
 let
   cfg = config.programs.guesthouse;
   firmware = pkgs.OVMFFull.fd;
+  nvidia = config.hardware.nvidia.package;
+  # The NVIDIA driver branches Guesthouse is tested on, from TESTED_VERSIONS in
+  # crates/app-core/src/linux/driver_versions.rs.
+  testedBranches = [
+    "615"
+    "620"
+  ];
+  untestedNvidia =
+    config.hardware.nvidia.enabled && !lib.elem (lib.versions.major nvidia.version) testedBranches;
 
   # QEMU's firmware.json format. The app wants the code with Secure Boot and SMM, in a copy with
   # Microsoft's keys already in the variables for Windows 11 and in one without.
@@ -81,6 +90,15 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    warnings = lib.optional untestedNvidia (
+      lib.concatStringsSep " " [
+        "Guesthouse is tested with NVIDIA's ${lib.concatStringsSep " and " testedBranches} drivers,"
+        "and this system has ${nvidia.version}. Plain machines work, but a Linux machine gets no GPU,"
+        "and a Windows machine's GPU hasn't been tried with it."
+        "docs/nixos.md in Guesthouse's repo says how to pin a tested one."
+      ]
+    );
+
     environment.systemPackages = [
       cfg.package
       # The app reads card names from its pci.ids.

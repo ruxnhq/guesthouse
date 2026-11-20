@@ -11,7 +11,7 @@ use crate::machine::{Kind, Machine, SCREENS, read_refresh};
 use crate::network::{Forward, Mode, Protocol, read_port};
 use crate::network_settings::{add_forward, read_forward, remove_forward, set_bridge, set_network};
 use crate::remote_access::{APPLY_TASK, Reaches, Service, choose, read_access, when_it_reaches};
-use crate::settings::max_vram_gib;
+use crate::settings::max_vram_gib_for;
 use crate::start_checks::share_problem;
 use crate::tasks::{State, status};
 use crate::vm_args::passt_installed;
@@ -133,7 +133,7 @@ pub(super) fn set(
             only_for_windows(&machine, key)?;
             must_be_off(context, &machine)?;
             let cap = whole_number(key, value)?;
-            in_range("The video memory cap in GiB", cap, 0, max_vram_gib(context).into())?;
+            in_range("The video memory cap in GiB", cap, 0, max_vram_gib_for(context, &machine).into())?;
             machine.vram_gib = cap;
         }
         "sound" => {

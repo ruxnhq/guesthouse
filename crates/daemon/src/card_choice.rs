@@ -1,12 +1,13 @@
 //! Which card a guest runs on. Each machine keeps its own: the app names an AMD card by its PCI
-//! address in [`AMD_CARD_VARIABLE`], or an Intel card in [`INTEL_CARD_VARIABLE`], and with neither
-//! the guest is on the NVIDIA card setup chose.
+//! address in [`AMD_CARD_VARIABLE`], an Intel card in [`INTEL_CARD_VARIABLE`], or an NVIDIA card in
+//! [`NVIDIA_CARD_VARIABLE`], and with none named the guest is on the NVIDIA card setup chose.
 
 use guesthouse_backend::PciAddress;
 use std::env;
 
 pub const AMD_CARD_VARIABLE: &str = "GUESTHOUSE_AMD_CARD";
 pub const INTEL_CARD_VARIABLE: &str = "GUESTHOUSE_INTEL_CARD";
+pub const NVIDIA_CARD_VARIABLE: &str = "GUESTHOUSE_NVIDIA_CARD";
 
 /// The AMD card the app named, if it named one.
 pub fn amd_card() -> Result<Option<PciAddress>, String> {
@@ -16,6 +17,11 @@ pub fn amd_card() -> Result<Option<PciAddress>, String> {
 /// The Intel card the app named, if it named one.
 pub fn intel_card() -> Result<Option<PciAddress>, String> {
     named_in(INTEL_CARD_VARIABLE)
+}
+
+/// The NVIDIA card the app named, if it named one other than setup's.
+pub fn nvidia_card() -> Result<Option<PciAddress>, String> {
+    named_in(NVIDIA_CARD_VARIABLE)
 }
 
 fn named_in(variable: &str) -> Result<Option<PciAddress>, String> {
@@ -47,6 +53,9 @@ mod tests {
         assert_eq!(card.to_string(), "0000:7c:00.0");
         let card = card_from(INTEL_CARD_VARIABLE, Some("0000:00:02.0")).unwrap().unwrap();
         assert_eq!(card.to_string(), "0000:00:02.0");
+        let card = card_from(NVIDIA_CARD_VARIABLE, Some(" 0000:02:00.0\n")).unwrap().unwrap();
+        assert_eq!(card.to_string(), "0000:02:00.0");
+        assert_eq!(card_from(NVIDIA_CARD_VARIABLE, Some("")), Ok(None), "none is setup's card");
     }
 
     #[test]
@@ -54,5 +63,7 @@ mod tests {
         let refused = card_from(INTEL_CARD_VARIABLE, Some("renderD128")).unwrap_err();
         assert!(refused.starts_with("GUESTHOUSE_INTEL_CARD is renderD128"), "{refused}");
         assert!(refused.contains("not a PCI address"));
+        let refused = card_from(NVIDIA_CARD_VARIABLE, Some("nvidia1")).unwrap_err();
+        assert!(refused.starts_with("GUESTHOUSE_NVIDIA_CARD is nvidia1"), "{refused}");
     }
 }

@@ -4,7 +4,7 @@
 use super::args::NewOptions;
 use super::change::on_or_off;
 use super::{follow_up, run_task};
-use crate::card_choice::{default_choice, windows_card_choices};
+use crate::card_choice::{choice_at, default_choice, windows_card_choices};
 use crate::context::Context;
 use crate::defaults::{NO_GPU, account_name, sizes_for_disc};
 use crate::failure::{Failure, Result};
@@ -76,7 +76,8 @@ fn disc_offered(context: &Context, path: &str, wanted: Option<&str>, out: &mut d
 }
 
 /// The card a Windows machine runs on, as the dialog would choose it unless one was named, with its
-/// maker. No choice at all is the NVIDIA card.
+/// maker. No choice at all is the NVIDIA card. Setup's NVIDIA card named by its address is kept as no
+/// address, as the dialog keeps it.
 fn card_for(context: &Context, named: Option<&str>) -> Result<(String, GpuMaker)> {
     let choices = windows_card_choices(context);
     let Some(pci) = named else {
@@ -84,8 +85,8 @@ fn card_for(context: &Context, named: Option<&str>) -> Result<(String, GpuMaker)
             .get(default_choice(context, &choices))
             .map_or_else(|| (String::new(), GpuMaker::Nvidia), |choice| (choice.pci.clone(), choice.maker)));
     };
-    if let Some(choice) = choices.iter().find(|choice| !choice.pci.is_empty() && choice.pci == pci) {
-        return Ok((pci.to_owned(), choice.maker));
+    if let Some(choice) = choice_at(&choices, pci) {
+        return Ok((choice.pci.clone(), choice.maker));
     }
     let cards: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
     Err(Failure(format!("There is no card at {pci} to use. The cards are {}.", cards.join(", "))))

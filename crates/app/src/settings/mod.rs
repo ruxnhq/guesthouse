@@ -201,10 +201,12 @@ impl SettingsDialog {
         };
         let list = pages.list.clone();
         let shared = Shared { window: window.clone(), machine, dialog };
+        let hardware = hardware::Hardware::new(&shared, &pages.general);
+        let cap = hardware.cap_row();
         let this = Self(Rc::new(Parts {
-            hardware: hardware::Hardware::new(&shared, &pages.general),
+            hardware,
             _starting: starting::Starting::new(&shared, &pages.general),
-            windows_card: windows_card::WindowsCard::new(&shared, &pages.general),
+            windows_card: windows_card::WindowsCard::new(&shared, &pages.general, cap),
             _gpu_preview: gpu_preview::GpuPreview::new(&shared, &pages.general),
             linux_gpu: linux_gpu::LinuxGpu::new(&shared, &pages.general),
             _account: account::Account::new(&shared, &pages.general),

@@ -33,7 +33,7 @@ pub fn forwarded_card(context: &Context) -> Option<ForwardedCard> {
     let card = card_in_use(context)?;
     let minor = minor_of(&context.nvidia_cards, &card.pci)?;
     let render_node = render_node_of(&context.drm_class, &card.pci);
-    let memory_mib = crate::setup::cards::memory_mib(&card.pci);
+    let memory_mib = crate::setup::cards::memory_mib(context, &card.pci);
     Some(ForwardedCard { pci: card.pci, minor, render_node, memory_mib })
 }
 

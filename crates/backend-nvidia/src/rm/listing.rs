@@ -79,16 +79,19 @@ pub fn listed_at(listing: &[ListedCard], address: &PciAddress) -> Option<ListedC
     listing.iter().find(|card| card.address == *address).cloned()
 }
 
-/// The card to open for a setup that chose the card at `wanted`, or chose before setups wrote that
-/// down. Without an address only a PC with one card can be sure which card it meant.
+/// The card to open for a guest on the card at `wanted`, which setup chose or the app gave this guest,
+/// or for a setup that chose before setups wrote that down. Without an address only a PC with one
+/// card can be sure which card it meant.
 pub fn place_for(listing: &[ListedCard], wanted: Option<&PciAddress>) -> Result<CardPlace, String> {
     match (wanted, listing) {
-        (Some(address), _) => listed_at(listing, address).map(|card| CardPlace::from(&card)).ok_or_else(|| {
-            format!(
-                "Setup chose the NVIDIA card at {address}, and the driver has no card there now. Run Setup \
-                 Again from the menu."
-            )
-        }),
+        (Some(address), _) => {
+            listed_at(listing, address).map(|card| CardPlace::from(&card)).ok_or_else(|| {
+                format!(
+                    "This guest's NVIDIA card is at {address}, and the driver has no card there now. Choose \
+                 another card in the machine's settings, or Run Setup Again from the menu."
+                )
+            })
+        }
         (None, [only]) => Ok(CardPlace::from(only)),
         // The driver's list couldn't be read: the old guess, which a PC with one card was always right on.
         (None, []) => Ok(CardPlace::FIRST_GUESSED),

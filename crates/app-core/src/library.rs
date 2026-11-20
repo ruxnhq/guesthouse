@@ -97,8 +97,8 @@ pub struct NewMachine {
     pub user: String,
     /// Its password, or empty for a random one.
     pub password: String,
-    /// The AMD card its GPU runs on, by PCI address, or empty for the NVIDIA card. None takes this
-    /// PC's usual choice.
+    /// The card its GPU runs on, by PCI address, or empty for the NVIDIA card setup chose. None takes
+    /// this PC's usual choice.
     pub amd_gpu: Option<String>,
     /// A folder on another drive to keep the disk in, or empty for the machine's own folder. The
     /// disk gets a new folder of its own in there.
@@ -133,7 +133,7 @@ fn disk_place_problem(new: &NewMachine, id: &str) -> Option<String> {
 
 /// Says why this new machine can't be made now.
 pub fn create_problems(context: &Context, new: &NewMachine, machine: &Machine) -> Result<Vec<String>> {
-    let mut found = machine.problems(crate::settings::max_vram_gib(context));
+    let mut found = machine.problems(crate::settings::max_vram_gib_for(context, machine));
     found.extend(account::password_problem(&new.password));
     let disk_gib = new.disk_gib;
     let least = if machine.kind == Kind::Windows { MIN_WINDOWS_DISK_GIB } else { MIN_PLAIN_DISK_GIB };
@@ -214,6 +214,7 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     // Ubuntu's firmware is in QEMU, so it has no settings file.
     let firmware =
         if new.kind == Kind::Linux { String::new() } else { firmware.to_string_lossy().into_owned() };
+    let amd_gpu = new.amd_gpu.clone().unwrap_or_else(|| crate::linux::amd::default_linux_gpu(context));
     let machine = Machine {
         refresh_hz: new
             .refresh_hz
@@ -226,8 +227,8 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
         installing: installs,
         tpm: windows || new.windows_disc,
         mac: unused_mac(context),
-        amd_gpu: new.amd_gpu.clone().unwrap_or_else(|| crate::linux::amd::default_linux_gpu(context)),
-        gpu_maker: new.gpu_maker.and_then(GpuMaker::recorded).filter(|_| windows),
+        gpu_maker: new.gpu_maker.and_then(|maker| maker.recorded_for(&amd_gpu)).filter(|_| windows),
+        amd_gpu,
         user: if installs { new.user.trim().to_owned() } else { String::new() },
         disk_folder: if new.disk_place.is_empty() {
             String::new()
@@ -239,6 +240,7 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     if let Some(problem) = create_problems(context, new, &machine)?.into_iter().next() {
         return Err(Failure(problem));
     }
+    crate::card_choice::learn_machines_card(context, &machine);
     machine.save(context)?;
     if let Err(failure) = make_disk_folder(&machine) {
         let _ = fs::remove_dir_all(&folder);
@@ -685,6 +687,44 @@ mod tests {
             access: Access::NEW,
         };
         assert_eq!(create(&context, &new).unwrap_err().0, NO_DRIVER_FILES);
+    }
+
+    #[test]
+    fn a_windows_machine_made_on_the_second_nvidia_card_keeps_it_and_its_memory() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.install_room = Some(0);
+        context.card_memories = || "00000000:01:00.0, 16376\n00000000:02:00.0, 6144\n".to_owned();
+        std::fs::create_dir_all(crate::settings::driver_folder(&context)).unwrap();
+        let card = serde_json::json!({"card": {"device": 0x2704, "pci": "0000:01:00.0"}});
+        crate::settings::write_setup(&context, card.as_object().cloned().unwrap()).unwrap();
+        let iso = scratch.write("win.iso", "disc").display().to_string();
+        let new = NewMachine {
+            name: "Win".into(),
+            iso,
+            kind: Kind::Windows,
+            windows_disc: true,
+            cores: 2,
+            ram_gib: 4,
+            disk_gib: 64,
+            refresh_hz: None,
+            user: String::new(),
+            password: String::new(),
+            amd_gpu: Some("0000:02:00.0".into()),
+            disk_place: String::new(),
+            gpu_maker: Some(GpuMaker::Nvidia),
+            access: Access::NEW,
+        };
+        let made = create(&context, &new).unwrap();
+        let read = crate::machine::load(&context, &made.id).unwrap();
+        assert_eq!((read.amd_gpu.as_str(), read.windows_maker()), ("0000:02:00.0", Some(GpuMaker::Nvidia)));
+        let setup = crate::settings::read_setup(&context);
+        assert_eq!(setup[crate::settings::CARD_MEMORIES_FIELD]["0000:02:00.0"], 6144, "learnt for the cap");
+        assert_eq!(crate::settings::max_vram_gib_for(&context, &read), 4);
+        let on_setups =
+            create(&context, &NewMachine { name: "Old".into(), amd_gpu: Some(String::new()), ..new })
+                .unwrap();
+        assert_eq!((on_setups.amd_gpu.as_str(), on_setups.gpu_maker), ("", None), "written as before");
     }
 
     #[test]

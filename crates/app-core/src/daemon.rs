@@ -49,14 +49,21 @@ impl DaemonStart {
         }
     }
 
-    /// For a guest on the card at `pci`, which is `maker`'s. NVIDIA's is the one setup chose, which the
-    /// daemon opens when it's told no other.
+    /// For a guest on the card at `pci`, which is `maker`'s. An NVIDIA card with no address is the one
+    /// setup chose, which the daemon opens when it's told no other.
     pub fn on_card(self, maker: GpuMaker, pci: &str) -> Result<Self> {
         match maker {
-            GpuMaker::Nvidia => Ok(self),
+            GpuMaker::Nvidia if pci.is_empty() => Ok(self),
+            GpuMaker::Nvidia => Ok(self.on_nvidia_card(pci)),
             GpuMaker::Amd => Ok(self.on_amd_card(pci)),
             GpuMaker::Intel => Ok(self.on_intel_card(pci)),
         }
+    }
+
+    /// For a guest given an NVIDIA card by its address, which the daemon then opens instead of setup's.
+    fn on_nvidia_card(mut self, pci: &str) -> Self {
+        self.environment.insert(card_choice::NVIDIA_CARD_VARIABLE.to_owned(), pci.to_owned());
+        self
     }
 
     /// For a guest on an AMD card, which the daemon then opens instead of the NVIDIA card.
@@ -218,6 +225,18 @@ mod tests {
         assert!(!on_intel.environment.contains_key("GUESTHOUSE_AMD_CARD"));
         let on_amd = start.on_card(GpuMaker::Amd, "0000:7c:00.0").unwrap();
         assert!(!on_amd.environment.contains_key("GUESTHOUSE_TIMING"), "only Intel's starts are timed");
+    }
+
+    #[test]
+    fn a_guest_given_another_nvidia_card_names_it_and_nothing_else() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let start = DaemonStart::new(&context, slots::first(), "16G", None);
+        let on_second = start.clone().on_card(GpuMaker::Nvidia, "0000:02:00.0").unwrap();
+        assert_eq!(on_second.environment["GUESTHOUSE_NVIDIA_CARD"], "0000:02:00.0");
+        let mut named = on_second.environment.clone();
+        named.remove("GUESTHOUSE_NVIDIA_CARD");
+        assert_eq!(named, start.environment, "no other maker's card and no timings");
     }
 
     #[test]

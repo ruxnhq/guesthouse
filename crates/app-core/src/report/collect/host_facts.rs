@@ -9,7 +9,7 @@ use crate::host::total_ram;
 use crate::machine::Machine;
 use crate::render_cards::{render_card, render_cards};
 use crate::report::summary;
-use crate::setup::cards::{Support, card_in_use, find_cards};
+use crate::setup::cards::{Card, Support, card_in_use, find_cards, nvidia_card_at};
 use crate::setup::toolkit::gtk_version;
 use guesthouse_card_check::host::parse_taint_as_open;
 use std::env;
@@ -92,7 +92,7 @@ pub fn collect(context: &Context, request: &Request, found: &mut Collection) {
     let on_card = request.machine.as_ref().and_then(render_node_card);
     let card = match on_card {
         Some((maker, pci)) => render_card(context, maker, pci).map(|card| card.name),
-        None => card_in_use(context).map(|card| card.name),
+        None => nvidia_card_of(context, request.machine.as_ref()).map(|card| card.name),
     };
     found.summary.set(summary::CARD, card.as_deref().unwrap_or_default());
     let driver = match on_card {
@@ -120,8 +120,17 @@ fn recorded_intel_card(context: &Context) -> Option<String> {
     })
 }
 
+/// The NVIDIA card a report is about: the one its machine was given, or setup's.
+fn nvidia_card_of(context: &Context, machine: Option<&Machine>) -> Option<Card> {
+    let given = machine.filter(|machine| machine.windows_maker() == Some(GpuMaker::Nvidia));
+    match given.and_then(Machine::windows_card_address) {
+        Some(pci) => nvidia_card_at(context, pci),
+        None => card_in_use(context),
+    }
+}
+
 /// The maker and address of the card the machine reaches through a render node: a Linux guest's AMD
-/// card, or a Windows guest's card that isn't the NVIDIA one setup chose.
+/// card, or a Windows guest's AMD or Intel card.
 fn render_node_card(machine: &Machine) -> Option<(GpuMaker, &str)> {
     if let Some(pci) = machine.amd_card() {
         return Some((GpuMaker::Amd, pci));

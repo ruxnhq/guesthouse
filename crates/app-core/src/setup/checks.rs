@@ -1,7 +1,7 @@
 //! Looks at this PC. Nothing here changes anything.
 
 use super::access::{check_jail, check_render_nodes};
-use super::cards::{Card, Support, amd_support, card_in_use, find_cards};
+use super::cards::{Card, Support, amd_support, card_in_use, find_cards, nvidia_card_at};
 use crate::context::Context;
 use crate::gpu_maker::GpuMaker;
 use crate::host::{RamOffer, free_gib, total_ram};
@@ -262,8 +262,25 @@ fn check_amd_card(context: &Context) -> Option<Check> {
 
 /// Says if the card GPU machines run on is only experimental.
 pub fn card_warning(context: &Context) -> Option<String> {
-    let card = card_judged(context).filter(|card| card.support == Support::Experimental)?;
-    Some(format!("{} is experimental. {EXPERIMENTAL_FIX}", card.name))
+    card_judged(context).and_then(experimental_warning)
+}
+
+fn experimental_warning(card: Card) -> Option<String> {
+    (card.support == Support::Experimental)
+        .then(|| format!("{} is experimental. {EXPERIMENTAL_FIX}", card.name))
+}
+
+/// The same for this machine's card: the NVIDIA card it was given, or setup's. Nothing for a machine
+/// on another maker's card.
+pub fn machine_card_warning(context: &Context, machine: &Machine) -> Option<String> {
+    if machine.windows_maker() != Some(GpuMaker::Nvidia) {
+        return None;
+    }
+    let card = match machine.windows_card_address() {
+        Some(pci) => nvidia_card_at(context, pci),
+        None => card_judged(context),
+    };
+    card.and_then(experimental_warning)
 }
 
 /// What a person should hear before a VM on the GPU starts.
@@ -273,10 +290,15 @@ pub fn gpu_warning(context: &Context) -> Option<String> {
     (!warnings.is_empty()).then(|| warnings.join(" "))
 }
 
-/// What a person should hear before this machine starts: only a Windows machine on the NVIDIA card is
-/// about NVIDIA's card and driver.
+/// What a person should hear before this machine starts: only a Windows machine on an NVIDIA card is
+/// about its card and NVIDIA's driver.
 pub fn machine_gpu_warning(context: &Context, machine: &Machine) -> Option<String> {
-    (machine.windows_maker() == Some(GpuMaker::Nvidia)).then(|| gpu_warning(context)).flatten()
+    if machine.windows_maker() != Some(GpuMaker::Nvidia) {
+        return None;
+    }
+    let warnings: Vec<String> =
+        [machine_card_warning(context, machine), driver_warning(context)].into_iter().flatten().collect();
+    (!warnings.is_empty()).then(|| warnings.join(" "))
 }
 
 /// Says if the host's driver isn't the one this was tested on.
@@ -807,6 +829,13 @@ mod tests {
         assert!(said.contains("card 2c05 is experimental"), "{said}");
         fake_pci(&scratch, "0000:00:01.0", 0x2B85, "0x10de", "0x030000");
         assert_eq!(gpu_warning(&context), None);
+        let on_setups = Machine::new("w", "W", "/d", "/v");
+        assert_eq!(machine_gpu_warning(&context, &on_setups), None, "setup would choose the tested one");
+        let mut on_second = on_setups;
+        on_second.use_windows_card(GpuMaker::Nvidia, "0000:01:00.0");
+        let said = machine_gpu_warning(&context, &on_second).unwrap();
+        assert!(said.contains("card 2c05 is experimental"), "{said}");
+        assert!(machine_card_warning(&context, &on_second).is_some_and(|said| said.contains("2c05")));
     }
 
     #[test]

@@ -5,10 +5,10 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::linux::amd::{AmdCard, graphics_major};
 use crate::machine::sorted_names;
-use crate::settings::{CARD_MEMORY_FIELD, read_setup, write_setup};
+use crate::settings::{CARD_MEMORIES_FIELD, CARD_MEMORY_FIELD, Fields, read_setup, write_setup};
 use crate::usb::sysfs_text;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -105,7 +105,7 @@ pub struct Card {
 
 /// A PCI address as sysfs writes it, whatever width the domain was given in: `nvidia-smi` writes
 /// eight digits and sysfs four.
-fn normal_address(text: &str) -> String {
+pub(crate) fn normal_address(text: &str) -> String {
     let text = text.trim().to_lowercase();
     match text.split_once(':') {
         Some((domain, rest)) if rest.contains(':') => match u32::from_str_radix(domain, 16) {
@@ -116,53 +116,74 @@ fn normal_address(text: &str) -> String {
     }
 }
 
-/// The memory in MiB of the card at this address, from `nvidia-smi`'s lines of address and memory.
-fn parse_card_memory(said: &str, address: &str) -> Option<u64> {
-    let wanted = normal_address(address);
-    said.lines().find_map(|line| {
+/// Each card's memory in MiB by its address, from `nvidia-smi`'s lines of address and memory.
+fn card_memories_in(said: &str) -> Fields {
+    let card = |line: &str| {
         let (at, memory) = line.split_once(',')?;
-        (normal_address(at) == wanted).then(|| memory.trim().parse().ok())?
-    })
+        Some((normal_address(at), Value::from(memory.trim().parse::<u64>().ok()?)))
+    };
+    said.lines().filter_map(card).collect()
 }
 
-fn card_memory_mib(address: &str) -> Option<u64> {
+/// The memory in MiB of the card at this address, from `nvidia-smi`'s lines of address and memory.
+fn parse_card_memory(said: &str, address: &str) -> Option<u64> {
+    card_memories_in(said).get(&normal_address(address)).and_then(Value::as_u64)
+}
+
+/// What `nvidia-smi` says of each card's address and memory, or nothing if it can't be asked.
+pub fn ask_card_memories() -> String {
     let said = Command::new("nvidia-smi")
         .args(["--query-gpu=pci.bus_id,memory.total", "--format=csv,noheader,nounits"])
         .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    parse_card_memory(&String::from_utf8_lossy(&said.stdout), address)
+        .output();
+    said.map(|said| String::from_utf8_lossy(&said.stdout).into_owned()).unwrap_or_default()
 }
 
 /// The card's video memory, asked of the driver now.
-pub(crate) fn memory_mib(address: &str) -> Option<u64> {
-    card_memory_mib(address)
+pub(crate) fn memory_mib(context: &Context, address: &str) -> Option<u64> {
+    parse_card_memory(&(context.card_memories)(), address)
 }
 
 /// Writes down the card for the daemon, by its PCI address, and how much memory it has for the video
 /// memory cap. It's the best supported card, and of those the first by address.
 pub fn remember_card(context: &Context) -> Result<()> {
-    remember_card_with(context, card_memory_mib)
-}
-
-fn remember_card_with(context: &Context, memory_of: impl Fn(&str) -> Option<u64>) -> Result<()> {
     let cards = find_cards(context);
     let card = cards.first().ok_or_else(|| Failure::new("No NVIDIA card was found."))?;
-    write_card(context, card, memory_of)
+    write_card(context, card)
 }
 
 /// The same for the card at this address, on a PC where the best one isn't the one to use.
 pub fn remember_card_at(context: &Context, pci: &str) -> Result<()> {
-    let wanted = normal_address(pci);
-    let card = find_cards(context).into_iter().find(|card| card.pci == wanted);
+    let card = nvidia_card_at(context, pci);
     let card = card.ok_or_else(|| Failure(format!("There is no NVIDIA card at {}.", pci.trim())))?;
-    write_card(context, &card, card_memory_mib)
+    write_card(context, &card)
 }
 
-fn write_card(context: &Context, card: &Card, memory_of: impl Fn(&str) -> Option<u64>) -> Result<()> {
-    let memory = memory_of(&card.pci).unwrap_or(0);
-    let changes = json!({"card": card, CARD_MEMORY_FIELD: memory});
+/// Every NVIDIA card's memory is written down beside the chosen one's, as a machine can be given any
+/// of them and its cap goes by its own card.
+fn write_card(context: &Context, card: &Card) -> Result<()> {
+    let memories = card_memories_in(&(context.card_memories)());
+    let memory = memories.get(&card.pci).and_then(Value::as_u64).unwrap_or(0);
+    let changes = json!({"card": card, CARD_MEMORY_FIELD: memory, CARD_MEMORIES_FIELD: memories});
     write_setup(context, changes.as_object().cloned().unwrap_or_default())
+}
+
+/// Writes down the memory of the NVIDIA card at `pci`, if setup has run and didn't, for the cap of a
+/// machine given that card. A setup from before machines had their own NVIDIA card only wrote down
+/// the one it chose. This asks the driver, so it's for when a machine is put on a card, not for
+/// every look at one.
+pub fn learn_card_memory(context: &Context, pci: &str) -> Result<()> {
+    let setup = read_setup(context);
+    let mut memories = setup.get(CARD_MEMORIES_FIELD).and_then(Value::as_object).cloned().unwrap_or_default();
+    if pci.is_empty() || !setup.contains_key("card") || memories.contains_key(&normal_address(pci)) {
+        return Ok(());
+    }
+    let found = card_memories_in(&(context.card_memories)());
+    if !found.contains_key(&normal_address(pci)) {
+        return Ok(());
+    }
+    memories.extend(found);
+    write_setup(context, json!({ CARD_MEMORIES_FIELD: memories }).as_object().cloned().unwrap_or_default())
 }
 
 /// Workstation cards whose card check gave the same answers as a consumer card on the same chip, or that
@@ -270,6 +291,36 @@ pub fn card_in_use_note(context: &Context) -> Option<String> {
     }
     let card = card_in_use(context)?;
     Some(format!("Runs on the {} at {}.", card.name, card.pci))
+}
+
+/// The same for a machine given the NVIDIA card at `pci`, where empty is setup's card. A card that has
+/// gone is named by its address.
+pub fn nvidia_card_note(context: &Context, pci: &str) -> Option<String> {
+    if pci.is_empty() {
+        return card_in_use_note(context);
+    }
+    if nvidia_card_folders(context).len() < 2 {
+        return None;
+    }
+    let name = nvidia_card_at(context, pci).map_or_else(|| "NVIDIA card".to_owned(), |card| card.name);
+    Some(format!("Runs on the {name} at {}.", normal_address(pci)))
+}
+
+/// The NVIDIA card at this address, if it's in this PC.
+pub fn nvidia_card_at(context: &Context, pci: &str) -> Option<Card> {
+    let wanted = normal_address(pci);
+    find_cards(context).into_iter().find(|card| card.pci == wanted)
+}
+
+/// Why a machine given the NVIDIA card at `pci` can't start on it, if it can't.
+pub fn nvidia_card_problem(context: &Context, pci: &str) -> Option<String> {
+    nvidia_card_at(context, pci).is_none().then(|| {
+        format!(
+            "The NVIDIA card this machine runs on, at {}, isn't in this PC now. Choose another NVIDIA card in \
+             its settings.",
+            pci.trim()
+        )
+    })
 }
 
 /// The sysfs folders of NVIDIA's display devices, by PCI address.
@@ -429,20 +480,67 @@ mod tests {
         write_setup(context, json!({ "card": card }).as_object().cloned().unwrap()).unwrap();
     }
 
+    const TWO_CARDS_SAY: &str = "00000000:02:00.0, 6144\n00000000:01:00.0, 16376\n";
+
     #[test]
     fn of_two_cards_setup_writes_down_the_address_of_the_one_it_chose() {
         let scratch = Scratch::new();
-        let context = two_cards(&scratch);
+        let mut context = two_cards(&scratch);
+        context.card_memories = || TWO_CARDS_SAY.to_owned();
         let cards = find_cards(&context);
         let found: Vec<&str> = cards.iter().map(|card| card.pci.as_str()).collect();
         assert_eq!(found, ["0000:01:00.0", "0000:02:00.0"], "the same support, so by address");
-        let said = "00000000:02:00.0, 6144\n00000000:01:00.0, 16376\n";
-        remember_card_with(&context, |address| parse_card_memory(said, address)).unwrap();
+        remember_card(&context).unwrap();
         let setup = read_setup(&context);
         assert_eq!(setup["card"]["pci"], "0000:01:00.0");
         assert_eq!(setup[CARD_MEMORY_FIELD], 16376, "the chosen card's memory, not the first line's");
         assert_eq!(setup["card"]["device"], 0x2704);
         assert_eq!(chosen_card(&context).map(|card| card.name).as_deref(), Some("NVIDIA GeForce RTX 4080"));
+    }
+
+    #[test]
+    fn setup_writes_down_every_cards_memory_for_the_machines_given_one() {
+        let scratch = Scratch::new();
+        let mut context = two_cards(&scratch);
+        context.card_memories = || TWO_CARDS_SAY.to_owned();
+        remember_card_at(&context, "0000:02:00.0").unwrap();
+        let setup = read_setup(&context);
+        assert_eq!(setup[CARD_MEMORY_FIELD], 6144);
+        assert_eq!(setup[CARD_MEMORIES_FIELD], json!({"0000:01:00.0": 16376, "0000:02:00.0": 6144}));
+    }
+
+    #[test]
+    fn an_old_setup_learns_a_cards_memory_once_a_machine_is_put_on_it() {
+        let scratch = Scratch::new();
+        let mut context = two_cards(&scratch);
+        learn_card_memory(&context, "0000:02:00.0").unwrap();
+        assert!(read_setup(&context).is_empty(), "nothing is written before setup");
+        remember(&context, json!({"device": 0x2704, "pci": "0000:01:00.0"}));
+        learn_card_memory(&context, "0000:02:00.0").unwrap();
+        assert!(!read_setup(&context).contains_key(CARD_MEMORIES_FIELD), "the driver said nothing");
+        context.card_memories = || TWO_CARDS_SAY.to_owned();
+        learn_card_memory(&context, "0000:02:00.0").unwrap();
+        assert_eq!(read_setup(&context)[CARD_MEMORIES_FIELD]["0000:02:00.0"], 6144);
+        context.card_memories = || "00000000:02:00.0, 1\n".to_owned();
+        learn_card_memory(&context, "0000:02:00.0").unwrap();
+        assert_eq!(read_setup(&context)[CARD_MEMORIES_FIELD]["0000:02:00.0"], 6144, "asked only once");
+    }
+
+    #[test]
+    fn a_machine_given_a_card_by_address_is_told_of_it_and_refused_once_it_is_gone() {
+        let scratch = Scratch::new();
+        let context = two_cards(&scratch);
+        assert_eq!(nvidia_card_problem(&context, "0000:02:00.0"), None);
+        let note = nvidia_card_note(&context, "0000:02:00.0").unwrap();
+        assert_eq!(note, "Runs on the NVIDIA GeForce GTX 1660 SUPER at 0000:02:00.0.");
+        let refused = nvidia_card_problem(&context, "0000:03:00.0").unwrap();
+        assert!(refused.contains("at 0000:03:00.0, isn't in this PC now"), "{refused}");
+        assert_eq!(
+            nvidia_card_note(&context, "0000:03:00.0").unwrap(),
+            "Runs on the NVIDIA card at 0000:03:00.0."
+        );
+        remember(&context, json!({"device": 0x2704, "pci": "0000:01:00.0"}));
+        assert_eq!(nvidia_card_note(&context, ""), card_in_use_note(&context), "no address is setup's card");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use adw::prelude::*;
 use guesthouse_app_core::host::{cpu_list, physical_cores, vcache_cpus};
 use guesthouse_app_core::limits::{cores_range, ram_field};
 use guesthouse_app_core::machine::Kind;
-use guesthouse_app_core::settings::max_vram_gib;
+use guesthouse_app_core::settings::max_vram_gib_for;
 use guesthouse_app_core::tasks::Status;
 
 const VM_MUST_BE_OFF: &str = "The VM must be off to change these.";
@@ -24,6 +24,11 @@ pub struct Hardware {
 }
 
 impl Hardware {
+    /// The video memory cap's row, whose top follows the machine's card.
+    pub fn cap_row(&self) -> adw::SpinRow {
+        self.vram.clone()
+    }
+
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
         let context = shared.window.context();
         let machine = shared.machine.borrow().clone();
@@ -49,7 +54,7 @@ impl Hardware {
             "Video memory cap in GiB",
             machine.vram_gib.into(),
             0.0,
-            max_vram_gib(&context).into(),
+            max_vram_gib_for(&context, &machine).into(),
         );
         vram.set_subtitle(
             "0 is no cap. A program that goes past it loses its GPU device, and others carry on.",

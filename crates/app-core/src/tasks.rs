@@ -16,7 +16,7 @@ use crate::process_stat::{self, Seen};
 use crate::processes::{leftovers, memory_taken, running_machine, running_slots, still_running};
 use crate::render_cards::render_card;
 use crate::settings::write_json;
-use crate::setup::cards::card_in_use_note;
+use crate::setup::cards::{card_in_use_note, nvidia_card_note};
 use crate::slots;
 use guesthouse_daemon::gpu_note::read_note;
 use guesthouse_daemon::slot::{SLOTS, Slot};
@@ -217,7 +217,8 @@ pub fn status_since(context: &Context, machine: &Machine, before: Option<(u8, Se
         found.identity_note = identity.problem(found.state == State::Running).to_owned();
         found.card_note = match machine.windows_maker() {
             Some(maker @ (GpuMaker::Amd | GpuMaker::Intel)) => card_note(context, maker, &machine.amd_gpu),
-            Some(GpuMaker::Nvidia) | None => card_in_use_note(context).unwrap_or_default(),
+            Some(GpuMaker::Nvidia) => nvidia_card_note(context, &machine.amd_gpu).unwrap_or_default(),
+            None => card_in_use_note(context).unwrap_or_default(),
         };
         if found.state == State::Running {
             let slot = found.slot.map(slots::number);

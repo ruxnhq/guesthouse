@@ -1,8 +1,9 @@
 //! `guesthouse-daemon [PROJECT_FOLDER]`: serves one VM, named by `GUESTHOUSE_SLOT`.
 //!
 //! The real backends are behind the `nvidia`, `amd` and `intel` features. Each run opens one card:
-//! the AMD card named in `GUESTHOUSE_AMD_CARD` or the Intel card named in `GUESTHOUSE_INTEL_CARD` if
-//! the app named one, and else the NVIDIA card setup chose. A build without `nvidia` takes its card
+//! the AMD card named in `GUESTHOUSE_AMD_CARD`, the Intel card named in `GUESTHOUSE_INTEL_CARD` or the
+//! NVIDIA card named in `GUESTHOUSE_NVIDIA_CARD` if the app named one, and else the NVIDIA card setup
+//! chose. A build without `nvidia` takes its card
 //! from the AMD setup file when none is named, or with no `amd` either, from the Intel one. A build
 //! with no backend can only say so. The `stand-in` feature answers messages with nothing behind
 //! them, to try the sockets by hand.
@@ -41,12 +42,12 @@ fn serve(_slot: Slot, _project: PathBuf) -> Result<(), Box<dyn std::error::Error
 /// Serves on the card the app chose for this guest.
 #[cfg(any(feature = "nvidia", feature = "amd", feature = "intel"))]
 fn serve(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    use guesthouse_daemon::card_choice::{amd_card, intel_card};
-    match (amd_card()?, intel_card()?) {
-        (Some(_), Some(_)) => Err("This guest was given both an AMD card and an Intel card.".into()),
-        (Some(card), None) => serve_amd(slot, project, Some(card)),
-        (None, Some(card)) => serve_intel(slot, project, Some(card)),
-        (None, None) => serve_nvidia(slot, project),
+    use guesthouse_daemon::card_choice::{amd_card, intel_card, nvidia_card};
+    match (amd_card()?, intel_card()?, nvidia_card()?) {
+        (Some(card), None, None) => serve_amd(slot, project, Some(card)),
+        (None, Some(card), None) => serve_intel(slot, project, Some(card)),
+        (None, None, card) => serve_nvidia(slot, project, card),
+        _ => Err("This guest was given cards of more than one maker.".into()),
     }
 }
 
@@ -70,14 +71,36 @@ fn serve_intel(
 
 /// With no NVIDIA backend, a guest with no card named is on the card in the AMD setup file.
 #[cfg(all(feature = "amd", not(feature = "nvidia")))]
-fn serve_nvidia(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn serve_nvidia(
+    slot: Slot,
+    project: PathBuf,
+    card: Option<guesthouse_backend::PciAddress>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    without_nvidia(card)?;
     serve_amd(slot, project, None)
 }
 
 /// With neither the NVIDIA nor the AMD backend, it is on the card in the Intel setup file.
 #[cfg(all(feature = "intel", not(feature = "nvidia"), not(feature = "amd")))]
-fn serve_nvidia(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn serve_nvidia(
+    slot: Slot,
+    project: PathBuf,
+    card: Option<guesthouse_backend::PciAddress>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    without_nvidia(card)?;
     serve_intel(slot, project, None)
+}
+
+/// A build with no NVIDIA backend can't run a guest the app gave an NVIDIA card.
+#[cfg(all(any(feature = "amd", feature = "intel"), not(feature = "nvidia")))]
+fn without_nvidia(card: Option<guesthouse_backend::PciAddress>) -> Result<(), Box<dyn std::error::Error>> {
+    match card {
+        Some(_) => Err(
+            "This daemon was built without the NVIDIA backend, so it cannot run a guest on an NVIDIA card."
+                .into(),
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Starts the AMD backend on `card`, or with none, on the card in the AMD setup file, and serves.
@@ -199,9 +222,13 @@ fn serve_on_render_node<B: guesthouse_backend::Backend>(
     Ok(())
 }
 
-/// Starts the NVIDIA backend and serves. This opens the NVIDIA card setup chose.
+/// Starts the NVIDIA backend on `card`, or with none, on the NVIDIA card setup chose, and serves.
 #[cfg(feature = "nvidia")]
-fn serve_nvidia(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn serve_nvidia(
+    slot: Slot,
+    project: PathBuf,
+    card: Option<guesthouse_backend::PciAddress>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use guesthouse_backend::Backend;
     use guesthouse_backend_nvidia::NvidiaBackend;
     use guesthouse_backend_nvidia::rm::linux::LinuxRm;
@@ -211,10 +238,13 @@ fn serve_nvidia(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::
     use guesthouse_daemon::jail::{Needs, lock_calls, lock_files};
     use guesthouse_daemon::router::Router;
     use guesthouse_daemon::server::Server;
-    use guesthouse_daemon::setup::read_setup;
+    use guesthouse_daemon::setup::{on_card, read_setup};
     use guesthouse_daemon::startup::start_backend;
 
-    let setup = read_setup()?;
+    let setup = match card {
+        Some(card) => on_card(read_setup()?, card)?,
+        None => read_setup()?,
+    };
     let run_folder = slot.run_folder(&project);
     let (ram, cap) = (env::var("GUESTHOUSE_RAM").ok(), env::var("GUESTHOUSE_VRAM").ok());
     let memory = SharedMemory::from_environment(slot, guest_ram(ram.as_deref()))?;

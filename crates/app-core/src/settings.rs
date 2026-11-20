@@ -2,6 +2,8 @@
 
 use crate::context::Context;
 use crate::failure::Result;
+use crate::gpu_maker::GpuMaker;
+use crate::machine::Machine;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::fs;
@@ -13,6 +15,9 @@ const GIB: u64 = 1 << 30;
 const MIB: u64 = 1 << 20;
 /// The card's memory in MiB, in `setup.json`.
 pub const CARD_MEMORY_FIELD: &str = "card_memory_mib";
+/// Every NVIDIA card's memory in MiB, by its address, in `setup.json`. A setup from before machines
+/// had their own NVIDIA card has none.
+pub const CARD_MEMORIES_FIELD: &str = "card_memories";
 /// The host keeps an eighth of the card, and at least 2 GiB, for its desktop.
 const HOST_SHARE: u64 = 8;
 const HOST_MINIMUM_GIB: u64 = 2;
@@ -91,6 +96,25 @@ pub fn max_vram_gib(context: &Context) -> u32 {
     video_budget_gib(mib * MIB) as u32
 }
 
+/// The same for this machine's card. A Windows machine given an NVIDIA card by its address has that
+/// card's, and 0 until setup knows it. Every other machine has setup's card's, as it always had.
+pub fn max_vram_gib_for(context: &Context, machine: &Machine) -> u32 {
+    match (machine.windows_maker(), machine.windows_card_address()) {
+        (Some(GpuMaker::Nvidia), Some(pci)) => video_budget_gib(card_memory_mib(context, pci) * MIB) as u32,
+        _ => max_vram_gib(context),
+    }
+}
+
+/// The memory in MiB setup wrote down for the NVIDIA card at `pci`. A setup from before it wrote down
+/// every card's knows only its own card's.
+fn card_memory_mib(context: &Context, pci: &str) -> u64 {
+    let setup = read_setup(context);
+    let own_card = setup.get("card").and_then(|card| card.get("pci")).and_then(Value::as_str) == Some(pci);
+    let memories = setup.get(CARD_MEMORIES_FIELD).and_then(|memories| memories.get(pci));
+    let memory = memories.or_else(|| setup.get(CARD_MEMORY_FIELD).filter(|_| own_card));
+    memory.and_then(Value::as_u64).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +148,28 @@ mod tests {
         assert_eq!(max_vram_gib(&context), 14);
         write_setup(&context, fields(json!({CARD_MEMORY_FIELD: 32607}))).unwrap();
         assert_eq!(max_vram_gib(&context), 28, "28 GiB on a 32 GiB card");
+    }
+
+    #[test]
+    fn a_machine_on_another_nvidia_card_has_that_cards_cap() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let card = json!({"pci": "0000:01:00.0"});
+        write_setup(&context, fields(json!({"card": card, CARD_MEMORY_FIELD: 16376}))).unwrap();
+        let on_setups = Machine::new("w", "W", "/d", "/v");
+        let mut on_second = on_setups.clone();
+        on_second.use_windows_card(GpuMaker::Nvidia, "0000:02:00.0");
+        let mut on_first = on_setups.clone();
+        on_first.use_windows_card(GpuMaker::Nvidia, "0000:01:00.0");
+        assert_eq!(max_vram_gib_for(&context, &on_setups), 14);
+        assert_eq!(max_vram_gib_for(&context, &on_first), 14, "setup's card by its address");
+        assert_eq!(max_vram_gib_for(&context, &on_second), 0, "an old setup doesn't know the card");
+        let memories = json!({"0000:01:00.0": 16376, "0000:02:00.0": 6144});
+        write_setup(&context, fields(json!({CARD_MEMORIES_FIELD: memories}))).unwrap();
+        assert_eq!(max_vram_gib_for(&context, &on_second), 4, "a 6 GiB card keeps 2 for the host");
+        assert_eq!(max_vram_gib_for(&context, &on_setups), 14);
+        let mut on_amd = on_setups;
+        on_amd.use_windows_card(GpuMaker::Amd, "0000:02:00.0");
+        assert_eq!(max_vram_gib_for(&context, &on_amd), 14, "AMD's is as it was");
     }
 }

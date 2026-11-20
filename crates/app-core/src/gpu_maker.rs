@@ -40,12 +40,14 @@ impl GpuMaker {
         Self::ALL.into_iter().find(|maker| maker.vendor() == vendor)
     }
 
-    /// What a machine's file records for a card of this maker, if it records anything. NVIDIA and AMD
-    /// are told apart by the card's address alone, as they always were, so a file with either stays
-    /// one the released app reads. Only a maker that came later is written down.
-    pub fn recorded(self) -> Option<Self> {
+    /// What a machine's file records for this maker's card at `pci`, if it records anything. No address
+    /// is setup's NVIDIA card and an address alone is an AMD card, as they always were, so a file with
+    /// either stays one an older app reads. An NVIDIA card named by its address is written down, and
+    /// so is a maker that came later.
+    pub fn recorded_for(self, pci: &str) -> Option<Self> {
         match self {
-            Self::Nvidia | Self::Amd => None,
+            Self::Nvidia => (!pci.is_empty()).then_some(self),
+            Self::Amd => None,
             Self::Intel => Some(self),
         }
     }
@@ -64,8 +66,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_maker_the_released_app_does_not_know_is_recorded() {
-        let recorded: Vec<GpuMaker> = GpuMaker::ALL.into_iter().filter_map(GpuMaker::recorded).collect();
-        assert_eq!(recorded, [GpuMaker::Intel]);
+    fn only_a_maker_the_address_does_not_tell_is_recorded() {
+        let recorded = |pci: &str| -> Vec<GpuMaker> {
+            GpuMaker::ALL.into_iter().filter_map(|maker| maker.recorded_for(pci)).collect()
+        };
+        assert_eq!(recorded(""), [GpuMaker::Intel], "no address is setup's NVIDIA card");
+        assert_eq!(
+            recorded("0000:02:00.0"),
+            [GpuMaker::Nvidia, GpuMaker::Intel],
+            "an address alone is AMD's"
+        );
     }
 }

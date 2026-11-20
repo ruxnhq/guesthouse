@@ -82,6 +82,9 @@ pub struct Context {
     pub jail_support: fn() -> Support,
     /// Whether this user can open a card's device. A test's cards have none.
     pub may_open: fn(&Path) -> bool,
+    /// What NVIDIA's driver says of each card's address and memory, as `nvidia-smi`'s lines. A test
+    /// says what its cards have.
+    pub card_memories: fn() -> String,
     /// Stands in for what this PC can give a GPU machine, which depends on everything else running.
     pub ram_limit: Option<u64>,
     pub bridge: BridgeHost,
@@ -123,6 +126,7 @@ impl Context {
             jail_offer: Offer::here,
             jail_support: Support::probe,
             may_open: may_open_here,
+            card_memories: crate::setup::cards::ask_card_memories,
             ram_limit: None,
             bridge: BridgeHost::default(),
             monitor: Arc::new(QmpMonitor),

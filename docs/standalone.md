@@ -58,6 +58,7 @@ The environment of the daemon, besides the two files:
 | `GUESTHOUSE_VRAM` | The most video memory the guest may have, like `8G`. Unset is no cap. |
 | `GUESTHOUSE_STORE` | The data store, if it isn't the default. |
 | `GUESTHOUSE_AMD_CARD` | The PCI address of the AMD card, for a machine on AMD. |
+| `GUESTHOUSE_NVIDIA_CARD` | The PCI address of the NVIDIA card, for a machine given one other than setup's. Unset is setup's card. |
 
 ## Which of QEMU's words are yours
 

@@ -81,8 +81,11 @@ fn is_on(setting: &bool) -> bool {
     *setting
 }
 
+/// Whether the maker goes without saying. AMD's is what an address alone means. A machine keeps
+/// NVIDIA's only for a card named by its address, as [`GpuMaker::recorded_for`] says, so that is
+/// written, as is a later maker's.
 fn is_implied_by_address(maker: &Option<GpuMaker>) -> bool {
-    maker.and_then(GpuMaker::recorded).is_none()
+    maker.is_none_or(|maker| maker == GpuMaker::Amd)
 }
 
 fn is_off(setting: &bool) -> bool {
@@ -210,16 +213,17 @@ pub struct Machine {
     /// the file when on, so an older build can still read it.
     #[serde(default = "default_on", skip_serializing_if = "is_on")]
     pub sound: bool,
-    /// The PCI address of the AMD card the guest's GPU runs on. Empty is the NVIDIA card: setup's for
-    /// a Windows guest, forwarded for a Linux one. A guest never has both. Left out of the file when
-    /// empty, so an older build can still read it.
+    /// The PCI address of the card the guest's GPU runs on, which for a Linux guest is an AMD card.
+    /// Empty is the NVIDIA card: setup's for a Windows guest, forwarded for a Linux one. A Windows
+    /// guest can also be on another NVIDIA card, by its address. Left out of the file when empty, so
+    /// an older build can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub amd_gpu: String,
-    /// The maker of a Windows guest's card, when its address can't say. An empty `amd_gpu` is the
+    /// The maker of a Windows guest's card, when its address can't say. An empty `amd_gpu` is setup's
     /// NVIDIA card and an address is AMD's, which is how every machine from before other makers is
-    /// read, so those two are never written. A maker that came later is, with its card's address in
-    /// `amd_gpu`. The released app refuses a file with this field, so it can't take such a machine for
-    /// an AMD one.
+    /// read, so those two are never written. An NVIDIA card named by its address is, and so is a maker
+    /// that came later, with the card's address in `amd_gpu`. An app from before this field refuses a
+    /// file with it, so it can't take such a machine for an AMD one.
     #[serde(default, skip_serializing_if = "is_implied_by_address")]
     pub gpu_maker: Option<GpuMaker>,
     /// The name of the account the install makes, if the user chose one. Empty is the name the guest
@@ -381,15 +385,16 @@ impl Machine {
         Some(self.gpu_maker.unwrap_or(if self.amd_gpu.is_empty() { GpuMaker::Nvidia } else { GpuMaker::Amd }))
     }
 
-    /// The PCI address of the card a Windows guest's GPU-PV runs on, if it isn't setup's NVIDIA card.
+    /// The PCI address of the card a Windows guest's GPU-PV runs on, if it was given one. With none it
+    /// runs on the NVIDIA card setup chose.
     pub fn windows_card_address(&self) -> Option<&str> {
         Some(self.amd_gpu.as_str()).filter(|pci| self.kind == Kind::Windows && !pci.is_empty())
     }
 
-    /// Puts a Windows guest on the card at `pci`, which is `maker`'s. Empty is NVIDIA's.
+    /// Puts a Windows guest on the card at `pci`, which is `maker`'s. Empty is setup's NVIDIA card.
     pub fn use_windows_card(&mut self, maker: GpuMaker, pci: &str) {
         self.amd_gpu = pci.to_owned();
-        self.gpu_maker = maker.recorded();
+        self.gpu_maker = maker.recorded_for(pci);
     }
 
     /// Why this machine can't move to a card made by `to`. A Windows guest was installed with its card
@@ -515,7 +520,9 @@ impl Machine {
 
     /// Replaces the file in one step, so a crash can't leave half of it.
     pub fn save(&self, context: &Context) -> Result<()> {
-        if let Some(problem) = self.problems(crate::settings::max_vram_gib(context)).into_iter().next() {
+        if let Some(problem) =
+            self.problems(crate::settings::max_vram_gib_for(context, self)).into_iter().next()
+        {
             return Err(Failure(problem));
         }
         write_json(&self.folder(context).join(MACHINE_FILE), self)
@@ -575,7 +582,7 @@ pub fn load(context: &Context, id: &str) -> Result<Machine> {
     let text = fs::read_to_string(&path).map_err(|error| could_not_read(&error))?;
     let mut machine: Machine = serde_json::from_str(&text).map_err(|error| could_not_read(&error))?;
     machine.id = id.to_owned();
-    match machine.problems(crate::settings::max_vram_gib(context)).first() {
+    match machine.problems(crate::settings::max_vram_gib_for(context, &machine)).first() {
         Some(problem) => Err(Failure(format!("{}: {problem}", path.display()))),
         None => Ok(machine),
     }
@@ -676,6 +683,21 @@ mod tests {
             let read: Machine = serde_json::from_str(&text).unwrap();
             assert_eq!(read.windows_maker(), Some(maker));
         }
+    }
+
+    #[test]
+    fn a_machine_given_an_nvidia_card_by_its_address_writes_its_maker_so_it_is_not_taken_for_amd() {
+        let mut machine = sample();
+        machine.use_windows_card(GpuMaker::Nvidia, "0000:02:00.0");
+        let text = serde_json::to_string(&machine).unwrap();
+        assert!(text.contains(r#""gpu_maker":"nvidia""#), "{text}");
+        let read: Machine = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            (read.windows_maker(), read.windows_card_address()),
+            (Some(GpuMaker::Nvidia), Some("0000:02:00.0"))
+        );
+        machine.use_windows_card(GpuMaker::Nvidia, "");
+        assert!(!serde_json::to_string(&machine).unwrap().contains("gpu_maker"), "setup's card, as before");
     }
 
     #[test]

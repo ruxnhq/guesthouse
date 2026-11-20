@@ -6,7 +6,7 @@ use crate::application::APP_ID;
 use crate::rows::{confirm, on_yes, question};
 use adw::prelude::*;
 use guesthouse_app_core::machine::Machine;
-use guesthouse_app_core::setup::checks::{card_warning, machine_gpu_warning};
+use guesthouse_app_core::setup::checks::{machine_card_warning, machine_gpu_warning};
 use guesthouse_app_core::start_checks::SECOND_INSTANCE_REFUSAL;
 use guesthouse_app_core::tasks::{State, Status, no_slot_text};
 use std::cell::RefCell;
@@ -269,7 +269,7 @@ impl MachineCard {
             self.start();
             return;
         };
-        let experimental = card_warning(&self.window.context()).is_some();
+        let experimental = machine_card_warning(&self.window.context(), &self.machine.borrow()).is_some();
         let title = if experimental { "Experimental Card" } else { "Different NVIDIA Driver" };
         let dialog = question(title, &warning, "Start Anyway", adw::ResponseAppearance::Default);
         let this = self.clone();

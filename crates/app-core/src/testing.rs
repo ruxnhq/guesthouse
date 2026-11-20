@@ -123,6 +123,7 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     // Nor does it lack the jail, its cards' devices or udmabuf's room, whatever this PC has.
     context.jail_support = || guesthouse_jail::Support { landlock_abi: 10, seccomp: true };
     context.may_open = |_| true;
+    context.card_memories = String::new;
     context.security_modules = scratch.write("lsm", "capability,landlock");
     context.udmabuf_limit = scratch.path("udmabuf-limit");
     context

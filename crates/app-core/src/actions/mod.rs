@@ -55,9 +55,10 @@ use crate::machine::{Kind, Machine, load};
 use crate::monitor::Command as Qmp;
 use crate::network_settings::other_machines;
 use crate::processes::qemu_pid;
-use crate::settings::max_vram_gib;
+use crate::screen_gpu::setup_card;
+use crate::settings::max_vram_gib_for;
 use crate::snapshots::{delete_snapshot, go_back, take_snapshot};
-use crate::start_checks::{start_problems, video_cap};
+use crate::start_checks::{card_mates, start_problems, video_cap};
 use crate::tasks::{TaskRecord, write_task};
 use crate::text::shell_quote;
 use crate::vm_args::{Boot, VmPlan};
@@ -137,8 +138,8 @@ impl<'a> Task<'a> {
 
 /// The plan for this machine, in this task's slot, as things stand on the PC now.
 pub fn plan_for(context: &Context, machine: &Machine, boot: Boot) -> VmPlan {
-    let others = other_machines(context);
-    let cap = video_cap(machine, &others, max_vram_gib(context));
+    let mates = card_mates(machine, &other_machines(context), &setup_card(context));
+    let cap = video_cap(machine, &mates, max_vram_gib_for(context, machine));
     let mut plan = VmPlan::new(context, machine, boot, context.slot, cap);
     if machine.vcache_pin {
         plan.pin = Some(cpu_list(&vcache_cpus(&context.cpus)));

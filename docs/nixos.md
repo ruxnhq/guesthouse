@@ -9,6 +9,14 @@ source build has no Windows display driver. That needs Windows and Microsoft's k
 NixOS support is new. It's tested in a NixOS VM, but not yet on a PC with a GPU. If something doesn't
 work, please open an issue.
 
+Until the next release, use the `nixos-test` branch. The flake on main still gives 0.7.0, which can't run
+on NixOS. The branch gives the [0.7.1-nixos.1 test build](https://github.com/xnixy/guesthouse/releases/tag/v0.7.1-nixos.1),
+which can.
+
+```nix
+guesthouse.url = "github:xnixy/guesthouse/nixos-test";
+```
+
 ## Setup
 
 Add the flake as an input, and the module to your system.

@@ -38,6 +38,7 @@ mod space_vm;
 mod submit;
 mod traffic;
 mod udmabuf;
+mod video_ib;
 mod watch;
 
 pub use device::{Device, Mapping};
@@ -124,6 +125,8 @@ pub struct AmdBackend {
     udmabuf: Udmabuf,
     /// Copies of the last command buffers, when the daemon was asked for them.
     ib_dump: Option<ib_dump::Keeper>,
+    /// The copy of the video commands being run, kept for its room. See [`video_ib`].
+    video_commands: video_ib::Copied,
 }
 
 /// A run ready to send: its command buffers, the fence writer in `slot` last.
@@ -205,6 +208,7 @@ impl AmdBackend {
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
             ib_dump: None,
+            video_commands: video_ib::Copied::default(),
         })
     }
 
@@ -328,6 +332,55 @@ impl AmdBackend {
                 fault.address, fault.status
             )),
             Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Runs a guest's video work on the card's video ring and waits for it. The ring is never given
+    /// the guest's own command buffers, only a copy of them in a buffer of the daemon's: see
+    /// [`video_ib`] for why.
+    fn run_video(&mut self, work: &Work<'_>, ibs: &[Ib]) -> io::Result<Ran> {
+        let card = self.device.info();
+        let (start_alignment, alignment) = (card.ib_alignment.video.start, card.va_alignment);
+        let Some(space) = self.spaces.get_mut(&work.space) else {
+            return Err(io::Error::other("its space isn't here"));
+        };
+        let copied = &mut self.video_commands;
+        let read = |ib: &Ib, room: &mut [u32]| read_guest_commands(&self.memory, &space.vm, ib, room);
+        copy_video_commands(ibs, start_alignment, copied, read)?;
+        traffic::video_commands(work, copied);
+        let started = Instant::now();
+        let ran = space.vm.run_video(alignment, work.queue, copied, self.patience);
+        traffic::video_ran(work, copied, started.elapsed(), &ran);
+        ran
+    }
+
+    /// What the core is told of work that was waited for, by how it ran.
+    fn waited_for(&mut self, work: &Work<'_>, ip_type: u32, ran: io::Result<Ran>) -> WorkStart {
+        self.note_how_it_ran(&ran);
+        match ran {
+            Ok(Ran::Retired) => WorkStart::Ran,
+            // Nothing ran, so the guest's submission waits and comes again, and the guest never
+            // hears of it.
+            Ok(Ran::Refused) => WorkStart::Busy,
+            Ok(Ran::Hung) => {
+                log::error!("work on engine family {ip_type} never finished, and the kernel didn't reset it");
+                WorkStart::QueueFailed
+            }
+            // The guest's driver hears its queue failed, as it would after a fault on its own card.
+            Ok(Ran::Faulted(fault)) => {
+                log::error!(
+                    "work in space {:?} reached {:#x} on the card, where nothing is mapped (fault status \
+                     {:#x}). No more work from that space is run, on engine family {ip_type} or any other",
+                    work.space,
+                    fault.address,
+                    fault.status
+                );
+                WorkStart::QueueFailed
+            }
+            Err(error) => {
+                log::warn!("work on engine family {ip_type} not run: {error}");
+                WorkStart::QueueFailed
+            }
         }
     }
 
@@ -476,9 +529,9 @@ fn ranges_fit(ranges: &[GpuRange], start: u64, end: u64) -> bool {
     ranges.iter().all(|range| range.start >= start && range.end <= end && range.start <= range.end)
 }
 
-/// A command buffer's dwords, if it lies in guest pages, which the CPU reads where they are. A
-/// guest writes its commands with its CPU, so that is where they are.
-fn guest_commands(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> Option<Vec<u32>> {
+/// Where in this process a command buffer lies, if it lies in guest pages, which the CPU reads
+/// where they are. A guest writes its commands with its CPU, so that is where they are.
+fn guest_command_bytes(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> Option<*const u8> {
     let (buffer, offset) = space.locate(ib.address)?;
     let bo = memory.values().find(|bo| bo.handle == buffer)?;
     let Origin::HostPages { address, size, .. } = bo.origin else {
@@ -487,18 +540,61 @@ fn guest_commands(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> O
     if offset.checked_add(u64::from(ib.bytes))? > size {
         return None;
     }
+    Some((address + offset) as *const u8)
+}
+
+/// A command buffer's dwords, if it lies in guest pages.
+fn guest_commands(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> Option<Vec<u32>> {
+    let at = guest_command_bytes(memory, space, ib)?;
     let mut commands = vec![0u32; ib.bytes as usize / size_of::<u32>()];
-    // SAFETY: the pages are mapped in this process for `size` bytes while the buffer lives, and the
+    // SAFETY: the pages are mapped in this process for the buffer's bytes while it lives, and the
     // read ends inside them. The guest can write them meanwhile, which a copy of bytes takes as it
     // finds them.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            (address + offset) as *const u8,
+            at,
             commands.as_mut_ptr().cast::<u8>(),
             size_of_val(commands.as_slice()),
         )
     };
     Some(commands)
+}
+
+/// Reads a command buffer's dwords into `commands`, which holds no more of them than the buffer
+/// has. `None`, with nothing read, for a buffer that doesn't lie in guest pages.
+fn read_guest_commands(
+    memory: &HashMap<MemoryId, Bo>,
+    space: &SpaceVm,
+    ib: &Ib,
+    commands: &mut [u32],
+) -> Option<()> {
+    let at = guest_command_bytes(memory, space, ib)?;
+    let bytes = size_of_val(commands);
+    if bytes > ib.bytes as usize {
+        return None;
+    }
+    // SAFETY: as in `guest_commands`, and no more is read than the buffer's bytes.
+    unsafe { std::ptr::copy_nonoverlapping(at, commands.as_mut_ptr().cast::<u8>(), bytes) };
+    Some(())
+}
+
+/// Copies a submission's video command buffers into `copied`, laid out for the daemon's buffer.
+/// `read` fills in one buffer's dwords from the guest's pages, or says it can't.
+fn copy_video_commands(
+    ibs: &[Ib],
+    start_alignment: u32,
+    copied: &mut video_ib::Copied,
+    mut read: impl FnMut(&Ib, &mut [u32]) -> Option<()>,
+) -> io::Result<()> {
+    copied.clear();
+    for ib in ibs {
+        let refused = |why: &str| {
+            io::Error::other(format!("its commands at {:#x} for {:#x} bytes are {why}", ib.address, ib.bytes))
+        };
+        let room = copied.place(ib.bytes, start_alignment).map_err(|why| refused(why.0))?;
+        read(ib, room).ok_or_else(|| refused("not in guest pages the daemon can read"))?;
+    }
+    Ok(())
 }
 
 /// The first run of bytes a guest's DMA commands name that isn't mapped in its space. The card
@@ -963,6 +1059,22 @@ impl Backend for AmdBackend {
             );
             return WorkStart::QueueFailed;
         }
+        if node.ip_type == info::HW_IP_VCN_ENC {
+            // Before anything below can send the guest's own command buffers: see `video_ib`.
+            if space.vm.video_stopped() {
+                if space.vm.first_video_refusal() {
+                    log::warn!(
+                        "no more video work is run in space {:?}: an earlier video run there was sent and \
+                         never seen to end, and the buffer its commands are in can't be written again \
+                         while the card may still read it",
+                        work.space
+                    );
+                }
+                return WorkStart::QueueFailed;
+            }
+            let ran = self.run_video(work, &ibs);
+            return self.waited_for(work, node.ip_type, ran);
+        }
         let card = self.device.info();
         let writer = fence_ib::writer_for(node.ip_type, card.details.gfx_version.0)
             .filter(|_| space.vm.holds(work.fence_gpu_address, FENCE_BYTES));
@@ -994,36 +1106,7 @@ impl Backend for AmdBackend {
             return WorkStart::QueueFailed;
         };
         let ran = space.vm.run(node.ip_type, Some(work.queue), &ibs, self.patience);
-        self.note_how_it_ran(&ran);
-        match ran {
-            Ok(Ran::Retired) => WorkStart::Ran,
-            // Nothing ran, so the guest's submission waits and comes again, and the guest never
-            // hears of it.
-            Ok(Ran::Refused) => WorkStart::Busy,
-            Ok(Ran::Hung) => {
-                log::error!(
-                    "work on engine family {} never finished, and the kernel didn't reset it",
-                    node.ip_type
-                );
-                WorkStart::QueueFailed
-            }
-            // The guest's driver hears its queue failed, as it would after a fault on its own card.
-            Ok(Ran::Faulted(fault)) => {
-                log::error!(
-                    "work in space {:?} reached {:#x} on the card, where nothing is mapped (fault status \
-                     {:#x}). No more work from that space is run, on engine family {} or any other",
-                    work.space,
-                    fault.address,
-                    fault.status,
-                    node.ip_type
-                );
-                WorkStart::QueueFailed
-            }
-            Err(error) => {
-                log::warn!("work on engine family {} not run: {error}", node.ip_type);
-                WorkStart::QueueFailed
-            }
-        }
+        self.waited_for(work, node.ip_type, ran)
     }
 
     /// amdgpu's CS call is the doorbell, and it can fail.
@@ -1222,6 +1305,62 @@ mod tests {
         }
         let survey = AmdBackend::survey(&setup_for("1.0.0.0")).unwrap();
         assert!(matches!(decide_start(&survey), StartDecision::Refuse(_)));
+    }
+
+    /// Guest pages that hold command buffers, by GPU address: each dword is its own address.
+    fn read_from_guest_pages(readable: std::ops::Range<u64>) -> impl FnMut(&Ib, &mut [u32]) -> Option<()> {
+        move |ib, room| {
+            let end = ib.address + u64::from(ib.bytes);
+            (readable.start <= ib.address && end <= readable.end).then(|| {
+                for (index, word) in room.iter_mut().enumerate() {
+                    *word = (ib.address + 4 * index as u64) as u32;
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn video_commands_are_copied_out_of_guest_pages_and_run_from_the_daemons_buffer() {
+        const START: u32 = 256;
+        let guests = [Ib { address: 0x4_2000_1000, bytes: 0xC }, Ib { address: 0x4_2000_3000, bytes: 0x8 }];
+        let mut copied = video_ib::Copied::default();
+        copy_video_commands(&guests, START, &mut copied, read_from_guest_pages(0..u64::MAX)).unwrap();
+        // No run is at an address the guest gave, and each holds what the guest's buffer held.
+        let runs = [
+            Ib { address: video_ib::ADDRESS, bytes: 0xC },
+            Ib { address: video_ib::ADDRESS + 256, bytes: 0x8 },
+        ];
+        assert_eq!(copied.runs(), runs);
+        let held: Vec<&[u32]> = copied.buffers().collect();
+        assert_eq!(held, [&[0x2000_1000, 0x2000_1004, 0x2000_1008][..], &[0x2000_3000, 0x2000_3004][..]]);
+
+        // What an earlier submission left is gone before the next is copied.
+        copy_video_commands(&guests[1..], START, &mut copied, read_from_guest_pages(0..u64::MAX)).unwrap();
+        assert_eq!(copied.runs(), [Ib { address: video_ib::ADDRESS, bytes: 0x8 }]);
+    }
+
+    #[test]
+    fn video_commands_the_daemon_cannot_copy_are_not_run() {
+        const START: u32 = 256;
+        let mut copied = video_ib::Copied::default();
+        let failed = |guests: &[Ib], copied: &mut video_ib::Copied| {
+            let read = read_from_guest_pages(0x1000..0x2000);
+            copy_video_commands(guests, START, copied, read).unwrap_err().to_string()
+        };
+        // In video memory, say, where the CPU doesn't read them.
+        assert_eq!(
+            failed(&[Ib { address: 0x1000, bytes: 8 }, Ib { address: 0x8000, bytes: 8 }], &mut copied),
+            "its commands at 0x8000 for 0x8 bytes are not in guest pages the daemon can read"
+        );
+        assert_eq!(
+            failed(&[Ib { address: 0x1000, bytes: 6 }], &mut copied),
+            "its commands at 0x1000 for 0x6 bytes are not a whole number of dwords"
+        );
+        let long = video_ib::BYTES as u32 + 4;
+        assert_eq!(
+            failed(&[Ib { address: 0x1000, bytes: long }], &mut copied),
+            "its commands at 0x1000 for 0x10004 bytes are more than the daemon's buffer holds"
+        );
     }
 
     #[test]

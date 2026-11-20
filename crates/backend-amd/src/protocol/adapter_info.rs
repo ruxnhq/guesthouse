@@ -467,6 +467,7 @@ pub(crate) mod tests {
                 graphics: IbAlignment { start: 32, size: 32 },
                 compute: IbAlignment { start: 32, size: 32 },
                 dma: IbAlignment { start: 256, size: 4 },
+                video: IbAlignment { start: 256, size: 4 },
             },
             details: CardDetails {
                 external_revision: 0x9,

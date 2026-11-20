@@ -41,6 +41,8 @@ const ALL_INSTANCES: u32 = 0xffff_ffff;
 pub const HW_IP_GFX: u32 = 0;
 pub const HW_IP_COMPUTE: u32 = 1;
 pub const HW_IP_DMA: u32 = 2;
+/// The video encode family. From VCN 4 its ring is the one that decodes as well.
+pub const HW_IP_VCN_ENC: u32 = 7;
 
 /// An APU carves its video memory out of system RAM, so its sizes and CPU reach differ from a card
 /// with its own VRAM. AMDGPU_IDS_FLAGS_FUSION says which this is.
@@ -238,6 +240,7 @@ pub struct IbAlignments {
     pub graphics: IbAlignment,
     pub compute: IbAlignment,
     pub dma: IbAlignment,
+    pub video: IbAlignment,
 }
 
 impl IbAlignments {
@@ -247,6 +250,7 @@ impl IbAlignments {
             HW_IP_GFX => self.graphics,
             HW_IP_COMPUTE => self.compute,
             HW_IP_DMA => self.dma,
+            HW_IP_VCN_ENC => self.video,
             _ => IbAlignment::default(),
         }
     }
@@ -397,6 +401,7 @@ pub fn read_device_info(file: &impl AsRawFd, device_folder: Option<&Path>) -> io
     let gfx = query_hw_ip(file, HW_IP_GFX).unwrap_or_default();
     let compute = query_hw_ip(file, HW_IP_COMPUTE).unwrap_or_default();
     let dma = query_hw_ip(file, HW_IP_DMA).unwrap_or_default();
+    let video = query_hw_ip(file, HW_IP_VCN_ENC).unwrap_or_default();
     let engines = EngineSet { graphics: gfx.rings != 0, compute: compute.rings != 0, dma: dma.rings != 0 };
 
     Ok(DeviceInfo {
@@ -419,6 +424,7 @@ pub fn read_device_info(file: &impl AsRawFd, device_folder: Option<&Path>) -> io
             graphics: gfx.ib_alignment,
             compute: compute.ib_alignment,
             dma: dma.ib_alignment,
+            video: video.ib_alignment,
         },
         details: read_details(file, &dev, gfx, compute, device_folder),
     })

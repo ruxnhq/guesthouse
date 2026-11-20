@@ -93,13 +93,15 @@ try_machine() { # name, how: landlock or namespaces, grants
     pkill -u "$(id -u)" -x qemu-system-x86
 }
 
-# The namespace probe as sandbox_question() in forwarding.rs makes it, and the one before it.
-TRUE=$(command -v true)
+# The namespace probe as sandbox_question() in forwarding.rs makes it, and the one before it. true is
+# looked for as the app looks, on its PATH, which starts with the package's tools, where it's a link to
+# coreutils. The shell's own true would hide that. It's in the store, which is bound already.
+TRUE=$(IFS=:; for folder in $PATH; do [ -x "$folder/true" ] && echo "$folder/true" && break; done)
 bwrap --unshare-user --unshare-ipc --unshare-uts \
     --ro-bind-try /usr /usr --ro-bind-try /nix/store /nix/store \
     --ro-bind-try /run/current-system/sw /run/current-system/sw \
     --ro-bind-try /run/opengl-driver /run/opengl-driver \
-    --symlink usr/lib64 /lib64 --ro-bind-try "$TRUE" "$TRUE" -- "$TRUE" >"$WORK/probe.log" 2>&1
+    --symlink usr/lib64 /lib64 -- "$TRUE" >"$WORK/probe.log" 2>&1
 result probe.new "$? $(tr '\n' '|' <"$WORK/probe.log")"
 bwrap --unshare-user --unshare-ipc --unshare-uts --ro-bind /usr /usr --symlink usr/lib64 /lib64 \
     -- /usr/bin/true >"$WORK/probe.log" 2>&1

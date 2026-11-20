@@ -17,22 +17,30 @@ const GL_QUESTION: &str = "virtio-vga-gl,help";
 const GL_ANSWER: &str = "drm_native_context=";
 /// The namespaces the jail uses, which a PC can refuse, with nothing else in the way.
 const SANDBOX_NAMESPACES: [&str; 3] = ["--unshare-user", "--unshare-ipc", "--unshare-uts"];
-/// What runs inside to show they work. It's bound at the place `PATH` finds it, which on NixOS is a
-/// link into the store, so it keeps the name it's called by.
+/// What runs inside to show they work, from where `PATH` finds it. In NixOS's store it's a link to
+/// coreutils, which goes by the name it's called with.
 const SANDBOX_PROGRAM: &str = "true";
 const USUAL_SANDBOX_PROGRAM: &str = "/usr/bin/true";
 
-/// bubblewrap's words for the question: the system's programs bound as the jail binds them, and the
-/// program to run.
 fn sandbox_question() -> Vec<String> {
     let program = program_on_path(SANDBOX_PROGRAM).unwrap_or_else(|| USUAL_SANDBOX_PROGRAM.into());
-    let program = program.display().to_string();
+    sandbox_question_for(&program)
+}
+
+/// bubblewrap's words for the question: the system's programs bound as the jail binds them, and the
+/// program to run. That's only bound at its own place when it's outside them. Inside one it's there
+/// already, and bubblewrap can't bind onto a link, which NixOS's `true` is.
+fn sandbox_question_for(program: &Path) -> Vec<String> {
     let mut words: Vec<String> = SANDBOX_NAMESPACES.map(str::to_owned).to_vec();
     for folder in system::PROGRAM_FOLDERS {
         words.extend(["--ro-bind-try", folder, folder].map(str::to_owned));
     }
     words.extend(["--symlink", "usr/lib64", "/lib64"].map(str::to_owned));
-    words.extend(["--ro-bind-try", &program, &program, "--", &program].map(str::to_owned));
+    let path = program.display().to_string();
+    if !system::PROGRAM_FOLDERS.iter().any(|folder| program.starts_with(folder)) {
+        words.extend(["--ro-bind-try", &path, &path].map(str::to_owned));
+    }
+    words.extend(["--".to_owned(), path]);
     words
 }
 
@@ -85,6 +93,21 @@ pub fn forwarding_problem(qemu: &Path, allow_list: &Path) -> Option<GpuOff> {
 mod tests {
     use super::*;
     use crate::testing::Scratch;
+
+    #[test]
+    fn a_program_in_the_store_is_run_from_the_bound_store() {
+        let program = "/nix/store/0000-coreutils-9.11/bin/true";
+        let words = sandbox_question_for(Path::new(program));
+        assert_eq!(words.iter().filter(|word| *word == program).count(), 1, "{words:?}");
+        assert_eq!(words.last().map(String::as_str), Some(program));
+    }
+
+    #[test]
+    fn a_program_outside_the_bound_folders_is_bound_at_its_place() {
+        let program = "/opt/tools/true";
+        let words = sandbox_question_for(Path::new(program));
+        assert_eq!(words.iter().filter(|word| *word == program).count(), 3, "{words:?}");
+    }
 
     /// As the real one does, it exits with 0 whether or not it knows the device.
     fn fake_qemu(scratch: &Scratch, answer: &str) -> std::path::PathBuf {

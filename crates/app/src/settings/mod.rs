@@ -13,6 +13,7 @@ mod hardware;
 mod jail;
 mod linux_gpu;
 mod network;
+mod remote_access;
 mod remove;
 mod sharing;
 mod snapshots;
@@ -180,6 +181,7 @@ struct Parts {
     windows_card: windows_card::WindowsCard,
     sharing: sharing::Sharing,
     network: network::Network,
+    remote_access: remote_access::RemoteAccess,
     usb: usb::Usb,
     remove: remove::Remove,
     /// The names of the pages, down the dialog's side.
@@ -214,6 +216,7 @@ impl SettingsDialog {
             drives: drives::Drives::new(&shared, &pages.storage),
             snapshots: snapshots::Snapshots::new(&shared, &pages.storage),
             network: network::Network::new(&shared, &pages.network),
+            remote_access: remote_access::RemoteAccess::new(&shared, &pages.network),
             sharing: sharing::Sharing::new(&shared, &pages.devices),
             usb: usb::Usb::new(&shared, &pages.devices),
             shared,
@@ -252,6 +255,7 @@ impl SettingsDialog {
         parts.snapshots.set_status(status);
         parts.sharing.set_status(status);
         parts.network.set_status(status);
+        parts.remote_access.set_status(status);
         parts.usb.set_status(status);
         parts.linux_gpu.set_status(status);
         parts.windows_card.set_status(status);

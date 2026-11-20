@@ -6,7 +6,7 @@ use adw::prelude::*;
 use guesthouse_app_core::machine::Kind;
 
 const WINDOWS_NOTE: &str =
-    "Windows signs in by itself. The password is for permission prompts and Remote Desktop.";
+    "Windows signs in by itself. The password is for permission prompts, Remote Desktop and SSH.";
 const LINUX_NOTE: &str = "For a console login if the desktop won't start. The app gets in with its own key.";
 
 pub struct Account;

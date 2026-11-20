@@ -18,7 +18,7 @@ use guesthouse_app_core::library::{
     MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create,
 };
 use guesthouse_app_core::machine::{Kind, MIN_CORES, MIN_RAM_GIB, Machine};
-use guesthouse_app_core::remote_access::Access;
+use guesthouse_app_core::remote_access::{Access, Service, ssh_problem};
 use guesthouse_app_core::setup::amd::NO_AMD_SETUP;
 use guesthouse_app_core::setup::checks::machine_gpu_warning;
 use guesthouse_app_core::setup::guest_driver::guest_driver;
@@ -29,11 +29,17 @@ use std::rc::Rc;
 
 const DISPLAY_DRIVER_NOTE: &str =
     "Guesthouse adds its own display driver to Windows, signed with a certificate made on this machine.";
-const WINDOWS_ACCOUNT_NOTE: &str = "Windows signs in by itself. The password is for permission prompts and Remote \
-                                    Desktop. Leave it empty for a random one, kept in the machine's folder.";
+const WINDOWS_ACCOUNT_NOTE: &str = "Windows signs in by itself. The password is for permission prompts, Remote \
+                                    Desktop and SSH. Leave it empty for a random one, kept in the machine's \
+                                    folder.";
 const LINUX_ACCOUNT_NOTE: &str = "For a console login if the desktop won't start. Leave the password empty for a \
                                   random one, kept in the machine's folder.";
 const DISK_NOTE: &str = "The most it can hold. Its file starts small and grows as the guest fills it.";
+const ACCESS_NOTE: &str = "Only a port forward from this PC reaches them, whatever the network. The machine's \
+                           settings can change them later.";
+const REMOTE_DESKTOP_NOTE: &str = "Windows' own, on guest port 3389. Sign in with the account above.";
+const SSH_NOTE: &str = "OpenSSH Server on guest port 22, for the account above. Your public keys from ~/.ssh go \
+                        in too.";
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
@@ -58,6 +64,10 @@ struct Parts {
     account: adw::PreferencesGroup,
     user: adw::EntryRow,
     password: adw::PasswordEntryRow,
+    /// Remote Desktop and SSH, for a Windows machine.
+    access: adw::PreferencesGroup,
+    remote_desktop: adw::SwitchRow,
+    ssh: adw::SwitchRow,
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     disk: adw::SpinRow,
@@ -136,6 +146,27 @@ impl NewMachineDialog {
         account.add(&user);
         let password = adw::PasswordEntryRow::builder().title("Password").build();
         account.add(&password);
+        let access = adw::PreferencesGroup::builder()
+            .title("Remote Access")
+            .description(ACCESS_NOTE)
+            .visible(false)
+            .build();
+        page.add(&access);
+        let remote_desktop = adw::SwitchRow::builder()
+            .title(Service::RemoteDesktop.name())
+            .subtitle(REMOTE_DESKTOP_NOTE)
+            .active(Access::NEW.is_on(Service::RemoteDesktop))
+            .build();
+        access.add(&remote_desktop);
+        // A build without OpenSSH's installer can't give a guest SSH, and says so rather than fail later.
+        let no_openssh = ssh_problem(&context);
+        let ssh = adw::SwitchRow::builder()
+            .title(Service::Ssh.name())
+            .subtitle(no_openssh.unwrap_or(SSH_NOTE))
+            .active(Access::NEW.is_on(Service::Ssh) && no_openssh.is_none())
+            .sensitive(no_openssh.is_none())
+            .build();
+        access.add(&ssh);
         let cards = windows_card_choices(&context);
         let labels: Vec<&str> = cards.iter().map(|choice| choice.label.as_str()).collect();
         let card = choice_row(CARD_TITLE, &labels);
@@ -178,6 +209,9 @@ impl NewMachineDialog {
             account,
             user,
             password,
+            access,
+            remote_desktop,
+            ssh,
             cores,
             ram,
             disk,
@@ -368,6 +402,7 @@ impl NewMachineDialog {
         }
         *self.0.suggested.borrow_mut() = suggestion;
         self.show_account(iso.kind);
+        self.0.access.set_visible(iso.kind == Kind::Windows);
         *self.0.iso.borrow_mut() = Some(iso);
         self.0.hardware.set_sensitive(true);
         self.update();
@@ -468,7 +503,10 @@ impl NewMachineDialog {
             amd_gpu: (iso.kind == Kind::Windows).then(|| self.chosen_card_pci()),
             disk_place: parts.disk_place.chosen(),
             gpu_maker: self.chosen_choice().map(|choice| choice.maker),
-            access: Access::NEW,
+            access: Access {
+                remote_desktop: Some(parts.remote_desktop.is_active()),
+                ssh: Some(parts.ssh.is_active()),
+            },
         };
         let context = parts.window.context();
         let working = context.clone();

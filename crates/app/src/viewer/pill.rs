@@ -19,6 +19,7 @@ pub struct Pill {
     pub capture: gtk::Button,
     pub fullscreen: gtk::Button,
     more: gtk::MenuButton,
+    controls: gtk::WindowControls,
     /// The monitors fullscreen can go to, which the viewer lists.
     pub monitors: gio::Menu,
     actions: gio::SimpleActionGroup,
@@ -32,6 +33,22 @@ fn pill_button(icon: &str, name: &str) -> gtk::Button {
     let button = icon_button(icon, name);
     button.set_focus_on_click(false);
     button
+}
+
+/// The window's buttons as the desktop lays them out, like `icon:minimize,maximize,close`.
+fn desktop_layout() -> String {
+    gtk::Settings::default()
+        .and_then(|settings| settings.gtk_decoration_layout())
+        .map(String::from)
+        .unwrap_or_default()
+}
+
+/// A layout of the window's buttons with the one that maximises left out, on either side.
+fn without_maximize(layout: &str) -> String {
+    let side = |buttons: &str| {
+        buttons.split(',').filter(|button| button.trim() != "maximize").collect::<Vec<_>>().join(",")
+    };
+    layout.split(':').map(side).collect::<Vec<_>>().join(":")
 }
 
 fn switch(name: &str, on: bool) -> gio::SimpleAction {
@@ -107,7 +124,7 @@ impl Pill {
             actions.add_action(action);
         }
         bar.insert_action_group(GROUP, Some(&actions));
-        Self { bar, hint, capture, fullscreen, more, monitors, actions, overlay, hides, shut_down }
+        Self { bar, hint, capture, fullscreen, more, controls, monitors, actions, overlay, hides, shut_down }
     }
 
     pub fn widget(&self) -> &gtk::WindowHandle {
@@ -148,15 +165,37 @@ impl Pill {
     }
 
     /// The fullscreen button leads out. The window's own buttons stay, so the window can be
-    /// minimised without leaving fullscreen, as it could before the pill.
+    /// minimised without leaving fullscreen, as it could before the pill, all but the one that
+    /// maximises, which a window in fullscreen can't be.
+    ///
+    /// That button coming back also makes the bar wider, and KWin needs that. It works out whether
+    /// a window can be maximised only when the window's smallest size changes, says no while it's
+    /// in fullscreen, and doesn't ask again when it leaves, so the button stayed greyed out.
     pub fn set_fullscreen(&self, fullscreen: bool, tooltip: &str) {
         let icon = if fullscreen { "view-restore-symbolic" } else { "view-fullscreen-symbolic" };
         self.fullscreen.set_icon_name(icon);
         self.fullscreen.set_tooltip_text(Some(tooltip));
+        // With no layout of the desktop's to go by, GTK's own is left as it is.
+        let layout = desktop_layout();
+        let fullscreen_layout = (fullscreen && !layout.is_empty()).then(|| without_maximize(&layout));
+        self.controls.set_decoration_layout(fullscreen_layout.as_deref());
     }
 
     /// Whether the menu is open, when the pointer is in it and not gone.
     pub fn menu_open(&self) -> bool {
         self.more.popover().is_some_and(|menu| menu.is_visible())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_maximize;
+
+    #[test]
+    fn fullscreen_leaves_out_only_the_button_that_maximises() {
+        assert_eq!(without_maximize("icon:minimize,maximize,close"), "icon:minimize,close");
+        assert_eq!(without_maximize("close,maximize,minimize:menu"), "close,minimize:menu");
+        assert_eq!(without_maximize("appmenu:close"), "appmenu:close");
+        assert_eq!(without_maximize(":maximize"), ":");
     }
 }

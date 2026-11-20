@@ -18,7 +18,7 @@ A plain VM needs QEMU with its D-Bus display, which Fedora calls `qemu-ui-dbus`,
 
 What `install.sh` does, in order:
 
-1. Refuses to run as root, on NixOS, on musl, and on anything but x86_64.
+1. Refuses to run as root, on musl, and on anything but x86_64. On NixOS it points you to the flake instead: see [nixos.md](nixos.md).
 2. Looks at the distro, CPU and KVM, with no root.
 3. Downloads one release into a folder of its own and checks its SHA-256 against the one in the script.
 4. Asks the release's own `guesthouse-check` what this PC can run. That's what looks at the GPU and its driver. If the answer's no it still installs, with plain VMs only, and says why.

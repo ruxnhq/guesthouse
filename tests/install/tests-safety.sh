@@ -47,11 +47,11 @@ t_another_architecture_is_refused() {
     check_said "only runs on x86_64"
 }
 
-t_nixos_is_refused() {
+t_nixos_is_sent_to_the_flake() {
     fake_os nixos
     no_terminal "$SHELL_UNDER_TEST" "$REPO/install.sh"
     check_exit 1
-    check_said "NixOS isn't supported"
+    check_said "install Guesthouse through its flake"
 }
 
 t_musl_is_refused() {

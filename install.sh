@@ -190,7 +190,7 @@ refuse_unsupported() {
     [ "$(uname -m)" = "$ARCH" ] ||
         die "Guesthouse only runs on $ARCH, and this PC is $(uname -m). KVM can't run these guests anywhere else."
     [ "$FAMILY" != nixos ] && [ ! -e /etc/NIXOS ] ||
-        die "NixOS isn't supported: the release's programs expect a normal /lib and /usr, and this script can't declare anything in your configuration."
+        die "on NixOS, install Guesthouse through its flake instead: $REPO_URL/blob/main/docs/nixos.md. This script can't declare anything in your configuration."
     if ldd --version 2>&1 | grep -qi musl; then
         die "musl isn't supported: the release is built against glibc, and the app needs it."
     fi

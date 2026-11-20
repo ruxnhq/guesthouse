@@ -112,9 +112,15 @@ pub struct FakeHost {
     /// Monitored fences a space's process holds: the space, the GPU address and the fence's guest
     /// physical address.
     monitored: Vec<(SpaceId, u64, u64)>,
+    /// GPU addresses handed out so far, from [`FakeHost::ADDRESSES_FROM`] up.
+    addresses_taken: u64,
 }
 
 impl FakeHost {
+    /// Where the addresses the host hands out start: high in the guests' range, past anything the
+    /// tests map themselves.
+    pub const ADDRESSES_FROM: u64 = 0x80_0000_0000;
+
     pub fn show(&mut self, space: SpaceId, gpu_address: u64, pages: &Pages) {
         self.spans.push((space, gpu_address, pages.address(), pages.len()));
     }
@@ -139,8 +145,10 @@ impl FakeHost {
 }
 
 impl HostServices for FakeHost {
-    fn take_gpu_addresses(&mut self, _size: u64, _align: u64) -> Result<u64, BackendError> {
-        Err(BackendError::new("the test host hands out no addresses"))
+    fn take_gpu_addresses(&mut self, size: u64, align: u64) -> Result<u64, BackendError> {
+        let address = (Self::ADDRESSES_FROM + self.addresses_taken).next_multiple_of(align.max(1));
+        self.addresses_taken = address + size - Self::ADDRESSES_FROM;
+        Ok(address)
     }
 
     fn read_at_gpu_address(&self, space: SpaceId, address: u64, out: &mut [u8]) -> Option<usize> {

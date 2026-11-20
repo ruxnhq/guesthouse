@@ -1,11 +1,12 @@
 //! Pictures out of the guest: a buffer handed to a viewer as a file, and frames copied between
 //! surfaces in the daemon's own address space.
 //!
-//! The copies are made by the CPU, through its view of each end. That is right for any memory and
-//! quick for the guest's own pages, where Intel's drivers keep nearly everything. For a picture
-//! that stays in the card's memory it is slow, as the CPU reads that memory uncached, and a copy
-//! by the card's copy engine would be the better way; [`crate::xe::batch::copy_rows`] is its
-//! instruction, and nothing sends it yet.
+//! Frames in rows at both ends are copied here by the CPU, through its view of each end. That is
+//! right for any memory and quick for the guest's own pages, where Intel's drivers keep nearly
+//! everything. For a picture that stays in the card's memory it is slow, as the CPU reads that
+//! memory uncached, and a copy by the card's copy engine would be the better way;
+//! [`crate::xe::batch::copy_rows`] is its instruction, and nothing sends it yet. A frame in tiles
+//! at either end already goes by the copy engine: see [`super::blits`].
 
 use super::CardWork;
 use crate::xe::plan::Backing;

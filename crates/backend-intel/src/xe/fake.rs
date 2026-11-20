@@ -349,6 +349,78 @@ impl State {
         Ok(())
     }
 
+    /// Runs one `XY_FAST_COPY_BLT`, pixel by pixel, each end laid out as [`surface_offset`] says.
+    /// What the PRM forbids, or leaves undefined, a card would do something unknown with, so the
+    /// stand-in faults at the instruction instead: a reserved bit set, a length other than 8, a
+    /// Tile Y type bit clear, a depth other than 32 bits, a base off a cache line, a pitch that
+    /// isn't whole tiles or OWords, a first pixel off an OWord, an empty or inside-out rectangle.
+    /// A bad address faults where it points, as a run that reads past its binding does.
+    fn fast_copy(vm: &Vm, dwords: &[u32; batch::FAST_COPY_DWORDS]) -> Result<(), ()> {
+        const DWORD0_RESERVED: u32 = 0x000F_9F00;
+        const DWORD1_RESERVED: u32 = 0x380F_0000;
+        let header = dwords[0];
+        if header & DWORD0_RESERVED != 0 || header & 0xFF != 8 {
+            return Err(());
+        }
+        let tile4_bits = batch::FAST_COPY_SOURCE_TILE4 | batch::FAST_COPY_TARGET_TILE4;
+        if dwords[1] & tile4_bits != tile4_bits
+            || dwords[1] & DWORD1_RESERVED != 0
+            || dwords[1] & batch::FAST_COPY_DEPTH_MASK != batch::FAST_COPY_DEPTH_32
+            || dwords[7] & 0xFF0F_0000 != 0
+        {
+            return Err(());
+        }
+        let tiling = |shift: u32| match header >> shift & 3 {
+            0 => batch::Tiling::Linear,
+            1 => batch::Tiling::TileX,
+            2 => batch::Tiling::Tile4,
+            _ => batch::Tiling::Tile64,
+        };
+        let (source_tiling, target_tiling) =
+            (tiling(batch::FAST_COPY_SOURCE_TILING_SHIFT), tiling(batch::FAST_COPY_TARGET_TILING_SHIFT));
+        let pitch = |tiling: batch::Tiling, field: u32| {
+            let field = u64::from(field & 0xFFFF);
+            if tiling == batch::Tiling::Linear { field } else { field * 4 }
+        };
+        let (source_pitch, target_pitch) = (pitch(source_tiling, dwords[7]), pitch(target_tiling, dwords[1]));
+        let corner = |dword: u32| (u64::from(dword & 0xFFFF), u64::from(dword >> 16));
+        let ((x1, y1), (x2, y2), (source_x, source_y)) =
+            (corner(dwords[2]), corner(dwords[3]), corner(dwords[6]));
+        let address = |low: u32, high: u32| u64::from(high) << 32 | u64::from(low);
+        let (target, source) = (address(dwords[4], dwords[5]), address(dwords[8], dwords[9]));
+        let pixel = u64::from(batch::FAST_COPY_PIXEL_BYTES);
+        let oword = u64::from(batch::OWORD);
+        let side_breaks_rules = |base: u64, pitch: u64, tiling: batch::Tiling, x: u64| {
+            !base.is_multiple_of(batch::CACHE_LINE)
+                || pitch == 0
+                || !pitch.is_multiple_of(tiling.width().into())
+                || !(x * pixel).is_multiple_of(oword)
+        };
+        if x2 <= x1
+            || y2 <= y1
+            || [x2, y2].iter().any(|&end| end > u64::from(batch::FAST_COPY_COORDINATE_MOST))
+            || side_breaks_rules(target, target_pitch, target_tiling, x1)
+            || side_breaks_rules(source, source_pitch, source_tiling, source_x)
+        {
+            return Err(());
+        }
+        for row in 0..y2 - y1 {
+            for column in 0..x2 - x1 {
+                let from = source
+                    + surface_offset(
+                        source_tiling,
+                        source_pitch,
+                        (source_x + column) * pixel,
+                        source_y + row,
+                    );
+                let to =
+                    target + surface_offset(target_tiling, target_pitch, (x1 + column) * pixel, y1 + row);
+                Self::copy(vm, from, to, pixel).map_err(|_| ())?;
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the instructions this backend writes. Anything else ends the batch quietly.
     fn run(vm: &Vm, registers: &mut Registers, batch: u64) -> Outcome {
         const MEM_COPY_HEADER_MASK: u32 = 0xFFC0_0000;
@@ -389,6 +461,14 @@ impl State {
                 }
                 if header & !0xFFFF == batch::SEMAPHORE_WAIT_HEADER & !0xFFFF {
                     return Err(Outcome::Parked);
+                }
+                if header & batch::FAST_COPY_HEADER_MASK == batch::FAST_COPY {
+                    let mut dwords = [0u32; batch::FAST_COPY_DWORDS];
+                    for (index, dword) in dwords.iter_mut().enumerate() {
+                        *dword = Self::read_dword(vm, at + 4 * index as u64)?;
+                    }
+                    Self::fast_copy(vm, &dwords).map_err(|()| Outcome::Fault(at))?;
+                    return Ok(Some(at + 4 * batch::FAST_COPY_DWORDS as u64));
                 }
                 if header & MEM_COPY_HEADER_MASK == MEM_COPY {
                     let field = |index: u64| Self::read_dword(vm, at + 4 * index).map(|v| u64::from(v) + 1);
@@ -514,6 +594,41 @@ impl State {
             }
         }
     }
+}
+
+/// Where the byte at byte `x` of row `y` of a surface lies, from the surface's start, as the
+/// stand-in card lays out each tiling: whole tiles in rows of tiles across the pitch, and inside a
+/// tile the bits of `x` and `y` spread over the offset's bits as gmmlib's swizzles have them
+/// (`INTEL_TILE_X`, `INTEL_TILE_4` and `INTEL_TILE_64_32` in
+/// `Source/GmmLib/Utility/CpuSwizzleBlt/CpuSwizzleBlt.c`, where `X` marks a bit of `x` and `Y` one
+/// of `y`, from the offset's bit 15 down to bit 0):
+///
+/// - TileX, `o o o o Y Y Y X X X X X X X X X`: 512 bytes by 8 rows.
+/// - Tile4, `o o o o Y Y X Y X X Y Y X X X X`: 128 bytes by 32 rows.
+/// - Tile64 of 32-bit pixels, `Y Y X X Y Y X Y X X Y Y X X X X`: 512 bytes by 128 rows.
+pub fn surface_offset(tiling: batch::Tiling, pitch: u64, x: u64, y: u64) -> u64 {
+    let (x_bits, y_bits) = match tiling {
+        batch::Tiling::Linear => return y * pitch + x,
+        batch::Tiling::TileX => (0x01FFu16, 0x0E00u16),
+        batch::Tiling::Tile4 => (0x02CF, 0x0D30),
+        batch::Tiling::Tile64 => (0x32CF, 0xCD30),
+    };
+    let (width, rows) = (u64::from(tiling.width()), u64::from(tiling.rows()));
+    let tile = (y / rows) * (pitch / width) + x / width;
+    tile * width * rows + spread(x % width, x_bits) + spread(y % rows, y_bits)
+}
+
+/// Puts the low bits of `value`, lowest first, at the bits `mask` has set.
+fn spread(value: u64, mask: u16) -> u64 {
+    let mut out = 0;
+    let mut next = 0;
+    for bit in 0..16 {
+        if mask >> bit & 1 != 0 {
+            out |= (value >> next & 1) << bit;
+            next += 1;
+        }
+    }
+    out
 }
 
 /// Names the first few unbound addresses of a kind in the log.
@@ -934,6 +1049,34 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each of gmmlib's swizzles puts every byte of a tile at its own offset inside the tile, and
+    /// the tiles follow each other along the pitch, then down.
+    #[test]
+    fn each_tile_layout_fills_its_tile_once_and_tiles_follow_along_the_pitch() {
+        for tiling in [batch::Tiling::TileX, batch::Tiling::Tile4, batch::Tiling::Tile64] {
+            let (width, rows) = (u64::from(tiling.width()), u64::from(tiling.rows()));
+            let mut seen = vec![false; (width * rows) as usize];
+            for y in 0..rows {
+                for x in 0..width {
+                    let offset = surface_offset(tiling, 4 * width, x, y) as usize;
+                    assert!(!std::mem::replace(&mut seen[offset], true), "{tiling:?} ({x}, {y}) twice");
+                }
+            }
+            assert!(seen.iter().all(|&hit| hit), "{tiling:?} leaves a byte out");
+            let tile = width * rows;
+            assert_eq!(surface_offset(tiling, 4 * width, width, 0), tile, "{tiling:?} the next tile across");
+            assert_eq!(
+                surface_offset(tiling, 4 * width, 0, rows),
+                4 * tile,
+                "{tiling:?} the next row of tiles"
+            );
+        }
+        // Inside a tile an OWord of a row is in order, and Tile4's second row follows its first OWord.
+        assert_eq!(surface_offset(batch::Tiling::Tile4, 128, 15, 0), 15);
+        assert_eq!(surface_offset(batch::Tiling::Tile4, 128, 0, 1), 16);
+        assert_eq!(surface_offset(batch::Tiling::Linear, 7680, 8, 3), 3 * 7680 + 8);
+    }
     use crate::xe_query::Engine;
 
     fn buffer() -> NewBuffer {

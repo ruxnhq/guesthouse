@@ -93,6 +93,21 @@ pub mod info_flag {
     pub const TILE_64: u64 = 1 << 36;
 }
 
+/// Some of gmmlib's tile modes, the word at [`at::TILE_MODE`] that a tiled surface's shape keeps.
+/// GMM_TILE_MODE (`Source/GmmLib/inc/External/Common/GmmPlatformExt.h`) counts up from TILE_NONE:
+/// the two legacy modes, then fourteen Yf and Ys modes, then TILE4, then the Tile64 modes, each of
+/// those but TILE4 five times over, for elements of 8, 16, 32, 64 and 128 bits
+/// (`DEFINE_TILE_BPEs`).
+pub mod tile_mode {
+    /// LEGACY_TILE_X.
+    pub const LEGACY_TILE_X: u32 = 1;
+    /// TILE4: after TILE_NONE, the two legacy modes and the seventy Yf and Ys modes.
+    pub const TILE4: u32 = 3 + 14 * 5;
+    /// TILE__64_2D_32bpe: one sample of 32 bits in 64 KiB tiles, after TILE4 and the five
+    /// TILE__64_1D modes. The tester's back buffer on a B580 has it, with Tile64 in its flags.
+    pub const TILE_64_2D_32BPE: u32 = TILE4 + 1 + 5 + 2;
+}
+
 /// The ranges [`Resource::parse`] reads, so a log line can list what else the object holds.
 pub const DECODED: [(usize, usize); 11] = [
     (0, 8),
@@ -329,6 +344,17 @@ pub(crate) mod tests {
         put_dword(&mut data, at::TILE_MODE, 9);
         let surface = Resource::parse(&data).unwrap().shape().surface.unwrap();
         assert_eq!(surface.tiling, Some(9));
+    }
+
+    /// The tester's back buffer: info flags 0x88001101008100 with Tile64's bit, tile mode 81, a
+    /// pitch of 7680 and 0x870000 bytes, which is 15 tiles of 512 bytes across and 9 of 128 rows
+    /// down, of 64 KiB each, for 1071 rows.
+    #[test]
+    fn the_tile_modes_are_counted_as_gmmlib_counts_them() {
+        assert_eq!((tile_mode::LEGACY_TILE_X, tile_mode::TILE4, tile_mode::TILE_64_2D_32BPE), (1, 73, 81));
+        assert_ne!(0x0088_0011_0100_8100u64 & info_flag::TILE_64, 0);
+        assert_eq!(0x0088_0011_0100_8100u64 & info_flag::TILE_4, 0);
+        assert_eq!((7680 / 512) * 1071u64.div_ceil(128) * 0x1_0000, 0x87_0000);
     }
 
     #[test]

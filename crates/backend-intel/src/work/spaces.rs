@@ -169,8 +169,11 @@ impl CardWork {
         Ok(space)
     }
 
-    /// Destroys a space and whatever of xe's still runs in it.
+    /// Destroys a space and whatever of xe's still runs in it, the copy engine's queue among them.
     pub fn destroy_space(&mut self, space: SpaceId) {
+        if self.copy_engine_in(space) {
+            self.close_copy_engine();
+        }
         let queues: Vec<u32> =
             self.queues.iter().filter(|(_, queue)| queue.space == space).map(|(id, _)| *id).collect();
         for queue in queues {

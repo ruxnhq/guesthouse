@@ -52,8 +52,8 @@ use guesthouse_backend::guest_text::QUERY_USER_DRIVER_NAME;
 use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, COPY_PIXEL_BYTES, CardLabel, Doorbell, DriverFound,
     DriverSurvey, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard, Refusal,
-    RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, Status, UnmapRequest,
-    VendorQuery, Work, WorkSource, WorkStart,
+    RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, Status, SurfaceShape,
+    UnmapRequest, VendorQuery, Work, WorkSource, WorkStart,
 };
 use hwconfig::Hwconfig;
 pub use ioctl::{INTEL_VENDOR, intel_render_node};
@@ -71,6 +71,7 @@ use std::time::Instant;
 use traffic::{QueryOutcome, Traffic};
 use watch::PREFIX;
 use work::CardWork;
+use work::blits::Blit;
 use work::copies::Rows;
 use xe::abi::Keying;
 use xe::device::Xe;
@@ -475,6 +476,28 @@ impl IntelBackend {
 
 fn no_card() -> std::io::Result<Box<dyn Xe + Send>> {
     Err(std::io::Error::other("there is no card"))
+}
+
+/// Starts a copy on the copy engine, unless it is empty, which is done at once, or it can't be
+/// made, which the log is told.
+fn start_blit(
+    work: &mut CardWork,
+    host: &mut dyn HostServices,
+    space: SpaceId,
+    blit: Result<Blit, String>,
+) -> StagingStart {
+    let started = match blit {
+        Ok(blit) if blit.is_empty() => return StagingStart::Finished(Status::SUCCESS),
+        Ok(blit) => work.start_blit(host, space, &blit),
+        Err(why) => Err(BackendError::new(format!("the copy engine isn't given this copy: {why}"))),
+    };
+    match started {
+        Ok(()) => StagingStart::Running,
+        Err(error) => {
+            work.note_blit_failure(&error);
+            StagingStart::Finished(Status::UNSUCCESSFUL)
+        }
+    }
 }
 
 /// A copy's result as the guest is told it, with the reason in the log.
@@ -962,11 +985,21 @@ impl Backend for IntelBackend {
         }
     }
 
-    /// By the CPU, at once: see [`work::copies`]. While listening, what would be copied was never
-    /// drawn, so the copy is done by leaving the target as it is.
-    fn start_staging_copy(&mut self, _host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {
+    /// Surfaces in rows at both ends by the CPU, at once: see [`work::copies`]. A surface in tiles
+    /// at either end by the copy engine, which [`Backend::poll_staging_copy`] waits for: see
+    /// [`work::blits`]. While listening, what would be copied was never drawn, so the copy is done
+    /// by leaving the target as it is.
+    fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {
         self.traffic.copy(if copy.is_screen { "screen" } else { "staging" });
         let Some(work) = &mut self.work else { return StagingStart::Finished(Status::SUCCESS) };
+        if copy.source.tiling.is_some() || copy.target.tiling.is_some() {
+            return start_blit(
+                work,
+                host,
+                copy.own_space,
+                Blit::of_staging(copy).map_err(|why| format!("{why}: {copy:?}")),
+            );
+        }
         let Some(rows) = Rows::of_staging(copy, COPY_PIXEL_BYTES) else {
             log::warn!("{PREFIX} a copy to a staging surface that this backend can't place: {copy:?}");
             return StagingStart::Finished(Status::UNSUCCESSFUL);
@@ -974,17 +1007,40 @@ impl Backend for IntelBackend {
         StagingStart::Finished(copied(work.copy_rows(copy.own_space, &rows)))
     }
 
-    /// A whole frame into a viewer's slot, by the CPU, at once.
-    fn start_slot_copy(&mut self, _host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
+    /// A whole frame into a viewer's slot: from rows by the CPU, at once, and from tiles by the
+    /// copy engine.
+    fn start_slot_copy(&mut self, host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
         let Some(work) = &mut self.work else { return StagingStart::Finished(Status::UNSUCCESSFUL) };
+        if copy.source.tiling.is_some() || copy.slot_tiling.is_some() {
+            return start_blit(
+                work,
+                host,
+                copy.own_space,
+                Blit::of_slot(copy).map_err(|why| format!("{why}: {copy:?}")),
+            );
+        }
         let Some(rows) = Rows::of_slot(copy, COPY_PIXEL_BYTES) else {
             return StagingStart::Finished(Status::UNSUCCESSFUL);
         };
         StagingStart::Finished(copied(work.copy_rows(copy.own_space, &rows)))
     }
 
-    fn poll_staging_copy(&mut self, _host: &mut dyn HostServices, _now: Instant) -> Option<Status> {
-        Some(Status::SUCCESS)
+    /// Only a copy by the copy engine is ever under way; the CPU's are finished when they start.
+    fn poll_staging_copy(&mut self, _host: &mut dyn HostServices, now: Instant) -> Option<Status> {
+        let Some(work) = &mut self.work else { return Some(Status::SUCCESS) };
+        match work.poll_blit(now)? {
+            Ok(()) => Some(Status::SUCCESS),
+            Err(error) => {
+                work.note_blit_failure(&error);
+                Some(Status::UNSUCCESSFUL)
+            }
+        }
+    }
+
+    /// As the copy engine lays the surface out, for the tile modes it is given here: see
+    /// [`work::blits::tiled_bytes`]. Any other tile mode isn't measured, so the core refuses the copy.
+    fn tiled_bytes(&self, surface: &SurfaceShape, x: u64, y: u64) -> Option<u64> {
+        work::blits::tiled_bytes(surface, x, y)
     }
 }
 
@@ -1469,6 +1525,111 @@ mod tests {
             StagingStart::Finished(Status::UNSUCCESSFUL)
         );
         assert!(backend.export_memory(from, 0x1000).is_err(), "guest pages are not the card's to export");
+    }
+
+    /// A picture laid out as the stand-in card lays out `tiling`, with every byte telling where it
+    /// is, and the same picture in rows.
+    fn tiled_picture(tiling: xe::batch::Tiling, pitch: u32, rows: usize, bytes: usize) -> (Vec<u8>, Vec<u8>) {
+        let row_bytes = pitch as usize;
+        let in_rows: Vec<u8> =
+            (0..row_bytes * rows).map(|at| (at / row_bytes * 3 + at % row_bytes) as u8).collect();
+        let mut tiled = vec![0u8; bytes];
+        for (at, &byte) in in_rows.iter().enumerate() {
+            let (x, y) = ((at % row_bytes) as u64, (at / row_bytes) as u64);
+            tiled[xe::fake::surface_offset(tiling, pitch.into(), x, y) as usize] = byte;
+        }
+        (in_rows, tiled)
+    }
+
+    fn shape(width: u32, height: u32, pitch: u32, tiling: Option<u32>) -> SurfaceShape {
+        SurfaceShape { width, height, format: 0, pitch, tiling, refresh: (0, 0), samples: (1, 0), colour: 0 }
+    }
+
+    /// The tester's windowed present: a back buffer in Tile64 (tile mode 81) of 1920 by 1071 at a
+    /// pitch of 7680, in 0x880000 bytes, into a staging surface in rows. The trait's default
+    /// measures no tiled surface, so the core refused it; now the core's three rules for a tiled
+    /// side (a row inside the pitch, the rows inside the height, the tiles inside the memory) hold.
+    /// Then the same kind of copy, small, runs through the stand-in card's copy engine, and a
+    /// rectangle outside the source or a tile mode the engine isn't given is still refused.
+    #[test]
+    fn a_windowed_present_from_a_tiled_back_buffer_goes_by_the_copy_engine() {
+        let xe = xe::fake::FakeXe::default();
+        let (mut backend, _) = started((Stage::Everything, None), &xe);
+        let back_buffer = SurfaceShape { colour: 0x7E, ..shape(1920, 1071, 7680, Some(81)) };
+        let filled = backend.tiled_bytes(&back_buffer, 0, 0).unwrap();
+        assert!(filled == 0x87_0000 && filled <= 0x88_0000 && 1920 * 4 <= back_buffer.pitch);
+        let (in_rows, tiled) = tiled_picture(xe::batch::Tiling::Tile64, 1024, 130, 0x4_0000);
+        let (frame, staging) = (work::testing::Pages::new(0x4_0000), work::testing::Pages::new(0x2_1000));
+        frame.write(0, &tiled);
+        let from = backend.adopt_host_pages(frame.address(), 0x4_0000).unwrap();
+        let to = backend.adopt_host_pages(staging.address(), 0x2_1000).unwrap();
+        let space = backend.create_address_space(&guesthouse_backend::GPU_RANGES).unwrap();
+        backend.map(&work::testing::map_request(space, from, 0x400_0000, 0, 0x4_0000)).unwrap();
+        backend.map(&work::testing::map_request(space, to, 0x800_0000, 0, 0x2_1000)).unwrap();
+        let copy = StagingCopy {
+            source: shape(256, 130, 1024, Some(81)),
+            target: shape(256, 130, 1024, None),
+            source_address: 0x400_0000,
+            target_address: 0x800_0000,
+            left: 0,
+            top: 0,
+            right: 256,
+            bottom: 130,
+            target_left: 0,
+            target_top: 0,
+            target_guest_address: None,
+            is_screen: false,
+            own_space: space,
+        };
+        let mut host = work::testing::FakeHost::default();
+        assert_eq!(backend.start_staging_copy(&mut host, &copy), StagingStart::Running);
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
+        assert_eq!(staging.bytes()[..in_rows.len()], in_rows[..]);
+        let sent = xe.calls_named("exec").len();
+        let outside = StagingCopy { bottom: 131, ..copy };
+        assert_eq!(
+            backend.start_staging_copy(&mut host, &outside),
+            StagingStart::Finished(Status::UNSUCCESSFUL)
+        );
+        let other = StagingCopy { source: shape(256, 130, 1024, Some(82)), ..copy };
+        assert_eq!(backend.tiled_bytes(&other.source, 0, 0), None, "Tile64 of 64-bit pixels");
+        assert_eq!(
+            backend.start_staging_copy(&mut host, &other),
+            StagingStart::Finished(Status::UNSUCCESSFUL)
+        );
+        assert_eq!(xe.calls_named("exec").len(), sent, "neither reached the card");
+        let empty = StagingCopy { right: 0, ..copy };
+        assert_eq!(backend.start_staging_copy(&mut host, &empty), StagingStart::Finished(Status::SUCCESS));
+    }
+
+    #[test]
+    fn a_tiled_frame_goes_into_a_viewers_slot_by_the_copy_engine() {
+        let xe = xe::fake::FakeXe::default();
+        let (mut backend, _) = started((Stage::Everything, None), &xe);
+        let (in_rows, tiled) = tiled_picture(xe::batch::Tiling::Tile4, 512, 64, 0x8000);
+        let (frame, slot) = (work::testing::Pages::new(0x8000), work::testing::Pages::new(0x8000));
+        frame.write(0, &tiled);
+        let from = backend.adopt_host_pages(frame.address(), 0x8000).unwrap();
+        let to = backend.adopt_host_pages(slot.address(), 0x8000).unwrap();
+        let space = backend.create_address_space(&guesthouse_backend::GPU_RANGES).unwrap();
+        backend.map(&work::testing::map_request(space, from, 0x400_0000, 0, 0x8000)).unwrap();
+        backend.map(&work::testing::map_request(space, to, 0x500_0000, 0, 0x8000)).unwrap();
+        let copy = SlotCopy {
+            source: shape(128, 64, 512, Some(protocol::allocation::tile_mode::TILE4)),
+            source_address: 0x400_0000,
+            slot_address: 0x500_0000,
+            slot_pitch: 512,
+            width: 128,
+            height: 64,
+            own_space: space,
+            slot_tiling: None,
+        };
+        let mut host = work::testing::FakeHost::default();
+        assert_eq!(backend.start_slot_copy(&mut host, &copy), StagingStart::Running);
+        assert_eq!(backend.poll_staging_copy(&mut host, Instant::now()), Some(Status::SUCCESS));
+        assert_eq!(slot.bytes(), in_rows);
+        let bigger = SlotCopy { width: 129, ..copy };
+        assert_eq!(backend.start_slot_copy(&mut host, &bigger), StagingStart::Finished(Status::UNSUCCESSFUL));
     }
 
     #[test]

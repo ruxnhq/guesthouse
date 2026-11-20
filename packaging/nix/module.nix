@@ -74,7 +74,9 @@ in
       default = [ ];
       example = [ "alice" ];
       description = ''
-        Users who get access to /dev/kvm, by joining the kvm group. Machines don't start without it.
+        Users who may start machines without being logged in at the desktop, as over SSH. They join the
+        kvm group, for /dev/udmabuf, which a machine on an AMD card needs. Whoever is logged in at the
+        desktop gets that device without this, and /dev/kvm is open to everyone on NixOS.
       '';
     };
 

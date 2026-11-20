@@ -13,6 +13,12 @@ self: {
         bridges = [ "br0" ];
       };
       users.users.alice.isNormalUser = true;
+      # bob is logged in at the console and listed nowhere, and carol isn't logged in.
+      users.users.bob.isNormalUser = true;
+      users.users.carol.isNormalUser = true;
+      services.getty.autologinUser = "bob";
+      boot.kernelModules = [ "udmabuf" ];
+      environment.systemPackages = [ pkgs.acl ];
     };
 
   testScript =
@@ -25,6 +31,14 @@ self: {
     machine.succeed("test -u /run/wrappers/bin/guesthouse-bridge-helper")
     assert machine.succeed("cat /etc/qemu/bridge.conf") == "allow br0\n"
     machine.succeed("id -nG alice | grep -qw kvm")
+
+    # Whoever is logged in gets /dev/udmabuf and /dev/kvm is everyone's, both from systemd's own rules, which
+    # is why nobody has to be listed in users.
+    machine.wait_until_succeeds("loginctl list-sessions --no-legend | grep -qw bob")
+    machine.wait_until_succeeds("getfacl -p /dev/udmabuf | grep -q '^user:bob:rw-'")
+    machine.succeed("su bob -c 'test -r /dev/udmabuf -a -w /dev/udmabuf'")
+    machine.fail("su carol -c 'test -w /dev/udmabuf'")
+    machine.succeed("su carol -c 'test -r /dev/kvm -a -w /dev/kvm'")
     machine.succeed("test -f /run/current-system/sw/share/hwdata/pci.ids")
     machine.succeed("test -d /run/opengl-driver/lib")
 

@@ -34,10 +34,7 @@ Add the flake as an input, and the module to your system.
       modules = [
         guesthouse.nixosModules.default
         {
-          programs.guesthouse = {
-            enable = true;
-            users = [ "alice" ];
-          };
+          programs.guesthouse.enable = true;
         }
       ];
     };
@@ -45,13 +42,16 @@ Add the flake as an input, and the module to your system.
 }
 ```
 
-Rebuild, then log in again so the group takes effect. Guesthouse is in the menu, and `guesthouse` starts it.
+Rebuild. Guesthouse is in the menu, and `guesthouse` starts it. Whoever is logged in at the desktop can start
+machines, so nobody needs to be listed. `/dev/kvm` is open to everyone on NixOS, and systemd gives `/dev/udmabuf`,
+which a machine on an AMD card needs, to whoever is logged in.
 
 ## Options
 
 - `programs.guesthouse.enable` turns it all on.
 - `programs.guesthouse.package` is the package. It defaults to the one in this flake.
-- `programs.guesthouse.users` are the users who may use `/dev/kvm`. They join the `kvm` group.
+- `programs.guesthouse.users` are users who start machines without being logged in at the desktop, as over SSH.
+  They join the `kvm` group. Log in again after adding one, so the group takes effect.
 - `programs.guesthouse.bridges` are the bridges a machine may attach to, such as `[ "br0" ]`. They go into
   `/etc/qemu/bridge.conf`, which the bridge helper reads. With none, the file isn't written.
 

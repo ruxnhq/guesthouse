@@ -31,6 +31,9 @@ const USER_PROGRAM: &str = ".local/lib/guesthouse/current";
 const PROGRAM_MARK: &str = "guest";
 /// Where the program folder keeps a build of the display driver. A build from source has none.
 const DISPLAY_DRIVER_FOLDER: &str = "display-driver";
+/// Where the program folder keeps Microsoft's installer of OpenSSH for Windows, which a release brings
+/// for a guest's SSH. A build from source may have none.
+const OPENSSH_INSTALLER: &str = "openssh/OpenSSH-Win64.msi";
 /// A file that tells the repo's guest folder from any other folder of that name.
 const REPO_GUEST_MARK: &str = "setup.ps1";
 const SHARED_MEMORY: &str = "/dev/shm";
@@ -203,6 +206,11 @@ impl Paths {
     /// The built display driver, if this program folder has one.
     pub fn display_driver(&self) -> PathBuf {
         self.program.join(DISPLAY_DRIVER_FOLDER)
+    }
+
+    /// OpenSSH's installer for a Windows guest, if this program folder has it.
+    pub fn openssh_installer(&self) -> PathBuf {
+        self.program.join(OPENSSH_INSTALLER)
     }
 
     /// The sources of a Linux guest.

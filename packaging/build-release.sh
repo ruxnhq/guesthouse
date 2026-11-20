@@ -50,6 +50,14 @@ DRIVER_BUILT='GuesthouseDisplay.dll GuesthouseDisplay.inf'
 DRIVER_SETUP='sign-and-install.ps1 install-take-over.ps1 take-over-display.ps1'
 # The driver has code from Microsoft's sample as well as zako-vdd's, so both licences go wherever it does.
 DRIVER_FILES='vdd_settings.xml LICENSE LICENSE-MS-PL'
+# Microsoft's build of OpenSSH for Windows, which goes into a Windows guest whose SSH is on. The guest
+# may have no internet, and Windows' own way of adding it downloads it, so the installer comes with the
+# payload. Its licence and its notices are inside it, and it puts them beside the programs in the guest.
+# OPENSSH_URL can name another copy of the same file, which the hash still checks.
+OPENSSH_URL=${OPENSSH_URL:-https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.4.0.0p1-Preview/OpenSSH-Win64-v10.4.0.0.msi}
+OPENSSH_SHA256=788d8643464a01eb63640a2fd746f9ed23d106b5a901a35f88dc8cd40e446ac9
+# Where the app looks for it in the program folder, in app-core's paths.rs.
+OPENSSH_FILE=openssh/OpenSSH-Win64.msi
 
 # These stay the host's. The C library can't be mixed, and PipeWire's client must match its server.
 # OpenGL is the host's too: GBM and EGL are Mesa's, which has to match the host's kernel driver, and
@@ -515,6 +523,29 @@ copy_display_driver() {
     say "the display driver is $(cat "$target/package.txt")"
 }
 
+# The download is kept beside the build and used again while its hash is right. A build that can't
+# download it goes on without it, and its Windows machines can't have SSH, which the app says. A release
+# can't go out that way, and the source stage stops it.
+fetch_openssh() {
+    target=$OUT/stage/${OPENSSH_FILE%/*}
+    [ ! -d "$target" ] || rm -rf "${target:?}"
+    kept=$OUT/downloads/${OPENSSH_FILE##*/}
+    if ! has_sha256 "$kept" "$OPENSSH_SHA256"; then
+        mkdir -p "$OUT/downloads"
+        rm -f "$kept"
+        if ! curl -fsSL -o "$kept.part" "$OPENSSH_URL"; then
+            rm -f "$kept.part"
+            say "OpenSSH for Windows couldn't be downloaded, so this build's Windows machines can't have SSH"
+            return 0
+        fi
+        mv "$kept.part" "$kept"
+        has_sha256 "$kept" "$OPENSSH_SHA256" || die "$OPENSSH_URL isn't the file it should be."
+    fi
+    mkdir -p "$target"
+    cp "$kept" "$OUT/stage/$OPENSSH_FILE"
+    say "OpenSSH for Windows is $OUT/stage/$OPENSSH_FILE"
+}
+
 release_parts() {
     parts=app
     [ ! -d "$OUT/stage/guest" ] || parts="$parts windows"
@@ -532,6 +563,7 @@ stage_payload() {
     version=$(release_version)
     copy_guest_files
     copy_display_driver
+    fetch_openssh
     cp "$REPO/install.sh" "$REPO/uninstall.sh" "$REPO/LICENSE" "$REPO/THIRD-PARTY.md" "$OUT/stage/"
     {
         printf 'version=%s\n' "$version"
@@ -548,6 +580,8 @@ stage_payload() {
 stage_source() {
     [ -f "$OUT/stage/$DRIVER_FOLDER/GuesthouseDisplay.dll" ] ||
         die "a release can't go out without the display driver. Name the build with --display-driver."
+    [ -f "$OUT/stage/$OPENSSH_FILE" ] ||
+        die "a release can't go out without OpenSSH for Windows, which the payload stage downloads."
     version=$(release_version)
     name=guesthouse-$version-source
     bundle=$OUT/source-bundle

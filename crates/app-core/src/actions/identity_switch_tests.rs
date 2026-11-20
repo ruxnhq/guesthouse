@@ -116,6 +116,12 @@ impl Rig {
         Self { context, guest, machine }
     }
 
+    /// A VM that comes up and stays, as one whose start gets as far as its desktop does.
+    fn keeps_running(self) -> Self {
+        crate::actions::tests::with_vm_running(&self.context);
+        self
+    }
+
     fn boot(&self, host: &RecordingHost) -> (Result<()>, String) {
         let mut task = Task::new(&self.context, host, "start", self.machine.clone());
         let result = boot(&mut task);
@@ -139,7 +145,8 @@ fn identities(host: &RecordingHost) -> Vec<PciIdentity> {
 fn the_start_that_stages_the_package_ends_on_nvidias_number_after_one_new_vm() {
     let scratch = Scratch::new();
     let rig =
-        Rig::new(&scratch, &[DESKTOP_UP, GPU_UP, STAGED, DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP, GPU_UP]);
+        Rig::new(&scratch, &[DESKTOP_UP, GPU_UP, STAGED, DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP, GPU_UP])
+            .keeps_running();
     let host = RecordingHost::default();
     let (result, error) = rig.boot(&host);
     assert_eq!(result, Ok(()));
@@ -163,7 +170,7 @@ fn the_start_that_stages_the_package_ends_on_nvidias_number_after_one_new_vm() {
 #[test]
 fn a_start_already_due_its_windows_restart_needs_no_new_vm() {
     let scratch = Scratch::new();
-    let rig = Rig::new(&scratch, &[DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP, GPU_UP]);
+    let rig = Rig::new(&scratch, &[DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP, GPU_UP]).keeps_running();
     write_state(&rig.context, &rig.machine, &staged()).unwrap();
     let host = RecordingHost::default();
     assert_eq!(rig.boot(&host), (Ok(()), String::new()));

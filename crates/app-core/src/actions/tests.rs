@@ -154,6 +154,7 @@ fn a_gpu_machine_starts_through_the_same_host_and_sets_up_its_desktop() {
     let vm = machine(&context);
     crate::agent::make_token(&context, &vm).unwrap();
     fs::create_dir_all(context.run_folder(None)).unwrap();
+    with_vm_running(&context);
     let host = RecordingHost::default();
     let mut task = Task::new(&context, &host, "start", vm);
     boot(&mut task).unwrap();
@@ -195,6 +196,7 @@ fn a_desktop_at_the_wrong_size_is_set_and_checked_again() {
     let vm = machine(&context);
     crate::agent::make_token(&context, &vm).unwrap();
     fs::create_dir_all(context.run_folder(None)).unwrap();
+    with_vm_running(&context);
     let host = RecordingHost::default();
     let mut task = Task::new(&context, &host, "start", vm);
     boot(&mut task).unwrap();
@@ -714,4 +716,54 @@ fn an_intel_device_key_that_does_not_take_is_said_and_the_start_goes_on() {
     let mut task = Task::new(&context, &host, "start", intel);
     place_files_for_maker(&mut task).unwrap();
     assert!(task.error.contains("registry key"), "{}", task.error);
+}
+
+fn intel_start<'a>(context: &'a Context, host: &'a RecordingHost) -> Task<'a> {
+    let mut intel = machine(context);
+    intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");
+    crate::agent::make_token(context, &intel).unwrap();
+    Task::new(context, host, "start", intel)
+}
+
+#[test]
+fn a_vm_shut_down_from_windows_before_the_start_is_done_is_asked_nothing_more() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::default());
+    context.agent = agent.clone();
+    let run = context.run_folder(None);
+    fs::create_dir_all(&run).unwrap();
+    fs::write(run.join("ended-as"), crate::ending::GUEST_SHUTDOWN).unwrap();
+    let host = RecordingHost::default();
+    let mut task = intel_start(&context, &host);
+    finish_on_desktop(&mut task).unwrap();
+    assert!(agent.requests.lock().unwrap().is_empty(), "no guest to ask");
+    assert_eq!(task.error, "", "a guest that powered itself off is nothing gone wrong");
+    assert!(crate::log::read_log(&context).contains("was shut down from inside the guest."));
+}
+
+#[test]
+fn a_vm_that_went_by_itself_before_the_start_is_done_says_so_and_not_what_the_guest_missed() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    context.agent = Arc::new(ScriptedAgent::default());
+    let host = RecordingHost::default();
+    let mut task = intel_start(&context, &host);
+    finish_on_desktop(&mut task).unwrap();
+    assert!(task.error.contains("this app didn't stop it"), "{}", task.error);
+    assert!(!task.error.contains("registry key"), "{}", task.error);
+}
+
+#[test]
+fn a_vm_still_running_at_the_end_of_its_start_is_given_its_device_key() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::answering(&["", "", "device key set\r\n"]));
+    context.agent = agent.clone();
+    with_vm_running(&context);
+    let host = RecordingHost::default();
+    let mut task = intel_start(&context, &host);
+    finish_on_desktop(&mut task).unwrap();
+    let asked = agent.requests.lock().unwrap();
+    assert!(asked.iter().any(|(_, _, script)| script.contains("OpenCLDriverName")), "{asked:?}");
 }

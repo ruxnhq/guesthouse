@@ -109,14 +109,20 @@ fn watched(task: &Task) -> bool {
 }
 
 /// Looks until the guest has been up long enough, or the desktop has failed. A guest that stops
-/// answering is not taken as a failure on its own: the look after the GPU check decides.
+/// answering is not taken as a failure on its own: the look after the GPU check decides. One whose
+/// VM has gone, as Windows shut down from its own menu does, is not looked at any longer, and the
+/// start says how it went.
 fn watch(task: &Task) -> Option<String> {
     task.step("Watching the desktop on the card");
     for attempt in 0..LOOKS {
         if attempt > 0 {
             task.sleep(POLL);
         }
-        let Some(look) = Look::parse(&task.ask_guest(&look_script(), LOOK_SECONDS)) else { continue };
+        let Some(look) = Look::parse(&task.ask_guest(&look_script(), LOOK_SECONDS)) else {
+            // A VM that has gone is the end of the watch.
+            task.pid()?;
+            continue;
+        };
         if let Some(why) = look.failure() {
             return Some(why);
         }
@@ -243,6 +249,24 @@ mod tests {
             working_render_devices: working,
             compositor_crashes: crashes,
         }
+    }
+
+    #[test]
+    fn a_watch_ends_once_the_vm_has_gone() {
+        use crate::agent::stand_in::ScriptedAgent;
+        use crate::vm_host::stand_in::RecordingHost;
+        use std::sync::Arc;
+        let scratch = crate::testing::Scratch::new();
+        let mut context = super::super::tests::plain_task_context(&scratch);
+        let agent = Arc::new(ScriptedAgent::default());
+        context.agent = agent.clone();
+        let mut intel = super::super::tests::machine(&context);
+        intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");
+        crate::agent::make_token(&context, &intel).unwrap();
+        let host = RecordingHost::default();
+        let task = Task::new(&context, &host, "start", intel);
+        assert_eq!(watch(&task), None);
+        assert_eq!(agent.requests.lock().unwrap().len(), 1, "one look, and no more once QEMU is gone");
     }
 
     #[test]

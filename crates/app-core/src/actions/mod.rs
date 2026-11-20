@@ -227,6 +227,19 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
     if picture_first && let Some(why) = hardware_desktop::failed_with_picture(task) {
         return start_again_on_software_desktop(task, &why).map(|_| ());
     }
+    finish_on_desktop(task)
+}
+
+/// The settings and the card maker's files, which are all asked of the guest. A VM that has gone by
+/// now, as one shut down from Windows' own menu while an Intel desktop was watched has, leaves no
+/// guest to ask: the start says how it went instead of what the guest didn't answer.
+fn finish_on_desktop(task: &mut Task) -> Result<()> {
+    if task.pid().is_none() {
+        let slot = task.context.slot.number();
+        task.error =
+            crate::stopped::said_for_a_stop(task.context, &task.machine, slot).unwrap_or_default().to_owned();
+        return Ok(());
+    }
     apply_window_speed(task)?;
     apply_remote_access(task)?;
     place_files_for_maker(task)

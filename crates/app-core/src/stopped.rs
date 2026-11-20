@@ -29,22 +29,29 @@ fn last_words(context: &Context, slot: u8) -> String {
 pub fn note_if_stopped_by_itself(context: &Context, machine: &Machine, slot: u8) {
     let number = Some(slots::number(slot));
     let mut task = read_task(context, number);
-    // Taken whoever stopped it, so it can't be read as the reason for a later VM in this slot.
-    let reason = take_reason(context, slot);
     if task.machine == machine.id && STOPPING_ACTIONS.contains(&task.action.as_str()) {
+        // Taken all the same, so it can't be read as the reason for a later VM in this slot.
+        take_reason(context, slot);
         return;
     }
-    // A guest that powered itself off, from its own menu or on its own, is nothing gone wrong.
-    if reason.as_deref() == Some(GUEST_SHUTDOWN) {
+    let Some(error) = said_for_a_stop(context, machine, slot) else { return };
+    task.machine.clone_from(&machine.id);
+    task.pid = 0;
+    task.error = error.to_owned();
+    let _ = write_task(context, number, &task);
+}
+
+/// What to tell the user about a VM in `slot` that went with nobody here stopping it, if anything.
+/// The log gets a line either way. A guest that powered itself off, from its own menu or on its own,
+/// is nothing gone wrong.
+pub fn said_for_a_stop(context: &Context, machine: &Machine, slot: u8) -> Option<&'static str> {
+    if take_reason(context, slot).as_deref() == Some(GUEST_SHUTDOWN) {
         let _ = write_log(context, &format!("{} was shut down from inside the guest.", machine.id));
-        return;
+        return None;
     }
     let words = last_words(context, slot);
     let _ = write_log(context, &format!("{} stopped by itself. QEMU's last words: {words}", machine.id));
-    task.machine.clone_from(&machine.id);
-    task.pid = 0;
-    task.error = STOPPED_BY_ITSELF.to_owned();
-    let _ = write_task(context, number, &task);
+    Some(STOPPED_BY_ITSELF)
 }
 
 #[cfg(test)]

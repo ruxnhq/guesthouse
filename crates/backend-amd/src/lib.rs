@@ -832,6 +832,9 @@ impl Backend for AmdBackend {
         if let Some(status) = protocol::gpu_mmu_caps::answer(query, out) {
             return Some(status);
         }
+        if let Some(status) = protocol::node_metadata::answer(query, &self.device.info().engines, out) {
+            return Some(status);
+        }
         protocol::adapter_info::answer(query, self.device.info(), out)
     }
 

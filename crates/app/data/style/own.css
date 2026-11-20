@@ -180,8 +180,9 @@
   letter-spacing: -0.02em;
 }
 
-.bottom-bar {
-  padding: 10px 0 18px;
+/* The toolbar's own bar round it had this padding too, from when they shared a class. */
+.page-buttons {
+  padding: 20px 0 36px;
 }
 
 /* What the chosen disc was read as, set apart from the rows round it. */

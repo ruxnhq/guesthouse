@@ -147,7 +147,9 @@ pub fn bottom_bar(buttons: &[&gtk::Button]) -> adw::Clamp {
         bar.append(*button);
     }
     let clamp = page_wide(&bar);
-    clamp.add_css_class("bottom-bar");
+    // Not libadwaita's bottom-bar, which every toolbar view has: padding that took 28 pixels off
+    // the bottom of the viewer's screen.
+    clamp.add_css_class("page-buttons");
     clamp
 }
 

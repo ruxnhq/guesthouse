@@ -2,6 +2,9 @@
 //!
 //! The loader knows where the libraries are, whichever folder a distribution uses, and the version in
 //! a library's own file name says what it is. Data files sit in a few well known places.
+//!
+//! NixOS has no loader cache. Its driver is in the store, and every program there is built to look for
+//! it through one folder of links, which this reads instead.
 
 use super::driver_versions::DriverHost;
 use std::collections::BTreeSet;
@@ -32,17 +35,30 @@ const DRIVER_LIBRARY_PREFIXES: [&str; 9] = [
 /// These belong to the host's settings tool, and pull in a desktop a guest may not have.
 const LEFT_OUT_LIBRARIES: [&str; 2] = ["libnvidia-gtk", "libnvidia-wayland-client"];
 
-/// The first of these that's there goes in the image. Distributions differ on the Vulkan one.
-const VULKAN_MANIFESTS: [&str; 3] = [
+/// NixOS's folder of links to its graphics drivers' libraries.
+const LINKED_LIBRARIES: &str = "run/opengl-driver/lib";
+
+/// The first of these that's there goes in the image. Distributions differ on the Vulkan one, and
+/// NixOS keeps all of these with its links.
+const VULKAN_MANIFESTS: [&str; 5] = [
     "usr/share/vulkan/icd.d/nvidia_icd.x86_64.json",
     "usr/share/vulkan/icd.d/nvidia_icd.json",
     "etc/vulkan/icd.d/nvidia_icd.json",
+    "run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json",
+    "run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json",
 ];
-const EGL_VENDORS: [&str; 2] =
-    ["usr/share/glvnd/egl_vendor.d/10_nvidia.json", "etc/glvnd/egl_vendor.d/10_nvidia.json"];
-const SMI_PROGRAMS: [&str; 2] = ["usr/bin/nvidia-smi", "bin/nvidia-smi"];
-const EGL_PLATFORM_FOLDERS: [&str; 2] =
-    ["usr/share/egl/egl_external_platform.d", "etc/egl/egl_external_platform.d"];
+const EGL_VENDORS: [&str; 3] = [
+    "usr/share/glvnd/egl_vendor.d/10_nvidia.json",
+    "etc/glvnd/egl_vendor.d/10_nvidia.json",
+    "run/opengl-driver/share/glvnd/egl_vendor.d/10_nvidia.json",
+];
+const SMI_PROGRAMS: [&str; 3] =
+    ["usr/bin/nvidia-smi", "bin/nvidia-smi", "run/current-system/sw/bin/nvidia-smi"];
+const EGL_PLATFORM_FOLDERS: [&str; 3] = [
+    "usr/share/egl/egl_external_platform.d",
+    "etc/egl/egl_external_platform.d",
+    "run/opengl-driver/share/egl/egl_external_platform.d",
+];
 
 fn file_name(path: &Path) -> &str {
     path.file_name().and_then(|name| name.to_str()).unwrap_or_default()
@@ -79,19 +95,23 @@ impl LoaderHost {
     }
 
     fn driver_libraries(&self) -> Vec<PathBuf> {
-        let found = libraries_in(&self.loader_listing);
-        found.into_iter().filter(|path| is_driver_library(file_name(path))).collect()
+        let found =
+            libraries_in(&self.loader_listing).into_iter().chain(files_in(&self.root.join(LINKED_LIBRARIES)));
+        found.filter(|path| is_driver_library(file_name(path))).collect()
     }
 
     /// Debian's links go through `/etc/alternatives` to a folder the loader doesn't list, so the
     /// folder a link ends in counts too.
     fn library_folders(&self) -> BTreeSet<PathBuf> {
+        // NixOS's holds nothing but links out of it, and each would be copied as a whole file. The
+        // folders they end in hold the same, as files and their own links.
+        let linked = fs::canonicalize(self.root.join(LINKED_LIBRARIES)).ok();
         let mut folders = BTreeSet::new();
         for library in self.driver_libraries() {
             // On a merged system the loader says `/lib64`, the same folder as `/usr/lib64`.
             let listed = library.parent().and_then(|folder| fs::canonicalize(folder).ok());
             let target = fs::canonicalize(&library).ok();
-            folders.extend(listed);
+            folders.extend(listed.filter(|folder| Some(folder) != linked.as_ref()));
             folders.extend(target.and_then(|path| path.parent().map(Path::to_owned)));
         }
         folders
@@ -294,6 +314,61 @@ mod tests {
     #[test]
     fn nvidias_own_installer() {
         finds_everything(&RUN_FILE);
+    }
+
+    /// What NixOS's folder of links really is: a folder in the store, which may sort before the
+    /// driver's own.
+    const NIXOS_LINKS: &str = "nix/store/0000-graphics-drivers";
+
+    /// NixOS: no loader cache, the driver and NVIDIA's EGL libraries in store folders of their own,
+    /// and one folder of links to every file in them.
+    fn nixos_host(scratch: &Scratch, version: &str) -> LoaderHost {
+        let driver = format!("nix/store/5555-nvidia-x11-{version}/lib");
+        for stem in VERSIONED {
+            scratch.write(&format!("{driver}/{stem}.so.{version}"), "");
+        }
+        for (stem, number) in SONAMES {
+            symlink(format!("{stem}.so.{version}"), scratch.path(&format!("{driver}/{stem}.so.{number}")))
+                .unwrap();
+        }
+        scratch.write(&format!("{driver}/libnvidia-gtk3.so.{version}"), "");
+        let egl = "nix/store/6666-nvidia-egl-libraries/lib";
+        for name in OTHERS {
+            scratch.write(&format!("{egl}/{name}"), "");
+        }
+        scratch.write("nix/store/7777-mesa/lib/libsomething-else.so.1", "");
+        let links = scratch.path(&format!("{NIXOS_LINKS}/lib"));
+        fs::create_dir_all(&links).unwrap();
+        fs::create_dir_all(scratch.path("run")).unwrap();
+        symlink(scratch.path(NIXOS_LINKS), scratch.path("run/opengl-driver")).unwrap();
+        for folder in [driver.as_str(), egl, "nix/store/7777-mesa/lib"] {
+            for file in fs::read_dir(scratch.path(folder)).unwrap().flatten() {
+                symlink(file.path(), links.join(file.file_name())).unwrap();
+            }
+        }
+        scratch.write("run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json", "{}");
+        scratch.write("run/opengl-driver/share/glvnd/egl_vendor.d/10_nvidia.json", "{}");
+        scratch.write("run/opengl-driver/share/egl/egl_external_platform.d/15_nvidia_gbm.json", "{}");
+        scratch.write("run/current-system/sw/bin/nvidia-smi", "");
+        LoaderHost {
+            version_file: scratch.write("version", format!("{version}\n")),
+            root: scratch.path(""),
+            loader_listing: String::new(),
+        }
+    }
+
+    #[test]
+    fn nixos_through_its_folder_of_links() {
+        let scratch = Scratch::new();
+        let host = nixos_host(&scratch, V);
+        assert_eq!(refusal(host.loaded_version().as_deref(), &installed_versions(&host)), None);
+        let pairs = chosen(&host.driver_files());
+        let found: Vec<String> = pairs.iter().map(|(_, place)| place.clone()).collect();
+        assert_eq!(missing(&found, V), Vec::<String>::new());
+        assert!(!found.iter().any(|place| place.contains("something-else") || place.contains("gtk")));
+        // From the store, where a library's short name is a link beside it and stays one.
+        let links = scratch.path(NIXOS_LINKS).display().to_string();
+        assert!(pairs.iter().all(|(source, _)| !source.starts_with(&links)), "{pairs:?}");
     }
 
     #[test]

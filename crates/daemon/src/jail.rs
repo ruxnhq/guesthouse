@@ -8,7 +8,7 @@
 //! the filter leaves no way to make a socket, and it covers every thread.
 
 use guesthouse_jail::seccomp::{self, Threads, trap};
-use guesthouse_jail::{Grant, Plan, Support, filters, landlock, only_thread};
+use guesthouse_jail::{Grant, Plan, Support, filters, landlock, only_thread, system};
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
@@ -28,13 +28,12 @@ const NVIDIA_PREFIX: &str = "nvidia";
 const NVIDIA_LEFT_OUT: [&str; 3] = ["nvidia-modeset", "nvidia-caps", "nvidia-nvswitchctl"];
 const OWNER_ONLY: u32 = 0o600;
 
-/// The system's libraries, which the management library is loaded from when this daemon's turn to
-/// read the card comes, and `nvidia-smi`, which reads the card's rated clocks at the start. `/proc`
-/// and `/sys` are read for the driver's version and the card's place, and reading `/proc` gives
-/// nothing away, as Landlock doesn't let a jailed process look into another. A program it runs gets
-/// `/dev/null` for its input.
-const SYSTEM: [(Grant, &str); 5] = [
-    (Grant::Run, "/usr"),
+/// Besides the system's programs and libraries, which the management library is loaded from when
+/// this daemon's turn to read the card comes, and which hold `nvidia-smi`, which reads the card's
+/// rated clocks at the start. `/proc` and `/sys` are read for the driver's version and the card's
+/// place, and reading `/proc` gives nothing away, as Landlock doesn't let a jailed process look into
+/// another. A program it runs gets `/dev/null` for its input.
+const SYSTEM: [(Grant, &str); 4] = [
     (Grant::Read, "/etc/ld.so.cache"),
     (Grant::Read, "/sys"),
     (Grant::Read, "/proc"),
@@ -58,6 +57,7 @@ pub struct Needs {
 impl Needs {
     pub fn plan(&self) -> Plan {
         let mut plan = Plan::default();
+        system::grant_programs(&mut plan);
         for (grant, path) in SYSTEM {
             plan.grant(grant, path);
         }

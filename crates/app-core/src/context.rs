@@ -17,8 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const PRIVATE_FOLDER: u32 = 0o700;
-/// Where pci.ids is kept: hwdata on Fedora and Arch, misc on Debian and Ubuntu.
-const PCI_NAMES: [&str; 2] = ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids"];
+/// Where pci.ids is kept: hwdata on Fedora and Arch, misc on Debian and Ubuntu, and on NixOS in the
+/// system's hwdata, which Guesthouse's module adds.
+const PCI_NAMES: [&str; 3] =
+    ["/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids", "/run/current-system/sw/share/hwdata/pci.ids"];
 
 /// Whether this user can open a device to read and write it.
 fn may_open_here(device: &Path) -> bool {

@@ -15,14 +15,19 @@ const GL_DEVICE: &str = "virtio-vga-gl";
 const HOST_MEMORY: &str = "8G";
 /// Where the guest reads which way its 3D goes.
 const MODE_NAME: &str = "opt/guesthouse/amd-mode";
-/// Mesa's EGL, so glvnd never loads another vendor's.
-const MESA_EGL: &str = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+/// Mesa's EGL, so glvnd never loads another vendor's. NixOS keeps its graphics drivers' files under
+/// `/run/opengl-driver`.
+const MESA_EGL: [&str; 2] = [
+    "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json",
+];
 /// Where Venus's render server is, beside QEMU. The library names where it was built.
 pub const RENDER_SERVER: &str = "virgl_render_server";
 /// The shaders QEMU's Mesa compiles, kept in the run folder, which is QEMU's to write.
 const SHADER_CACHE: &str = "cache";
 /// Where the Vulkan loader finds its drivers, and RADV's manifest among them.
-const VULKAN_DRIVER_FOLDERS: [&str; 2] = ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d"];
+const VULKAN_DRIVER_FOLDERS: [&str; 3] =
+    ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d", "/run/opengl-driver/share/vulkan/icd.d"];
 /// RADV's manifest is this and QEMU's own architecture. The 32-bit one sits next to it, and the
 /// loader in a 64-bit QEMU can't load the library it names.
 const RADV_MANIFEST_PREFIX: &str = "radeon_icd";
@@ -48,6 +53,11 @@ pub fn radv_manifest(folders: &[&Path]) -> PathBuf {
         [own.as_str(), RADV_PLAIN_MANIFEST].iter().map(|name| folder.join(name)).find(|path| path.exists())
     });
     found.unwrap_or_else(|| PathBuf::from(VULKAN_DRIVER_FOLDERS[0]).join("radeon_icd.none.json"))
+}
+
+/// Mesa's EGL manifest on this PC, or where most distributions keep it.
+fn mesa_egl() -> &'static str {
+    MESA_EGL.into_iter().find(|path| Path::new(path).exists()).unwrap_or(MESA_EGL[0])
 }
 
 impl VmPlan {
@@ -115,7 +125,7 @@ impl VmPlan {
         let cache = self.run_folder.join(SHADER_CACHE);
         vec![
             ("VK_DRIVER_FILES".to_owned(), radv_manifest(&folders).display().to_string()),
-            ("__EGL_VENDOR_LIBRARY_FILENAMES".to_owned(), MESA_EGL.to_owned()),
+            ("__EGL_VENDOR_LIBRARY_FILENAMES".to_owned(), mesa_egl().to_owned()),
             ("RENDER_SERVER_EXEC_PATH".to_owned(), self.render_server().display().to_string()),
             ("XDG_CACHE_HOME".to_owned(), cache.display().to_string()),
         ]
@@ -217,7 +227,7 @@ mod tests {
         let environment = plan.amd_environment();
         let value = |name: &str| environment.iter().find(|(key, _)| key == name).unwrap().1.clone();
         assert!(value("VK_DRIVER_FILES").contains("radeon_icd"), "{}", value("VK_DRIVER_FILES"));
-        assert_eq!(value("__EGL_VENDOR_LIBRARY_FILENAMES"), MESA_EGL);
+        assert_eq!(value("__EGL_VENDOR_LIBRARY_FILENAMES"), mesa_egl());
         assert!(value("RENDER_SERVER_EXEC_PATH").ends_with("/virgl_render_server"));
         assert!(value("XDG_CACHE_HOME").starts_with(&plan.run_folder.display().to_string()));
     }

@@ -13,7 +13,7 @@ use crate::disk_image::backing::backing_files;
 use crate::failure::{Failure, Result};
 use crate::network::{Mode, Protocol, bridge_helper};
 use guesthouse_jail::launch::{Launch, Passt, Tap, UnixSocket};
-use guesthouse_jail::{Grant, Network, Plan, Ports};
+use guesthouse_jail::{Grant, Network, Plan, Ports, system};
 use std::path::{Path, PathBuf};
 
 /// Where the launcher leaves QEMU's unix sockets, when it opens them: monitors first, then the rest.
@@ -44,11 +44,11 @@ const QEMU_SANDBOX: &str = "on,obsolete=deny,spawn=allow,resourcecontrol=deny";
 /// context, with no shared folder.
 const QEMU_SANDBOX_NO_SPAWN: &str = "on,obsolete=deny,spawn=deny,resourcecontrol=deny";
 
-/// What any QEMU reads. `/proc` and `/sys` give nothing away, as Landlock doesn't let a jailed
-/// process look into one outside its jail.
+/// What any QEMU reads, besides the system's programs. `/proc` and `/sys` give nothing away, as
+/// Landlock doesn't let a jailed process look into one outside its jail.
 const SYSTEM: [(Grant, &str); 11] = [
-    (Grant::Run, "/usr"),
     (Grant::Read, "/etc/ld.so.cache"),
+    (Grant::Read, system::LINKED_SETTINGS),
     (Grant::Read, "/etc/nsswitch.conf"),
     (Grant::Read, "/etc/passwd"),
     (Grant::Read, "/etc/group"),
@@ -145,6 +145,7 @@ impl VmPlan {
     /// The same, with the card's nodes looked for under `devices`.
     pub(super) fn qemu_jail_plan_under(&self, jail: &QemuJail, devices: &Path) -> Plan {
         let mut plan = Plan { network: self.jail_network(), ..Plan::default() };
+        system::grant_programs(&mut plan);
         for (grant, path) in SYSTEM {
             plan.grant(grant, path);
         }

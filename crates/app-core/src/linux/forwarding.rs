@@ -3,6 +3,8 @@
 //! asked about with the rest of the start, as for Windows: see `jailing`.
 
 use super::gpu_off::{GUEST_NO_ALLOW_LIST, GUEST_NO_DEVICE, GUEST_NO_GL, GpuOff};
+use crate::vm_args::program_on_path;
+use guesthouse_jail::system;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -14,19 +16,25 @@ const DEVICE_ANSWER: &str = "nvfwd options:";
 const GL_QUESTION: &str = "virtio-vga-gl,help";
 const GL_ANSWER: &str = "drm_native_context=";
 /// The namespaces the jail uses, which a PC can refuse, with nothing else in the way.
-const SANDBOX_QUESTION: [&str; 11] = [
-    "--unshare-user",
-    "--unshare-ipc",
-    "--unshare-uts",
-    "--ro-bind",
-    "/usr",
-    "/usr",
-    "--symlink",
-    "usr/lib64",
-    "/lib64",
-    "--",
-    "/usr/bin/true",
-];
+const SANDBOX_NAMESPACES: [&str; 3] = ["--unshare-user", "--unshare-ipc", "--unshare-uts"];
+/// What runs inside to show they work. It's bound at the place `PATH` finds it, which on NixOS is a
+/// link into the store, so it keeps the name it's called by.
+const SANDBOX_PROGRAM: &str = "true";
+const USUAL_SANDBOX_PROGRAM: &str = "/usr/bin/true";
+
+/// bubblewrap's words for the question: the system's programs bound as the jail binds them, and the
+/// program to run.
+fn sandbox_question() -> Vec<String> {
+    let program = program_on_path(SANDBOX_PROGRAM).unwrap_or_else(|| USUAL_SANDBOX_PROGRAM.into());
+    let program = program.display().to_string();
+    let mut words: Vec<String> = SANDBOX_NAMESPACES.map(str::to_owned).to_vec();
+    for folder in system::PROGRAM_FOLDERS {
+        words.extend(["--ro-bind-try", folder, folder].map(str::to_owned));
+    }
+    words.extend(["--symlink", "usr/lib64", "/lib64"].map(str::to_owned));
+    words.extend(["--ro-bind-try", &program, &program, "--", &program].map(str::to_owned));
+    words
+}
 
 fn answers_yes(command: &mut Command) -> bool {
     let quiet = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -57,7 +65,7 @@ pub fn amd_problem(qemu: &Path) -> Option<GpuOff> {
 
 /// Whether bubblewrap can make namespaces here. Ubuntu 24.04 can refuse it, through AppArmor.
 pub fn sandbox_runs() -> bool {
-    answers_yes(Command::new("timeout").arg(CHECK_SECONDS).arg("bwrap").args(SANDBOX_QUESTION))
+    answers_yes(Command::new("timeout").arg(CHECK_SECONDS).arg("bwrap").args(sandbox_question()))
 }
 
 /// Says why QEMU can't start with the forwarded GPU, or `None` if it can.

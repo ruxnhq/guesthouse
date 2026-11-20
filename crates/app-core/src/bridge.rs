@@ -1,6 +1,6 @@
 //! What the host needs for a bridged machine, and what to tell the user to do about it.
 
-use crate::network::{OWN_BRIDGE_HELPER, bridge_helper, bridge_name_problem};
+use crate::network::{NIXOS_MARK, OWN_BRIDGE_HELPER, bridge_helper, bridge_name_problem};
 use crate::text::shell_quote;
 use rustix::fs::{Mode, stat};
 use std::fs;
@@ -23,6 +23,9 @@ pub struct BridgeHost {
     pub config: PathBuf,
     pub routes: PathBuf,
     pub firewall: PathBuf,
+    /// NixOS's `/etc` is made from its configuration, so the helper and the bridges it allows come
+    /// from Guesthouse's module there, and the fix is a line of configuration rather than a command.
+    pub nixos: bool,
 }
 
 impl Default for BridgeHost {
@@ -34,6 +37,7 @@ impl Default for BridgeHost {
             config: "/etc/qemu/bridge.conf".into(),
             routes: "/proc/net/route".into(),
             firewall: "/proc/sys/net/bridge/bridge-nf-call-iptables".into(),
+            nixos: Path::new(NIXOS_MARK).exists(),
         }
     }
 }
@@ -79,17 +83,16 @@ impl BridgeHost {
         } else if ports.is_ok_and(|mut ports| ports.next().is_none()) {
             found.push(format!("Nothing is connected to {bridge}, so it does not reach the network."));
         }
-        // Guesthouse's installer puts its own helper in, so either way the installer is the fix.
+        // Guesthouse's installer or its NixOS module puts its own helper in, so either way that's the fix.
+        let fix = if self.nixos {
+            "Turn on programs.guesthouse in your NixOS configuration and rebuild, which puts"
+        } else {
+            "Run Guesthouse's installer again, which puts"
+        };
         if !self.helper.exists() {
-            found.push(format!(
-                "{} is missing. Run Guesthouse's installer again, which puts it there.",
-                self.helper.display()
-            ));
+            found.push(format!("{} is missing. {fix} it there.", self.helper.display()));
         } else if !self.helper_can_run() {
-            found.push(format!(
-                "{} cannot run as root. Run Guesthouse's installer again, which puts in one that can.",
-                self.helper.display()
-            ));
+            found.push(format!("{} cannot run as root. {fix} in one that can.", self.helper.display()));
         }
         if self.bridge_allowed(bridge) == Some(false) {
             found.push(format!("{} does not allow {bridge}.", self.config.display()));
@@ -120,6 +123,21 @@ impl BridgeHost {
     /// over the interface's address, so the port needs a higher priority than the wired profile or
     /// that would come back at boot.
     pub fn commands(&self, bridge: &str, interface: Option<&str>, exists: bool) -> String {
+        let allow = if self.nixos { Self::nixos_allow(bridge) } else { self.allow(bridge) };
+        let Some(interface) = interface.filter(|_| !exists) else { return allow };
+        let port = shell_quote(&format!("{bridge}-{interface}"));
+        let (name, device) = (shell_quote(bridge), shell_quote(interface));
+        format!(
+            "sudo nmcli connection add type bridge ifname {name} con-name {name} stp no\n\
+             sudo nmcli connection add type ethernet ifname {device} con-name {port} \
+             master {name} slave-type bridge connection.autoconnect-priority 10\n\
+             sudo nmcli connection up {port}\n\
+             sudo nmcli connection up {name}\n{allow}"
+        )
+    }
+
+    /// QEMU's config allows the bridge, and a distribution's helper gets the right it needs.
+    fn allow(&self, bridge: &str) -> String {
         let config = self.config.to_string_lossy();
         let folder = self.config.parent().unwrap_or(Path::new("/")).to_string_lossy();
         let mut allow = format!(
@@ -130,15 +148,15 @@ impl BridgeHost {
         if self.helper_needs_right() {
             allow += &format!("\nsudo setcap {HELPER_RIGHT} {}", shell_quote(&self.helper.to_string_lossy()));
         }
-        let Some(interface) = interface.filter(|_| !exists) else { return allow };
-        let port = shell_quote(&format!("{bridge}-{interface}"));
-        let (name, device) = (shell_quote(bridge), shell_quote(interface));
+        allow
+    }
+
+    /// On NixOS the config is a link into the store and can't be written. The module writes it from
+    /// a list of bridges. As comments, the block still runs as it is.
+    fn nixos_allow(bridge: &str) -> String {
         format!(
-            "sudo nmcli connection add type bridge ifname {name} con-name {name} stp no\n\
-             sudo nmcli connection add type ethernet ifname {device} con-name {port} \
-             master {name} slave-type bridge connection.autoconnect-priority 10\n\
-             sudo nmcli connection up {port}\n\
-             sudo nmcli connection up {name}\n{allow}"
+            "# Add this to your NixOS configuration, then run sudo nixos-rebuild switch:\n\
+             # programs.guesthouse.bridges = [ \"{bridge}\" ];"
         )
     }
 }
@@ -204,6 +222,7 @@ mod tests {
             config: scratch.path("bridge.conf"),
             routes: scratch.path("route"),
             firewall: scratch.path("firewall"),
+            nixos: false,
         }
     }
 
@@ -285,6 +304,18 @@ mod tests {
         let commands = host.commands("br0", Some("eno2"), false);
         assert!(commands.contains("nmcli") && commands.contains("allow br0"));
         assert!(!host.commands("br0", Some("eno2"), true).contains("nmcli"), "only what is left to do");
+    }
+
+    #[test]
+    fn on_nixos_the_bridge_is_allowed_in_its_configuration() {
+        let scratch = Scratch::new();
+        let host = BridgeHost { nixos: true, helper: scratch.path("nowhere"), ..host(&scratch) };
+        let commands = host.commands("br0", Some("eno2"), false);
+        assert!(
+            commands.contains("nmcli") && commands.contains(r#"programs.guesthouse.bridges = [ "br0" ];"#)
+        );
+        assert!(!commands.contains("tee") && !commands.contains("setcap"));
+        assert!(problems(&host).contains("Turn on programs.guesthouse"));
     }
 
     #[test]

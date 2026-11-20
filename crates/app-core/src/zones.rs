@@ -10,7 +10,8 @@ use std::process::Command;
 
 pub const HOST_ZONE_LINK: &str = "/etc/localtime";
 const ZONE_TABLE: &str = include_str!("../data/windows-zones.txt");
-const ZONE_DATABASE: &str = "/usr/share/zoneinfo";
+/// NixOS keeps its zone files in `/etc`, behind the links its `/etc/localtime` goes through.
+const ZONE_DATABASES: [&str; 2] = ["/usr/share/zoneinfo", "/etc/zoneinfo"];
 const FALLBACK: &str = "UTC";
 
 /// The host's IANA zone, from where the link points. Empty if that says nothing.
@@ -32,7 +33,7 @@ fn plain_name(name: &str) -> bool {
 
 fn is_zone(zone: &str) -> bool {
     let safe = !zone.is_empty() && !zone.split('/').any(|part| part == ".." || part.is_empty());
-    safe && Path::new(ZONE_DATABASE).join(zone).is_file()
+    safe && ZONE_DATABASES.iter().any(|folder| Path::new(folder).join(zone).is_file())
 }
 
 /// A zone's UTC offsets on 1 January and 1 July of a year, or `None` if there's no such zone.

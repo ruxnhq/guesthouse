@@ -3,11 +3,16 @@
 //! else, QEMU's own descriptors say where a distribution put them.
 
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const FEDORA_FOLDER: &str = "/usr/share/edk2/ovmf";
-const DESCRIPTOR_FOLDER: &str = "/usr/share/qemu/firmware";
+/// Where QEMU looks for descriptors, as its firmware.json says. A file in `/etc` stands in for one of
+/// the same name in `/usr`, which is how an administrator adds their own. NixOS has nothing in
+/// `/usr`, so its Guesthouse module puts its descriptors in `/etc`.
+const DESCRIPTOR_FOLDERS: [&str; 2] = ["/usr/share/qemu/firmware", "/etc/qemu/firmware"];
 const SECURE_BOOT: &str = "secure-boot";
 const ENROLLED_KEYS: &str = "enrolled-keys";
 const NEEDS_SMM: &str = "requires-smm";
@@ -51,12 +56,17 @@ fn files_of(descriptor: &Value, with_keys: bool) -> Option<(PathBuf, PathBuf)> {
     wanted.then(|| Some((file("executable")?, file("nvram-template")?))).flatten()
 }
 
-/// What the descriptors in `folder` say. QEMU goes through them in name order, and so does this.
-fn from_descriptors(folder: &Path) -> Option<Firmware> {
-    let mut names: Vec<PathBuf> = fs::read_dir(folder).ok()?.flatten().map(|entry| entry.path()).collect();
-    names.sort();
+/// What the descriptors in `folders` say, a later folder's file standing in for an earlier one of the
+/// same name. QEMU goes through them in name order, whichever folder each is in, and so does this.
+fn from_descriptors(folders: &[&Path]) -> Option<Firmware> {
+    let mut by_name: BTreeMap<OsString, PathBuf> = BTreeMap::new();
+    for folder in folders {
+        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+            by_name.insert(entry.file_name(), entry.path());
+        }
+    }
     let descriptors: Vec<Value> =
-        names.iter().filter_map(|path| serde_json::from_slice(&fs::read(path).ok()?).ok()).collect();
+        by_name.values().filter_map(|path| serde_json::from_slice(&fs::read(path).ok()?).ok()).collect();
     let first = |with_keys| descriptors.iter().find_map(|found| files_of(found, with_keys));
     let (code, vars) = first(false)?;
     // Arch ships no firmware with keys. A VM with no TPM never uses it, and one with a TPM gets
@@ -83,7 +93,8 @@ impl Default for Firmware {
         if named.code.exists() {
             return named;
         }
-        from_descriptors(Path::new(DESCRIPTOR_FOLDER)).unwrap_or(named)
+        let folders = DESCRIPTOR_FOLDERS.map(Path::new);
+        from_descriptors(&folders).unwrap_or(named)
     }
 }
 
@@ -119,7 +130,7 @@ mod tests {
             descriptor("/o/CODE.secboot.fd", "/o/VARS.fd", r#""requires-smm", "secure-boot""#),
         );
         scratch.write("firmware/60-plain.json", descriptor("/o/CODE.fd", "/o/PLAIN.fd", ""));
-        let found = from_descriptors(&scratch.path("firmware")).unwrap();
+        let found = from_descriptors(&[&scratch.path("firmware")]).unwrap();
         assert_eq!(found.code, Path::new("/o/CODE.secboot.fd"));
         assert_eq!(found.vars, Path::new("/o/VARS.fd"));
         assert_eq!(found.vars_secure, Path::new("/o/VARS.ms.fd"));
@@ -134,7 +145,7 @@ mod tests {
         scratch.write("firmware/50-secure.json", descriptor("/s/CODE", "/s/VARS", features));
         scratch.write("firmware/60-plain.json", descriptor("/s/PLAIN", "/s/PLAIN_VARS", ""));
         scratch.write("firmware/70-not-json.json", "nothing");
-        let found = from_descriptors(&scratch.path("firmware")).unwrap();
+        let found = from_descriptors(&[&scratch.path("firmware")]).unwrap();
         assert_eq!(found.vars, Path::new("/s/VARS"));
         assert_eq!(found.vars_secure, Path::new("/s/VARS.ms"));
         assert_eq!((format_of(&found.code), format_of(&found.code_secure)), ("raw", "raw"));
@@ -145,17 +156,39 @@ mod tests {
         let scratch = Scratch::new();
         let features = r#""requires-smm", "secure-boot""#;
         scratch.write("firmware/50-secure.json", descriptor("/s/CODE", "/s/VARS", features));
-        let found = from_descriptors(&scratch.path("firmware")).unwrap();
+        let found = from_descriptors(&[&scratch.path("firmware")]).unwrap();
         assert_eq!(found.vars_secure, Path::new("/s/VARS"));
-        assert_eq!(from_descriptors(&scratch.path("nothing")), None);
+        assert_eq!(from_descriptors(&[&scratch.path("nothing")]), None);
     }
 
     #[test]
     fn with_no_firmware_for_this_pc_there_is_no_answer() {
         let scratch = Scratch::new();
         scratch.write("firmware/10-other.json", descriptor("/o/C", "/o/V", "").replace("x86_64", "aarch64"));
-        assert_eq!(from_descriptors(&scratch.path("firmware")), None);
-        assert_eq!(from_descriptors(&scratch.path("nowhere")), None);
+        assert_eq!(from_descriptors(&[&scratch.path("firmware")]), None);
+        assert_eq!(from_descriptors(&[&scratch.path("nowhere")]), None);
+    }
+
+    #[test]
+    fn a_descriptor_in_etc_stands_in_for_the_one_of_its_name() {
+        let scratch = Scratch::new();
+        let secure = r#""requires-smm", "secure-boot""#;
+        scratch.write("usr/50-secure.json", descriptor("/usr/CODE", "/usr/VARS", secure));
+        scratch.write("etc/50-secure.json", descriptor("/etc/CODE", "/etc/VARS", secure));
+        let keys = r#""enrolled-keys", "requires-smm", "secure-boot""#;
+        scratch.write("usr/40-keys.json", descriptor("/usr/CODE", "/usr/VARS.ms", keys));
+        let found = from_descriptors(&[&scratch.path("usr"), &scratch.path("etc")]).unwrap();
+        assert_eq!((found.code, found.vars), ("/etc/CODE".into(), "/etc/VARS".into()));
+        assert_eq!(found.vars_secure, Path::new("/usr/VARS.ms"));
+    }
+
+    #[test]
+    fn descriptors_in_etc_alone_are_enough() {
+        let scratch = Scratch::new();
+        let secure = r#""requires-smm", "secure-boot""#;
+        scratch.write("etc/50-secure.json", descriptor("/nix/store/o/CODE", "/nix/store/o/VARS", secure));
+        let found = from_descriptors(&[&scratch.path("usr"), &scratch.path("etc")]).unwrap();
+        assert_eq!(found.code, Path::new("/nix/store/o/CODE"));
     }
 
     #[test]

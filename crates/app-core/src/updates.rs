@@ -32,7 +32,8 @@ pub enum Found {
     Latest,
     /// No network, or the script couldn't say. It isn't worth bothering anyone about by itself.
     CantTell,
-    /// A build of the repo, which updates through git.
+    /// A build of the repo, which updates through git, or a copy from a package, such as NixOS's
+    /// flake, which updates the way it came.
     NotInstalled,
 }
 

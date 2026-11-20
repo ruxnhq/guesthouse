@@ -17,6 +17,7 @@ pub mod launch;
 mod plan;
 pub mod seccomp;
 mod support;
+pub mod system;
 
 pub use plan::{Grant, Network, Plan, Ports};
 pub use support::{Support, only_thread};

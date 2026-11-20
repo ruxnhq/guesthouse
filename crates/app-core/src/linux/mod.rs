@@ -15,6 +15,7 @@ pub mod gpu_off;
 pub mod guest_says;
 pub mod layout;
 pub mod seed;
+mod store_loader;
 mod tables;
 
 use crate::context::Context;

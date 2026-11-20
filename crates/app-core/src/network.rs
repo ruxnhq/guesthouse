@@ -22,11 +22,18 @@ pub const CONTROL_MAC: &str = "52:54:00:67:68:01";
 pub const DEFAULT_BRIDGE: &str = "br0";
 /// Where install.sh puts Guesthouse's own bridge helper, setuid root. It says the same.
 pub const OWN_BRIDGE_HELPER: &str = "/usr/local/libexec/guesthouse/qemu-bridge-helper";
-/// Makes a tap as root, for a QEMU that runs as this user. Guesthouse's own comes first. A build of the
-/// repo has none, and then it's the distribution's: Fedora keeps it in the second of these, and Debian,
-/// Ubuntu and Arch in the third.
-const BRIDGE_HELPERS: [&str; 3] =
-    [OWN_BRIDGE_HELPER, "/usr/libexec/qemu-bridge-helper", "/usr/lib/qemu/qemu-bridge-helper"];
+/// Where Guesthouse's NixOS module puts the same helper, as a setuid wrapper. It isn't called
+/// `qemu-bridge-helper`, as NixOS's libvirt module already gives that name to its own QEMU's.
+pub const NIXOS_BRIDGE_HELPER: &str = "/run/wrappers/bin/guesthouse-bridge-helper";
+/// Makes a tap as root, for a QEMU that runs as this user. Guesthouse's own comes first, from
+/// install.sh or from the NixOS module. A build of the repo has none, and then it's the
+/// distribution's: Fedora keeps it in the third of these, and Debian, Ubuntu and Arch in the fourth.
+const BRIDGE_HELPERS: [&str; 4] = [
+    OWN_BRIDGE_HELPER,
+    NIXOS_BRIDGE_HELPER,
+    "/usr/libexec/qemu-bridge-helper",
+    "/usr/lib/qemu/qemu-bridge-helper",
+];
 /// The kernel's limit on an interface's name.
 const MOST_BRIDGE_NAME: usize = 15;
 const FIRST_FREE_PORT_FILE: &str = "/proc/sys/net/ipv4/ip_unprivileged_port_start";
@@ -37,9 +44,15 @@ fn first_that_exists<'a>(places: &[&'a str], exists: impl Fn(&str) -> bool) -> &
     places.iter().copied().find(|place| exists(place)).unwrap_or(places[0])
 }
 
-/// Where this PC keeps the helper. If it has none, the bridge check says so about Guesthouse's own.
+/// What NixOS has, and nothing else does.
+pub const NIXOS_MARK: &str = "/etc/NIXOS";
+
+/// Where this PC keeps the helper. If it has none, the bridge check says so about Guesthouse's own:
+/// install.sh's, or on NixOS the module's.
 pub fn bridge_helper() -> &'static str {
-    first_that_exists(&BRIDGE_HELPERS, |place| Path::new(place).exists())
+    let found = first_that_exists(&BRIDGE_HELPERS, |place| Path::new(place).exists());
+    let none = !Path::new(found).exists();
+    if none && Path::new(NIXOS_MARK).exists() { NIXOS_BRIDGE_HELPER } else { found }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

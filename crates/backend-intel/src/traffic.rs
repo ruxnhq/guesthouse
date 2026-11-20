@@ -1,14 +1,16 @@
 //! One log line for each exchange with the guest's driver, in a fixed form a tester's log can be
 //! searched by: `intel <kind> name=value ...`.
 //!
-//! The kinds are `query`, `registry`, `escape`, `partition`, `context`, `queue`, `allocation`,
-//! `submit`, `queue-closed`, `copy` and `refused`. Each line names the fields decoded, then
-//! `undecoded=` with the non-zero words nothing names yet. The first few of each kind are at info,
-//! told apart by the guest's process where the trait passes one (escapes and contexts) and by its
-//! address space for submissions, so a second program's traffic isn't hidden behind the first's.
-//! Queries, registry values, queues and allocations come with no process, so those are told apart
-//! by what they say alone. The repeats are at debug, and with `GUESTHOUSE_VERBOSE` every buffer is
-//! dumped whole as well, up to 4 KiB.
+//! The kinds are `query`, `registry`, `escape`, `partition`, `media`, `context`, `queue`,
+//! `allocation`, `submit`, `queue-closed`, `copy` and `refused`. Each line names the fields
+//! decoded, then `undecoded=` with the non-zero words nothing names yet. The first few of each
+//! kind are at info, told apart by the guest's process where the trait passes one (escapes,
+//! media answers and contexts) and by its address space for submissions, so a second program's
+//! traffic isn't hidden behind the first's. An escape is also told apart by what it asks, so a
+//! program's later questions aren't hidden behind its first ones. Queries, registry values,
+//! queues and allocations come with no process, so those are told apart by what they say alone.
+//! The repeats are at debug, and with `GUESTHOUSE_VERBOSE` every buffer is dumped whole as well,
+//! up to 4 KiB.
 
 use crate::protocol::allocation::{self, Resource};
 use crate::protocol::command_header::{self, Compact, Header};
@@ -16,6 +18,7 @@ use crate::protocol::context::{self, Context};
 use crate::protocol::escape::{self, Escape, PartitionAsk};
 use crate::protocol::guest_driver::NameAnswer;
 use crate::protocol::hw_queue::{self, Queue};
+use crate::protocol::media_escape::Answered;
 use crate::protocol::nodes;
 use crate::protocol::partition;
 use crate::protocol::record::Asked;
@@ -86,6 +89,7 @@ pub struct Traffic {
     queries: Seen,
     registry: Seen,
     escapes: Seen,
+    media: Seen,
     contexts: Seen,
     queues: Seen,
     allocations: Seen,
@@ -126,16 +130,31 @@ impl Traffic {
         tell!(telling, "{PREFIX} registry name=\"{shown}\" {answer}");
     }
 
-    pub fn escape(&mut self, process: u32, data: &[u8], escape: &Escape, partition: Option<PartitionAsk>) {
-        let kind =
-            (process, escape.code, escape.minor_code, escape.gmm_action, escape.length, escape.verdict);
+    pub fn escape(
+        &mut self,
+        process: u32,
+        data: &[u8],
+        escape: &Escape,
+        partition: Option<PartitionAsk>,
+        media: Option<Answered>,
+    ) {
+        let kind = (
+            process,
+            escape.code,
+            escape.minor_code,
+            escape.gmm_action,
+            escape.media_action,
+            escape.length,
+            escape.verdict,
+        );
         let telling = self.escapes.worth_telling(kind);
         let action = DisplayOption(escape.gmm_action.map(|action| HexNumber(action.into())));
+        let media_action = DisplayOption(escape.media_action.map(|action| HexNumber(action.into())));
         let payload = data.get(escape::HEADER_SIZE..).unwrap_or_default();
         tell!(
             telling,
             "{PREFIX} escape process={process:#x} length={} payload_size={} checksum={:#x} code={:#x} minor={:#x} \
-             gmm_action={action} kernel_would={} why=\"{}\" answer={} payload={}",
+             gmm_action={action} media_action={media_action} kernel_would={} why=\"{}\" answer={} payload={}",
             escape.length,
             escape.payload_size,
             escape.checksum,
@@ -143,8 +162,9 @@ impl Traffic {
             escape.minor_code,
             escape.verdict.word(),
             escape.verdict.why(),
-            match partition {
-                Some(PartitionAsk::Get) => "partition",
+            match (partition, media) {
+                (Some(PartitionAsk::Get), _) => "partition",
+                (_, Some(_)) => "media",
                 _ => "echoed",
             },
             Hex { bytes: payload, most: ESCAPE_BYTES_SHOWN }
@@ -163,6 +183,13 @@ impl Traffic {
             }
             None => {}
         }
+    }
+
+    /// What a media driver's escape was answered with. The first few of each answer are at info,
+    /// so a log cut down to its info lines still says which engine each video stream was given.
+    pub fn media(&mut self, process: u32, answered: &Answered) {
+        let telling = self.media.worth_telling((process, *answered));
+        tell!(telling, "{PREFIX} media process={process:#x} {answered}");
     }
 
     pub fn context(&mut self, process: u32, node: u32, private: &[u8], context: &Context) {

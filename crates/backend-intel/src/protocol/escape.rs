@@ -7,10 +7,12 @@
 //! in [`ANY_SIZE`]. The checksum is logged and not judged. A payload starting with
 //! [`DONE_AT_ONCE`] counts as answered at once, and an escape of [`OLDER_FORM_SIZE`] bytes that
 //! fails the rules counts as an older form whose rules aren't known. The memory manager's escapes
-//! use [`GMM_CONTROL`], with what they ask for in the payload's first dword.
+//! use [`GMM_CONTROL`], with what they ask for in the payload's first dword, and so do the media
+//! driver's, [`super::media_escape::MEDIA`].
 //!
-//! The partition escape is answered, in [`answer_partition`]. Any other comes back as the guest
-//! sent it. The core gives an escape no status of its own, so the verdict only goes to the log.
+//! The partition escape is answered, in [`answer_partition`], and some of the media driver's, in
+//! [`super::media_escape`]. Any other comes back as the guest sent it. The core gives an escape no
+//! status of its own, so the verdict only goes to the log.
 
 use super::bytes::dword;
 use super::partition::{self, Range};
@@ -18,7 +20,7 @@ use super::partition::{self, Range};
 pub const HEADER_SIZE: usize = 16;
 const PAYLOAD_SIZE: usize = 0x0;
 const CHECKSUM: usize = 0x4;
-const CODE: usize = 0x8;
+pub const CODE: usize = 0x8;
 const MINOR_CODE: usize = 0xC;
 /// Codes below this are judged known.
 const CODES: u32 = 0x70;
@@ -99,6 +101,8 @@ pub struct Escape {
     pub minor_code: u32,
     /// What a memory manager escape asks for.
     pub gmm_action: Option<u32>,
+    /// What a media driver's escape asks for.
+    pub media_action: Option<u32>,
     pub verdict: Verdict,
 }
 
@@ -112,11 +116,14 @@ impl Escape {
             code: field(CODE),
             minor_code: field(MINOR_CODE),
             gmm_action: None,
+            media_action: None,
             verdict: Verdict::Taken,
         };
         let payload = data.get(HEADER_SIZE..).unwrap_or_default();
-        if escape.code == GMM_CONTROL {
-            escape.gmm_action = dword(payload, 0);
+        match escape.code {
+            GMM_CONTROL => escape.gmm_action = dword(payload, 0),
+            super::media_escape::MEDIA => escape.media_action = dword(payload, 0),
+            _ => {}
         }
         escape.verdict = escape.judge(payload);
         escape
@@ -190,6 +197,15 @@ pub(crate) mod tests {
         let mut other_code = gmm(0x1D, PARTITION_PAYLOAD);
         put_dword(&mut other_code, CODE, 3);
         assert_eq!(answer_partition(&mut other_code, &ours), None);
+    }
+
+    #[test]
+    fn a_media_escape_says_what_it_asks_and_a_memory_manager_one_is_not_one() {
+        let mut data = gmm(0x10, 0x160);
+        put_dword(&mut data, CODE, crate::protocol::media_escape::MEDIA);
+        let escape = Escape::parse(&data);
+        assert_eq!((escape.media_action, escape.gmm_action), (Some(0x10), None));
+        assert_eq!(Escape::parse(&gmm(0x10, 0x160)).media_action, None);
     }
 
     #[test]

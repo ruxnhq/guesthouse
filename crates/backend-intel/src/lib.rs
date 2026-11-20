@@ -61,6 +61,7 @@ use protocol::allocation::Resource;
 use protocol::command_header::Header;
 use protocol::context::Context;
 use protocol::escape::Escape;
+use protocol::media_escape::{MediaEngines, MediaEscapes};
 use protocol::record::{
     EngineMaxima, GtSystem, IpWord, Memory, Platform, RecordFacts, StageThreads, Urb, UrbEntries,
 };
@@ -103,6 +104,11 @@ pub struct IntelBackend {
     work: Option<CardWork>,
     /// Why the guest is left listening, when it is.
     listening: Option<Fallback>,
+    /// What the media driver's escapes keep for the guest: its reset count, and the engines its
+    /// video streams hold.
+    media: MediaEscapes,
+    /// The card's video engines a video stream can be given, by node.
+    media_engines: MediaEngines,
 }
 
 impl IntelBackend {
@@ -145,6 +151,7 @@ impl IntelBackend {
             engines: card.engine_families(),
             guest_driver_version: 0,
         };
+        let media_engines = MediaEngines::of(|node| work::engines::for_node(&card.engines, node).is_some());
         let backend = Self {
             card,
             generation,
@@ -157,6 +164,8 @@ impl IntelBackend {
             desktop: Desktop::Hardware,
             work: None,
             listening: None,
+            media: MediaEscapes::default(),
+            media_engines,
         };
         backend.log_start();
         Ok(backend)
@@ -251,6 +260,7 @@ impl IntelBackend {
             log::info!("{PREFIX} profile-guess \"{guess}\"");
         }
         log::info!("{PREFIX} record {}", record::summary(&self.record));
+        log::info!("{PREFIX} media-engines {}", self.media_engines);
         let urb = record::urb(&self.record);
         log::info!("{PREFIX} record-urb {urb}");
         if urb.vertex.max == 0 {
@@ -840,14 +850,20 @@ impl Backend for IntelBackend {
 
     fn guest_restarted(&mut self) {
         log::info!("{PREFIX} guest-restarted");
+        self.media.guest_restarted();
     }
 
-    /// A partition escape asking for one gets the record's. Every other is answered by leaving the
-    /// guest's buffer as it came.
+    /// A partition escape asking for one gets the record's, and the media driver's questions about
+    /// its engines and its reset count are answered as the kernel driver answers them. Every other
+    /// is answered by leaving the guest's buffer as it came.
     fn escape(&mut self, process: u32, data: &mut [u8], _books: &GuestBooks<'_>) {
         let escape = Escape::parse(data);
         let partition = protocol::escape::answer_partition(data, &protocol::partition::ours());
-        self.traffic.escape(process, data, &escape, partition);
+        let media = self.media.answer(process, data, &self.media_engines);
+        self.traffic.escape(process, data, &escape, partition, media);
+        if let Some(answered) = media {
+            self.traffic.media(process, &answered);
+        }
     }
 
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status> {
@@ -934,6 +950,7 @@ impl Backend for IntelBackend {
 
     fn process_gone(&mut self, process: u32) {
         log::debug!("{PREFIX} process-gone process={process:#x}");
+        self.media.process_gone(process);
     }
 
     /// Each submission is logged with what its header says, as far as it can be read. While
@@ -1700,6 +1717,31 @@ mod tests {
         assert_eq!(slot.bytes(), in_rows);
         let bigger = SlotCopy { width: 129, ..copy };
         assert_eq!(backend.start_slot_copy(&mut host, &bigger), StagingStart::Finished(Status::UNSUCCESSFUL));
+    }
+
+    #[test]
+    fn a_decoder_is_given_the_cards_video_engines_in_turn_and_they_run_there() {
+        use protocol::media_escape::EngineKind;
+        use protocol::media_escape::tests::{question, video_decode_node};
+        let card = card::tests::battlemage();
+        let engines = card.engines.clone();
+        let mut backend = IntelBackend::from_card(card).unwrap();
+        let memory = || guesthouse_backend::VideoMemoryUse { total: 0, used: 0 };
+        let processes = Vec::new;
+        let books = GuestBooks { memory: &memory, processes: &processes };
+        let ask = |backend: &mut IntelBackend, process| {
+            let mut data = question(EngineKind::VideoDecode, 0, 0);
+            backend.escape(process, &mut data, &books);
+            video_decode_node(&data).unwrap()
+        };
+        let given = [ask(&mut backend, 0x4003_2A80), ask(&mut backend, 0x4004_B780)];
+        assert_eq!(given, [1, 4], "never node 0, the 3D engine, where video commands do nothing");
+        for node in given {
+            let engine = work::engines::for_node(&engines, node).expect("a node the card runs");
+            assert_eq!(engine.class, xe_query::Engine::VIDEO_DECODE);
+        }
+        backend.process_gone(0x4004_B780);
+        assert_eq!(ask(&mut backend, 0x4004_B780), 4, "the gone process's engine is its turn again");
     }
 
     #[test]

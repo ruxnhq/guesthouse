@@ -37,7 +37,7 @@ fn the_recorded_b580_gets_its_workaround_table_from_its_render_and_media_ips() {
     let backend = IntelBackend::from_card(recording::read(ARC_B580).unwrap()).unwrap();
     let record = backend.record();
     let set = (0..3048).filter(|&entry| features::workaround(record, entry).is_some_and(|value| value != 0));
-    assert_eq!(set.count(), 194, "the table's 195 but the render cache's keying");
+    assert_eq!(set.count(), 192, "a real card's 193 but the render cache's keying");
     assert_eq!(features::workaround(record, 2287), Some(0), "the render cache's keying, kept clear");
     assert_eq!(features::workaround(record, 2964), Some(2), "render 20.01");
     assert_eq!(features::workaround(record, 2525), Some(4), "media 13.01");
@@ -53,8 +53,10 @@ fn fingerprint(record: &[u8]) -> u64 {
 
 /// What the record of the recorded card with its device made 0xE20D was before the kernel driver's
 /// data, a Battlemage device that data has no table for, but for the workaround entry for the render
-/// cache's keying, which the record now keeps clear on every card.
-const UNLISTED_DEVICE_RECORD: u64 = 0x989C_77AA_F17D_736B;
+/// cache's keying, which the record now keeps clear on every card, and the Direct3D 11 interface
+/// versions, which it now offers all of on a card that gives the URB stage limits, with the
+/// workaround entries that go with them.
+const UNLISTED_DEVICE_RECORD: u64 = 0xA94C_B27A_A85B_6AA7;
 
 #[test]
 fn a_device_the_kernel_drivers_data_does_not_list_gets_the_record_it_got_before() {
@@ -110,7 +112,7 @@ fn the_recorded_b580_gets_the_kernel_drivers_feature_table_but_where_this_record
         .collect();
     let unnamed = |index| features::bit("unnamed", index);
     // Each departure by name: the driver's value, then the record's.
-    let mut expected = vec![
+    let expected = vec![
         // The GPU can't share the guest's pointers.
         (features::SVM, true, false),
         // Compression stays off.
@@ -134,10 +136,11 @@ fn the_recorded_b580_gets_the_kernel_drivers_feature_table_but_where_this_record
         // The Direct3D 12 capability that wants resources shared across adapters.
         (unnamed(505), true, false),
     ];
-    // The older Direct3D 11 interface versions: this record offers the newest alone.
-    expected.extend(
-        (0..5).map(|n| (features::bit("an older Direct3D 11 interface version", 1408 + n), true, false)),
-    );
+    // The card gives the URB stage limits, so the record offers every Direct3D 11 interface version,
+    // the older ones the driver's table has among them.
+    for version in features::every_ddi_version() {
+        assert!(features::is_set(record, version), "{}", version.name);
+    }
     let expected: BTreeMap<usize, (bool, bool)> =
         expected.iter().map(|&(feature, data, ours)| (place(feature), (data, ours))).collect();
     assert_eq!(departures, expected);

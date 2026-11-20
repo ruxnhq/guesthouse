@@ -151,12 +151,26 @@ pub fn is_set(record: &[u8], feature: Feature) -> bool {
     record.get(feature.byte).is_some_and(|byte| byte & (1 << feature.bit) != 0)
 }
 
-/// The one newer Direct3D 11 interface version the record offers: the newest, which carries the
-/// hardware-queue callbacks the compositor needs. With the older ones as well, Intel's OpenGL driver
-/// takes the pixel format and then divides by zero making a context; with this one alone it stays
-/// out and OpenGL falls back to Microsoft's, as it did before any were offered. A real card offers
-/// every version, the five below 0x000B0023 too.
-pub const OFFERED_DDI_VERSION: Feature = DDI_VERSIONS[DDI_VERSIONS.len() - 1];
+/// The five Direct3D 11 interface versions below 0x000B0023, the low bits of the same dword, which
+/// have no names in gmmlib either. Intel's kernel driver offers them on every card its data lists.
+pub const OLDER_DDI_VERSIONS: [Feature; 5] = [
+    at("an older D3D11 DDI, bit 0", WORD_FIRST, 1408),
+    at("an older D3D11 DDI, bit 1", WORD_FIRST, 1409),
+    at("an older D3D11 DDI, bit 2", WORD_FIRST, 1410),
+    at("an older D3D11 DDI, bit 3", WORD_FIRST, 1411),
+    at("an older D3D11 DDI, bit 4", WORD_FIRST, 1412),
+];
+
+/// The newest Direct3D 11 interface version, which carries the hardware-queue callbacks the
+/// compositor needs. Every record offers it.
+pub const NEWEST_DDI_VERSION: Feature = DDI_VERSIONS[DDI_VERSIONS.len() - 1];
+
+/// Every Direct3D 11 interface version a real card offers: Intel's kernel driver offers the five
+/// older ones and the newest from its data and the rest as it starts, and its own workaround rules
+/// for an Arc B580 come out as a real card's only with all of them offered.
+pub fn every_ddi_version() -> impl Iterator<Item = Feature> {
+    OLDER_DDI_VERSIONS.into_iter().chain(DDI_VERSIONS)
+}
 
 #[cfg(test)]
 mod tests {
@@ -243,6 +257,20 @@ mod tests {
         }
         assert_eq!(dword(&record, 0x364), Some(0xFFE0));
         assert_eq!(record.iter().filter(|&&byte| byte != 0).count(), 2);
+    }
+
+    #[test]
+    fn the_older_ddi_versions_are_the_low_five_bits_and_every_version_is_the_low_sixteen() {
+        let mut record = vec![0u8; 0x400];
+        for version in OLDER_DDI_VERSIONS {
+            set(&mut record, version, true);
+        }
+        assert_eq!(dword(&record, 0x364), Some(0x1F));
+        for version in every_ddi_version() {
+            set(&mut record, version, true);
+        }
+        assert_eq!(dword(&record, 0x364), Some(0xFFFF));
+        assert_eq!((NEWEST_DDI_VERSION.byte, NEWEST_DDI_VERSION.bit), (0x365, 7));
     }
 
     #[test]

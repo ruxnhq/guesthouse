@@ -778,12 +778,30 @@ fn set_features(record: &mut [u8], facts: &RecordFacts) {
     for (feature, on) in flags {
         features::set(record, feature, on);
     }
-    for feature in features::PIPELINE_LEVELS.into_iter().chain([features::OFFERED_DDI_VERSION]) {
+    for feature in features::PIPELINE_LEVELS.into_iter().chain(offered_ddi_versions(&facts.urb)) {
         features::set(record, feature, true);
     }
     // A real card says compression on every Xe2 and Xe3 card and most others.
     for feature in features::COMPRESSION {
         features::set(record, feature, false);
+    }
+}
+
+/// The Direct3D 11 interface versions the record offers: every one a real card offers, when the
+/// record has the stage limits Intel's OpenGL driver needs, and otherwise the newest alone.
+///
+/// Intel's OpenGL driver takes part only when the older versions are offered too. Offered the
+/// newest alone it stays out, and a program gets Microsoft's OpenGL 1.1 in its place, which has no
+/// pixel formats to choose by attribute, multisampled ones among them, so a program that asks for
+/// one stops. Making a context, Intel's driver divides by the most URB entries of the vertex, hull,
+/// domain and geometry stages, so on a record without them it would fail every program that uses
+/// OpenGL rather than leave them Microsoft's.
+fn offered_ddi_versions(urb: &Urb) -> Vec<Feature> {
+    let stages = [urb.vertex, urb.hull, urb.domain, urb.geometry];
+    if stages.iter().all(|stage| stage.max > 0) {
+        features::every_ddi_version().collect()
+    } else {
+        vec![features::NEWEST_DDI_VERSION]
     }
 }
 
@@ -1384,11 +1402,28 @@ pub(crate) mod tests {
     }
 
     /// The Direct3D 11 interface versions below 0x000B0023, the dword's five low bits, which a real
-    /// card offers and this record does not, as it offers the newest alone.
+    /// card offers and a record without the URB stage limits does not, as it offers the newest alone.
     fn older_ddi_versions() -> Vec<Departure> {
-        (0..5)
-            .map(|n| (features::bit("an older Direct3D 11 interface version", 1408 + n), true, false))
-            .collect()
+        features::OLDER_DDI_VERSIONS.iter().map(|&version| (version, true, false)).collect()
+    }
+
+    /// The URB an Arc B580 gives through its hwconfig, as a tester's card logged it.
+    fn b580_urb() -> Urb {
+        Urb {
+            size_kb: 3840,
+            vertex: UrbEntries { min: 64, max: 5888 },
+            hull: UrbEntries { min: 0, max: 1548 },
+            geometry: UrbEntries { min: 2, max: 1952 },
+            domain: UrbEntries { min: 50, max: 4480 },
+            task: UrbEntries { min: 0, max: 1548 },
+            mesh: UrbEntries { min: 4, max: 1952 },
+            max_starting_address: 127,
+        }
+    }
+
+    /// The Direct3D 11 interface versions a record offers, as the dword's low sixteen bits.
+    fn ddi_versions(record: &[u8]) -> u32 {
+        dword(record, at::DDI_VERSIONS).unwrap() & 0xFFFF
     }
 
     /// What every card's record departs from the driver's table in, where the driver says it.
@@ -1415,7 +1450,7 @@ pub(crate) mod tests {
 
     /// The flags the driver's table doesn't know that this backend sets, by name.
     fn assert_backends_own(record: &[u8], name: &str) {
-        for feature in [features::HW_SCHEDULING, features::WDDM2_64KB_PAGES, features::OFFERED_DDI_VERSION] {
+        for feature in [features::HW_SCHEDULING, features::WDDM2_64KB_PAGES, features::NEWEST_DDI_VERSION] {
             assert!(features::is_set(record, feature), "{name}: {}", feature.name);
         }
         for feature in [features::WDDM2_SVM, features::HW_SEMAPHORE_64] {
@@ -1680,7 +1715,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_arc_b580_gets_the_table_intels_kernel_driver_gives_it() {
-        let b580 = card(1274, 0xE20B, IpWord::new(20, 1, 0), Some(IpWord::new(13, 1, 1)));
+        let b580 = RecordFacts {
+            urb: b580_urb(),
+            ..card(1274, 0xE20B, IpWord::new(20, 1, 0), Some(IpWord::new(13, 1, 1)))
+        };
         let (record, outcome) = build_telling(&b580);
         let mut ours = table_of(&record);
         let mut real = expected(B580_REAL_CARD);
@@ -1688,14 +1726,6 @@ pub(crate) mod tests {
         // Where this backend's record departs from a real card's, each entry by name: (entry, the
         // real card's value, this record's).
         let departures = [
-            // The entries that go with which Direct3D 11 interface versions the feature table
-            // offers. A real card offers them all; this record offers the newest alone.
-            (1404, 0, 1),
-            (1405, 1, 0),
-            (1406, 0, 1),
-            (1408, 1, 0),
-            (1409, 0, 1),
-            (1412, 0, 1),
             // This backend's own two, the virtual machine's and tiled resources: the same as a
             // real card's.
             (VIRTUAL_MACHINE_WORKAROUND.0, 1, 1),
@@ -1712,7 +1742,7 @@ pub(crate) mod tests {
         assert_eq!(features::workaround(&record, 2964), Some(2), "the compositor follows it");
         assert_eq!(record[0x96A] & 0xF, 0x02, "the low half of the byte Direct3D 11 tests");
         let Outcome::Built(built) = outcome.workarounds else { panic!("the B580 is covered") };
-        assert_eq!(built.entries, 195);
+        assert_eq!(built.entries, 193, "as many as a real card's");
     }
 
     #[test]
@@ -1803,16 +1833,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_urb_goes_where_gt_system_info_has_it_and_reads_back() {
-        let urb = Urb {
-            size_kb: 3840,
-            vertex: UrbEntries { min: 64, max: 5888 },
-            hull: UrbEntries { min: 0, max: 1548 },
-            geometry: UrbEntries { min: 2, max: 1952 },
-            domain: UrbEntries { min: 50, max: 4480 },
-            task: UrbEntries { min: 0, max: 1548 },
-            mesh: UrbEntries { min: 4, max: 1952 },
-            max_starting_address: 127,
-        };
+        let urb = b580_urb();
         let record = build(&RecordFacts { urb, ..facts() });
         let read = |at| dword(&record, at).unwrap();
         assert_eq!(read(0x211C), 3840);
@@ -1865,10 +1886,71 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_record_offers_the_newest_direct3d_11_interface_version_alone() {
-        let record = build(&facts());
-        let ddi_bits = dword(&record, 0x364).unwrap() & 0xFFE0;
-        assert_eq!(ddi_bits, 1 << 15, "0x000B002D, and none of the older ones");
+    fn a_record_with_the_urb_stage_limits_offers_every_direct3d_11_interface_version() {
+        let b580 = card(1274, 0xE20B, IpWord::new(20, 1, 0), Some(IpWord::new(13, 1, 1)));
+        for (name, facts) in [("a card the data lists", b580), ("a card it doesn't", facts())] {
+            let record = build(&RecordFacts { urb: b580_urb(), ..facts });
+            assert_eq!(ddi_versions(&record), 0xFFFF, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_record_short_of_a_stage_limit_offers_the_newest_direct3d_11_interface_version_alone() {
+        assert_eq!(ddi_versions(&build(&facts())), 1 << 15, "0x000B002D, and none of the older ones");
+        let short_of: [fn(&mut Urb); 4] = [
+            |urb| urb.vertex.max = 0,
+            |urb| urb.hull.max = 0,
+            |urb| urb.domain.max = 0,
+            |urb| urb.geometry.max = 0,
+        ];
+        for (stage, clear) in short_of.into_iter().enumerate() {
+            let mut urb = b580_urb();
+            clear(&mut urb);
+            assert_eq!(ddi_versions(&build(&RecordFacts { urb, ..facts() })), 1 << 15, "stage {stage}");
+        }
+        let mut urb = b580_urb();
+        (urb.task.max, urb.mesh.max) = (0, 0);
+        assert_eq!(
+            ddi_versions(&build(&RecordFacts { urb, ..facts() })),
+            0xFFFF,
+            "task and mesh don't count"
+        );
+    }
+
+    #[test]
+    fn the_arc_b580_without_the_stage_limits_departs_from_a_real_cards_table_in_six_entries() {
+        let b580 = card(1274, 0xE20B, IpWord::new(20, 1, 0), Some(IpWord::new(13, 1, 1)));
+        let with_limits = table_of(&build(&RecordFacts { urb: b580_urb(), ..b580.clone() }));
+        let without = table_of(&build(&b580));
+        let entries: BTreeMap<_, _> = (1400..1416)
+            .filter(|entry| with_limits.get(entry) != without.get(entry))
+            .map(|entry| (entry, (with_limits.get(&entry).copied(), without.get(&entry).copied())))
+            .collect();
+        let one = Some(1);
+        assert_eq!(
+            entries,
+            BTreeMap::from([
+                (1404, (None, one)),
+                (1405, (one, None)),
+                (1406, (None, one)),
+                (1408, (one, None)),
+                (1409, (None, one)),
+                (1412, (None, one)),
+            ])
+        );
+    }
+
+    #[test]
+    fn with_the_stage_limits_the_older_versions_are_offered_as_the_drivers_table_offers_them() {
+        let lunar_lake = card(1275, 0x64A0, IpWord::new(20, 4, 4), Some(IpWord::new(20, 0, 0)));
+        let without = departures_from(&build(&lunar_lake), &LUNAR_LAKE_64A0_DATA);
+        let with_limits =
+            departures_from(&build(&RecordFacts { urb: b580_urb(), ..lunar_lake }), &LUNAR_LAKE_64A0_DATA);
+        for version in features::OLDER_DDI_VERSIONS {
+            assert_eq!(without.get(&place(version)), Some(&(true, false)), "{}", version.name);
+            assert_eq!(with_limits.get(&place(version)), None, "{}", version.name);
+        }
+        assert_eq!(without.len(), with_limits.len() + features::OLDER_DDI_VERSIONS.len());
     }
 
     #[test]

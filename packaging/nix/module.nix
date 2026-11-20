@@ -103,10 +103,15 @@ in
 
     environment.systemPackages = [
       cfg.package
-      # The app reads card names from its pci.ids.
+      # The app reads card names from its pci.ids, and the AMD backend from libdrm's list, which names
+      # each card by revision.
       pkgs.hwdata
+      pkgs.libdrm.out
     ];
-    environment.pathsToLink = [ "/share/hwdata" ];
+    environment.pathsToLink = [
+      "/share/hwdata"
+      "/share/libdrm"
+    ];
 
     users.users = lib.genAttrs cfg.users (_: {
       extraGroups = [ "kvm" ];

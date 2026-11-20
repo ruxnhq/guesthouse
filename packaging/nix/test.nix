@@ -40,6 +40,7 @@ self: {
     machine.fail("su carol -c 'test -w /dev/udmabuf'")
     machine.succeed("su carol -c 'test -r /dev/kvm -a -w /dev/kvm'")
     machine.succeed("test -f /run/current-system/sw/share/hwdata/pci.ids")
+    machine.succeed("grep -q '^1114,' /run/current-system/sw/share/libdrm/amdgpu.ids")
     machine.succeed("test -d /run/opengl-driver/lib")
 
     # Two descriptors, one with Microsoft's keys, whose files all exist.

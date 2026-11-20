@@ -16,6 +16,7 @@
 //! that has the card write the queue's fence, and [`Backend::ring_doorbell`] makes the call. The
 //! guest's fence then moves when the card is through, as the core expects of a GPU.
 
+mod card_name;
 mod channel_order;
 mod copy_ib;
 mod device;
@@ -621,7 +622,8 @@ fn queue_checked(queue: u32, serial: u32, private: &[u8]) -> Result<(), BackendE
 fn facts_from(info: &DeviceInfo) -> AdapterFacts {
     AdapterFacts {
         card: PciCard { vendor: AMD_VENDOR, device: info.device_id, revision: info.pci_revision },
-        name: format!("AMD GPU {:#06x}", info.device_id),
+        name: card_name::card_name(info.device_id, info.pci_revision)
+            .unwrap_or_else(|| format!("AMD GPU {:#06x}", info.device_id)),
         video_memory: info.vram_total,
         gtt_memory: info.gtt_total,
         bar_size: info.visible_vram_total,

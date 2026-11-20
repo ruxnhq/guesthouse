@@ -47,7 +47,7 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
 
    The two sources are there for the GPL and the LGPL, so a release doesn't go out without them. They have to stay up for as long as the payload does.
 
-7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed, and merge that with a pull request too. From that moment the one line installs this release, and `--update` and `--check-update` offer it to everyone.
+7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed. In `packaging/nix/package.nix`, set `version` too, and `hash` to the payload's SHA-256 as Nix writes it, which `nix hash convert --hash-algo sha256 --to sri PAYLOAD_SHA256` prints. Merge both with a pull request. From that moment the one line installs this release, `--update` and `--check-update` offer it to everyone, and the flake gives it to NixOS.
 
 8. **Check it from the outside.** Run `install.sh --dry-run` from the raw URL, in a fake HOME. It should download, verify and show the plan.
 

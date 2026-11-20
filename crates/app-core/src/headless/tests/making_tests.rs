@@ -277,3 +277,17 @@ fn setup_takes_the_card_it_was_told_on_a_pc_with_two() {
     let refusal = setup_after(&context, &[passing("KVM")], None, Some("0000:09:00.0"), &mut Vec::new());
     assert_eq!(refusal.unwrap_err().0, "There is no NVIDIA card at 0000:09:00.0.");
 }
+
+#[test]
+fn remote_desktop_and_ssh_are_chosen_only_for_windows_and_only_on_or_off() {
+    let scratch = Scratch::new();
+    let mut context = with_cards(&scratch, &[("0000:01:00.0", 0x2B85)]);
+    context.install_room = Some(0);
+    let plain = plain_disc(&scratch);
+    let refused = failure_of(said(&context, &format!("new Tiny --iso {plain} --remote-desktop on")).1);
+    assert_eq!(refused, "--remote-desktop is only for a Windows machine with GPU-PV.");
+    let data = wim(&["Windows 11 Pro"], 26300, 9);
+    let windows = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
+    let refused = failure_of(said(&context, &format!("new Win --iso {windows} --ssh maybe")).1);
+    assert_eq!(refused, "--ssh is on or off.");
+}

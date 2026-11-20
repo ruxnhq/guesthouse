@@ -41,14 +41,14 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
 
   new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
-                             [--intel-driver PATH]
+                             [--intel-driver PATH] [--remote-desktop on|off] [--ssh on|off]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, sound, share,
-                             window-speed, start-unjailed
+                             window-speed, start-unjailed, remote-desktop, ssh
   forward MACHINE add|remove tcp|udp HOST GUEST
                              a port on this PC that reaches a port in the guest
 

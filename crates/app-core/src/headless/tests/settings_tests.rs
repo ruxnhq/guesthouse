@@ -1,6 +1,7 @@
 use super::*;
 use crate::machine::load;
 use crate::network::Mode;
+use crate::remote_access::{Access, NO_OPENSSH, read_access};
 
 fn refused(context: &Context, words: &str) -> String {
     match said(context, words).1 {
@@ -180,4 +181,44 @@ fn a_machine_can_be_let_start_without_a_jail_and_says_so() {
     assert_eq!(said(&context, "set win start-unjailed off").1, Ok(()));
     assert!(!load(&context, "win").unwrap().start_without_jail);
     assert_eq!(refused(&context, "set win start-unjailed maybe"), "start-unjailed is on or off.");
+}
+
+#[test]
+fn remote_desktop_and_ssh_are_chosen_for_windows_and_reach_it_at_the_next_start() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "win", "Win", Kind::Windows);
+    let show = said(&context, "show win").0;
+    assert!(show.contains("remote-desktop not set\n") && show.contains("ssh       not set\n"), "{show}");
+    let answer = said(&context, "set win remote-desktop yes");
+    let reaches = "remote-desktop is now on.\nWindows gets it at the next start.\n";
+    assert_eq!(answer, (reaches.to_owned(), Ok(())));
+    let machine = load(&context, "win").unwrap();
+    assert_eq!(read_access(&context, &machine), Access { remote_desktop: Some(true), ssh: None });
+    let show = said(&context, "show win").0;
+    assert!(show.contains("remote-desktop on\n") && show.contains("ssh       not set\n"), "{show}");
+    assert_eq!(refused(&context, "set win ssh on"), NO_OPENSSH);
+    assert_eq!(said(&context, "set win ssh off").1, Ok(()));
+    assert!(said(&context, "show win").0.contains("ssh       off\n"));
+    assert_eq!(refused(&context, "set win remote-desktop maybe"), "remote-desktop is on or off.");
+}
+
+#[test]
+fn a_machine_still_to_install_gets_the_change_at_its_install() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let mut machine = make(&context, "win", "Win", Kind::Windows);
+    machine.installing = true;
+    machine.save(&context).unwrap();
+    let answer = said(&context, "set win remote-desktop off").0;
+    assert_eq!(answer, "remote-desktop is now off.\nWindows gets it when it is installed.\n");
+}
+
+#[test]
+fn only_windows_has_remote_desktop_and_ssh() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "plain", "Plain", Kind::Plain);
+    assert_eq!(refused(&context, "set plain ssh off"), "ssh is only for a Windows machine with GPU-PV.");
+    assert!(!said(&context, "show plain").0.contains("remote-desktop"));
 }

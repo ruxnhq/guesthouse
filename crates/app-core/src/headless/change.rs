@@ -10,6 +10,7 @@ use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
 use crate::network::{Forward, Mode, Protocol, read_port};
 use crate::network_settings::{add_forward, read_forward, remove_forward, set_bridge, set_network};
+use crate::remote_access::{APPLY_TASK, Reaches, Service, choose, read_access, when_it_reaches};
 use crate::settings::max_vram_gib;
 use crate::start_checks::share_problem;
 use crate::tasks::{State, status};
@@ -18,7 +19,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 12] = [
+const SETTINGS: [&str; 14] = [
     "cores",
     "ram",
     "vram",
@@ -31,6 +32,8 @@ const SETTINGS: [&str; 12] = [
     "share",
     "window-speed",
     "start-unjailed",
+    "remote-desktop",
+    "ssh",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -39,7 +42,7 @@ fn whole_number(key: &str, text: &str) -> Result<u32> {
     text.parse().ok().filter(|_| digits).ok_or_else(|| Failure(format!("{key} must be a whole number.")))
 }
 
-fn on_or_off(key: &str, text: &str) -> Result<bool> {
+pub(super) fn on_or_off(key: &str, text: &str) -> Result<bool> {
     match text.to_lowercase().as_str() {
         "on" | "yes" | "true" => Ok(true),
         "off" | "no" | "false" => Ok(false),
@@ -89,6 +92,21 @@ fn said(out: &mut dyn Write, key: &str, value: &str) -> Result<()> {
     Ok(writeln!(out, "{key} is now {value}.")?)
 }
 
+/// A change to Remote Desktop or SSH reaches Windows at once if it's running, as the settings page
+/// does, and otherwise at the next start or the install.
+fn take_to_windows(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
+    let reaches = when_it_reaches(context, machine);
+    if reaches != Reaches::Now {
+        return Ok(writeln!(out, "{}", reaches.text())?);
+    }
+    let found = run_task(context, machine, APPLY_TASK, true, out)?.unwrap_or_default();
+    if found.error.is_empty() {
+        Ok(writeln!(out, "Windows has it now.")?)
+    } else {
+        Ok(writeln!(out, "Note: {}", found.error)?)
+    }
+}
+
 pub(super) fn set(
     context: &Context,
     mut machine: Machine,
@@ -130,6 +148,13 @@ pub(super) fn set(
         "start-unjailed" => {
             must_be_off(context, &machine)?;
             machine.start_without_jail = on_or_off(key, value)?;
+        }
+        "remote-desktop" | "ssh" => {
+            let service = if key == "ssh" { Service::Ssh } else { Service::RemoteDesktop };
+            let on = on_or_off(key, value)?;
+            choose(context, &machine, service, on)?;
+            said(out, key, switch(on))?;
+            return take_to_windows(context, &machine, out);
         }
         "screen" => {
             only_for_windows(&machine, key)?;
@@ -244,6 +269,10 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
+        let access = read_access(context, machine);
+        for service in Service::ALL {
+            line(out, service.key(), &access.get(service).map_or("not set", switch))?;
+        }
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
     if machine.kind != Kind::Linux {

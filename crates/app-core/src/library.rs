@@ -10,6 +10,7 @@ use crate::kept_logs;
 use crate::machine::{Kind, Machine, load_all, sorted_names};
 use crate::monitor::{Command, failed};
 use crate::network;
+use crate::remote_access::{Access, access_problem, write_access};
 use crate::settings::with_suffix;
 use crate::setup::guest_driver::guest_driver;
 use crate::snapshots::{list_snapshots, snapshots_folder};
@@ -99,6 +100,8 @@ pub struct NewMachine {
     pub disk_place: String,
     /// Whose card that is, for a Windows machine. None is what the address says.
     pub gpu_maker: Option<GpuMaker>,
+    /// Remote Desktop and SSH, for a Windows machine. Other kinds have neither from here.
+    pub access: Access,
 }
 
 /// The folder a new machine's disk goes in.
@@ -165,6 +168,7 @@ pub fn create_problems(context: &Context, new: &NewMachine, machine: &Machine) -
         if let Err(missing) = guest_driver(context, machine) {
             found.push(missing.to_owned());
         }
+        found.extend(access_problem(context, &new.access).map(str::to_owned));
     }
     Ok(found)
 }
@@ -250,10 +254,13 @@ fn make_disk_folder(machine: &Machine) -> Result<()> {
     })
 }
 
-/// The password and the disk.
+/// The password, the choices of Remote Desktop and SSH, and the disk.
 fn make_files(context: &Context, new: &NewMachine, machine: &Machine) -> Result<()> {
     if installs_itself(machine) && !new.password.is_empty() {
         store_password(&machine.password_file(context), &new.password)?;
+    }
+    if machine.kind == Kind::Windows {
+        write_access(context, machine, &new.access)?;
     }
     make_disk(context, machine, new.disk_gib)
 }
@@ -386,6 +393,7 @@ mod tests {
     use crate::machine::load;
     use crate::monitor::stand_in::RecordingMonitor;
     use crate::processes::stand_in::fake_process;
+    use crate::remote_access::read_access;
     use crate::slots;
     use crate::testing::{Scratch, scratch_context};
     use std::os::unix::fs::{MetadataExt, symlink};
@@ -406,6 +414,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         }
     }
 
@@ -442,6 +451,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         let made = create(&context, &new).unwrap();
         assert_eq!(made.account(), "ana");
@@ -503,6 +513,7 @@ mod tests {
         assert!(made.owns_files(&context) && !made.installing && !made.has_gpu() && !made.tpm);
         assert_eq!(fs::read_to_string(&made.vars).unwrap(), "blank firmware settings");
         assert_eq!(load(&context, "tiny-linux").unwrap(), made);
+        assert_eq!(read_access(&context, &made), Access::default(), "Remote Desktop and SSH are Windows'");
         let second = create(&context, &plain(&scratch, "Tiny Linux", None)).unwrap();
         assert_eq!(second.id, "tiny-linux-2", "a second machine with this name gets its own folder");
         assert_eq!(new_id(&context, "???"), "machine");
@@ -529,6 +540,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         assert!(create(&context, &new).unwrap_err().0.contains("room for 6 GiB"));
     }
@@ -552,6 +564,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         assert_eq!(create(&context, &new).unwrap_err().0, NO_FIRMWARE);
     }
@@ -576,11 +589,15 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         let made = create(&context, &new).unwrap();
         assert!(made.installing && made.tpm && !made.has_gpu());
         assert_eq!(fs::read_to_string(&made.vars).unwrap(), "firmware settings with keys");
+        assert_eq!(read_access(&context, &made), Access::NEW);
+        let with_ssh = Access { ssh: Some(true), ..Access::NEW };
         for (change, text) in [
+            (NewMachine { access: with_ssh, ..new.clone() }, "OpenSSH"),
             (NewMachine { cores: 1, ..new.clone() }, "Cores"),
             (NewMachine { ram_gib: 3, ..new.clone() }, "RAM"),
             (NewMachine { disk_gib: MIN_WINDOWS_DISK_GIB - 1, ..new.clone() }, "disk"),
@@ -611,6 +628,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         let made = create(&context, &new).unwrap();
         assert!(made.installing && !made.tpm && made.vars.is_empty());
@@ -636,6 +654,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: Access::NEW,
         };
         assert_eq!(create(&context, &new).unwrap_err().0, NO_DRIVER_FILES);
     }

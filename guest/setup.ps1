@@ -39,5 +39,11 @@ if (Test-Path (Join-Path $PSScriptRoot 'intel')) {
     New-Item -Path $intelKey -Force | Out-Null
     New-ItemProperty -Path $intelKey -Name 'EnableTrinity' -PropertyType DWord -Value 2 -Force | Out-Null
 }
+# Remote Desktop and SSH, as the machine was made. The host puts each script on the disc with the
+# machine's choice above it, and leaves out the script for one nobody chose.
+foreach ($name in 'remote-desktop.ps1', 'ssh.ps1') {
+    $script = Join-Path $PSScriptRoot $name
+    if (Test-Path $script) { & $script | Out-File -Append C:\gpupv\remote-access.log }
+}
 Start-ScheduledTask -TaskName 'gpupv-agent'
 'setup done' | Out-File C:\gpupv\setup.log

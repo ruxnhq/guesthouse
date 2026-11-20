@@ -18,6 +18,7 @@ use guesthouse_app_core::library::{
     MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create,
 };
 use guesthouse_app_core::machine::{Kind, MIN_CORES, MIN_RAM_GIB, Machine};
+use guesthouse_app_core::remote_access::Access;
 use guesthouse_app_core::setup::amd::NO_AMD_SETUP;
 use guesthouse_app_core::setup::checks::machine_gpu_warning;
 use guesthouse_app_core::setup::guest_driver::guest_driver;
@@ -467,6 +468,7 @@ impl NewMachineDialog {
             amd_gpu: (iso.kind == Kind::Windows).then(|| self.chosen_card_pci()),
             disk_place: parts.disk_place.chosen(),
             gpu_maker: self.chosen_choice().map(|choice| choice.maker),
+            access: Access::NEW,
         };
         let context = parts.window.context();
         let working = context.clone();

@@ -224,6 +224,7 @@ mod tests {
             amd_gpu: None,
             disk_place: String::new(),
             gpu_maker: None,
+            access: crate::remote_access::Access::NEW,
         };
         create(context, &new).unwrap()
     }

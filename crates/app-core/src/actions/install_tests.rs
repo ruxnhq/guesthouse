@@ -143,6 +143,8 @@ fn with_install_files(scratch: &Scratch, context: &Context) {
         scratch.write(&format!("program/guest/{name}"), "<TimeZone>UTC</TimeZone>");
     }
     scratch.write("program/guest/setmode.ps1", "mode");
+    scratch.write("program/guest/remote-desktop.ps1", "turn it");
+    scratch.write("program/guest/ssh.ps1", "set it up");
     let driver = crate::settings::driver_folder(context);
     fs::create_dir_all(driver.join("sub")).unwrap();
     fs::write(driver.join("nv_dispi.inf"), "driver").unwrap();
@@ -205,6 +207,25 @@ fn a_machine_on_an_amd_card_gets_amds_driver_on_its_disc() {
     assert!(!listing.contains("/nvidia"), "NVIDIA's driver is not this machine's");
 }
 
+#[test]
+fn the_disc_carries_remote_desktop_and_ssh_as_the_machine_was_made() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    with_install_files(&scratch, &context);
+    let vm = machine(&context);
+    let access = crate::remote_access::Access { ssh: Some(true), ..crate::remote_access::Access::NEW };
+    crate::remote_access::write_access(&context, &vm, &access).unwrap();
+    let refused = make_answer_disc(&context, &vm).unwrap_err();
+    assert!(refused.0.contains("no OpenSSH"), "{}", refused.0);
+    scratch.write("program/openssh/OpenSSH-Win64.msi", "installer");
+    make_answer_disc(&context, &vm).unwrap();
+    let path = answer_disc_path(&context, &vm);
+    assert!(String::from_utf8_lossy(&on_disc(&path, "/remote-desktop.ps1")).starts_with("$on = $true\n"));
+    let ssh = String::from_utf8_lossy(&on_disc(&path, "/ssh.ps1")).into_owned();
+    assert!(ssh.contains("$package = Join-Path $PSScriptRoot 'OpenSSH-Win64.msi'\n"), "{ssh}");
+    assert_eq!(on_disc(&path, "/OpenSSH-Win64.msi"), b"installer");
+}
+
 /// Stands in for a guest that installs and shuts down.
 #[derive(Default)]
 struct InstalledGuest;
@@ -243,6 +264,7 @@ fn install_setup(scratch: &Scratch) -> (Context, Machine) {
         amd_gpu: None,
         disk_place: String::new(),
         gpu_maker: None,
+        access: crate::remote_access::Access::NEW,
     };
     let vm = crate::library::create(&context, &new).unwrap();
     (context, vm)

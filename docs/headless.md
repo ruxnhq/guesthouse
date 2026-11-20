@@ -13,7 +13,7 @@ guesthouse-vm command NAME
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
-                       [--intel-driver PATH]
+                       [--intel-driver PATH] [--remote-desktop on|off] [--ssh on|off]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
 
@@ -39,6 +39,8 @@ The disc decides what the machine is, as it does in the app's New Machine dialog
 
 What you don't give, you get as the dialog would start you: the sizes for that kind, with RAM as high as this PC allows, and for Windows the NVIDIA card, or an AMD or Intel card by its address with `--amd-card`. For an Intel card, `--intel-driver` takes Intel's installer and unpacks the card's driver from it, as the dialog does when it asks for the installer. The dialog's refusals come out as they are, in plain words, and nothing is made.
 
+A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--remote-desktop off` and `--ssh on` change that, and [Getting in](#getting-in) says how you reach either. SSH needs OpenSSH for Windows, which comes with a release. A build from source may not have it, and then `new` refuses `--ssh on` and says why.
+
 `--disk-folder` keeps the disk on another drive. The disk gets a folder of its own inside the one you name, and `remove` takes it with the machine. The disk's file starts small and grows as the guest fills it, so `--disk` is the most it can hold, not what it takes at once.
 
 `new` makes the disk and its settings and stops there. A Windows or Ubuntu machine is then installed with `install`, which follows the install step by step like `start`. The guest account's password is made at the install and kept in the machine's folder. There's no way to choose it here.
@@ -62,8 +64,10 @@ What you don't give, you get as the dialog would start you: the sizes for that k
 | `passt` | on or off, with NAT | not Ubuntu |
 | `bridge` | the bridge's name | not Ubuntu |
 | `share` | a folder, or `none` | not Ubuntu |
+| `remote-desktop` | on or off | Windows |
+| `ssh` | on or off | Windows |
 
-These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh` and `window-speed`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` at the next start. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
+These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
 
@@ -79,15 +83,19 @@ I've run a plain machine this way on a PC with no desktop session, from `new` to
 
 A plain VM that you install by hand has no screen here either, and a disc that waits for a key, as Windows' does, gets no key. QEMU's own monitor socket in the machine's run folder can send one, but Guesthouse doesn't wrap that yet.
 
-## Getting a screen
+## Getting in
 
-There isn't one. QEMU runs with no viewer, and the machine runs the same. To use Windows you go in over the network, with Remote Desktop:
+There's no screen. QEMU runs with no viewer, and the machine runs the same. To use Windows you go in over the network, with Remote Desktop or SSH. A new Windows machine has Remote Desktop on from its install, and SSH if you made it with `--ssh on`.
 
-1. In Windows, turn Remote Desktop on. This is Windows' own setting, under System in its Settings.
-2. With the machine off, forward the port: `guesthouse-vm forward NAME add tcp 3389 3389`. It takes effect at the next start. It's `hostfwd` on QEMU's own network, so it only reaches the guest from the PC the machine runs on: `127.0.0.1:3389` there goes to port 3389 in Windows.
-3. Connect Remote Desktop to `127.0.0.1:3389` on that PC. From another PC, tunnel it first with `ssh -L 3389:127.0.0.1:3389 user@host` and connect to `127.0.0.1:3389` on your own PC. The other way is `guesthouse-vm set NAME network bridged`, which gives the guest an address of its own on your network.
+1. With the machine off, forward a port on this PC to the guest's: `guesthouse-vm forward NAME add tcp 3389 3389` for Remote Desktop, and `guesthouse-vm forward NAME add tcp 2222 22` for SSH. It takes effect at the next start. It's `hostfwd` on QEMU's own network, so it only listens on the PC the machine runs on: `127.0.0.1:3389` there goes to port 3389 in Windows.
+2. Start the machine, and connect Remote Desktop to `127.0.0.1:3389` on that PC, or run `ssh -p 2222 USER@127.0.0.1` there. From another PC, tunnel it first, with `ssh -L 3389:127.0.0.1:3389 -L 2222:127.0.0.1:2222 you@host`, and connect to the same ports on your own PC.
+3. Sign in as the machine's account. Its name is `gpupv` unless you chose one with `--user`, and its password is in the `windows-password` file in the machine's folder, which `show` names. Windows asks for it before the session starts. SSH also takes any key in `~/.ssh/id_*.pub` on the PC the machine runs on: the install puts those in `C:\ProgramData\ssh\administrators_authorized_keys`, and each start adds one that's new. A key you use from another PC has to go in that file too. SSH starts you in Windows' command prompt.
 
-A Windows machine's password is in the `windows-password` file in the machine's folder, and `show` says where the folder is.
+Windows lets Remote Desktop and SSH in from one address only: this PC's end of QEMU's private network, which is where every forward comes from. So a forward is the way in, whatever the machine's network. With `set NAME network bridged` the guest has an address on your network too, and neither answers there. If you want that, open the port in Windows' own firewall yourself. Guesthouse doesn't touch Windows' own rules.
+
+A machine made before this version keeps what its Windows has until you choose. `set NAME remote-desktop on` turns it on, at once if the machine is running, and `show` says `not set` until then. A guest without OpenSSH gets it from this PC when you turn SSH on, so it needs no internet. Turning SSH off stops it and closes its port, and leaves the program in Windows.
+
+Remote Desktop signs into the same session the machine's screen shows, so in the app the window shows Windows' lock screen while you're connected, and after you leave, until you sign in there again.
 
 ## Starting it by hand
 

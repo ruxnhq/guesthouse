@@ -2,6 +2,7 @@
 //! the machine's Delete do.
 
 use super::args::NewOptions;
+use super::change::on_or_off;
 use super::{follow_up, run_task};
 use crate::card_choice::{default_choice, windows_card_choices};
 use crate::context::Context;
@@ -13,6 +14,7 @@ use crate::host::{RamField, physical_cores};
 use crate::iso::Iso;
 use crate::library::{NewMachine, create, delete, folders_text, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
+use crate::remote_access::{Access, Service};
 use crate::render_cards::render_card;
 use crate::setup::checks::machine_gpu_warning;
 use crate::setup::driver::Extraction;
@@ -107,6 +109,30 @@ fn unpack_intel_driver(context: &Context, pci: &str, installer: &str, out: &mut 
     Ok(writeln!(out.borrow_mut(), "Intel's driver {} is in {}.", package.version, folder.display())?)
 }
 
+/// Remote Desktop and SSH as the dialog starts them, unless told otherwise. Only Windows has them.
+fn access_for(windows: bool, options: &NewOptions) -> Result<Access> {
+    let mut access = Access::NEW;
+    for (service, word) in [(Service::RemoteDesktop, options.remote_desktop), (Service::Ssh, options.ssh)] {
+        let Some(word) = word else { continue };
+        let option = format!("--{}", service.key());
+        if !windows {
+            return Err(Failure(format!("{option} is only for a Windows machine with GPU-PV.")));
+        }
+        access.set(service, on_or_off(&option, word)?);
+    }
+    Ok(access)
+}
+
+fn access_text(access: &Access) -> String {
+    let on: Vec<&str> =
+        Service::ALL.iter().filter(|service| access.is_on(**service)).map(|service| service.name()).collect();
+    match on.as_slice() {
+        [] => "Remote Desktop and SSH are off.".to_owned(),
+        [one] => format!("{one} is on, and a port forward reaches it."),
+        _ => "Remote Desktop and SSH are on, and a port forward reaches each.".to_owned(),
+    }
+}
+
 pub(super) fn new_machine(
     context: &Context,
     name: &str,
@@ -154,6 +180,7 @@ pub(super) fn new_machine(
         amd_gpu: card.as_ref().map(|(pci, _)| pci.clone()),
         disk_place: options.disk_folder.unwrap_or_default().to_owned(),
         gpu_maker: card.map(|(_, maker)| maker),
+        access: access_for(windows, options)?,
     };
     if new.name.trim().is_empty() {
         return Err(Failure::new("The machine needs a name."));
@@ -162,6 +189,9 @@ pub(super) fn new_machine(
     writeln!(out, "Made {} in {}.", machine.name, machine.folder(context).display())?;
     if !machine.disk_folder.is_empty() {
         writeln!(out, "Its disk is in {}.", machine.disk_folder)?;
+    }
+    if windows {
+        writeln!(out, "{}", access_text(&new.access))?;
     }
     if machine.installing {
         let who = if windows { "Windows" } else { "Ubuntu" };

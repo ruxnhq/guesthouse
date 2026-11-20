@@ -21,7 +21,7 @@ const TIME_LENGTH: usize = 8;
 /// Who wrote a line, as the word after its time, for the lines that only ever hold the host's side:
 /// the window, the viewer, and each task's steps (the actions in `run_action` in actions/mod.rs). Many
 /// other lines pass on what the guest or QEMU said, so a line from anyone else stays out.
-const OWN_SPEAKERS: [&str; 20] = [
+const OWN_SPEAKERS: [&str; 21] = [
     "app:",
     "frames:",
     "own",
@@ -37,6 +37,7 @@ const OWN_SPEAKERS: [&str; 20] = [
     "after_reboot",
     "apply_display",
     "install_display",
+    "remote_access",
     "install",
     "take_snapshot",
     "go_back",

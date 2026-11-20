@@ -20,6 +20,7 @@ mod install;
 mod intel_device;
 mod intel_files;
 mod own_linux;
+mod remote_access;
 mod ubuntu;
 mod window_speed;
 
@@ -37,6 +38,7 @@ pub use install::{
     INSTALL_STEPS, answer_disc_path, answer_file, install, install_step, make_answer_disc, wait_for_setup,
 };
 use intel_files::complete_intel_driver;
+use remote_access::apply_remote_access;
 use window_speed::apply_window_speed;
 
 use crate::context::Context;
@@ -226,6 +228,7 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
         return start_again_on_software_desktop(task, &why).map(|_| ());
     }
     apply_window_speed(task)?;
+    apply_remote_access(task)?;
     place_files_for_maker(task)
 }
 
@@ -434,6 +437,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
             display::install_display(task);
             Ok(())
         }
+        crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),
         "take_snapshot" => take_snapshot(task, text),

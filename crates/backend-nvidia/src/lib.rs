@@ -641,6 +641,17 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         self.poll_copy(host, now)
     }
 
+    fn wait_staging_copy(&mut self, host: &mut dyn HostServices) -> Status {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.poll_copy(host, Instant::now()) {
+                return status;
+            }
+            // Asked each time, as a retry brings a new surface with the new channel.
+            crate::channel::copy::pause(self.wake_descriptor(), started);
+        }
+    }
+
     fn start_slot_copy(&mut self, host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
         self.start_frame_copy(host, copy)
     }

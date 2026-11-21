@@ -292,6 +292,17 @@ pub trait Backend: Sized {
     /// Looks at a copy that [`StagingStart::Running`] said was under way. `None` means not yet.
     fn poll_staging_copy(&mut self, host: &mut dyn HostServices, now: Instant) -> Option<Status>;
 
+    /// Waits until a copy that [`StagingStart::Running`] said was under way ends. The default spins
+    /// on [`Backend::poll_staging_copy`]; a backend whose copies can raise an interrupt sleeps on it.
+    fn wait_staging_copy(&mut self, host: &mut dyn HostServices) -> Status {
+        loop {
+            if let Some(status) = self.poll_staging_copy(host, Instant::now()) {
+                return status;
+            }
+            std::hint::spin_loop();
+        }
+    }
+
     /// Starts copying a whole picture into a slot of the frame ring. It runs when no other copy is
     /// under way, and a backend that can't show this picture says so with a failure.
     fn start_slot_copy(&mut self, _host: &mut dyn HostServices, _copy: &SlotCopy) -> StagingStart {

@@ -311,16 +311,22 @@ impl CopyChannel {
             if self.has_timed_out(Instant::now()) {
                 return false;
             }
-            match self.signal {
-                Some((_, _, fd)) if started.elapsed() >= SPIN_LIMIT => {
-                    let mut fds = [libc::pollfd { fd, events: libc::POLLIN | libc::POLLPRI, revents: 0 }];
-                    // SAFETY: the poll writes only into the one structure.
-                    unsafe { libc::poll(fds.as_mut_ptr(), 1, 1) };
-                }
-                _ => std::hint::spin_loop(),
-            }
+            pause(self.signal.map(|(_, _, fd)| fd), started);
         }
         true
+    }
+}
+
+/// One step of a wait for a copy that began at `started`: a spin while it may be nearly done, then
+/// a sleep of up to a millisecond on the interrupt descriptor, if there is one.
+pub(crate) fn pause(wake: Option<RawFd>, started: Instant) {
+    match wake {
+        Some(fd) if started.elapsed() >= SPIN_LIMIT => {
+            let mut fds = [libc::pollfd { fd, events: libc::POLLIN | libc::POLLPRI, revents: 0 }];
+            // SAFETY: the poll writes only into the one structure.
+            unsafe { libc::poll(fds.as_mut_ptr(), 1, 1) };
+        }
+        _ => std::hint::spin_loop(),
     }
 }
 

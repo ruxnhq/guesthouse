@@ -793,11 +793,15 @@ mod tests {
         let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
         let space = backend.create_address_space(&[range]).unwrap();
         let copy = SlotCopy { own_space: space, ..slot_copy(None) };
-        assert!(matches!(backend.start_frame_copy(&mut AreaOnly(AREA), &copy), StagingStart::Running));
+        let mut host = AreaOnly(AREA);
+        assert!(matches!(backend.start_frame_copy(&mut host, &copy), StagingStart::Running));
         let calls = &backend.device().rm.calls;
         assert!(calls.iter().any(|call| matches!(
             call,
             Call::Control { command, .. } if *command == SURFACE_REGISTER_WAITER
         )));
+        // The session's blocking wait takes the backend's own, which sleeps on the surface.
+        backend.copier.as_ref().expect("a copy runs").channel.pretend_finished();
+        assert_eq!(backend.wait_staging_copy(&mut host), guesthouse_messages::Status::SUCCESS);
     }
 }

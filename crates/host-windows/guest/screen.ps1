@@ -53,12 +53,26 @@ if (-not (Test-Path -LiteralPath (Join-Path $files 'setup.ps1'))) {
     return
 }
 
-# remoteman's host is installed again whenever the host brings different files.
+# Writes what Windows holds in memory of its registry and of drive C to the disk. A machine stopped
+# at once, as a guest with a card is, loses what wasn't written: a whole install's service and
+# firewall rule were lost so, while its files stayed.
+function Save-ToDisk {
+    if (-not ('Guesthouse.Registry' -as [type])) {
+        Add-Type -Namespace Guesthouse -Name Registry -MemberDefinition '[DllImport("advapi32.dll")] public static extern int RegFlushKey(IntPtr key);'
+    }
+    # HKEY_LOCAL_MACHINE's predefined handle, which flushes every hive under it.
+    [Guesthouse.Registry]::RegFlushKey([IntPtr]0x80000002) | Out-Null
+    Write-VolumeCache -DriveLetter C -ErrorAction SilentlyContinue
+}
+
+# remoteman's host is installed again whenever the host brings different files, and whenever its
+# service isn't there, whatever the guest's note of the last install says.
 $wanted = (Get-ChildItem -LiteralPath $files -Recurse -File | Sort-Object FullName |
     ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ''
 $installedFile = Join-Path $screen 'installed.txt'
 $installed = if (Test-Path -LiteralPath $installedFile) { (Get-Content -LiteralPath $installedFile -Raw).Trim() } else { '' }
-if (-not (Test-Path -LiteralPath $hostExe) -or $installed -ne $wanted) {
+$missing = -not (Get-Service -Name $service -ErrorAction SilentlyContinue)
+if ($missing -or -not (Test-Path -LiteralPath $hostExe) -or $installed -ne $wanted) {
     Send-Line 'screen: installing remoteman host'
     Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $folder | Out-Null
@@ -75,6 +89,7 @@ if (-not (Test-Path -LiteralPath $hostExe) -or $installed -ne $wanted) {
         return
     }
     Set-Content -LiteralPath $installedFile -Value $wanted -Encoding ascii
+    Save-ToDisk
     Send-Line 'screen: remoteman host installed'
 }
 
@@ -87,7 +102,43 @@ Copy-Item -LiteralPath (Join-Path $screen 'trusted') -Destination (Join-Path $id
 $encoder = (Get-Content -LiteralPath (Join-Path $screen 'encoder.txt') -Raw).Trim()
 $command = "`"$hostExe`" service --state `"$state`" --log `"$state\host.log`" --encoder $encoder"
 Set-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$service" -Name ImagePath -Value $command
-Start-Service -Name $service
+try {
+    Start-Service -Name $service -ErrorAction Stop
+} catch {
+    Send-Line "screen: remoteman's service didn't start: $($_.Exception.Message)"
+}
+Start-Sleep -Seconds 3
+$status = Get-Service -Name $service -ErrorAction SilentlyContinue
+Send-Line "screen: remoteman's service is $($status.Status), command $((Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$service").ImagePath)"
+# Why it stopped, if it did, as Windows saw it: the service manager's word, and any crash of the
+# host's program since this start.
+$since = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = $since } -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -like '*remoteman*' } | Select-Object -First 5) {
+    Send-Line "screen: service manager: $(($event.Message -replace '\s+', ' '))"
+}
+foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $since } -ErrorAction SilentlyContinue |
+    Where-Object { $_.Message -like '*remoteman*' } | Select-Object -First 3) {
+    Send-Line "screen: crash: $((($event.Message -replace '\s+', ' ')).Substring(0, [Math]::Min(400, ($event.Message -replace '\s+', ' ').Length)))"
+}
+
+# remoteman's installer lets its host's program in on its port. The viewer's packets never reached
+# it in a guest, so the port is let in as well, by a rule of Guesthouse's own, and the guest says
+# what its firewall and the port look like.
+$rule = 'Guesthouse screen'
+if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7791 -Profile Any | Out-Null
+}
+foreach ($profile in Get-NetConnectionProfile -ErrorAction SilentlyContinue) {
+    Send-Line "screen: network $($profile.InterfaceAlias) is $($profile.NetworkCategory)"
+}
+foreach ($found in Get-NetFirewallRule -DisplayName 'remoteman host', $rule -ErrorAction SilentlyContinue) {
+    $ports = $found | Get-NetFirewallPortFilter
+    $program = ($found | Get-NetFirewallApplicationFilter).Program
+    Send-Line "screen: firewall rule $($found.DisplayName): enabled $($found.Enabled), $($found.Action), $($ports.Protocol) $($ports.LocalPort), program $program, profiles $($found.Profile)"
+}
+# The host's command line, the trust list, the rule and the sign-in, all kept now.
+Save-ToDisk
 
 # The host's fingerprint, which the viewer checks it against. The host makes its identity when it
 # first starts.
@@ -99,7 +150,34 @@ while (-not (Test-Path -LiteralPath $cert) -and $waited -lt 30) {
 }
 if (Test-Path -LiteralPath $cert) {
     $fingerprint = (Get-FileHash -LiteralPath $cert -Algorithm SHA256).Hash.ToLowerInvariant()
+    Start-Sleep -Seconds 5
+    $listening = @(Get-NetUDPEndpoint -LocalPort 7791 -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress }) -join ', '
+    Send-Line "screen: listening on UDP 7791 at: $listening"
     Send-Line "screen: fingerprint $fingerprint"
 } else {
     Send-Line "screen: remoteman's host made no identity in $identity"
+}
+
+# For a while after it starts, remoteman's own logs go to the serial port as they're written, with
+# whether anything listens on its port, so the host sees how it starts while it does: what it wrote
+# to the guest's disk is lost when the machine is stopped at once.
+$watchSeconds = 180
+$logs = @{ (Join-Path $state 'host.log') = 0; (Join-Path $state 'service.log') = 0 }
+foreach ($log in @($logs.Keys)) {
+    if (Test-Path -LiteralPath $log) { $logs[$log] = @(Get-Content -LiteralPath $log).Count }
+}
+for ($second = 0; $second -lt $watchSeconds; $second += 5) {
+    foreach ($log in @($logs.Keys)) {
+        if (-not (Test-Path -LiteralPath $log)) { continue }
+        $lines = @(Get-Content -LiteralPath $log)
+        $name = Split-Path -Leaf $log
+        foreach ($line in $lines | Select-Object -Skip $logs[$log]) { Send-Line "screen: $name $line" }
+        $logs[$log] = $lines.Count
+    }
+    if ($second % 30 -eq 0) {
+        $listening = @(Get-NetUDPEndpoint -LocalPort 7791 -ErrorAction SilentlyContinue | ForEach-Object { "$($_.LocalAddress) pid $($_.OwningProcess)" }) -join ', '
+        $hosts = @(Get-Process -Name 'remoteman-host' -ErrorAction SilentlyContinue | ForEach-Object { "pid $($_.Id) session $($_.SessionId)" }) -join ', '
+        Send-Line "screen: at $second s, UDP 7791: [$listening], remoteman-host: [$hosts]"
+    }
+    Start-Sleep -Seconds 5
 }

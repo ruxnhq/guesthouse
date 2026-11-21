@@ -36,7 +36,7 @@ fn main() {
         }
         let _ = std::fs::write(path, format!("{info}\n"));
     }));
-    let start = app::Start { first: bridge::status() };
+    let start = app::Start::new();
     if let Err(error) = windows_reactor::App::run_component::<app::Main>(start) {
         let _ = std::fs::write(system::panic_file(), format!("the window couldn't open: {error}\n"));
         std::process::exit(1);

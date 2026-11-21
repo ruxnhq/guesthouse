@@ -18,6 +18,11 @@ license.workspace = true
 name = "guesthouse-app"
 path = "src/main.rs"
 
+[features]
+# Made-up machines in place of the service's, chosen by GUESTHOUSE_APP_PREVIEW, so each of the
+# window's states can be looked at, light or dark, without a service or a GPU. See src/app/preview.rs.
+preview = []
+
 [target.'cfg(windows)'.dependencies]
 # The words on the service's pipe, and the pipe itself. The only way the app reaches the service.
 guesthouse-control.workspace = true

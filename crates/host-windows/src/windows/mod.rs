@@ -37,6 +37,7 @@ pub fn machine(
         tpm: settings.tpm,
         network,
         guest: record.guest,
+        console_access: settings.console_access.clone(),
     }
 }
 

@@ -134,6 +134,9 @@ impl Options {
             gpu: self.gpu_choice(),
             for_minutes: self.for_minutes,
             until_report: self.until_report,
+            // The console is the service's, for the app; from the command line there's the serial
+            // port and the report.
+            console_access: Vec::new(),
         }
     }
 }

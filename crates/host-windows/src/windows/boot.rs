@@ -111,6 +111,9 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     })?;
     running.start().map_err(|error| error.to_string())?;
     sink.note(format!("{} started.", machine.name));
+    if !machine.console_access.is_empty() {
+        sink.note(format!("Its console is Remote Desktop on {}.", machine.console_pipe()));
+    }
     sink.state(State::Running);
 
     // A guest still setting itself up gets no card: the host's card reset twice while a guest with

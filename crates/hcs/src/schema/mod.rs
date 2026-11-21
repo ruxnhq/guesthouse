@@ -193,11 +193,25 @@ pub enum AttachmentType {
     Iso,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The machine's own display, which shows it from the moment it starts, whatever runs in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VideoMonitor {
     pub horizontal_resolution: u16,
     pub vertical_resolution: u16,
+    /// Where HCS serves the display as Remote Desktop, and to whom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_options: Option<RdpConnectionOptions>,
+}
+
+/// The display as Remote Desktop on a named pipe of the host, which only the accounts named may open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RdpConnectionOptions {
+    /// The accounts that may open the pipe, as SIDs' text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub access_sids: Vec<String>,
+    pub named_pipe: String,
 }
 
 /// A serial port, which HCS serves on a named pipe of the host for anyone to open.

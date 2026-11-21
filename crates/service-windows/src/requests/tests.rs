@@ -54,6 +54,10 @@ impl Work for Pretend {
     fn end(&self, id: &str) {
         self.ended.lock().unwrap().push(id.to_owned());
     }
+
+    fn console_access(&self) -> Vec<String> {
+        vec!["S-1-5-21-1-2-3-1001".into()]
+    }
 }
 
 /// A window that keeps every answer, may read every file unless told otherwise, and may close.
@@ -209,6 +213,7 @@ fn a_machine_starts_stops_and_only_then_is_deleted() {
         [Answer::Refused { .. }]
     ));
     assert_eq!(service.work.booted.lock().unwrap()[0].name, "guesthouse-win");
+    assert_eq!(service.work.booted.lock().unwrap()[0].console_access, ["S-1-5-21-1-2-3-1001"]);
 
     assert_eq!(ask(service, Request::Stop { name: "win".into() }), [Answer::Ok]);
     wait_for(service, "win", State::Stopped);

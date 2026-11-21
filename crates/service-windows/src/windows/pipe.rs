@@ -159,7 +159,7 @@ fn allowed(pipe: &File) -> Result<(), String> {
 }
 
 /// The user signed in at the console, if anyone is. Only the system may ask Windows this.
-fn console_user() -> Option<String> {
+pub(super) fn console_user() -> Option<String> {
     let mut token: HANDLE = null_mut();
     // SAFETY: plain calls; the token comes back in a place for it, and is closed here.
     if unsafe { WTSQueryUserToken(WTSGetActiveConsoleSessionId(), &mut token) } == 0 {
@@ -239,6 +239,9 @@ mod tests {
             Vec::new()
         }
         fn end(&self, _: &str) {}
+        fn console_access(&self) -> Vec<String> {
+            Vec::new()
+        }
     }
 
     /// The pipe as the service makes it, under a name of the test's own, asked as the app asks, by

@@ -3,8 +3,9 @@
 
 use guesthouse_hcs::schema::{
     Attachment, AttachmentType, Chipset, ComPort, ComputeSystem, ComputeTopology, Devices, Empty, GuestState,
-    Isolation, IsolationType, Memory, NetworkAdapter, Processor, SCHEMA_VERSION, SECURE_BOOT_WINDOWS, Scsi,
-    SecureBootTemplate, SecuritySettings, Uefi, UefiConsole, VideoMonitor, VirtualMachine,
+    Isolation, IsolationType, Memory, NetworkAdapter, Processor, RdpConnectionOptions, SCHEMA_VERSION,
+    SECURE_BOOT_WINDOWS, Scsi, SecureBootTemplate, SecuritySettings, Uefi, UefiConsole, VideoMonitor,
+    VirtualMachine,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 pub const OWNER: &str = "guesthouse";
 /// The screen HCS needs a machine to have. Nothing shows it yet, so its size is the smallest
 /// Windows is happy with.
-const SCREEN: VideoMonitor = VideoMonitor { horizontal_resolution: 1024, vertical_resolution: 768 };
+const SCREEN: (u16, u16) = (1024, 768);
 const SCSI_CONTROLLER: &str = "Primary";
 const COM1: &str = "0";
 const NETWORK_CARD: &str = "Default";
@@ -41,6 +42,8 @@ pub struct Machine {
     /// Disks after the boot disk, in the slots after it, such as a Linux guest's files disk and,
     /// while it installs, its installer.
     pub more_disks: Vec<Attachment>,
+    /// Who may open the machine's console, as SIDs' text. With nobody, it has no console.
+    pub console_access: Vec<String>,
 }
 
 impl Machine {
@@ -56,6 +59,12 @@ impl Machine {
     /// The host's end of the guest's COM1.
     pub fn serial_pipe(&self) -> String {
         format!(r"\\.\pipe\{}-com1", self.name)
+    }
+
+    /// The pipe HCS serves the machine's display on, as Remote Desktop: its console, which shows
+    /// the firmware, the installer and a boot that's stuck as well as the desktop.
+    pub fn console_pipe(&self) -> String {
+        format!(r"\\.\pipe\{}-console", self.name)
     }
 
     pub fn document(&self) -> ComputeSystem {
@@ -94,7 +103,14 @@ impl Machine {
                 },
                 devices: Devices {
                     scsi: BTreeMap::from([(SCSI_CONTROLLER.to_owned(), Scsi { attachments: disks })]),
-                    video_monitor: Some(SCREEN),
+                    video_monitor: Some(VideoMonitor {
+                        horizontal_resolution: SCREEN.0,
+                        vertical_resolution: SCREEN.1,
+                        connection_options: (!self.console_access.is_empty()).then(|| RdpConnectionOptions {
+                            access_sids: self.console_access.clone(),
+                            named_pipe: self.console_pipe(),
+                        }),
+                    }),
                     keyboard: Some(Empty {}),
                     mouse: Some(Empty {}),
                     com_ports: BTreeMap::from([(
@@ -140,7 +156,20 @@ mod tests {
             network: None,
             guest: Guest::Windows,
             more_disks: Vec::new(),
+            console_access: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_console_is_served_only_to_whom_it_names() {
+        let named = Machine { console_access: vec!["S-1-5-21-1-2-3-1001".into()], ..machine() };
+        let document = serde_json::to_value(named.document()).unwrap();
+        assert_eq!(
+            document["VirtualMachine"]["Devices"]["VideoMonitor"]["ConnectionOptions"],
+            json!({"AccessSids": ["S-1-5-21-1-2-3-1001"], "NamedPipe": r"\\.\pipe\guesthouse-test-console"})
+        );
+        let none = serde_json::to_value(machine().document()).unwrap();
+        assert!(none["VirtualMachine"]["Devices"]["VideoMonitor"].get("ConnectionOptions").is_none());
     }
 
     fn linux() -> Machine {

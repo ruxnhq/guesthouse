@@ -64,6 +64,11 @@ impl Work for HostWork {
         }
     }
 
+    fn console_access(&self) -> Vec<String> {
+        let user = pipe::console_user().or_else(security::own_user);
+        user.into_iter().chain([security::ADMINISTRATORS.to_owned()]).collect()
+    }
+
     fn end(&self, id: &str) {
         if let Some(machine) = ComputeSystem::open(id) {
             log(&format!("{id} was still running, with nothing watching it, so it's stopped."));

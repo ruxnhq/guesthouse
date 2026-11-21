@@ -48,6 +48,10 @@ pub struct BootSettings {
     pub for_minutes: Option<u64>,
     /// Whether the machine is asked to shut down once the guest has reported.
     pub until_report: bool,
+    /// Who may open the machine's console, as SIDs' text: the display HCS serves as Remote Desktop
+    /// on the machine's console pipe. With nobody, it has none.
+    #[serde(default)]
+    pub console_access: Vec<String>,
 }
 
 impl PrepareSettings {
@@ -76,6 +80,7 @@ impl BootSettings {
             gpu: GpuChoice::Default,
             for_minutes: None,
             until_report: false,
+            console_access: Vec::new(),
         }
     }
 }

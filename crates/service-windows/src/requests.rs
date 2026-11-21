@@ -36,6 +36,8 @@ pub trait Work: Send + Sync + 'static {
     fn cards(&self) -> Vec<CardInfo>;
     /// Stops at once the machine HCS knows by `id`, if there is one.
     fn end(&self, id: &str);
+    /// Who may open a machine's console: the user signed in at the console, and administrators.
+    fn console_access(&self) -> Vec<String>;
 }
 
 /// The app window a request came from.
@@ -308,6 +310,7 @@ impl<W: Work> Service<W> {
             memory_mb: entry_settings.memory_mb,
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
+            console_access: self.work.console_access(),
             ..BootSettings::new(&vm_id(&name), disk)
         };
         let service = Arc::clone(self);

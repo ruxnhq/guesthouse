@@ -40,7 +40,11 @@ fn machine() -> ComputeSystem {
                     },
                 )]
                 .into(),
-                video_monitor: Some(VideoMonitor { horizontal_resolution: 1024, vertical_resolution: 768 }),
+                video_monitor: Some(VideoMonitor {
+                    horizontal_resolution: 1024,
+                    vertical_resolution: 768,
+                    connection_options: None,
+                }),
                 keyboard: Some(Empty {}),
                 mouse: Some(Empty {}),
                 com_ports: [("0".to_owned(), ComPort { named_pipe: r"\\.\pipe\a-com1".into() })].into(),

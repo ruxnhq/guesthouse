@@ -370,8 +370,9 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
                 &["The guest's screen at full speed, drawn by its card and streamed by remoteman."],
                 Some(screen.into()),
             ));
-            let open = button("Remote Desktop", glyph::REMOTE, context.message(Message::RemoteDesktop), false)
-                .is_enabled(reachable);
+            let open =
+                button("Remote Desktop", glyph::REMOTE, context.message(Message::RemoteDesktop), false)
+                    .is_enabled(reachable);
             rows.push(row(
                 glyph::REMOTE,
                 "Remote Desktop",

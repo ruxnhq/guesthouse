@@ -1,8 +1,11 @@
-//! The app's side of a guest's screen: the remoteman viewer runs as the user, with a state folder of
-//! the user's, so the app writes what the service's `Screen` answer says into that folder, in
-//! remoteman's own layout, and starts the viewer with it. Then the viewer proves itself with the
-//! identity the guest trusts, and expects the guest's own, and nobody is asked to pair.
+//! The app's side of a guest's screen. remoteman's viewer runs as the user, and its `connect`
+//! command takes all it needs on its command line: the guest's address, the fingerprint its host
+//! must have, the identity the guest trusts, and where its picture goes. So the app only writes the
+//! identity the service gave it into files, in a state folder of the user's, and starts the viewer
+//! with that command. What remoteman keeps in its own folder stays remoteman's business, and nobody
+//! is asked to pair.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -20,53 +23,49 @@ pub fn unhex(text: &str) -> Option<Vec<u8>> {
     (0..text.len()).step_by(2).map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok()).collect()
 }
 
-/// Writes a viewer's state folder: its identity, `client\cert.der` and `client\key.der`, and the
-/// host it expects at `address:port`, `client\hosts\ADDRESS_PORT`, the name remoteman gives it.
-/// Gives the address to start the viewer with.
-pub fn viewer_state(
+/// Where the viewer's picture goes in the guest: its display becomes the guest's main one, where the
+/// taskbar and new windows go. A guest has a display of its own too, the one its console shows,
+/// which stays on as a second display.
+const PLACEMENT: &str = "main";
+
+/// Writes the viewer's identity into `state\identity` and gives the arguments that start remoteman's
+/// viewer on the guest's screen, `connect ADDRESS:PORT --expect … --identity … --placement main
+/// --state STATE`.
+pub fn connect_command(
     state: &Path,
     address: &str,
     port: u16,
     host_fingerprint: &str,
     certificate: &str,
     key: &str,
-) -> io::Result<String> {
+) -> io::Result<Vec<OsString>> {
     let bad =
-        |what: &str| io::Error::new(io::ErrorKind::InvalidData, format!("The service's {what} isn't hex."));
+        |what: &str| io::Error::new(io::ErrorKind::InvalidData, format!("The service's {what} isn't right."));
+    let fingerprint_ok =
+        host_fingerprint.len() == 64 && host_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !fingerprint_ok {
+        return Err(bad("host fingerprint"));
+    }
     let certificate = unhex(certificate).ok_or_else(|| bad("certificate"))?;
     let key = unhex(key).ok_or_else(|| bad("key"))?;
-    let client = state.join("client");
-    let hosts = client.join("hosts");
-    fs::create_dir_all(&hosts)?;
-    fs::write(client.join("cert.der"), certificate)?;
-    fs::write(client.join("key.der"), key)?;
-    let target = format!("{address}:{port}");
-    fs::write(hosts.join(target.replace([':', '/'], "_")), host_fingerprint)?;
-    main_display(&state.join("viewer-settings"), true)?;
-    main_display(&state.join("viewer-computers"), false)?;
-    Ok(target)
-}
-
-/// What the viewer asks for: its display as the guest's main one, where the taskbar and new
-/// windows go. A guest has a display of its own too, the one its console shows, which stays on as
-/// a second display; remoteman would otherwise put the viewer's beside it as an extra one, with the
-/// guest's own still the main display.
-const PLACEMENT: &str = "placement=main";
-
-/// Sets the viewer's placement. Its settings say it for a computer it hasn't kept, and its list of
-/// computers for each one it has, once it has connected; this folder is one guest's alone, so every
-/// placement in it is set. Everything else is kept.
-fn main_display(file: &Path, add: bool) -> io::Result<()> {
-    let kept = fs::read_to_string(file).unwrap_or_default();
-    if kept.is_empty() && !add {
-        return Ok(());
-    }
-    let mut lines: Vec<&str> =
-        kept.lines().map(|line| if line.starts_with("placement=") { PLACEMENT } else { line }).collect();
-    if add && !lines.contains(&PLACEMENT) {
-        lines.push(PLACEMENT);
-    }
-    fs::write(file, lines.join("\n") + "\n")
+    let identity = state.join("identity");
+    fs::create_dir_all(&identity)?;
+    let (certificate_file, key_file) = (identity.join("cert.der"), identity.join("key.der"));
+    fs::write(&certificate_file, certificate)?;
+    fs::write(&key_file, key)?;
+    Ok(vec![
+        "connect".into(),
+        format!("{address}:{port}").into(),
+        "--expect".into(),
+        host_fingerprint.into(),
+        "--identity".into(),
+        certificate_file.into(),
+        key_file.into(),
+        "--placement".into(),
+        PLACEMENT.into(),
+        "--state".into(),
+        state.into(),
+    ])
 }
 
 #[cfg(test)]
@@ -82,28 +81,37 @@ mod tests {
     }
 
     #[test]
-    fn a_viewer_state_is_remotemans_layout() {
+    fn the_command_names_the_guest_and_carries_the_identity_in_files() {
         let state = std::env::temp_dir().join(format!("gh-viewer-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
-        fs::create_dir_all(&state).unwrap();
-        fs::write(state.join("viewer-settings"), "placement=extend\nsound=yes\n").unwrap();
-        let target = viewer_state(&state, "172.29.1.2", 7791, "ff", "0102", "0304").unwrap();
-        assert_eq!(fs::read_to_string(state.join("viewer-settings")).unwrap(), "placement=main\nsound=yes\n");
-        assert!(!state.join("viewer-computers").exists(), "no list is made where there was none");
-        fs::write(state.join("viewer-computers"), "[computer]\naddress=172.29.1.2:7791\nplacement=extend\n")
-            .unwrap();
-        viewer_state(&state, "172.29.1.2", 7791, "ff", "0102", "0304").unwrap();
-        assert_eq!(
-            fs::read_to_string(state.join("viewer-computers")).unwrap(),
-            "[computer]\naddress=172.29.1.2:7791\nplacement=main\n"
-        );
-        assert_eq!(target, "172.29.1.2:7791");
-        assert_eq!(fs::read(state.join("client").join("cert.der")).unwrap(), [1, 2]);
-        assert_eq!(fs::read(state.join("client").join("key.der")).unwrap(), [3, 4]);
-        assert_eq!(
-            fs::read_to_string(state.join("client").join("hosts").join("172.29.1.2_7791")).unwrap(),
-            "ff"
-        );
+        let fingerprint = "ab".repeat(32);
+        let args = connect_command(&state, "172.29.1.2", 7791, &fingerprint, "0102", "0304").unwrap();
+        let (certificate, key) =
+            (state.join("identity").join("cert.der"), state.join("identity").join("key.der"));
+        let expected: Vec<OsString> = vec![
+            "connect".into(),
+            "172.29.1.2:7791".into(),
+            "--expect".into(),
+            fingerprint.clone().into(),
+            "--identity".into(),
+            certificate.clone().into(),
+            key.clone().into(),
+            "--placement".into(),
+            "main".into(),
+            "--state".into(),
+            state.clone().into(),
+        ];
+        assert_eq!(args, expected);
+        assert_eq!(fs::read(certificate).unwrap(), [1, 2]);
+        assert_eq!(fs::read(key).unwrap(), [3, 4]);
         let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_fingerprint_that_isnt_one_is_refused() {
+        let state = std::env::temp_dir().join(format!("gh-viewer-bad-{}", std::process::id()));
+        assert!(connect_command(&state, "172.29.1.2", 7791, "ff", "0102", "0304").is_err());
+        assert!(connect_command(&state, "172.29.1.2", 7791, &"zz".repeat(32), "0102", "0304").is_err());
+        assert!(!state.exists(), "nothing is written for a bad answer");
     }
 }

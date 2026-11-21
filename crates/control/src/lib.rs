@@ -100,7 +100,7 @@ pub enum Answer {
         password: String,
     },
     /// Where a guest's screen is and what the viewer proves itself and expects with, for
-    /// [`screen::viewer_state`]. The certificate and key are hex.
+    /// [`screen::connect_command`]. The certificate and key are hex.
     Screen {
         address: String,
         port: u16,

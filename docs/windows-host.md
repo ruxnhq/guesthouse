@@ -154,11 +154,24 @@ Closing the window ends the app, and the machines go on as they were. A panic le
 
 ## Installing
 
-`scripts/windows-setup.ps1` builds the service, the serial relay and `hcs-boot`, and packs them into one file, `target\installer\guesthouse-setup-VERSION.exe`. It adds the app if it finds it, and says so if it doesn't:
+`scripts/windows-setup.ps1` builds the service, the serial relay and `hcs-boot`, and packs them into one file. It adds the app if it finds it, and says so if it doesn't. It adds remoteman too, for [a Windows guest's screen](#a-windows-guests-screen):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
 ```
+
+It leaves two files in `target\installer\`, the folder to publish for testers at `https://files.ruxn.com/p/guesthouse/`: `guesthouse-setup-VERSION.exe`, where VERSION is the workspace's version in `Cargo.toml`, and `guesthouse-setup-VERSION.exe.sha256` beside it, its SHA-256 as `sha256sum` writes one (`<hex>  <file>`), so `sha256sum -c` checks a download. The script publishes nothing.
+
+remoteman isn't built here. The installer carries remoteman's own release files, the version `windows/remoteman.json` pins: remoteman's host's installer, `remoteman-host-setup-V.exe`, and its Windows viewer, `remoteman-viewer-windows-V.zip`. The pin names each file and its SHA-256, and the place they're published, `https://files.ruxn.com/p/remoteman/`, where each has its `.sha256` beside it. The script downloads both into `target\remoteman-cache\V\` and checks each against the pin. A file that doesn't match is refused and not kept, and a cached file that doesn't match is downloaded again. With no network and nothing cached, the build stops and says so: it never builds an installer without the screen unless asked. In the payload, and so in the install folder:
+
+- `screen\remoteman-host-setup.exe` is the host's installer as it is. The service runs it in each Windows guest.
+- `viewer\` is the viewer's zip unpacked, `remoteman.exe` in it, with FFmpeg's DLLs, the Windows App Runtime, remoteman's licence and FFmpeg's. The runtime is the same as the app's, so the installer carries it once.
+- `GPL-3.0.txt`, from `windows\installer\`, is the GPL 3 that FFmpeg's LGPL 3 builds on.
+- The end of the installed `THIRD-PARTY.md` says which remoteman the installer carries and which licence files came with it.
+
+`-RemotemanFrom FOLDER` takes the two files from a folder instead of downloading them, still checked against the pin. `-RemotemanUnpinned` skips the check, for trying a local build of remoteman only, so it works only with `-RemotemanFrom`, never on a download or the cache. It says so at the start and the end of the build and in the installed `THIRD-PARTY.md`, and it takes the newest `remoteman-host-setup-*.exe` and `remoteman-viewer-windows-*.zip` when the pin's names aren't there. Never hand such an installer to anyone. `-NoScreen` builds without remoteman. An installer without it still installs everything else, and installed over one with it, it removes the earlier screen's files.
+
+The app starts the viewer as `viewer\remoteman.exe` in the install folder, `C:\Program Files\Guesthouse\viewer\remoteman.exe`. From the app's own `C:\Program Files\Guesthouse\app\guesthouse-app.exe` that's `..\viewer\remoteman.exe`.
 
 Opening the file asks for an administrator once, then shows each step. It copies the files into `C:\Program Files\Guesthouse`, which only administrators can write to, and `setup.ps1` does the rest:
 
@@ -166,9 +179,9 @@ Opening the file asks for an administrator once, then shows each step. It copies
 - It registers the service `Guesthouse`, which starts with Windows, as the system. Windows is told to wait up to 90 s for it at shutdown, so it has time to ask each machine to shut down. It's started again if it ends.
 - The app gets a shortcut in Start, and the uninstaller is in Settings > Apps.
 
-An install over an earlier one stops the service first, which asks each running machine to shut down and can take a minute. It never ends the service by force, as that would cut a machine off while it's shutting down. If the service doesn't stop in 90 s, the step fails and says why.
+An install over an earlier one stops the service first, which asks each running machine to shut down and can take a minute. remoteman's viewer is closed if it's open from the install folder, as the app is. `app\`, `viewer\` and `screen\` keep only the new install's files: what the earlier one had there and this one doesn't is deleted. It never ends the service by force, as that would cut a machine off while it's shutting down. If the service doesn't stop in 90 s, the step fails and says why.
 
-The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, removes the service and the files. Your machines in `%ProgramData%\Guesthouse` stay, so installing again finds them, unless you tick Also delete my machines. Virtual Machine Platform stays on.
+The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, removes the service and the files, remoteman's with them. What remoteman's host installed in a guest stays in the guest. Your machines in `%ProgramData%\Guesthouse` stay, so installing again finds them, unless you tick Also delete my machines. Virtual Machine Platform stays on.
 
 `--silent` has no pages, `--uninstall --delete-machines` deletes the machines too, and `--dry-run` shows every page and walks every step with no administrator and no change to the PC. Its log is `%TEMP%\guesthouse-setup.log`, and the install's own is `setup.log` in the install folder. `crates/installer-windows/test/walk.ps1` drives the pages in a dry run and takes a picture of each.
 
@@ -182,18 +195,20 @@ A Windows guest's screen is [remoteman](https://github.com/xnixy/remoteman)'s: i
 - The guest signs in to its own account by itself at every start, as remoteman's host shows a sign-in screen otherwise. Its password is kept in its own registry, where Windows keeps an automatic sign-in's, and it has no lock screen and doesn't lock when idle. That starts from the boot after the first one with the installer.
 - remoteman's host picks NVIDIA's encoder itself. AMD's and Intel's encoders for Media Foundation aren't registered in a guest, so with their cards it's told to use Direct3D 12's video encoding, which both have.
 
-The app's Open screen does all of that. It starts the viewer at `viewer\remoteman-app.exe` beside itself, or at `GUESTHOUSE_VIEWER` when that's set, as when trying the app from a build. Without the app, with the service running:
+The installer puts remoteman's release in place, as [Installing](#installing) says: the host's installer at `screen\remoteman-host-setup.exe` beside the service, and the viewer at `viewer\remoteman.exe`, with FFmpeg's DLLs and the Windows App Runtime beside it. The service still looks for the unpacked host files at `screen\remoteman-host\` until it runs the host's installer itself.
+
+The app's Open screen does all of that. It starts the viewer at `viewer\remoteman.exe` in the folder above its own, as the installer lays them out, or at `GUESTHOUSE_VIEWER` when that's set, as when trying the app from a build. Without the app, with the service running:
 
 ```powershell
-cargo run -p guesthouse-control --example screen -- NAME D:\Projects\remoteman\target\release\remoteman-app.exe
+cargo run -p guesthouse-control --example screen -- NAME "C:\Program Files\Guesthouse\viewer\remoteman.exe"
 ```
 
-The viewer needs FFmpeg's DLLs beside it or on `PATH`. The viewer isn't jailed yet, though it decodes what the guest sends: that's next for it.
+A viewer from remoteman's own `target\release` needs FFmpeg's DLLs beside it or on `PATH`. The viewer isn't jailed yet, though it decodes what the guest sends: that's next for it.
 
 ## What it doesn't do yet
 
 - The service hasn't run as a service yet, and the installer hasn't installed it for real: they've been tried only by their tests and a dry run, which run unelevated.
 - A Windows guest gets only the driver's folder in the driver store. That's what Direct3D needs. The files a driver also puts in `System32`, which some programs look for there, aren't placed yet.
 - An Ubuntu guest without WSL on the host has no `libdxcore.so`, so `nvidia-smi` and CUDA won't run in it.
-- A Windows guest's console, its own display before it's set up or when its network is down, isn't in the app yet.
+- A Windows guest's console, its own display before it's set up or when its network is down, isn't in the app yet. An Ubuntu guest has no screen but SSH.
 - When it fails, HCS's own answer is printed with the document that was sent. That answer names what it refused.

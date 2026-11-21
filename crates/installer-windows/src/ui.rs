@@ -422,6 +422,12 @@ impl Installer {
         if start.facts.has_app {
             items.push(("The Guesthouse app", "Where you make and run machines, with a shortcut in Start."));
         }
+        if start.facts.has_screen {
+            items.push((
+                "A Windows machine's screen",
+                "remoteman: its host, which each Windows machine is given, and its viewer, which shows the machine's screen here.",
+            ));
+        }
         parts.push(card(
             items
                 .iter()

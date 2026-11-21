@@ -110,6 +110,8 @@ pub struct Facts {
     pub version: String,
     /// The files to install have the app.
     pub has_app: bool,
+    /// The files to install have remoteman, for a Windows guest's screen (`screen\` and `viewer\`).
+    pub has_screen: bool,
     pub installed: Option<Installed>,
     /// The Guesthouse app is installed now.
     pub app_installed: bool,
@@ -129,6 +131,7 @@ pub fn facts(ctx: &Ctx, archive: Option<&Archive>) -> Facts {
     Facts {
         version: archive.map(|a| a.index.version.clone()).unwrap_or_default(),
         has_app: archive.is_some_and(|a| a.has_app()),
+        has_screen: archive.is_some_and(|a| a.has_screen()),
         installed,
         app_installed: ctx.dir.join(APP_EXE).exists(),
     }
@@ -136,6 +139,19 @@ pub fn facts(ctx: &Ctx, archive: Option<&Archive>) -> Facts {
 
 /// The app, from the install folder.
 pub const APP_EXE: &str = r"app\guesthouse-app.exe";
+
+/// remoteman's viewer, from the install folder, which the app starts to show a Windows guest's
+/// screen: its release zip unpacked into `viewer\`.
+pub const VIEWER_EXE: &str = r"viewer\remoteman.exe";
+
+/// remoteman's host's installer, from the install folder, as remoteman releases it: the service
+/// runs it in each Windows guest.
+pub const SCREEN_HOST_SETUP: &str = r"screen\remoteman-host-setup.exe";
+
+/// The install folder's folders that hold only this version's files: what an earlier install put
+/// in them and this one doesn't have is deleted, so that an install without the screen leaves no
+/// old remoteman for the service to give a guest.
+const OWN_FOLDERS: [&str; 3] = ["app", "viewer", "screen"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StepInfo {
@@ -164,7 +180,15 @@ pub fn plan(ctx: &Ctx, facts: &Facts) -> Vec<StepInfo> {
                     "Settings > Apps",
                     "An entry to remove it again: first, so that whatever happens next can be undone",
                 ),
-                step(StepId::Files, "Files", &format!("Into {dir}")),
+                step(
+                    StepId::Files,
+                    "Files",
+                    &if facts.has_screen {
+                        format!("Into {dir}, with remoteman for a Windows machine's screen")
+                    } else {
+                        format!("Into {dir}")
+                    },
+                ),
                 step(
                     StepId::Setup,
                     "Virtual Machine Platform and the service",
@@ -382,6 +406,9 @@ impl Run<'_> {
         if self.end(&dir.join(APP_EXE))? > 0 {
             stopped.push("the Guesthouse app");
         }
+        if self.end(&dir.join(VIEWER_EXE))? > 0 {
+            stopped.push("remoteman's viewer");
+        }
         Ok(match stopped.as_slice() {
             [] => ("Not running".into(), None),
             list => ("Stopped".into(), Some(list.join(", "))),
@@ -401,22 +428,27 @@ impl Run<'_> {
         }
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
-        // The app's folder holds only this version's files: what an earlier one had and this
-        // one doesn't is deleted (the rest of the install folder is left).
-        let app = dir.join("app");
-        if app.exists() {
-            let keep: std::collections::HashSet<String> =
-                archive.index.payload.iter().map(|e| e.path.to_lowercase()).collect();
+        // The app's, the viewer's and the screen's folders hold only this version's files: what an
+        // earlier one had and this one doesn't is deleted, and a folder left empty with it (the
+        // rest of the install folder is left).
+        let keep: std::collections::HashSet<String> =
+            archive.index.payload.iter().map(|e| e.path.to_lowercase()).collect();
+        for folder in OWN_FOLDERS {
+            let own = dir.join(folder);
+            if !own.exists() {
+                continue;
+            }
             let mut stale = 0;
-            for file in walk(&app) {
+            for file in walk(&own) {
                 let rel = file.strip_prefix(&dir).unwrap().to_string_lossy().to_lowercase();
                 if !keep.contains(&rel) {
                     std::fs::remove_file(&file).map_err(|e| format!("{}: {e}", file.display()))?;
                     stale += 1;
                 }
             }
+            remove_empty(&own);
             if stale > 0 {
-                log::say(&format!("  {stale} files of the earlier app deleted"));
+                log::say(&format!("  {stale} files of the earlier install's {folder}\\ deleted"));
             }
         }
 
@@ -771,6 +803,19 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Removes the empty folders under `dir`, and `dir` if that leaves it empty.
+fn remove_empty(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                remove_empty(&entry.path());
+            }
+        }
+    }
+    // Only an empty folder goes.
+    let _ = std::fs::remove_dir(dir);
+}
+
 fn append(file: &Path, line: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
@@ -863,7 +908,7 @@ mod tests {
     }
 
     fn facts() -> Facts {
-        Facts { version: "9.9.9".into(), has_app: true, installed: None, app_installed: false }
+        Facts { version: "9.9.9".into(), has_app: true, has_screen: true, installed: None, app_installed: false }
     }
 
     fn run_in<'a>(ctx: &'a Ctx, facts: &'a Facts, emit: &'a mut dyn FnMut(Event)) -> Run<'a> {
@@ -970,6 +1015,9 @@ mod tests {
         write(&build, r"payload\guesthouse-service.exe", b"new service");
         write(&build, r"payload\app\a.dll", b"runtime dll");
         write(&build, r"payload\app\guesthouse-app.exe", b"new app");
+        write(&build, r"payload\screen\remoteman-host-setup.exe", b"new host setup");
+        write(&build, r"payload\viewer\remoteman.exe", b"new viewer");
+        write(&build, r"payload\viewer\a.dll", b"runtime dll");
         write(&build, "stub.exe", b"MZ stub");
         let source = build.join("setup.exe");
         crate::archive::pack(
@@ -980,9 +1028,16 @@ mod tests {
             &source,
         )
         .unwrap();
+        assert!(Archive::open(&source).unwrap().has_screen());
         write(&dir, "guesthouse-service.exe", b"old service");
         write(&dir, r"app\old.dll", b"an earlier runtime's");
         write(&dir, r"app\guesthouse-app.exe", b"old app");
+        write(&dir, r"screen\remoteman-host-setup.exe", b"old host setup");
+        // An earlier layout's host files, which the new install doesn't have.
+        write(&dir, r"screen\remoteman-host\vcam\old_vcam.dll", b"an earlier host's");
+        write(&dir, r"viewer\old.dll", b"an earlier viewer's");
+        // Beside the install's own folders, what isn't theirs is left.
+        write(&dir, r"other\kept.txt", b"not the installer's to delete");
 
         let (ctx, facts) = (real_in(&dir, source), facts());
         let mut emit = |_: Event| {};
@@ -993,6 +1048,36 @@ mod tests {
         assert_eq!(std::fs::read(dir.join(r"app\guesthouse-app.exe")).unwrap(), b"new app");
         assert_eq!(std::fs::read(dir.join(r"app\a.dll")).unwrap(), b"runtime dll");
         assert!(!dir.join(r"app\old.dll").exists());
+        assert_eq!(std::fs::read(dir.join(SCREEN_HOST_SETUP)).unwrap(), b"new host setup");
+        assert_eq!(std::fs::read(dir.join(VIEWER_EXE)).unwrap(), b"new viewer");
+        assert_eq!(std::fs::read(dir.join(r"viewer\a.dll")).unwrap(), b"runtime dll");
+        assert!(!dir.join(r"viewer\old.dll").exists());
+        assert!(!dir.join(r"screen\remoteman-host").exists());
+        assert!(dir.join(r"other\kept.txt").exists());
+
+        // An install without the screen over one with it leaves no remoteman behind, so the
+        // service has no old host to give a guest, and nothing of the viewer is left to start.
+        std::fs::remove_dir_all(build.join(r"payload\screen")).unwrap();
+        std::fs::remove_dir_all(build.join(r"payload\viewer")).unwrap();
+        let plain = build.join("plain.exe");
+        crate::archive::pack(
+            &build.join("stub.exe"),
+            &build.join("runtime"),
+            &build.join("payload"),
+            "9.9.9",
+            &plain,
+        )
+        .unwrap();
+        assert!(!Archive::open(&plain).unwrap().has_screen());
+        let ctx = real_in(&dir, plain);
+        let mut emit = |_: Event| {};
+        let mut run = run_in(&ctx, &facts, &mut emit);
+        let done = run.files();
+        assert!(done.is_ok(), "{done:?}");
+        assert!(!dir.join("screen").exists());
+        assert!(!dir.join("viewer").exists());
+        assert_eq!(std::fs::read(dir.join(r"app\guesthouse-app.exe")).unwrap(), b"new app");
+        assert!(dir.join(r"other\kept.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&build).unwrap();
     }

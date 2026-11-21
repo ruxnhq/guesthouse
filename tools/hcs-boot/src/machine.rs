@@ -6,6 +6,7 @@ use guesthouse_hcs::schema::{
     Isolation, IsolationType, Memory, NetworkAdapter, Processor, SCHEMA_VERSION, SECURE_BOOT_WINDOWS, Scsi,
     SecureBootTemplate, SecuritySettings, Uefi, UefiConsole, VideoMonitor, VirtualMachine,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +15,17 @@ pub const OWNER: &str = "guesthouse";
 /// Windows is happy with.
 const SCREEN: VideoMonitor = VideoMonitor { horizontal_resolution: 1024, vertical_resolution: 768 };
 const SCSI_CONTROLLER: &str = "Primary";
-const BOOT_DISK_SLOT: &str = "0";
 const COM1: &str = "0";
 const NETWORK_CARD: &str = "Default";
+
+/// The system a machine runs, which decides its firmware's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Guest {
+    #[default]
+    Windows,
+    Linux,
+}
 
 #[derive(Debug, Clone)]
 pub struct Machine {
@@ -28,6 +37,10 @@ pub struct Machine {
     pub processors: u32,
     pub tpm: bool,
     pub network: Option<NetworkAdapter>,
+    pub guest: Guest,
+    /// Disks after the boot disk, in the slots after it, such as a Linux guest's files disk and,
+    /// while it installs, its installer.
+    pub more_disks: Vec<Attachment>,
 }
 
 impl Machine {
@@ -48,16 +61,28 @@ impl Machine {
     pub fn document(&self) -> ComputeSystem {
         let boot_disk =
             Attachment { r#type: AttachmentType::VirtualDisk, path: text(&self.disk), read_only: None };
+        let disks = std::iter::once(boot_disk)
+            .chain(self.more_disks.iter().cloned())
+            .enumerate()
+            .map(|(slot, disk)| (slot.to_string(), disk))
+            .collect();
+        let windows = self.guest == Guest::Windows;
         ComputeSystem {
             owner: OWNER.to_owned(),
             schema_version: SCHEMA_VERSION,
             should_terminate_on_last_handle_closed: true,
             virtual_machine: VirtualMachine {
                 chipset: Chipset {
+                    // A Linux guest gets its GPU through a kernel module it builds itself, which no one
+                    // signs, so its firmware leaves Secure Boot off.
                     uefi: Some(Uefi {
                         console: Some(UefiConsole::Default),
-                        apply_secure_boot_template: Some(SecureBootTemplate::Apply),
-                        secure_boot_template_id: Some(SECURE_BOOT_WINDOWS.to_owned()),
+                        apply_secure_boot_template: Some(if windows {
+                            SecureBootTemplate::Apply
+                        } else {
+                            SecureBootTemplate::Skip
+                        }),
+                        secure_boot_template_id: windows.then(|| SECURE_BOOT_WINDOWS.to_owned()),
                     }),
                 },
                 compute_topology: ComputeTopology {
@@ -71,10 +96,7 @@ impl Machine {
                     gpu: None,
                 },
                 devices: Devices {
-                    scsi: BTreeMap::from([(
-                        SCSI_CONTROLLER.to_owned(),
-                        Scsi { attachments: BTreeMap::from([(BOOT_DISK_SLOT.to_owned(), boot_disk)]) },
-                    )]),
+                    scsi: BTreeMap::from([(SCSI_CONTROLLER.to_owned(), Scsi { attachments: disks })]),
                     video_monitor: Some(SCREEN),
                     keyboard: Some(Empty {}),
                     mouse: Some(Empty {}),
@@ -92,7 +114,8 @@ impl Machine {
                     guest_state_file_path: text(&self.guest_state_path()),
                     runtime_state_file_path: text(&self.runtime_state_path()),
                 }),
-                security_settings: self.tpm.then_some(SecuritySettings {
+                // Only Windows asks for a TPM.
+                security_settings: (self.tpm && windows).then_some(SecuritySettings {
                     enable_tpm: true,
                     isolation: Some(Isolation { isolation_type: IsolationType::GuestStateOnly }),
                 }),
@@ -118,7 +141,35 @@ mod tests {
             processors: 4,
             tpm: true,
             network: None,
+            guest: Guest::Windows,
+            more_disks: Vec::new(),
         }
+    }
+
+    fn linux() -> Machine {
+        let disk = |kind, path: &str| Attachment { r#type: kind, path: path.into(), read_only: None };
+        let files = disk(AttachmentType::VirtualDisk, r"D:\vms\test.files.vhdx");
+        let installer = disk(AttachmentType::Iso, r"D:\iso\ubuntu.iso");
+        Machine { guest: Guest::Linux, more_disks: vec![files, installer], ..machine() }
+    }
+
+    #[test]
+    fn a_linux_guest_has_no_secure_boot_and_no_tpm() {
+        let document = serde_json::to_value(linux().document()).unwrap();
+        let vm = &document["VirtualMachine"];
+        assert_eq!(vm["Chipset"]["Uefi"]["ApplySecureBootTemplate"], json!("Skip"));
+        assert!(vm["Chipset"]["Uefi"].get("SecureBootTemplateId").is_none());
+        assert!(vm.get("SecuritySettings").is_none());
+        assert!(vm.get("GuestState").is_some(), "its firmware still keeps its boot entries");
+    }
+
+    #[test]
+    fn more_disks_take_the_slots_after_the_boot_disk() {
+        let document = serde_json::to_value(linux().document()).unwrap();
+        let attachments = &document["VirtualMachine"]["Devices"]["Scsi"]["Primary"]["Attachments"];
+        assert_eq!(attachments["0"]["Path"], json!(r"D:\vms\test.vhdx"));
+        assert_eq!(attachments["1"], json!({"Type": "VirtualDisk", "Path": r"D:\vms\test.files.vhdx"}));
+        assert_eq!(attachments["2"], json!({"Type": "Iso", "Path": r"D:\iso\ubuntu.iso"}));
     }
 
     #[test]

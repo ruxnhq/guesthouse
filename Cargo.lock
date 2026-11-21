@@ -867,6 +867,7 @@ version = "0.7.1"
 dependencies = [
  "guesthouse-hcs",
  "guesthouse-jail",
+ "serde",
  "serde_json",
 ]
 

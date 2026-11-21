@@ -1,0 +1,36 @@
+#cloud-config
+# Ubuntu's installer reads this from the files disk and installs with no questions. The guest's
+# administrator is made by install.sh from a file of its own, so no password is written here or
+# into the installer's logs.
+autoinstall:
+  version: 1
+  locale: C.UTF-8
+  keyboard:
+    layout: us
+  storage:
+    layout:
+      name: direct
+      # The files disk and the installer are smaller, so the largest disk is the machine's own.
+      match:
+        size: largest
+  ssh:
+    install-server: true
+    allow-pw: true
+  updates: security
+  refresh-installer:
+    update: false
+  drivers:
+    install: false
+  # The installer needs a user or some user-data, and the user comes from install.sh.
+  user-data:
+    timezone: Etc/UTC
+  shutdown: poweroff
+  error-commands:
+    - tail -n 100 /var/log/installer/subiquity-server-debug.log > /dev/ttyS0 || true
+    - echo guesthouse-install-failed > /dev/ttyS0
+  late-commands:
+    - mkdir -p /run/guesthouse-files
+    - mount LABEL=CIDATA /run/guesthouse-files
+    - sh /run/guesthouse-files/guesthouse/install.sh /run/guesthouse-files /target
+    - umount /run/guesthouse-files
+    - echo guesthouse-install-finished > /dev/ttyS0

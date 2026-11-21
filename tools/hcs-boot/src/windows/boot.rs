@@ -1,10 +1,14 @@
-//! Boots the machine: the card's driver onto its disk, a network endpoint, the machine created and
-//! started through HCS, and then its GPU, in that order, as HCS gives a GPU only to a running
-//! machine. It stays until the machine stops, as the machine stops when its last handle closes.
+//! Boots the machine: the card's driver onto its disk, or onto a Linux guest's files disk, a network
+//! endpoint, the machine created and started through HCS, and then its GPU, in that order, as HCS
+//! gives a GPU only to a running machine. It stays until the machine stops, as the machine stops
+//! when its last handle closes, or until its time is up.
 
-use super::{absolute, chosen_card, copy_driver_to_disk, machine, need_elevation};
+use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation};
 use crate::Options;
+use crate::guest::linux::INSTALL_FINISHED;
+use crate::machine::Guest;
 use crate::printable::printable;
+use crate::record::{Record, files_disk};
 use guesthouse_hcs::host;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
@@ -13,6 +17,7 @@ use guesthouse_jail::windows::{Handles, Jail, Jailed};
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader};
 use std::os::windows::io::OwnedHandle;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +35,8 @@ const RELAY: &str = "guesthouse-serial-relay.exe";
 const RELAY_PROFILE: &str = "guesthouse.serial-relay";
 /// While the machine's state can't be read, the reason is told once in this many tries.
 const UNREADABLE_REPEAT: u32 = 60;
+/// How long a guest asked to shut down at the end of its time has before it's stopped.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(180);
 
 pub fn boot(options: &Options) -> Result<(), String> {
     need_elevation()?;
@@ -46,16 +53,29 @@ pub fn boot(options: &Options) -> Result<(), String> {
             eprintln!("{error}");
         }
     }
-    if let Some(card) = &card {
-        copy_driver_to_disk(&disk, card)?;
+    let record = Record::load(&disk)?;
+    match record.guest {
+        Guest::Windows => {
+            if let Some(card) = &card {
+                copy_driver_to_disk(&disk, card)?;
+            }
+        }
+        Guest::Linux => {
+            linux::refresh_disk(&files_disk(&disk), card.as_ref())?;
+            if !record.installed {
+                println!("This boot installs Ubuntu. The machine turns itself off when it's done.");
+            }
+        }
     }
     let stop = host::catch_ctrl_c().map_err(|error| error.to_string())?;
 
     let (_endpoint, adapter) = if options.network { plug_in()? } else { (None, None) };
-    let machine = machine(options, disk, adapter);
+    let machine = machine(options, disk, &record, adapter);
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
-    for path in [&machine.disk, &machine.guest_state_path(), &machine.runtime_state_path()] {
+    let mut opened = vec![machine.disk.clone(), machine.guest_state_path(), machine.runtime_state_path()];
+    opened.extend(machine.more_disks.iter().map(|disk| PathBuf::from(&disk.path)));
+    for path in &opened {
         system::grant_vm_access(&machine.name, path).map_err(|error| error.to_string())?;
     }
 
@@ -77,9 +97,21 @@ pub fn boot(options: &Options) -> Result<(), String> {
 
     let pipe = machine.serial_pipe();
     let unjailed = !options.jail;
-    thread::spawn(move || print_serial(&pipe, unjailed));
+    let disk = machine.disk.clone();
+    // The guest's line saying its install is done is when the installer stops being attached.
+    let on_line = move |line: &str| {
+        if line.contains(INSTALL_FINISHED) && record.guest == Guest::Linux && !record.installed {
+            let installed = Record { installed: true, ..record.clone() };
+            match installed.save(&disk) {
+                Ok(()) => println!("The install is done. The next boot starts the installed system."),
+                Err(error) => eprintln!("{error}"),
+            }
+        }
+    };
+    thread::spawn(move || print_serial(&pipe, unjailed, on_line));
     println!("Waiting for the guest. Ctrl+C asks it to shut down.");
-    wait(&running, stop)
+    let limit = options.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
+    wait(&running, stop, limit)
 }
 
 /// An endpoint on Guesthouse's network, deleted when dropped, and the card that plugs into it.
@@ -95,12 +127,26 @@ fn plug_in() -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
 /// Waits for the machine to stop. Returning closes the last handle, which stops the machine, so only
 /// an answer that says it has stopped, or a second Ctrl+C, ends this: an answer that can't be read
 /// is told and waited past.
-fn wait(running: &ComputeSystem, stop: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+fn wait(
+    running: &ComputeSystem,
+    stop: &std::sync::atomic::AtomicBool,
+    limit: Option<Duration>,
+) -> Result<(), String> {
+    let started = Instant::now();
     let mut asked = false;
     let mut first_answer = true;
     let mut unreadable = 0u32;
     loop {
         thread::sleep(POLL);
+        // When its time is up the guest is asked to shut down, as Ctrl+C would, and stopped if it
+        // hasn't after a grace.
+        if let Some(limit) = limit {
+            let elapsed = started.elapsed();
+            if (!asked && elapsed >= limit) || (asked && elapsed >= limit + SHUTDOWN_GRACE) {
+                println!("Its time is up.");
+                stop.store(true, Ordering::SeqCst);
+            }
+        }
         if stop.swap(false, Ordering::SeqCst) {
             if asked {
                 println!("Stopping it now.");
@@ -146,7 +192,7 @@ fn wait(running: &ComputeSystem, stop: &std::sync::atomic::AtomicBool) -> Result
 
 /// Prints each line the guest writes to COM1 until the port closes. The port is read by the relay
 /// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here.
-fn print_serial(pipe: &str, unjailed: bool) {
+fn print_serial(pipe: &str, unjailed: bool, mut on_line: impl FnMut(&str)) {
     let started = Instant::now();
     let port = loop {
         match File::open(pipe) {
@@ -160,11 +206,11 @@ fn print_serial(pipe: &str, unjailed: bool) {
     };
     if unjailed {
         println!("Reading the guest's serial port with no jail, as --no-jail asks.");
-        return print_lines(port);
+        return print_lines(port, &mut on_line);
     }
     match relay(port) {
         Ok((jailed, lines)) => {
-            print_lines(lines);
+            print_lines(lines, &mut on_line);
             let _ = jailed.wait();
         }
         Err(error) => eprintln!(
@@ -187,12 +233,14 @@ fn relay(port: File) -> std::io::Result<(Jailed, PipeReader)> {
     Ok((jailed, lines))
 }
 
-/// Prints each line, made printable, as the guest's.
-fn print_lines(source: impl std::io::Read) {
+/// Prints each line, made printable, as the guest's, and hands it to `on_line`.
+fn print_lines(source: impl std::io::Read, on_line: &mut impl FnMut(&str)) {
     let mut source = BufReader::new(source);
     let mut line = Vec::new();
     while source.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
-        println!("guest: {}", printable(&line));
+        let text = printable(&line);
+        println!("guest: {text}");
+        on_line(&text);
         line.clear();
     }
 }

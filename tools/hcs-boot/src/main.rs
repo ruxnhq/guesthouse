@@ -12,6 +12,7 @@
 mod guest;
 mod machine;
 mod printable;
+mod record;
 mod wim_info;
 #[cfg(windows)]
 mod windows;
@@ -40,6 +41,8 @@ options:
   --no-gpu                 No card, and no driver copy.
   --no-network             No network card.
   --no-tpm                 No TPM.
+  --for-minutes N          boot: asks the guest to shut down after N minutes, and stops it
+                           three minutes later if it hasn't.
   --no-jail                Reads the guest's serial port in this process, not in the jailed
                            relay beside it.
   --size-gb N              prepare: the disk's largest size (128).
@@ -60,6 +63,7 @@ pub struct Options {
     pub network: bool,
     pub tpm: bool,
     pub jail: bool,
+    pub for_minutes: Option<u64>,
     pub size_gb: u64,
     pub edition: String,
     pub user: String,
@@ -87,6 +91,7 @@ impl Default for Options {
             network: true,
             tpm: true,
             jail: true,
+            for_minutes: None,
             size_gb: 128,
             edition: "Windows 11 Pro".into(),
             user: "guest".into(),
@@ -121,6 +126,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--no-network" => options.network = false,
             "--no-tpm" => options.tpm = false,
             "--no-jail" => options.jail = false,
+            "--for-minutes" => options.for_minutes = Some(number(&flag, &value()?)?),
             _ => return Err(format!("{flag} is not an option")),
         }
     }

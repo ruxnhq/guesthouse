@@ -73,3 +73,92 @@ mod tests {
         assert!(REPORT.contains("COM1"));
     }
 }
+
+/// What a Linux guest's files disk holds for its install and its GPU.
+pub mod linux {
+    /// The files disk's FAT label, which is also how Ubuntu's installer finds its answer file there.
+    pub const LABEL: &str = "CIDATA";
+    /// What the guest says on its serial port when its install is done, as `user-data` writes it.
+    pub const INSTALL_FINISHED: &str = "guesthouse-install-finished";
+    /// The guest's GPU files on the files disk, which it mounts at /usr/lib/wsl.
+    pub const WSL_LIB: &str = r"wsl\lib";
+    pub const WSL_DRIVERS: &str = r"wsl\drivers";
+    /// The file install.sh makes the guest's administrator from, and then deletes.
+    pub const ACCOUNT: &str = r"guesthouse\account";
+
+    const GRUB: &str = include_str!("../guest/linux/grub.cfg");
+
+    /// Files written to the files disk, by their path on it. The boot menu is in each place
+    /// Ubuntu's GRUB may look for it, by the folder it started from or by its own search.
+    pub const FILES: [(&str, &str); 12] = [
+        (r"EFI\BOOT\grub.cfg", GRUB),
+        (r"EFI\ubuntu\grub.cfg", GRUB),
+        (r"boot\grub\grub.cfg", GRUB),
+        (r".disk\info", "Guesthouse's files disk\n"),
+        ("user-data", include_str!("../guest/linux/user-data")),
+        ("meta-data", include_str!("../guest/linux/meta-data")),
+        (r"guesthouse\install.sh", include_str!("../guest/linux/install.sh")),
+        (r"guesthouse\gpu.sh", include_str!("../guest/linux/gpu.sh")),
+        (r"guesthouse\guesthouse-gpu.service", include_str!("../guest/linux/guesthouse-gpu.service")),
+        (r"guesthouse\dxgkrnl\build.sh", include_str!("../guest/linux/dxgkrnl/build.sh")),
+        (r"guesthouse\dxgkrnl\Kbuild", include_str!("../guest/linux/dxgkrnl/Kbuild")),
+        (
+            r"guesthouse\dxgkrnl\guesthouse-compat.h",
+            include_str!("../guest/linux/dxgkrnl/guesthouse-compat.h"),
+        ),
+    ];
+
+    /// The installer's own boot files, from its ISO to the files disk. Shim starts first, as the
+    /// firmware's fallback, and starts GRUB beside it, which finds the menu above.
+    pub const BOOT_FILES: [(&str, &str); 3] = [
+        (r"EFI\boot\bootx64.efi", r"EFI\BOOT\BOOTX64.EFI"),
+        (r"EFI\boot\grubx64.efi", r"EFI\BOOT\grubx64.efi"),
+        (r"EFI\boot\mmx64.efi", r"EFI\BOOT\mmx64.efi"),
+    ];
+
+    /// What marks an ISO as Ubuntu's installer: the kernel and initrd the boot menu starts.
+    pub const INSTALLER_KERNEL: &str = r"casper\vmlinuz";
+    pub const INSTALLER_INITRD: &str = r"casper\initrd";
+
+    pub fn account(user: &str, password: &str) -> String {
+        format!("{user} {password}\n")
+    }
+
+    /// A file as Linux needs it. A Windows checkout may have turned its line endings into CRLF,
+    /// and `#!/bin/sh` with a carriage return after it runs nothing.
+    pub fn unix_text(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+}
+
+#[cfg(test)]
+mod linux_tests {
+    use super::linux::*;
+
+    #[test]
+    fn the_answer_file_says_what_boot_waits_for() {
+        let user_data = FILES.iter().find(|(path, _)| *path == "user-data").unwrap().1;
+        assert!(user_data.contains(&format!("echo {INSTALL_FINISHED} > /dev/ttyS0")));
+        assert!(user_data.contains(&format!("LABEL={LABEL}")));
+    }
+
+    #[test]
+    fn the_boot_menu_starts_the_installer_unattended_on_the_serial_port_too() {
+        let grub = FILES[0].1;
+        assert!(grub.contains("autoinstall ds=nocloud"));
+        assert!(grub.contains("console=ttyS0"));
+        assert!(grub.contains(&format!("/{}", INSTALLER_KERNEL.replace('\\', "/"))));
+        assert!(grub.contains(&format!("/{}", INSTALLER_INITRD.replace('\\', "/"))));
+    }
+
+    #[test]
+    fn the_install_script_reads_the_account_where_it_is_written() {
+        let install = FILES.iter().find(|(path, _)| path.ends_with("install.sh")).unwrap().1;
+        assert!(install.contains(&format!("$files/{}", ACCOUNT.replace('\\', "/"))));
+    }
+
+    #[test]
+    fn line_endings_become_linuxs() {
+        assert_eq!(unix_text("#!/bin/sh\r\necho hi\r\n"), "#!/bin/sh\necho hi\n");
+    }
+}

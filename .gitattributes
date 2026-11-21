@@ -1,0 +1,3 @@
+# What goes into a Linux guest keeps Linux's line endings on any checkout, Windows' included, as a
+# script with a carriage return after its first line won't run.
+tools/hcs-boot/guest/linux/** text eol=lf

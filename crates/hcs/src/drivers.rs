@@ -6,6 +6,7 @@
 use crate::error::{Error, Result};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 /// Where a guest's Windows looks for the drivers its host lends it, from the root of its volume.
 pub const HOST_DRIVER_STORE: &str = r"Windows\System32\HostDriverStore\FileRepository";
@@ -23,10 +24,15 @@ pub fn copy_driver(driver_folder: &Path, guest_root: &Path) -> Result<Copied> {
     let name = driver_folder.file_name().ok_or_else(|| {
         Error::new(format!("Copying {}", driver_folder.display()), -1, Some("it has no folder name".into()))
     })?;
-    let target = guest_root.join(HOST_DRIVER_STORE).join(name);
+    copy_folder(driver_folder, &guest_root.join(HOST_DRIVER_STORE).join(name))
+}
+
+/// Copies the folder `from` to `to`, with everything in it. A file already there with the same size
+/// and time is left.
+pub fn copy_folder(from: &Path, to: &Path) -> Result<Copied> {
     let mut copied = Copied::default();
-    copy_tree(driver_folder, &target, &mut copied)
-        .map_err(|error| Error::io(format!("Copying {} to the guest", driver_folder.display()), error))?;
+    copy_tree(from, to, &mut copied)
+        .map_err(|error| Error::io(format!("Copying {} to {}", from.display(), to.display()), error))?;
     Ok(copied)
 }
 
@@ -51,9 +57,15 @@ fn copy_tree(from: &Path, to: &Path, copied: &mut Copied) -> std::io::Result<()>
     Ok(())
 }
 
+/// FAT keeps a file's time to two seconds, so a copy on a FAT disk is as new as its source if the
+/// two times are this close.
+const TIME_SLACK: Duration = Duration::from_secs(2);
+
 fn same_file(source: &fs::Metadata, target: &Path) -> bool {
     let Ok(there) = fs::metadata(target) else { return false };
-    there.len() == source.len() && there.modified().ok() == source.modified().ok()
+    let (Ok(new), Ok(old)) = (source.modified(), there.modified()) else { return false };
+    let apart = new.duration_since(old).or_else(|_| old.duration_since(new)).unwrap_or(Duration::MAX);
+    there.len() == source.len() && apart <= TIME_SLACK
 }
 
 #[cfg(test)]

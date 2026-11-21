@@ -1,0 +1,6 @@
+# dxgkrnl out of the kernel's tree. Its uapi header comes from include/ here, and the GPU-PV channel
+# GUIDs, which only Microsoft's WSL kernel adds to linux/hyperv.h, from guesthouse-compat.h. Newer
+# kernels no longer bring vmalloc.h in through other headers, so it's included for every file.
+obj-m := dxgkrnl.o
+dxgkrnl-y := dxgmodule.o hmgr.o misc.o dxgadapter.o ioctl.o dxgvmbus.o dxgprocess.o dxgsyncfile.o
+ccflags-y := -I$(src)/include -include $(src)/guesthouse-compat.h -include linux/vmalloc.h -D_MAIN_KERNEL_

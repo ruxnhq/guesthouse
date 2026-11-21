@@ -1,0 +1,14 @@
+[Unit]
+Description=Guesthouse: the host's GPU by GPU-PV, and a report on the serial port
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/guesthouse/gpu.sh
+# The first start may build dxgkrnl, which downloads and compiles.
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

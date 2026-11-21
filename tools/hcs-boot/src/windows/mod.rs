@@ -1,15 +1,17 @@
 //! The commands themselves, which call into Windows.
 
 mod boot;
+mod linux;
 mod prepare;
 
-use crate::machine::Machine;
+use crate::machine::{Guest, Machine};
+use crate::record::{Record, files_disk};
 use crate::{Command, Options};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
 use guesthouse_hcs::gpu::{self, Card};
 use guesthouse_hcs::host;
-use guesthouse_hcs::schema::{Gpu, ModifySettingRequest};
+use guesthouse_hcs::schema::{Attachment, AttachmentType, Gpu, ModifySettingRequest};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,7 +46,9 @@ fn list_cards() -> Result<(), String> {
 }
 
 fn print_document(options: &Options) -> Result<(), String> {
-    let machine = machine(options, absolute(options.disk.as_deref().expect("parse asks for a disk"))?, None);
+    let disk = absolute(options.disk.as_deref().expect("parse asks for a disk"))?;
+    let record = Record::load(&disk)?;
+    let machine = machine(options, disk, &record, None);
     println!("{}", serde_json::to_string_pretty(&machine.document()).expect("a document always serialises"));
     if options.network {
         eprintln!("(boot adds a network card here, plugged into an endpoint it makes then.)");
@@ -60,16 +64,36 @@ fn print_document(options: &Options) -> Result<(), String> {
 fn machine(
     options: &Options,
     disk: PathBuf,
+    record: &Record,
     network: Option<guesthouse_hcs::schema::NetworkAdapter>,
 ) -> Machine {
     Machine {
         name: options.name.clone(),
+        more_disks: more_disks(&disk, record),
         disk,
         memory_mb: options.memory_mb,
         processors: options.processors,
         tpm: options.tpm,
         network,
+        guest: record.guest,
     }
+}
+
+/// A Linux guest's files disk, and its installer until it has installed.
+fn more_disks(disk: &Path, record: &Record) -> Vec<Attachment> {
+    if record.guest != Guest::Linux {
+        return Vec::new();
+    }
+    let attach = |kind, path: &Path| Attachment {
+        r#type: kind,
+        path: path.to_string_lossy().into_owned(),
+        read_only: None,
+    };
+    let mut disks = vec![attach(AttachmentType::VirtualDisk, &files_disk(disk))];
+    if let Some(installer) = record.installer.as_deref().filter(|_| !record.installed) {
+        disks.push(attach(AttachmentType::Iso, installer));
+    }
+    disks
 }
 
 /// The card asked for, or the first NVIDIA card, or the first card; none with `--no-gpu`.

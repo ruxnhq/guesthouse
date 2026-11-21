@@ -70,6 +70,7 @@ impl Screen {
             Step::Enter => self.enter_capture(),
             Step::Leave { had_mouse } => self.leave_capture(had_mouse),
         }
+        self.follow_shortcuts();
         self.report_capture();
     }
 

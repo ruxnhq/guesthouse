@@ -192,21 +192,39 @@ impl Screen {
     }
 
     pub(super) fn on_focus(&self, inside: bool) {
+        // First, so a capture that ends with the focus doesn't hand the shortcuts over again.
+        self.0.focused.set(inside);
         if !inside {
             self.stop_capture();
             self.let_go();
         }
-        if let Some(surface) = self.toplevel() {
-            if inside {
-                surface.inhibit_system_shortcuts(None::<&gdk::Event>);
-            } else {
-                surface.restore_system_shortcuts();
-            }
+        self.follow_shortcuts();
+    }
+
+    /// Gives the desktop's shortcuts to the guest, or takes them back, as [`shortcuts_go_to_guest`]
+    /// says for now.
+    pub(super) fn follow_shortcuts(&self) {
+        let Some(surface) = self.toplevel() else { return };
+        let on_focus = (self.0.shortcuts_on_focus.borrow())();
+        if shortcuts_go_to_guest(self.0.focused.get(), on_focus, self.captured()) {
+            surface.inhibit_system_shortcuts(None::<&gdk::Event>);
+        } else {
+            surface.restore_system_shortcuts();
         }
+    }
+
+    /// Where the screen asks whether the shortcuts go to the guest whenever it has the focus.
+    pub fn ask_shortcuts_on_focus(&self, asked: impl Fn() -> bool + 'static) {
+        *self.0.shortcuts_on_focus.borrow_mut() = Box::new(asked);
     }
 
     pub fn shortcuts_inhibited(&self) -> bool {
         self.toplevel().is_some_and(|surface| surface.is_shortcuts_inhibited())
+    }
+
+    /// Typing goes to the guest.
+    pub fn has_keyboard(&self) -> bool {
+        self.0.focused.get()
     }
 
     /// Lifts what is held down, because the guest won't see those keys come up otherwise.
@@ -232,9 +250,26 @@ impl Screen {
     }
 }
 
+/// Whether the desktop's shortcuts, such as Alt+Tab and the Super key, go to the guest. Only while
+/// the screen has the focus. With `on_focus`, the Preferences switch, that's enough, as before it
+/// was there. Without it, only a captured mouse hands them over, and letting it go takes them back,
+/// so a window manager that's run by its shortcuts keeps them otherwise. Fullscreen doesn't, as such a
+/// window manager's own key often takes a window into fullscreen and out again.
+fn shortcuts_go_to_guest(focused: bool, on_focus: bool, captured: bool) -> bool {
+    focused && (on_focus || captured)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_desktops_shortcuts_go_to_the_guest_with_the_focus_or_only_when_asked() {
+        assert!(shortcuts_go_to_guest(true, true, false), "as before the switch");
+        assert!(!shortcuts_go_to_guest(true, false, false), "a tester's window manager keeps its keys");
+        assert!(shortcuts_go_to_guest(true, false, true), "a captured mouse hands them over");
+        assert!(!shortcuts_go_to_guest(false, true, true), "never without the focus");
+    }
 
     #[test]
     fn the_thumb_buttons_go_to_the_guest_as_back_and_forward() {

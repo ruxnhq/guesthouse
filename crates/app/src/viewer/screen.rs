@@ -82,6 +82,11 @@ pub(super) struct Inner {
     pub(super) capture: Cell<Capture>,
     pub(super) capture_input: RefCell<Vec<gtk::EventController>>,
     pub(super) capture_changed: RefCell<Box<dyn Fn()>>,
+    /// The picture has the keyboard's focus.
+    pub(super) focused: Cell<bool>,
+    /// Whether the desktop's shortcuts go to the guest whenever the picture has the focus. It's asked
+    /// each time they're given or taken back, so a change in Preferences reaches a screen that's open.
+    pub(super) shortcuts_on_focus: RefCell<Box<dyn Fn() -> bool>>,
     pub(super) overlay_wanted: Cell<bool>,
     /// Where the figures' readings come from.
     pub(super) overlay_sensors: PathBuf,
@@ -190,6 +195,8 @@ impl Screen {
             capture: Cell::default(),
             capture_input: RefCell::default(),
             capture_changed: RefCell::new(Box::new(capture_changed)),
+            focused: Cell::new(false),
+            shortcuts_on_focus: RefCell::new(Box::new(|| true)),
             overlay_wanted: Cell::new(overlay.shown),
             overlay_sensors: overlay.sensors,
             overlay: RefCell::default(),

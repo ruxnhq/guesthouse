@@ -433,7 +433,8 @@ fn console_row(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> V
     if ended {
         buttons.push(button("Reconnect", glyph::REFRESH, context.message(Message::Reconnect), true).into());
     } else {
-        buttons.push(button("Show", glyph::CONSOLE, context.message(Message::Console), false).into());
+        let show = button("Show", glyph::CONSOLE, context.message(Message::Console), false);
+        buttons.push(show.automation_name("Show the console").into());
     }
     buttons.push(
         button("Close", glyph::CLOSE, context.message(Message::CloseConsole), false)

@@ -679,8 +679,8 @@ unsafe extern "system" fn on_connector_error(this: *mut PipeCallbacks, error: HR
         let Some(display) = (*this).display.get().as_ref() else { return };
         display.answered.set(true);
         if error == PIPE_MISSING {
-            let words = "The machine's screen isn't being served: its console's pipe isn't there. It is while \
-                         the machine runs, so Reconnect tries again.";
+            let words = "The machine's screen isn't being served: its console's pipe isn't there. It's served \
+                         while the machine runs, so Reconnect tries again once it's running.";
             return display.tell(Event::Problem(words.to_owned()));
         }
         if error == PIPE_REFUSED {

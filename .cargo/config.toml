@@ -1,0 +1,6 @@
+# Windows programs carry the C runtime inside them, so none needs VCRUNTIME140.dll, which a clean
+# Windows doesn't have. The Windows app's runtime DLLs don't need it either, so with this the app
+# runs from its folder on any Windows 10 or 11. Only the Universal CRT, which Windows has, is used.
+# It holds for every Windows program here, the service and guesthouse-hcs-boot too.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

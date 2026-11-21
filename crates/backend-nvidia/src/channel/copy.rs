@@ -233,6 +233,9 @@ impl CopyChannel {
 
     /// Sends a batch to the GPU.
     pub fn start<R: Rm>(&mut self, device: &mut Device<R>, mut words: Vec<u32>) {
+        // The batch is kept as it was built, without the wake words: a retry on a new channel
+        // replays what is kept, and the old surface's slot died with the channel it was bound to.
+        self.last_words = words.clone();
         if let Some((slot, surface, fd)) = self.signal {
             // A waiter for the sequence this batch will write, armed before the batch runs so the
             // interrupt cannot beat the arm. A refused arm leaves the poll to time out, which is
@@ -258,7 +261,6 @@ impl CopyChannel {
         self.put = (self.put + 1) % RING_ENTRIES;
         self.channel.advance(device, self.put);
         self.started = Some(Instant::now());
-        self.last_words = words;
     }
 
     /// Does what the engine's semaphore would, as a fake has no engine.
@@ -442,5 +444,18 @@ mod tests {
         copier.start(&mut device, words);
         assert!(!copier.has_timed_out(Instant::now()));
         assert!(copier.has_timed_out(Instant::now() + COPY_TIMEOUT + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn the_kept_batch_carries_no_wake_words() {
+        let (mut device, mut copier) = copier();
+        copier.signal = Some((0x3000_0000, 0x10, 0));
+        let words = copier.bytes(0x1000, 0x2000, 64);
+        let plain = words.len();
+        copier.start(&mut device, words);
+        // A retry replays the kept batch on a new channel with a new surface, so what is kept
+        // must end where the batch itself ends and not at the old surface's slot.
+        assert_eq!(copier.last_words.len(), plain);
+        assert_eq!(*copier.last_words.last().unwrap(), LAUNCH_PITCH_ONE_LINE);
     }
 }

@@ -50,11 +50,9 @@ pub trait Connection {
     fn may_read(&mut self, path: &Path) -> Result<(), String>;
 }
 
-/// HCS's ID for a machine, which also names its serial port's pipe. Every other program's machines
-/// are left alone, as `boot` stops any machine with its ID that's still there.
-pub fn vm_id(name: &str) -> String {
-    format!("guesthouse-{name}")
-}
+/// HCS's ID for a machine, which also names its pipes. `boot` stops any machine with its ID that's
+/// still there, so it's never another program's.
+pub use guesthouse_control::vm_id;
 
 pub struct Service<W: Work> {
     machines: Arc<Machines>,

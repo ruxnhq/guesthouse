@@ -173,6 +173,19 @@ pub fn address_in(line: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// HCS's ID for machine `name`, which also names its pipes. Every other program's machines are left
+/// alone.
+pub fn vm_id(name: &str) -> String {
+    format!("guesthouse-{name}")
+}
+
+/// The pipe machine `name`'s console is served on: its own display, which HCS's worker serves for
+/// Windows' Remote Desktop control to reach through RdpBase's named-pipe connector, for only the
+/// user at the console and administrators.
+pub fn console_pipe(name: &str) -> String {
+    format!(r"\\.\pipe\{}-console", vm_id(name))
+}
+
 /// Whether `name` can name a machine: its folder and its VM take it as it is.
 pub fn valid_name(name: &str) -> bool {
     const LONGEST: usize = 40;

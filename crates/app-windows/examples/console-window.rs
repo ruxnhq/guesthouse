@@ -2,15 +2,16 @@
 //! try the console against a running machine:
 //!
 //! ```text
-//! cargo run -p guesthouse-app-windows --example console -- win 30
-//! cargo run -p guesthouse-app-windows --example console -- \\.\pipe\guesthouse-win.BasicSession 30 who
+//! cargo run -p guesthouse-app-windows --example console-window -- win 30
+//! cargo run -p guesthouse-app-windows --example console-window -- \\.\pipe\guesthouse-win.BasicSession 30 who
 //! ```
 //!
 //! A pipe's path is taken as it is. With `who`, the pipe is opened once first to say which process
-//! serves it, which takes one of its connections.
+//! serves it, which takes one of its connections. With `plain`, the guest's screen isn't fitted to
+//! the window, as appsandbox leaves it.
 //!
 //! The window shows without taking the keyboard, and closes after the given seconds (20 unless
-//! said). If the session ends, it connects once more, as the app's Reconnect does. It only shows
+//! said). If the session ends or fails, it connects once more, as the app's Reconnect does. It only shows
 //! the guest's screen: nothing is asked of the service.
 
 // The app uses all of it, and this only some.
@@ -35,13 +36,15 @@ fn main() {
     let seconds: u64 = args.next().and_then(|text| text.parse().ok()).unwrap_or(20);
     // A path is taken as it is, so a pipe that isn't there can be tried too.
     let pipe = if name.starts_with(r"\\") { name.clone() } else { guesthouse_control::console_pipe(&name) };
-    if args.next().as_deref() == Some("who") {
+    let flags: Vec<String> = args.collect();
+    if flags.iter().any(|flag| flag == "who") {
         // Takes one of the pipe's connections, so only when asked.
         say_who_serves(&pipe);
     }
+    let scale = !flags.iter().any(|flag| flag == "plain");
     let started = Instant::now();
     let (sender, events) = mpsc::channel();
-    let console = console::Console::open(&pipe, &format!("{name} — Console"), true, move |event| {
+    let console = console::Console::open(&pipe, &format!("{name} — Console"), true, scale, move |event| {
         let _ = sender.send(event);
     })
     .expect("the console's thread didn't start");
@@ -62,7 +65,8 @@ fn main() {
             Ok(event) => {
                 println!("{:6.2}s {event:?}", started.elapsed().as_secs_f64());
                 // Once, as the app's Reconnect does: a control can't connect twice, so it's made anew.
-                if matches!(event, console::Event::Disconnected { .. }) && !reconnected {
+                let ended = matches!(event, console::Event::Disconnected { .. } | console::Event::Problem(_));
+                if ended && !reconnected {
                     reconnected = true;
                     console.reconnect();
                 }

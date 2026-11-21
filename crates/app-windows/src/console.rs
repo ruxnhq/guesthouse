@@ -85,12 +85,13 @@ struct Shared {
 
 impl Console {
     /// Opens a window titled `title` showing the screen served on `pipe`. `quiet` shows it without
-    /// making it the active window, for a test that mustn't take the keyboard. `events` hears how it
-    /// goes.
+    /// making it the active window, for a test that mustn't take the keyboard. `scale` fits the
+    /// guest's screen to the window, which appsandbox doesn't. `events` hears how it goes.
     pub fn open(
         pipe: &str,
         title: &str,
         quiet: bool,
+        scale: bool,
         events: impl Fn(Event) + Send + 'static,
     ) -> std::io::Result<Console> {
         let shared = Arc::new(Shared { hwnd: AtomicIsize::new(0), closing: AtomicBool::new(false) });
@@ -99,7 +100,7 @@ impl Console {
         let title = wide(title);
         thread::Builder::new()
             .name("console".into())
-            .spawn(move || run(theirs, pipe, title, quiet, Box::new(events)))?;
+            .spawn(move || run(theirs, pipe, title, quiet, scale, Box::new(events)))?;
         Ok(Console { shared })
     }
 
@@ -174,8 +175,9 @@ const NO_GUID: GUID = GUID::from_u128(0);
 /// The user's locale, which names are looked up in.
 const USER_LOCALE: u32 = 0x0400;
 
-/// The control's events, by their dispatch IDs, as its type library numbers them. appsandbox's
-/// numbers differ, and took a disconnect for the start of connecting.
+/// The control's events, by their dispatch IDs, as the control's type information gives them to
+/// the program hosting it, by name. appsandbox's numbers differ, and took a disconnect for the
+/// start of connecting.
 const ON_CONNECTING: i32 = 1;
 const ON_CONNECTED: i32 = 2;
 const ON_LOGIN_COMPLETE: i32 = 3;
@@ -507,6 +509,8 @@ const HEIGHT: i32 = 860;
 struct Display {
     shared: Arc<Shared>,
     pipe: Vec<u16>,
+    /// Whether the guest's screen is fitted to the window.
+    scale: bool,
     events: Box<dyn Fn(Event) + Send>,
     hwnd: Cell<HWND>,
     /// The child window the control is hosted in.
@@ -659,9 +663,21 @@ unsafe extern "system" fn on_connection_completed(this: *mut PipeCallbacks, stre
             )));
             return;
         }
+        // No server authentication, as the console has no server to check. appsandbox sets this on
+        // the control, which has no such property, so there it does nothing; the advanced
+        // settings are where the control keeps it.
+        let hr = put_long(advanced, "AuthenticationLevel", 0);
+        if hr < 0 {
+            display.tell(Event::Note(format!(
+                "The control's settings didn't take the authentication level ({}).",
+                hex(hr)
+            )));
+        }
         // Not in appsandbox: the guest's screen is scaled to the window, so it follows the window's
         // size rather than showing a corner of it with scroll bars.
-        put_bool(advanced, "SmartSizing", true);
+        if display.scale {
+            put_bool(advanced, "SmartSizing", true);
+        }
         release(advanced);
         let hr = call(dispatch, "Connect");
         if hr < 0 {
@@ -879,7 +895,14 @@ fn wide(text: &str) -> Vec<u16> {
 
 const CLASS: &str = "Guesthouse.Console";
 
-fn run(shared: Arc<Shared>, pipe: Vec<u16>, title: Vec<u16>, quiet: bool, events: Box<dyn Fn(Event) + Send>) {
+fn run(
+    shared: Arc<Shared>,
+    pipe: Vec<u16>,
+    title: Vec<u16>,
+    quiet: bool,
+    scale: bool,
+    events: Box<dyn Fn(Event) + Send>,
+) {
     // SAFETY: OLE is started for this thread, which the control needs, and ended when it's done.
     let ole = unsafe { OleInitialize(null()) };
     if ole < 0 && ole != RPC_E_CHANGED_MODE {
@@ -890,6 +913,7 @@ fn run(shared: Arc<Shared>, pipe: Vec<u16>, title: Vec<u16>, quiet: bool, events
     let display = Box::new(Display {
         shared,
         pipe,
+        scale,
         events,
         hwnd: Cell::new(null_mut()),
         host: Cell::new(null_mut()),
@@ -1087,14 +1111,6 @@ unsafe fn connect(display: &Display, libraries: &Libraries, again: bool) {
             }
         };
         display.dispatch.set(dispatch);
-        // The worker asks for no server authentication, as there's no server to check.
-        let hr = put_long(dispatch, "AuthenticationLevel", 0);
-        if hr < 0 {
-            display.tell(Event::Note(format!(
-                "The control didn't take its authentication level ({}).",
-                hex(hr)
-            )));
-        }
         advise(display);
 
         let mut platform = null_mut();

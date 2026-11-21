@@ -409,7 +409,7 @@ impl Main {
         let window = self.window.clone();
         let title = format!("{name} \u{2014} Console");
         let pipe = guesthouse_control::console_pipe(&name);
-        let opened = Console::open(&pipe, &title, false, move |event| {
+        let opened = Console::open(&pipe, &title, false, true, move |event| {
             let _ = window.tell(Message::Consoled(id, event));
         });
         match opened {

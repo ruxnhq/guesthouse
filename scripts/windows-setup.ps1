@@ -15,8 +15,8 @@
 #    target\remoteman-cache\V\ (a cached file is used when its SHA-256 is the pin's, and downloaded
 #    again when it isn't), or taken from -RemotemanFrom FOLDER. Each file's SHA-256 has to be the
 #    pin's, or the build stops; -RemotemanUnpinned skips that check, for trying a local build of
-#    remoteman only, and says so at the start and the end (with it, -RemotemanFrom's files may have
-#    another version in their names). With no network and nothing cached the build stops: it never
+#    remoteman only, so it needs -RemotemanFrom, and says so at the start and the end (with it,
+#    -RemotemanFrom's files may have another version in their names). With no network and nothing cached the build stops: it never
 #    builds without the screen unless -NoScreen asks;
 # 4. gathers the files to install (the payload) in the out folder's payload\:
 #      guesthouse-service.exe, guesthouse-serial-relay.exe (it has to be beside the service),
@@ -43,7 +43,11 @@ if (-not $Version) {
     $Version = $line.Matches[0].Groups[1].Value
 }
 $unpinnedWarning = "-RemotemanUnpinned: remoteman's files are NOT checked against windows\remoteman.json. Only for trying a local build of remoteman; never hand this installer to anyone."
-if ($RemotemanUnpinned -and -not $NoScreen) { Write-Warning $unpinnedWarning }
+if ($RemotemanUnpinned -and -not $NoScreen) {
+    # Never unchecked from the network or the cache: only a local build, named by its folder.
+    if (-not $RemotemanFrom) { throw '-RemotemanUnpinned is for a local build of remoteman only: give -RemotemanFrom FOLDER with it.' }
+    Write-Warning $unpinnedWarning
+}
 
 # Runs a native program and stops if it fails.
 function Invoke-Native([string]$What, [scriptblock]$Command) {
@@ -93,7 +97,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
     New-Item -ItemType Directory -Force $cache | Out-Null
     $path = Join-Path $cache $Entry.file
     if (Test-Path -LiteralPath $path) {
-        if ($RemotemanUnpinned -or (Get-Sha256 $path) -eq $want) {
+        if ((Get-Sha256 $path) -eq $want) {
             Write-Host "remoteman: $($Entry.file) from the cache, $cache."
             return $path
         }
@@ -114,7 +118,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
             'with the two files, or give -NoScreen to build an installer without a Windows guest''s screen.')
     }
     $got = Get-Sha256 $part
-    if (-not $RemotemanUnpinned -and $got -ne $want) {
+    if ($got -ne $want) {
         Remove-Item -LiteralPath $part -Force
         throw "$url has SHA-256 $got, and windows\remoteman.json pins $want. Refused: nothing of it is kept."
     }
@@ -152,7 +156,7 @@ function Add-Remoteman($Pin, [string]$To) {
         '',
         '## remoteman in this installer',
         '',
-        "This installer carries $which, under the MIT licence: ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). remoteman's licence and FFmpeg's, with where FFmpeg's source is, are in ``viewer\`` beside ``remoteman.exe``: $(($notices | ForEach-Object Name) -join ', ')."
+        "This installer carries $which, under the MIT licence: ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). The licence and notice files that came with the viewer are in ``viewer\`` beside ``remoteman.exe``: $(($notices | ForEach-Object Name) -join ', ')."
     )
     Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
 }

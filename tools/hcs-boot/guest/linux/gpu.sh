@@ -43,6 +43,10 @@ if [ -d "$files/wsl" ] && ! mountpoint -q /usr/lib/wsl; then
 fi
 echo /usr/lib/wsl/lib > /etc/ld.so.conf.d/ld.wsl.conf
 ldconfig 2> /dev/null
+# WSL puts these on everyone's PATH, nvidia-smi among them, and so does this. The single quotes
+# keep $PATH for the login shell to expand.
+# shellcheck disable=SC2016
+printf 'PATH="$PATH:/usr/lib/wsl/lib"\n' > /etc/profile.d/guesthouse-wsl.sh
 
 if ! modprobe dxgkrnl 2> /dev/null; then
     say "dxgkrnl: building it for $(uname -r)"

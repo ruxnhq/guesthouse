@@ -62,9 +62,11 @@ function Invoke-Boot([string]$Name, [string[]]$Arguments) {
 
 Write-Log "Guesthouse on this PC, logging to $log"
 Write-Log "Windows $([Environment]::OSVersion.Version)"
+# DISM itself, as Get-WindowsOptionalFeature takes minutes and says nothing under PowerShell 7.
 foreach ($feature in 'VirtualMachinePlatform', 'Microsoft-Hyper-V-All') {
-    $state = (Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction SilentlyContinue).State
-    Write-Log "Feature ${feature}: $state"
+    $state = & dism.exe /English /Online /Get-FeatureInfo "/FeatureName:$feature" 2>&1 |
+        Select-String -Pattern '^State : (.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+    Write-Log "Feature ${feature}: $(if ($state) { $state } else { 'not known' })"
 }
 foreach ($card in Get-CimInstance -ClassName Win32_VideoController) {
     Write-Log "Card: $($card.Name), driver $($card.DriverVersion)"

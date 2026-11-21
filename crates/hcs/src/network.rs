@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows_sys::Win32::System::HostComputeNetwork::{
     HcnCloseEndpoint, HcnCloseNetwork, HcnCreateEndpoint, HcnCreateNetwork, HcnDeleteEndpoint,
-    HcnOpenEndpoint, HcnOpenNetwork, HcnQueryEndpointProperties,
+    HcnDeleteNetwork, HcnOpenEndpoint, HcnOpenNetwork, HcnQueryEndpointProperties,
 };
 use windows_sys::core::PWSTR;
 
@@ -40,6 +40,16 @@ pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
     }
     close_network(network);
     Ok(())
+}
+
+/// Deletes the network `id` if HCN has it and nothing is plugged into it.
+pub fn delete_network(id: &GUID) -> Result<()> {
+    let mut record: PWSTR = null_mut();
+    // SAFETY: the GUID outlives the call, and `record` is a place for HCN's answer.
+    let deleted = unsafe { HcnDeleteNetwork(id, &mut record) };
+    // SAFETY: as in `ensure_ics_network`.
+    let record = unsafe { take_co_task(record) };
+    if deleted < 0 { Err(Error::new("Deleting a network", deleted, record)) } else { Ok(()) }
 }
 
 /// A machine's place on a network, deleted again when dropped.

@@ -136,7 +136,7 @@ fn properties_read_the_state_and_ignore_the_rest() {
 fn the_network_documents_use_hcn_names() {
     assert_eq!(
         serde_json::to_value(Network::ics("guesthouse")).unwrap(),
-        json!({"SchemaVersion": {"Major": 2, "Minor": 0}, "Name": "guesthouse", "Type": "ICS"})
+        json!({"SchemaVersion": {"Major": 2, "Minor": 0}, "Name": "guesthouse", "Type": "ICS", "Flags": 3})
     );
     let endpoint = Endpoint {
         schema_version: NETWORK_SCHEMA_VERSION,

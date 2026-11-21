@@ -25,8 +25,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Guesthouse's own network in HCN, which every machine shares and which outlives a run.
-const NETWORK_ID: GUID = GUID::from_u128(0x9f3a6c2e_5b1d_4e8a_a7c4_2d6e8b0f1a35);
-const NETWORK_NAME: &str = "Guesthouse";
+const NETWORK_ID: GUID = GUID::from_u128(0x5c2d8e41_7a3b_4f60_9d1e_3b8a6c4f2e17);
+const NETWORK_NAME: &str = "Guesthouse network";
+/// The network earlier builds made, with no DHCP server. HCN keeps a network until the host
+/// restarts, so it's deleted here once nothing is plugged into it.
+const OLD_NETWORK_ID: GUID = GUID::from_u128(0x9f3a6c2e_5b1d_4e8a_a7c4_2d6e8b0f1a35);
 /// How often the machine's state is read while it runs.
 const POLL: Duration = Duration::from_secs(1);
 /// How long the guest's serial port may take to appear once the machine starts.
@@ -139,6 +142,7 @@ pub fn boot(options: &Options) -> Result<(), String> {
 /// An endpoint on Guesthouse's network, deleted when dropped, and the card with this MAC that plugs
 /// into it.
 fn plug_in(mac: &str) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
+    let _ = network::delete_network(&OLD_NETWORK_ID);
     network::ensure_ics_network(&NETWORK_ID, NETWORK_NAME).map_err(|error| error.to_string())?;
     let id = host::new_guid().map_err(|error| error.to_string())?;
     let endpoint = Endpoint::create(&NETWORK_ID, id, mac).map_err(|error| error.to_string())?;

@@ -45,7 +45,8 @@ impl std::fmt::Debug for Wakes {
 impl Wakes {
     /// Makes a surface over fresh host pages mapped at `gpu_address` in the space, and tells the
     /// driver to post this client's waiters on the descriptor [`Rm::wake_fd`] names. The surface
-    /// hangs from `parent`: the device on this driver.
+    /// hangs from `parent`: the device on this driver. Whatever a refusal leaves behind, the page,
+    /// its mapping, and the event posting, is taken back before the error goes up.
     pub fn new<R: Rm>(
         device: &mut Device<R>,
         space: &AddressSpace,
@@ -53,8 +54,14 @@ impl Wakes {
         parent: Handle,
     ) -> Result<Self, RmError> {
         device.rm.alloc_os_event(device.device)?;
-        let memory = device.alloc_sysmem(4096)?;
-        device.map(
+        let memory = match device.alloc_sysmem(4096) {
+            Ok(memory) => memory,
+            Err(error) => {
+                let _ = device.rm.free_os_event(device.device);
+                return Err(error);
+            }
+        };
+        if let Err(error) = device.map(
             space,
             &Mapping {
                 memory,
@@ -65,11 +72,29 @@ impl Wakes {
                 gpu_cached: false,
                 page_kind: None,
             },
-        )?;
+        ) {
+            let _ = device.free(memory);
+            let _ = device.rm.free_os_event(device.device);
+            return Err(error);
+        }
         let mut params = [0; 16];
         params[0..4].copy_from_slice(&memory.to_le_bytes());
-        let surface = device.alloc(parent, SEMAPHORE_SURFACE, &mut params)?;
-        Ok(Self { memory, surface, bound: Vec::new(), armed: Vec::new(), gpu_address, space: space.clone() })
+        match device.alloc(parent, SEMAPHORE_SURFACE, &mut params) {
+            Ok(surface) => Ok(Self {
+                memory,
+                surface,
+                bound: Vec::new(),
+                armed: Vec::new(),
+                gpu_address,
+                space: space.clone(),
+            }),
+            Err(error) => {
+                let _ = device.unmap(space, memory, gpu_address, 4096);
+                let _ = device.free(memory);
+                let _ = device.rm.free_os_event(device.device);
+                Err(error)
+            }
+        }
     }
 
     /// Binds a channel, so its engine's non-stall interrupts re-check the waiters. A copy channel
@@ -147,7 +172,10 @@ impl Wakes {
         let surface = self.surface;
         device.free(surface)?;
         let memory = self.memory;
-        device.free(memory)
+        device.free(memory)?;
+        // The event posting came with the surface's making, so it goes with its closing; without
+        // this a rebuilt surface asks for another posting every time and none comes off.
+        device.rm.free_os_event(device.device)
     }
 }
 
@@ -227,5 +255,28 @@ mod tests {
         assert!(device.rm.memory_at(0x800_0000).is_some(), "the page is mapped while it lives");
         wakes.close(&mut device).unwrap();
         assert!(device.rm.memory_at(0x800_0000).is_none(), "the mapping went with the surface");
+        assert_eq!(
+            (device.rm.events_allocated, device.rm.events_freed),
+            (1, 1),
+            "the posting the surface asked for came back off"
+        );
+    }
+
+    #[test]
+    fn a_surface_that_will_not_make_leaves_nothing_behind() {
+        use crate::profile::HOST_615;
+        use crate::rm::classes::SEMAPHORE_SURFACE;
+        use crate::rm::device::Device;
+        use crate::rm::fake::FakeRm;
+
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.refuse_class = Some(SEMAPHORE_SURFACE);
+        let mut device = Device::open(rm, &HOST_615).unwrap();
+        let space = device.create_address_space(&[(0x400_0000, 0x1_0000_0000)]).unwrap();
+        let subdevice = device.subdevice;
+        assert!(Wakes::new(&mut device, &space, 0x800_0000, subdevice).is_err());
+        assert!(device.rm.memory_at(0x800_0000).is_none(), "the page's mapping came down again");
+        assert_eq!(device.rm.events_freed, 1, "the event posting came off with the refusal");
     }
 }

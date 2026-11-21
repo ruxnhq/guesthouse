@@ -148,6 +148,13 @@ pub trait Rm {
         Err(RmError::System("this RM has no events".to_owned()))
     }
 
+    /// Takes the event posting back, so nothing waits on the descriptor after this. Each posting a
+    /// surface's making asked for is one of these.
+    fn free_os_event(&mut self, device: Handle) -> Result<(), RmError> {
+        let _ = device;
+        Err(RmError::System("this RM has no events".to_owned()))
+    }
+
     /// The descriptor a poll sleeps on until the GPU signals a waiter of this client, if it has
     /// one.
     fn wake_fd(&self) -> Option<RawFd> {

@@ -79,6 +79,9 @@ pub struct FakeRm {
     /// What [`Rm::wake_fd`] says. `None`, as it stays, plays an RM whose client has no events, so
     /// the semaphore surface is never even tried; a test that wants the wakes sets it.
     pub wake: Option<std::os::fd::RawFd>,
+    /// How many event postings were asked for and taken back, so a test can see they pair.
+    pub events_allocated: usize,
+    pub events_freed: usize,
     answers: HashMap<u32, Answer>,
     /// Each range's mappings, address to length, to refuse a map over a map.
     mappings: BTreeMap<(Handle, u64), u64>,
@@ -112,6 +115,8 @@ impl FakeRm {
             engine: FakeEngine::default(),
             gpu_timer: None,
             wake: None,
+            events_allocated: 0,
+            events_freed: 0,
             answers: HashMap::new(),
             mappings: BTreeMap::new(),
             mapped: Mapped::new(),
@@ -409,6 +414,12 @@ impl Rm for FakeRm {
     }
 
     fn alloc_os_event(&mut self, _device: Handle) -> Result<(), RmError> {
+        self.events_allocated += 1;
+        Ok(())
+    }
+
+    fn free_os_event(&mut self, _device: Handle) -> Result<(), RmError> {
+        self.events_freed += 1;
         Ok(())
     }
 

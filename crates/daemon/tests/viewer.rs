@@ -2,6 +2,8 @@
 //! stand-in playing the GPU. The buffers here are empty files, so this proves who has which slot and
 //! what goes over the socket. It proves nothing about pictures.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Config, CopyOrder, MemoryLimits, Session};

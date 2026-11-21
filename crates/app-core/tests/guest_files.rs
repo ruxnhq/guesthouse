@@ -1,5 +1,7 @@
 //! The repo's own guest folder: everything the app sends is there, and nothing that must not be.
 
+#![cfg(target_os = "linux")]
+
 use std::fs;
 use std::path::PathBuf;
 

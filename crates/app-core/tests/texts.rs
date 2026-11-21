@@ -1,6 +1,8 @@
 //! What a person reads. A line continuation that went missing leaves a run of spaces in the middle of
 //! a sentence, and nothing else would catch it.
 
+#![cfg(target_os = "linux")]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

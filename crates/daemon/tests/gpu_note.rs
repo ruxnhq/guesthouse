@@ -1,5 +1,7 @@
 //! When faults stop a guest's GPU work, the app has to be able to hear of it.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Config, MOST_FAULTS, MemoryLimits, Session};

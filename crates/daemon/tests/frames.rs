@@ -2,6 +2,8 @@
 //! the pretend RM playing the card. This proves the bookkeeping and the commands. It proves nothing
 //! about a real card, a real dmabuf, or how long anything takes.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend_nvidia::NvidiaBackend;
 use guesthouse_backend_nvidia::fake_guest::{

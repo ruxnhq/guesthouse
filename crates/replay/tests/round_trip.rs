@@ -1,5 +1,7 @@
 //! A recording made from the core's own answers must replay clean, and a change must be caught.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Config, MemoryLimits, ReplyTicket, Session};

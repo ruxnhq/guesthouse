@@ -8,6 +8,9 @@
 //! data out of the recording. That makes those bytes match by construction, so a report counts
 //! them apart from what the core really worked out. See [`report::Report`].
 
+// Linux only, as the daemon it replays into is. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 pub mod answers;
 pub mod explain;
 pub mod recording;

@@ -1,5 +1,7 @@
 //! The daemon end to end over real sockets, with this test playing QEMU.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Config, MemoryLimits, Session};

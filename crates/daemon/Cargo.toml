@@ -26,7 +26,7 @@ intel = ["dep:guesthouse-backend-intel", "dep:serde_json"]
 # GUESTHOUSE_INTEL_LAB_FAKE_CARD=1 runs the work path against a stand-in for xe. See the Intel backend.
 intel-lab-fake-card = ["intel", "guesthouse-backend-intel/lab-fake-card"]
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 guesthouse-backend.workspace = true
 guesthouse-backend-amd = { workspace = true, optional = true }
 guesthouse-backend-intel = { workspace = true, optional = true }
@@ -38,14 +38,14 @@ guesthouse-frame-socket.workspace = true
 guesthouse-jail.workspace = true
 guesthouse-messages.workspace = true
 guesthouse-transport.workspace = true
-# mmap and ppoll, which the standard library does not offer.
-libc = "0.2"
 # The sensors' snapshot file, which the jail has to name.
 guesthouse-sensors = { workspace = true, optional = true }
 # The facade, for the logger in logger.rs to serve.
 log = "0.4"
 # The app writes what setup found as JSON, and this reads it.
 serde_json = { version = "1", optional = true }
+# mmap and ppoll, which the standard library does not offer.
+libc = "0.2"
 
 [dev-dependencies]
 guesthouse-backend-standin.workspace = true

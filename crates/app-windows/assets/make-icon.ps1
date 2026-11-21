@@ -2,7 +2,11 @@
 # (crates/app/data/icons/hicolor/scalable/apps/io.github.xnixy.Guesthouse.svg). Windows has nothing
 # that draws an SVG into an icon, so this draws the same shapes, at each size Windows asks for, and
 # stores each one as a PNG. Change both together.
+#
+# The shapes are the SVG's, in a deeper palette that sits better with Windows 11's icons. At 32 px
+# and below a plainer drawing takes over: thinner walls drown the little house at that size.
 #   powershell -ExecutionPolicy Bypass -File crates\app-windows\assets\make-icon.ps1
+param([string]$IcoPath = (Join-Path $PSScriptRoot 'guesthouse.ico'), [string]$PngFolder)
 Add-Type -AssemblyName System.Drawing
 
 function Color($hex, $alpha = 255) {
@@ -26,6 +30,28 @@ function Downward($top, $bottom, $from, $to) {
         (New-Object System.Drawing.PointF 0, $bottom), (Color $from), (Color $to)
 }
 
+# A house: its roof's peak, where the roof meets the walls, and the floor.
+function House($left, $right, $peak, $eaves, $floor, $dy = 0) {
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $mid = ($left + $right) / 2
+    $path.AddPolygon([System.Drawing.PointF[]]@(
+            (New-Object System.Drawing.PointF $mid, ($peak + $dy)),
+            (New-Object System.Drawing.PointF $right, ($eaves + $dy)),
+            (New-Object System.Drawing.PointF $right, ($floor + $dy)),
+            (New-Object System.Drawing.PointF $left, ($floor + $dy)),
+            (New-Object System.Drawing.PointF $left, ($eaves + $dy))))
+    $path
+}
+
+function Edge($brush, $width) {
+    $pen = New-Object System.Drawing.Pen $brush, $width
+    $pen.LineJoin = 'Round'
+    $pen
+}
+
+$wallTop = '#3aa0ff'; $wallBottom = '#0b5cc0'; $wallDark = '#084891'; $wallSmall = '#0a58b8'
+$tint = '#e6f3ff'; $warmTop = '#ffe28f'; $warmBottom = '#ff9e2c'; $warmDeep = '#e8820c'
+
 function Draw($n) {
     $bmp = New-Object System.Drawing.Bitmap $n, $n, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -33,43 +59,44 @@ function Draw($n) {
     $g.PixelOffsetMode = 'HighQuality'
     $g.CompositingQuality = 'HighQuality'
     $g.Clear([System.Drawing.Color]::Transparent)
-    # The SVG's own units from here on.
-    $g.ScaleTransform($n / 128, $n / 128)
 
-    $g.FillPath((New-Object System.Drawing.SolidBrush (Color '#241f31')), (Rounded 84 22 14 30 2))
-    $g.FillPath((New-Object System.Drawing.SolidBrush (Color '#1a5fb4')), (Rounded 24 52 80 64 6))
-    $wall = Rounded 24 48 80 64 6
-    $g.FillPath((Downward 50 112 '#3584e4' '#1c71d8'), $wall)
-    # The window's glow on the wall.
-    $glow = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $glow.AddEllipse(30, 48, 68, 68)
-    $light = New-Object System.Drawing.Drawing2D.PathGradientBrush $glow
-    $light.CenterColor = Color '#f9f06b' 140
-    $light.SurroundColors = @(Color '#f9f06b' 0)
-    $g.SetClip($wall)
-    $g.FillPath($light, $glow)
-    $g.ResetClip()
-
-    $roof = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $roof.AddPolygon([System.Drawing.PointF[]]@(
-            (New-Object System.Drawing.PointF 64, 16),
-            (New-Object System.Drawing.PointF 112, 56),
-            (New-Object System.Drawing.PointF 16, 56)))
-    $g.FillPath((Downward 14 64 '#5e5c64' '#3d3846'), $roof)
-    $edge = New-Object System.Drawing.Pen (Downward 14 64 '#5e5c64' '#3d3846'), 10
-    $edge.LineJoin = 'Round'
-    $g.DrawPath($edge, $roof)
-
-    $eave = New-Object System.Drawing.Pen (Color '#241f31'), 4
-    $eave.StartCap = 'Round'
-    $eave.EndCap = 'Round'
-    $g.DrawLine($eave, 11, 61, 117, 61)
-
-    $g.FillPath((New-Object System.Drawing.SolidBrush (Color '#1a5fb4')), (Rounded 46 68 36 32 3))
-    $g.FillPath((Downward 66 98 '#f9f06b' '#f6d32d'), (Rounded 48 70 32 28 2))
-    $bars = New-Object System.Drawing.Pen (Color '#1a5fb4'), 3
-    $g.DrawLine($bars, 64, 70, 64, 98)
-    $g.DrawLine($bars, 48, 84, 80, 84)
+    if ($n -eq 16) {
+        # Drawn to the pixel: two pixel walls centred on whole pixels, and the little house's
+        # walls on pixel edges, so nothing lands half on one.
+        $outer = House 2 14 2.5 7.5 14
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $tint)), $outer)
+        $g.DrawPath((Edge (Color $wallSmall) 2), $outer)
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $warmBottom)), (House 5 11 6 9 12))
+    } elseif ($n -le 32) {
+        # The small drawing, on a 32 unit grid.
+        $g.ScaleTransform($n / 32, $n / 32)
+        $outer = House 5 27 4.5 14 26.5
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $tint)), $outer)
+        $g.DrawPath((Edge (Color $wallSmall) 3.5), $outer)
+        $inner = House 11 21 14 18 21.5
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $warmBottom)), $inner)
+        $g.DrawPath((Edge (Color $warmBottom) 2.5), $inner)
+    } else {
+        # The SVG's own units from here on.
+        $g.ScaleTransform($n / 128, $n / 128)
+        $g.FillEllipse((New-Object System.Drawing.SolidBrush (Color '#000000' 56)), 18, 113, 92, 10)
+        # The walls' underside, showing below them and under the roof inside.
+        $g.DrawPath((Edge (Color $wallDark) 12), (House 22 106 22 58 106 4))
+        $outer = House 22 106 22 58 106
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $tint)), $outer)
+        $g.DrawPath((Edge (Downward 16 112 $wallTop $wallBottom) 12), $outer)
+        # The little house's glow on the tint.
+        $glow = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $glow.AddEllipse(32, 52, 64, 48)
+        $light = New-Object System.Drawing.Drawing2D.PathGradientBrush $glow
+        $light.CenterColor = Color $warmTop 140
+        $light.SurroundColors = @(Color $warmTop 0)
+        $g.FillPath($light, $glow)
+        $inner = House 45 83 58 74 89
+        $g.FillPath((Downward 53 93 $warmTop $warmBottom), $inner)
+        $g.DrawPath((Edge (Downward 53 93 $warmTop $warmBottom) 8), $inner)
+        $g.FillPath((New-Object System.Drawing.SolidBrush (Color $warmDeep)), (Rounded 60 80 8 13 2))
+    }
 
     $g.Dispose()
     $ms = New-Object System.IO.MemoryStream
@@ -80,6 +107,11 @@ function Draw($n) {
 
 $sizes = 16, 20, 24, 32, 40, 48, 64, 96, 128, 256
 $pngs = foreach ($n in $sizes) { , (Draw $n) }
+if ($PngFolder) {
+    for ($i = 0; $i -lt $sizes.Count; $i++) {
+        [System.IO.File]::WriteAllBytes((Join-Path $PngFolder "$($sizes[$i]).png"), $pngs[$i])
+    }
+}
 
 # An ICONDIR, an ICONDIRENTRY for each size, then the PNGs, which Windows has taken since Vista.
 $out = New-Object System.IO.MemoryStream
@@ -96,5 +128,5 @@ for ($i = 0; $i -lt $sizes.Count; $i++) {
 }
 foreach ($p in $pngs) { $w.Write($p) }
 $w.Flush()
-[System.IO.File]::WriteAllBytes((Join-Path $PSScriptRoot 'guesthouse.ico'), $out.ToArray())
+[System.IO.File]::WriteAllBytes($IcoPath, $out.ToArray())
 "guesthouse.ico: $($sizes -join ', ') px, $($out.Length) bytes"

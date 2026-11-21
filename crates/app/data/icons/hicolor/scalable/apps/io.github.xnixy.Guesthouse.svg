@@ -1,29 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="wall" x1="0" y1="50" x2="0" y2="112" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#3584e4"/>
-      <stop offset="1" stop-color="#1c71d8"/>
+    <linearGradient id="wall" x1="0" y1="16" x2="0" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3d8be6"/>
+      <stop offset="1" stop-color="#1c63c4"/>
     </linearGradient>
-    <linearGradient id="roof" x1="0" y1="14" x2="0" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5e5c64"/>
-      <stop offset="1" stop-color="#3d3846"/>
+    <linearGradient id="warm" x1="0" y1="53" x2="0" y2="93" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbf27a"/>
+      <stop offset="1" stop-color="#f6c42d"/>
     </linearGradient>
-    <linearGradient id="light" x1="0" y1="66" x2="0" y2="98" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f9f06b"/>
-      <stop offset="1" stop-color="#f6d32d"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="64" cy="82" r="34" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f9f06b" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#f9f06b" stop-opacity="0"/>
+    <radialGradient id="glow" cx="64" cy="76" r="32" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 76) scale(1 0.75) translate(0 -76)">
+      <stop offset="0" stop-color="#fbf27a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#fbf27a" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <rect x="84" y="22" width="14" height="30" rx="2" fill="#241f31"/>
-  <rect x="24" y="52" width="80" height="64" rx="6" fill="#1a5fb4"/>
-  <rect x="24" y="48" width="80" height="64" rx="6" fill="url(#wall)"/>
-  <rect x="24" y="48" width="80" height="64" rx="6" fill="url(#glow)"/>
-  <path d="M64 16 112 56H16Z" fill="url(#roof)" stroke="url(#roof)" stroke-width="10" stroke-linejoin="round"/>
-  <path d="M11 61H117" stroke="#241f31" stroke-width="4" stroke-linecap="round"/>
-  <rect x="46" y="68" width="36" height="32" rx="3" fill="#1a5fb4"/>
-  <rect x="48" y="70" width="32" height="28" rx="2" fill="url(#light)"/>
-  <path d="M64 70V98M48 84H80" stroke="#1a5fb4" stroke-width="3"/>
+  <ellipse cx="64" cy="118" rx="46" ry="5" fill="#000" opacity="0.14"/>
+  <path d="M64 26 106 62V110H22V62Z" fill="none" stroke="#154f9e" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M64 22 106 58V106H22V58Z" fill="#e4effc" stroke="url(#wall)" stroke-width="12" stroke-linejoin="round"/>
+  <ellipse cx="64" cy="76" rx="32" ry="24" fill="url(#glow)"/>
+  <path d="M64 58 83 74V89H45V74Z" fill="url(#warm)" stroke="url(#warm)" stroke-width="8" stroke-linejoin="round"/>
+  <rect x="60" y="80" width="8" height="13" rx="2" fill="#e5a50a"/>
 </svg>

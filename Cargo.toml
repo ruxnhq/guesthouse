@@ -17,6 +17,7 @@ default-members = [
     "crates/frame-socket",
     "crates/hcs",
     "crates/host-windows",
+    "crates/installer-windows",
     "crates/jail",
     "crates/messages",
     "crates/replay",

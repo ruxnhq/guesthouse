@@ -144,9 +144,29 @@ On the left is each machine, with its system and where it stands. A machine's pa
 
 Closing the window ends the app, and the machines go on as they were. A panic leaves its words in `guesthouse-app\panic.txt` in your temporary folder, as the app has no console.
 
+## Installing
+
+`scripts/windows-setup.ps1` builds the service, the serial relay and `hcs-boot`, and packs them into one file, `target\installer\guesthouse-setup-VERSION.exe`. It adds the app if it finds it, and says so if it doesn't:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
+```
+
+Opening the file asks for an administrator once, then shows each step. It copies the files into `C:\Program Files\Guesthouse`, which only administrators can write to, and `setup.ps1` does the rest:
+
+- It checks for Windows 11, and for Virtual Machine Platform. If that's off it turns it on, and the last page says Windows has to restart before a machine can run. It never turns on Hyper-V.
+- It registers the service `Guesthouse`, which starts with Windows, as the system. Windows is told to wait up to 90 s for it at shutdown, so it has time to ask each machine to shut down. It's started again if it ends.
+- The app gets a shortcut in Start, and the uninstaller is in Settings > Apps.
+
+An install over an earlier one stops the service first, which asks each running machine to shut down and can take a minute. It never ends the service by force, as that would cut a machine off while it's shutting down. If the service doesn't stop in 90 s, the step fails and says why.
+
+The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, removes the service and the files. Your machines in `%ProgramData%\Guesthouse` stay, so installing again finds them, unless you tick Also delete my machines. Virtual Machine Platform stays on.
+
+`--silent` has no pages, `--uninstall --delete-machines` deletes the machines too, and `--dry-run` shows every page and walks every step with no administrator and no change to the PC. Its log is `%TEMP%\guesthouse-setup.log`, and the install's own is `setup.log` in the install folder. `crates/installer-windows/test/walk.ps1` drives the pages in a dry run and takes a picture of each.
+
 ## What it doesn't do yet
 
-- The service hasn't run as a service yet, nor been installed: it's been tried only by its tests, which run unelevated.
+- The service hasn't run as a service yet, and the installer hasn't installed it for real: they've been tried only by their tests and a dry run, which run unelevated.
 - A Windows guest gets only the driver's folder in the driver store. That's what Direct3D needs. The files a driver also puts in `System32`, which some programs look for there, aren't placed yet.
 - An Ubuntu guest without WSL on the host has no `libdxcore.so`, so `nvidia-smi` and CUDA won't run in it.
 - There's no screen but Remote Desktop or SSH.

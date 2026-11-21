@@ -816,6 +816,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-control"
+version = "0.7.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "guesthouse-core"
 version = "0.7.1"
 dependencies = [
@@ -874,6 +882,7 @@ dependencies = [
 name = "guesthouse-host-windows"
 version = "0.7.1"
 dependencies = [
+ "guesthouse-control",
  "guesthouse-hcs",
  "guesthouse-jail",
  "serde",

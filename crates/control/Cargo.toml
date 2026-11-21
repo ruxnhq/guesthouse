@@ -1,0 +1,16 @@
+[package]
+name = "guesthouse-control"
+description = "The words between Guesthouse's app and its service on a Windows host, on the service's pipe, and the app's end of the pipe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Each request and answer is a line of JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

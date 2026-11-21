@@ -14,6 +14,8 @@ name = "guesthouse-serial-relay"
 path = "src/relay.rs"
 
 [dependencies]
+# The events it says what it does in, as the service sends them on to the app.
+guesthouse-control.workspace = true
 guesthouse-hcs.workspace = true
 # The record beside each disk, and events and settings as the service's pipe carries them.
 serde = { version = "1", features = ["derive"] }

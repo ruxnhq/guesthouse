@@ -17,6 +17,7 @@ use guesthouse_control::{Answer, Card, CardInfo, Event, Machine, NewMachine, Sta
 use windows_reactor::*;
 
 use crate::bridge::{self, Ended, Job, Seen, Watch, Window};
+use crate::console::{self, Console};
 
 #[cfg(feature = "preview")]
 mod preview;
@@ -126,6 +127,26 @@ pub struct News {
     pub bad: bool,
 }
 
+/// How a machine's console stands, as its window last said.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ConsoleState {
+    /// Its pipe isn't there yet, as the machine has only just started.
+    Waiting,
+    Connecting,
+    Connected,
+    /// The session ended, or never began, and why, in words.
+    Ended(String),
+}
+
+/// A machine's console, open in a window of its own.
+pub struct OpenConsole {
+    pub machine: String,
+    pub state: ConsoleState,
+    /// Which console the window's events are from. Those of one that was closed are dropped.
+    id: u64,
+    window: Console,
+}
+
 /// The new machine's form, as the person has filled it in so far.
 #[derive(Clone, PartialEq)]
 pub struct Form {
@@ -200,6 +221,9 @@ pub struct Main {
     pub deleting: Option<String>,
     pub form: Form,
     pub making: Option<Making>,
+    /// The console's window, while one is open. There's one at a time.
+    pub console: Option<OpenConsole>,
+    console_id: u64,
     jobs: Sender<Job>,
     window: Window,
     /// The window's handle, for the file dialog and the clipboard.
@@ -238,6 +262,13 @@ pub enum Message {
     RemoteDesktop,
     /// Open the guest's screen in remoteman's viewer.
     Screen,
+    /// Open the selected machine's console, or bring its window to the front.
+    Console,
+    /// Connect the console again, after its session ended.
+    Reconnect,
+    CloseConsole,
+    /// What a console's window said, and which console it was.
+    Consoled(u64, console::Event),
     Copy(String),
     WatchAgain,
     Name(String),
@@ -317,6 +348,7 @@ impl Main {
         self.seen = seen;
         let Ok(status) = &self.seen else { return };
         let names: Vec<String> = status.machines.iter().map(|machine| machine.name.clone()).collect();
+        self.end_stopped_console();
         match &self.selected {
             Some(name) if !names.contains(name) => self.select(names.first().cloned()),
             Some(_) if self.rewatch && was_away => self.select(self.selected.clone()),
@@ -357,7 +389,69 @@ impl Main {
             // Sooner than the next answer to Status, so the buttons follow at once.
             machine.state = *state;
         }
+        self.end_stopped_console();
         push(&mut self.log, Line::of(event));
+    }
+
+    /// Opens the selected machine's console in a window of its own, or brings it to the front if
+    /// it's open. A console of another machine is closed first, as there's one at a time.
+    fn open_console(&mut self) {
+        let Some(name) = self.selected.clone().filter(|_| self.live) else { return };
+        if let Some(open) = &self.console
+            && open.machine == name
+        {
+            open.window.front();
+            return;
+        }
+        self.console = None;
+        self.console_id += 1;
+        let id = self.console_id;
+        let window = self.window.clone();
+        let title = format!("{name} \u{2014} Console");
+        let pipe = guesthouse_control::console_pipe(&name);
+        let opened = Console::open(&pipe, &title, false, move |event| {
+            let _ = window.tell(Message::Consoled(id, event));
+        });
+        match opened {
+            Ok(window) => {
+                self.console =
+                    Some(OpenConsole { machine: name, state: ConsoleState::Connecting, id, window });
+            }
+            Err(error) => self.tell(format!("The console's window couldn't be opened: {error}"), true),
+        }
+    }
+
+    fn consoled(&mut self, id: u64, event: console::Event) {
+        let Some(open) = self.console.as_mut().filter(|open| open.id == id) else { return };
+        match event {
+            console::Event::Waiting => open.state = ConsoleState::Waiting,
+            console::Event::Connecting => open.state = ConsoleState::Connecting,
+            console::Event::Connected => open.state = ConsoleState::Connected,
+            console::Event::Disconnected { reason, extended, words } => {
+                let words = words.unwrap_or_else(|| format!("the control gave reason {reason}, {extended}."));
+                open.state = ConsoleState::Ended(format!("Its session ended: {words}"));
+            }
+            console::Event::Problem(words) => open.state = ConsoleState::Ended(words),
+            console::Event::Note(_) => {}
+            // Its window was closed, and the machine goes on as it is.
+            console::Event::Closed => self.console = None,
+        }
+    }
+
+    /// Ends the console of a machine that has stopped, or gone: its session first, so it doesn't
+    /// hold the machine up, then its window.
+    fn end_stopped_console(&mut self) {
+        let Some(open) = &self.console else { return };
+        let Ok(status) = &self.seen else { return };
+        let on = status
+            .machines
+            .iter()
+            .any(|machine| machine.name == open.machine && machine.state != State::Stopped);
+        if !on {
+            open.window.disconnect();
+            open.window.close();
+            self.console = None;
+        }
     }
 
     fn watch_ended(&mut self, why: Ended) {
@@ -436,6 +530,8 @@ impl Component for Main {
             deleting: None,
             form: Form::default(),
             making: None,
+            console: None,
+            console_id: 0,
             jobs,
             window,
             hwnd: 0,
@@ -503,6 +599,15 @@ impl Component for Main {
             }
             Message::SignIn => self.ask(Job::Account),
             Message::Screen => self.ask(Job::Screen),
+            Message::Console => self.open_console(),
+            Message::Reconnect => {
+                if let Some(open) = &mut self.console {
+                    open.state = ConsoleState::Connecting;
+                    open.window.reconnect();
+                }
+            }
+            Message::CloseConsole => self.console = None,
+            Message::Consoled(id, event) => self.consoled(id, event),
             Message::RemoteDesktop => self.remote_desktop(),
             Message::Copy(text) => {
                 if crate::system::copy(self.hwnd, &text) {

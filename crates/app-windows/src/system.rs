@@ -1,6 +1,6 @@
 //! What the app asks of Windows itself, beyond the window: the file dialog, the clipboard, Remote
 //! Desktop, the icon's file, and cancelling a read on the pipe. Every `unsafe` call of the app is
-//! here.
+//! here, but for the console's, which are in console.rs.
 
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;

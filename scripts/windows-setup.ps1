@@ -145,9 +145,11 @@ function Add-Remoteman($Pin, [string]$To) {
     if (-not (Test-Path (Join-Path $top 'remoteman.exe'))) { throw "$zip has no remoteman.exe" }
     New-Item -ItemType Directory -Force $viewer | Out-Null
     Copy-Item -Recurse (Join-Path $top '*') $viewer
-    # Its licences go with it: remoteman's, and FFmpeg's.
-    $notices = @(Get-ChildItem -LiteralPath $viewer -File | Where-Object { $_.Name -match 'licen[cs]e|copying|notice|lgpl' })
-    if ($notices.Count -eq 0) { throw "$zip has no licence files beside remoteman.exe (remoteman's LICENSE and FFmpeg's LGPL); it can't be shipped like that." }
+    # Its licences go with it: remoteman's, and FFmpeg's, beside remoteman.exe or in its licences\
+    # folder, where remoteman's release puts them.
+    $noticeFolders = @($viewer, (Join-Path $viewer 'licences')) | Where-Object { Test-Path -LiteralPath $_ }
+    $notices = @(Get-ChildItem -LiteralPath $noticeFolders -File | Where-Object { $_.Name -match 'licen[cs]e|copying|notice|lgpl' })
+    if ($notices.Count -eq 0) { throw "$zip has no licence files beside remoteman.exe or in its licences\ (remoteman's LICENSE and FFmpeg's LGPL); it can't be shipped like that." }
     Write-Output "remoteman's viewer carries: $(($notices | ForEach-Object Name) -join ', ')."
 
     # The installer's THIRD-PARTY.md says which remoteman it carries.
@@ -156,7 +158,7 @@ function Add-Remoteman($Pin, [string]$To) {
         '',
         '## remoteman in this installer',
         '',
-        "This installer carries $which, under the MIT licence: ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). The licence and notice files that came with the viewer are in ``viewer\`` beside ``remoteman.exe``: $(($notices | ForEach-Object Name) -join ', ')."
+        "This installer carries $which, under the MIT licence: ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). The licence and notice files that came with the viewer are in ``viewer\`` and ``viewer\licences\``: $(($notices | ForEach-Object Name) -join ', ')."
     )
     Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
 }

@@ -108,6 +108,13 @@ impl Archive {
         self.index.payload.iter().any(|e| e.path.eq_ignore_ascii_case(r"app\guesthouse-app.exe"))
     }
 
+    /// Whether they have remoteman, for a Windows guest's screen: its host's installer, which the
+    /// service runs in each Windows guest, and its viewer, which the app starts.
+    pub fn has_screen(&self) -> bool {
+        let has = |path: &str| self.index.payload.iter().any(|e| e.path.eq_ignore_ascii_case(path));
+        has(crate::engine::SCREEN_HOST_SETUP) && has(crate::engine::VIEWER_EXE)
+    }
+
     /// The bare exe, as `out`.
     pub fn write_exe(&self, out: &Path) -> io::Result<()> {
         let mut from = File::open(&self.file)?.take(self.exe_len);
@@ -530,22 +537,37 @@ mod tests {
             ],
         );
         tree(&dir, &[("stub.exe", b"MZ not really an exe")]);
+        // Without remoteman's two sets there's no screen.
+        let plain = dir.join("plain.exe");
+        pack(&dir.join("stub.exe"), &dir.join("runtime"), &dir.join("payload"), "9.9.9", &plain).unwrap();
+        assert!(!Archive::open(&plain).unwrap().has_screen());
+        tree(
+            &dir.join("payload"),
+            &[
+                (r"screen\remoteman-host-setup.exe", b"param()"),
+                (r"viewer\remoteman.exe", b"viewer"),
+                (r"viewer\a.dll", &shared),
+            ],
+        );
         let out = dir.join("setup.exe");
         let report =
             pack(&dir.join("stub.exe"), &dir.join("runtime"), &dir.join("payload"), "9.9.9", &out).unwrap();
-        // The shared DLL is in the runtime's stream only.
+        // The shared DLL is in the runtime's stream only, though the app and the viewer have it too.
         assert_eq!(report.streams.len(), 2);
         assert_eq!(report.streams[0].0, 2);
-        assert_eq!(report.streams[1].0, 3);
+        assert_eq!(report.streams[1].0, 4);
         assert_eq!(std::fs::metadata(&out).unwrap().len() % 8, 0);
 
         let archive = Archive::open(&out).unwrap();
         assert_eq!(archive.index.version, "9.9.9");
         assert!(archive.has_app());
+        assert!(archive.has_screen());
         assert_eq!(archive.exe_len, b"MZ not really an exe".len() as u64);
         let unpacked = archive.unpack(&archive.index.payload, &dir.join("into"), &mut |_| {}).unwrap();
-        assert_eq!(unpacked.len(), 4);
+        assert_eq!(unpacked.len(), 7);
         assert_eq!(std::fs::read(dir.join(r"into\app\a.dll")).unwrap(), shared);
+        assert_eq!(std::fs::read(dir.join(r"into\viewer\a.dll")).unwrap(), shared);
+        assert_eq!(std::fs::read(dir.join(r"into\screen\remoteman-host-setup.exe")).unwrap(), b"param()");
         assert_eq!(std::fs::read(dir.join(r"into\setup.ps1")).unwrap(), b"param()");
 
         let uninstaller = dir.join("uninstall.exe");

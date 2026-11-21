@@ -11,6 +11,7 @@
 
 mod guest;
 mod machine;
+mod printable;
 mod wim_info;
 #[cfg(windows)]
 mod windows;
@@ -39,6 +40,8 @@ options:
   --no-gpu                 No card, and no driver copy.
   --no-network             No network card.
   --no-tpm                 No TPM.
+  --no-jail                Reads the guest's serial port in this process, not in the jailed
+                           relay beside it.
   --size-gb N              prepare: the disk's largest size (128).
   --edition NAME           prepare: the edition in the image (Windows 11 Pro).
   --user NAME              prepare: the guest's administrator (guest). Its password goes in a file
@@ -56,6 +59,7 @@ pub struct Options {
     pub no_gpu: bool,
     pub network: bool,
     pub tpm: bool,
+    pub jail: bool,
     pub size_gb: u64,
     pub edition: String,
     pub user: String,
@@ -82,6 +86,7 @@ impl Default for Options {
             no_gpu: false,
             network: true,
             tpm: true,
+            jail: true,
             size_gb: 128,
             edition: "Windows 11 Pro".into(),
             user: "guest".into(),
@@ -115,6 +120,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--no-gpu" => options.no_gpu = true,
             "--no-network" => options.network = false,
             "--no-tpm" => options.tpm = false,
+            "--no-jail" => options.jail = false,
             _ => return Err(format!("{flag} is not an option")),
         }
     }

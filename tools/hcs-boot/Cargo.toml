@@ -11,10 +11,19 @@ license.workspace = true
 name = "guesthouse-hcs-boot"
 path = "src/main.rs"
 
+# The jailed reader of a guest's serial port, which boot starts beside it.
+[[bin]]
+name = "guesthouse-serial-relay"
+path = "src/relay.rs"
+
 [dependencies]
 guesthouse-hcs.workspace = true
 # To print the machine document for `document`.
 serde_json = "1"
+
+# The jail the serial relay runs in.
+[target.'cfg(windows)'.dependencies]
+guesthouse-jail.workspace = true
 
 [lints]
 workspace = true

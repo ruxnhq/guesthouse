@@ -866,6 +866,7 @@ name = "guesthouse-hcs-boot"
 version = "0.7.1"
 dependencies = [
  "guesthouse-hcs",
+ "guesthouse-jail",
  "serde_json",
 ]
 
@@ -874,6 +875,7 @@ name = "guesthouse-jail"
 version = "0.7.1"
 dependencies = [
  "libc",
+ "windows-sys",
 ]
 
 [[package]]

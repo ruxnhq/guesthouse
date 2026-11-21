@@ -63,6 +63,16 @@ Ctrl+C asks the guest to shut down, and a second Ctrl+C stops it at once. The ma
 
 With a Pro guest, Remote Desktop to the address it prints shows its screen.
 
+### The jail
+
+What a guest writes to its serial port is the one thing on a Windows host that a Guesthouse program reads from a guest. The machine itself runs in Windows' own worker process, which Windows already keeps apart. So `boot` hands the port to `guesthouse-serial-relay`, which sits beside it and runs jailed, as QEMU does on Linux:
+
+- In an AppContainer with no capabilities, it can open none of your files, and it has no network, not even loopback. That does what Landlock does on Linux.
+- Process mitigations block every win32k call, code made at run time, and DLLs from a share or a low-integrity file. That does what seccomp does.
+- Its job lets it start no process, keeps it off the desktop and the clipboard, caps its memory, and stops it when `boot` ends. That does what no new privileges does.
+
+The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
+
 Without an NVIDIA card, `--gpu TEXT` picks the card whose name holds TEXT, and `--no-gpu` boots with none. `--memory-mb`, `--cpus`, `--no-network` and `--no-tpm` do what they say.
 
 ## What it doesn't do yet

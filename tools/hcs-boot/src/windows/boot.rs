@@ -4,12 +4,15 @@
 
 use super::{absolute, chosen_card, copy_driver_to_disk, machine, need_elevation};
 use crate::Options;
+use crate::printable::printable;
 use guesthouse_hcs::host;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
 use guesthouse_hcs::system::{self, ComputeSystem};
+use guesthouse_jail::windows::{Handles, Jail, Jailed};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, PipeReader};
+use std::os::windows::io::OwnedHandle;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,6 +24,10 @@ const NETWORK_NAME: &str = "Guesthouse";
 const POLL: Duration = Duration::from_secs(1);
 /// How long the guest's serial port may take to appear once the machine starts.
 const SERIAL_SECONDS: u64 = 30;
+/// The jailed reader of the serial port, beside this program.
+const RELAY: &str = "guesthouse-serial-relay.exe";
+/// Its AppContainer, which Windows keeps between runs.
+const RELAY_PROFILE: &str = "guesthouse.serial-relay";
 /// While the machine's state can't be read, the reason is told once in this many tries.
 const UNREADABLE_REPEAT: u32 = 60;
 
@@ -69,7 +76,8 @@ pub fn boot(options: &Options) -> Result<(), String> {
     }
 
     let pipe = machine.serial_pipe();
-    thread::spawn(move || print_serial(&pipe));
+    let unjailed = !options.jail;
+    thread::spawn(move || print_serial(&pipe, unjailed));
     println!("Waiting for the guest. Ctrl+C asks it to shut down.");
     wait(&running, stop)
 }
@@ -136,8 +144,9 @@ fn wait(running: &ComputeSystem, stop: &std::sync::atomic::AtomicBool) -> Result
     }
 }
 
-/// Prints each line the guest writes to COM1 until the port closes.
-fn print_serial(pipe: &str) {
+/// Prints each line the guest writes to COM1 until the port closes. The port is read by the relay
+/// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here.
+fn print_serial(pipe: &str, unjailed: bool) {
     let started = Instant::now();
     let port = loop {
         match File::open(pipe) {
@@ -149,11 +158,41 @@ fn print_serial(pipe: &str) {
             }
         }
     };
-    let mut port = BufReader::new(port);
+    if unjailed {
+        println!("Reading the guest's serial port with no jail, as --no-jail asks.");
+        return print_lines(port);
+    }
+    match relay(port) {
+        Ok((jailed, lines)) => {
+            print_lines(lines);
+            let _ = jailed.wait();
+        }
+        Err(error) => eprintln!(
+            "The guest's serial port is left unread, as its reader couldn't be jailed: {error}. \
+             --no-jail reads it anyway."
+        ),
+    }
+}
+
+/// The serial relay, started in its jail with the port as its input, and the end of its output.
+fn relay(port: File) -> std::io::Result<(Jailed, PipeReader)> {
+    let program = std::env::current_exe()?.with_file_name(RELAY);
+    let (lines, relay_output) = std::io::pipe()?;
+    let handles = Handles {
+        stdin: Some(OwnedHandle::from(port)),
+        stderr: Some(OwnedHandle::from(relay_output.try_clone()?)),
+        stdout: Some(OwnedHandle::from(relay_output)),
+    };
+    let jailed = Jail::new(RELAY_PROFILE).spawn(&program, &[], handles)?;
+    Ok((jailed, lines))
+}
+
+/// Prints each line, made printable, as the guest's.
+fn print_lines(source: impl std::io::Read) {
+    let mut source = BufReader::new(source);
     let mut line = Vec::new();
-    // Read as bytes, as a guest may write anything, and one bad line shouldn't end the rest.
-    while port.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
-        println!("guest: {}", String::from_utf8_lossy(&line).trim_end());
+    while source.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+        println!("guest: {}", printable(&line));
         line.clear();
     }
 }

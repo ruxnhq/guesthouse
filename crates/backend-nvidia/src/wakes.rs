@@ -32,6 +32,8 @@ pub struct Wakes {
     bound: Vec<(Handle, u32)>,
     armed: Vec<(u32, u64)>,
     gpu_address: u64,
+    /// The space the page is mapped in, so close can take the mapping down before the memory.
+    space: AddressSpace,
 }
 
 impl std::fmt::Debug for Wakes {
@@ -67,7 +69,7 @@ impl Wakes {
         let mut params = [0; 16];
         params[0..4].copy_from_slice(&memory.to_le_bytes());
         let surface = device.alloc(parent, SEMAPHORE_SURFACE, &mut params)?;
-        Ok(Self { memory, surface, bound: Vec::new(), armed: Vec::new(), gpu_address })
+        Ok(Self { memory, surface, bound: Vec::new(), armed: Vec::new(), gpu_address, space: space.clone() })
     }
 
     /// Binds a channel, so its engine's non-stall interrupts re-check the waiters. A copy channel
@@ -121,8 +123,9 @@ impl Wakes {
         self.gpu_address + u64::from(index) * SLOT as u64
     }
 
-    /// Takes the waiters off and the channels away, and frees the surface and its memory. Run this
-    /// before the channels and the space are freed, so the unbinds name live channels.
+    /// Takes the waiters off and the channels away, unmaps the page, and frees the surface and its
+    /// memory. Run this before the channels and the space are freed, so the unbinds name live
+    /// channels and the unmap a live space.
     pub fn close<R: Rm>(&mut self, device: &mut Device<R>) -> Result<(), RmError> {
         for (index, value) in self.armed.drain(..) {
             let mut params = [0; 32];
@@ -133,11 +136,14 @@ impl Wakes {
         for (channel, index) in self.bound.drain(..) {
             let mut params = [0; 40];
             params[0..4].copy_from_slice(&channel.to_le_bytes());
-            // Both of the entries the bind made: the FIFO's and the engine's own.
+            // The same two entries the bind made, in its order: the FIFO's index and the engine's
+            // own.
             params[4..8].copy_from_slice(&2u32.to_le_bytes());
-            params[8..12].copy_from_slice(&index.to_le_bytes());
+            params[8..12].copy_from_slice(&NOTIFY_FIFO_METHODS.to_le_bytes());
+            params[12..16].copy_from_slice(&index.to_le_bytes());
             let _ = device.rm.control(self.surface, SURFACE_UNBIND_CHANNEL, &mut params);
         }
+        device.unmap(&self.space, self.memory, self.gpu_address, 4096)?;
         let surface = self.surface;
         device.free(surface)?;
         let memory = self.memory;
@@ -169,7 +175,9 @@ mod tests {
     fn closing_takes_off_both_of_a_bound_channels_entries() {
         use crate::profile::HOST_615;
         use crate::rm::STATUS_OK;
-        use crate::rm::classes::{NOTIFY_COPY, SURFACE_BIND_CHANNEL, SURFACE_UNBIND_CHANNEL};
+        use crate::rm::classes::{
+            NOTIFY_COPY, NOTIFY_FIFO_METHODS, SURFACE_BIND_CHANNEL, SURFACE_UNBIND_CHANNEL,
+        };
         use crate::rm::device::Device;
         use crate::rm::fake::{Call, FakeRm};
 
@@ -197,6 +205,27 @@ mod tests {
             .collect();
         assert_eq!(unbinds.len(), 1);
         assert_eq!(word(&unbinds[0], 4), 2, "the FIFO's entry and the engine's own");
-        assert_eq!(word(&unbinds[0], 8), NOTIFY_COPY, "the index it was bound by");
+        assert_eq!(word(&unbinds[0], 8), NOTIFY_FIFO_METHODS, "the FIFO's index, as the bind sent it");
+        assert_eq!(word(&unbinds[0], 12), NOTIFY_COPY, "the engine's own, second as the bind sent it");
+    }
+
+    #[test]
+    fn closing_takes_the_pages_mapping_down_before_its_memory() {
+        use crate::profile::HOST_615;
+        use crate::rm::STATUS_OK;
+        use crate::rm::classes::SURFACE_BIND_CHANNEL;
+        use crate::rm::device::Device;
+        use crate::rm::fake::FakeRm;
+
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.answer(SURFACE_BIND_CHANNEL, |_| STATUS_OK);
+        let mut device = Device::open(rm, &HOST_615).unwrap();
+        let space = device.create_address_space(&[(0x400_0000, 0x1_0000_0000)]).unwrap();
+        let subdevice = device.subdevice;
+        let mut wakes = Wakes::new(&mut device, &space, 0x800_0000, subdevice).unwrap();
+        assert!(device.rm.memory_at(0x800_0000).is_some(), "the page is mapped while it lives");
+        wakes.close(&mut device).unwrap();
+        assert!(device.rm.memory_at(0x800_0000).is_none(), "the mapping went with the surface");
     }
 }

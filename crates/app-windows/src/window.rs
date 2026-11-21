@@ -136,7 +136,8 @@ fn away(words: &str) -> View {
     ];
     if words == Unreached::NoService.words() {
         parts.push(centred(
-            "It starts with Windows. If it was stopped, start it again in Services, where it's called Guesthouse.",
+            "Once it's installed, it starts with Windows, and if it was stopped, Services starts it again: \
+             it's called Guesthouse there. Until then, run guesthouse-service.exe run in an elevated prompt.",
         ));
     }
     parts.push(
@@ -169,7 +170,13 @@ fn navigation(main: &Main, context: &ViewContext<Main>) -> View {
             .tag(machine.name.as_str())
             .icon(Icon::font(system_glyph(machine.system)))
             .content(nav_item(machine))
-            .is_selected(selected == Some(machine.name.as_str()));
+            .is_selected(selected == Some(machine.name.as_str()))
+            .automation_name(format!(
+                "{}, {}, {}",
+                machine.name,
+                system_words(machine.system),
+                app::state_words(machine.state)
+            ));
         keyed(machine.name.as_str(), item)
     });
     let new = NavigationViewItem::new()
@@ -588,7 +595,7 @@ fn card_words(card: &Card, cards: &[CardInfo]) -> String {
             let info = cards.iter().find(|card| card.name == *name);
             let mut words = name.clone();
             if let Some(mb) = info.and_then(|card| card.memory_mb) {
-                words.push_str(&format!(" · {}", memory_words(mb)));
+                words.push_str(&format!(" · {}", card_memory_words(mb)));
             }
             if info.is_some_and(|card| card.default) {
                 words.push_str(" · default");
@@ -630,9 +637,19 @@ fn system_glyph(system: System) -> &'static str {
     }
 }
 
-/// Memory in whole GB where it comes to that, as cards and machines mostly do, and in MB otherwise.
+const MB_PER_GB: u64 = 1024;
+
+/// A machine's memory, as it was given: in GB when it's a whole number of them, and in MB otherwise.
 fn memory_words(mb: u64) -> String {
-    const MB_PER_GB: u64 = 1024;
+    if mb >= MB_PER_GB && mb.is_multiple_of(MB_PER_GB) {
+        format!("{} GB", mb / MB_PER_GB)
+    } else {
+        format!("{mb} MB")
+    }
+}
+
+/// A card's memory, to the nearest GB, as a card's driver gives a little under its size.
+fn card_memory_words(mb: u64) -> String {
     if mb >= MB_PER_GB { format!("{} GB", (mb + MB_PER_GB / 2) / MB_PER_GB) } else { format!("{mb} MB") }
 }
 

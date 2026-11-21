@@ -120,23 +120,30 @@ pub fn remote_desktop(address: &str) -> Result<(), String> {
 
 /// The exe's icon, as make-icon.ps1 draws it: a PNG for each size.
 const ICON: &[u8] = include_bytes!("../assets/guesthouse.ico");
-/// An icon file's header, and the length of each entry after it.
+/// An icon file's header: where it says how many sizes follow, and its length. Each size's entry
+/// after it has its width (one byte, as is its height), and where its picture is in the file and
+/// how long, as little-endian u32s.
+const ICON_COUNT_AT: usize = 4;
 const ICON_HEADER: usize = 6;
 const ICON_ENTRY: usize = 16;
+const ENTRY_WIDTH_AT: usize = 0;
+const ENTRY_LENGTH_AT: usize = 8;
+const ENTRY_OFFSET_AT: usize = 12;
 
 /// One size of the icon, as a PNG. The small ones are drawn plainer than the SVG, so they stay
 /// clear at a title bar's size, and they're the same picture the taskbar shows.
 pub fn icon_frame(size: u8) -> Option<&'static [u8]> {
     let field = |at: usize, len: usize| ICON.get(at..at + len);
-    let count = u16::from_le_bytes(field(4, 2)?.try_into().ok()?) as usize;
+    let word = |bytes: &[u8], at: usize| -> Option<usize> {
+        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize)
+    };
+    let count = u16::from_le_bytes(field(ICON_COUNT_AT, 2)?.try_into().ok()?) as usize;
     (0..count).find_map(|n| {
         let entry = field(ICON_HEADER + n * ICON_ENTRY, ICON_ENTRY)?;
-        if entry[0] != size {
+        if entry[ENTRY_WIDTH_AT] != size {
             return None;
         }
-        let len = u32::from_le_bytes(entry[8..12].try_into().ok()?) as usize;
-        let at = u32::from_le_bytes(entry[12..16].try_into().ok()?) as usize;
-        field(at, len)
+        field(word(entry, ENTRY_OFFSET_AT)?, word(entry, ENTRY_LENGTH_AT)?)
     })
 }
 

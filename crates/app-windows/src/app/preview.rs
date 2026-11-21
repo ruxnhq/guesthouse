@@ -56,7 +56,8 @@ pub fn stage(main: &mut Main) {
             main.form = Form {
                 name: "studio".to_owned(),
                 image: r"D:\iso\Win11_25H2_English_x64.iso".to_owned(),
-                card: Card::Default,
+                // A named card, so the closed list shows a card's memory and its default mark.
+                card: Card::Named("NVIDIA GeForce RTX 5090".to_owned()),
                 ..Form::default()
             };
             let ended = match state.as_str() {

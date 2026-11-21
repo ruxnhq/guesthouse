@@ -1,9 +1,10 @@
 //! Opens a Windows guest's screen, as the app will: asks the service for what the viewer needs,
 //! writes it into a state folder of the user's, and starts remoteman's viewer with it.
 //!
-//!     cargo run -p guesthouse-control --example screen -- NAME PATH\TO\remoteman-app.exe
+//!     cargo run -p guesthouse-control --example screen -- NAME PATH\TO\remoteman-app.exe [VIEWER OPTIONS]
 //!
-//! The viewer needs FFmpeg's DLLs beside it or on PATH.
+//! Options after the viewer's program go to it, such as `--size 2560x1440`. The viewer needs
+//! FFmpeg's DLLs beside it or on PATH.
 
 use guesthouse_control::client::ask;
 use guesthouse_control::screen::viewer_state;
@@ -13,7 +14,7 @@ use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [name, viewer] = args.as_slice() else {
+    let [name, viewer, options @ ..] = args.as_slice() else {
         eprintln!("Give the machine's name and the remoteman viewer's program.");
         return ExitCode::FAILURE;
     };
@@ -39,7 +40,7 @@ fn main() -> ExitCode {
             }
         };
     println!("Opening {target}, expecting {host_fingerprint}, with {}", state.display());
-    match Command::new(viewer).arg(&target).arg("--state").arg(&state).spawn() {
+    match Command::new(viewer).arg(&target).arg("--state").arg(&state).args(options).spawn() {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{viewer}: {error}");

@@ -42,27 +42,29 @@ pub fn viewer_state(
     fs::write(client.join("key.der"), key)?;
     let target = format!("{address}:{port}");
     fs::write(hosts.join(target.replace([':', '/'], "_")), host_fingerprint)?;
-    only_display(&state.join("viewer-settings"), true)?;
-    only_display(&state.join("viewer-computers"), false)?;
+    main_display(&state.join("viewer-settings"), true)?;
+    main_display(&state.join("viewer-computers"), false)?;
     Ok(target)
 }
 
-/// Makes the viewer's display the guest's only one while it's connected. A guest has a display of
-/// its own too, the one its console shows, and remoteman would otherwise put the viewer's beside it
-/// as an extra one, with the guest's own still its main display. The viewer's settings say it for
-/// a computer it hasn't kept, and its list of computers for each one it has, once it has connected;
-/// this folder is one guest's alone, so every placement in it is set. Everything else is kept.
-fn only_display(file: &Path, add: bool) -> io::Result<()> {
+/// What the viewer asks for: its display as the guest's main one, where the taskbar and new
+/// windows go. A guest has a display of its own too, the one its console shows, which stays on as
+/// a second display; remoteman would otherwise put the viewer's beside it as an extra one, with the
+/// guest's own still the main display.
+const PLACEMENT: &str = "placement=main";
+
+/// Sets the viewer's placement. Its settings say it for a computer it hasn't kept, and its list of
+/// computers for each one it has, once it has connected; this folder is one guest's alone, so every
+/// placement in it is set. Everything else is kept.
+fn main_display(file: &Path, add: bool) -> io::Result<()> {
     let kept = fs::read_to_string(file).unwrap_or_default();
     if kept.is_empty() && !add {
         return Ok(());
     }
-    let mut lines: Vec<&str> = kept
-        .lines()
-        .map(|line| if line.starts_with("placement=") { "placement=only" } else { line })
-        .collect();
-    if add && !lines.contains(&"placement=only") {
-        lines.push("placement=only");
+    let mut lines: Vec<&str> =
+        kept.lines().map(|line| if line.starts_with("placement=") { PLACEMENT } else { line }).collect();
+    if add && !lines.contains(&PLACEMENT) {
+        lines.push(PLACEMENT);
     }
     fs::write(file, lines.join("\n") + "\n")
 }
@@ -86,14 +88,14 @@ mod tests {
         fs::create_dir_all(&state).unwrap();
         fs::write(state.join("viewer-settings"), "placement=extend\nsound=yes\n").unwrap();
         let target = viewer_state(&state, "172.29.1.2", 7791, "ff", "0102", "0304").unwrap();
-        assert_eq!(fs::read_to_string(state.join("viewer-settings")).unwrap(), "placement=only\nsound=yes\n");
+        assert_eq!(fs::read_to_string(state.join("viewer-settings")).unwrap(), "placement=main\nsound=yes\n");
         assert!(!state.join("viewer-computers").exists(), "no list is made where there was none");
         fs::write(state.join("viewer-computers"), "[computer]\naddress=172.29.1.2:7791\nplacement=extend\n")
             .unwrap();
         viewer_state(&state, "172.29.1.2", 7791, "ff", "0102", "0304").unwrap();
         assert_eq!(
             fs::read_to_string(state.join("viewer-computers")).unwrap(),
-            "[computer]\naddress=172.29.1.2:7791\nplacement=only\n"
+            "[computer]\naddress=172.29.1.2:7791\nplacement=main\n"
         );
         assert_eq!(target, "172.29.1.2:7791");
         assert_eq!(fs::read(state.join("client").join("cert.der")).unwrap(), [1, 2]);

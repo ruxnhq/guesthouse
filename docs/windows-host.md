@@ -1,8 +1,8 @@
 # A Windows host
 
-This is the first step of Guesthouse on Windows: Windows 11 and Ubuntu VMs with GPU-PV, run through Windows' Host Compute System with only the Virtual Machine Platform feature on. Hyper-V isn't needed, so Windows 11 Home can do it, and none of Hyper-V's tools are used. The rest of Guesthouse, the daemon and the app, still runs on Linux only. On Windows those crates build empty, so the whole workspace builds.
+This is the first step of Guesthouse on Windows: Windows 11 and Ubuntu VMs with GPU-PV, run through Windows' Host Compute System with only the Virtual Machine Platform feature on. Hyper-V isn't needed, so Windows 11 Home can do it, and none of Hyper-V's tools are used. The rest of Guesthouse, the daemon and the GTK app, still runs on Linux only. On Windows those crates build empty, so the whole workspace builds.
 
-`tools/hcs-boot` is the program. `crates/host-windows` is the work it does, which the Guesthouse service will share, and `crates/hcs` is the calls into Windows underneath.
+`tools/hcs-boot` is the program. `crates/host-windows` is the work it does, which the Guesthouse service will share, and `crates/hcs` is the calls into Windows underneath. `crates/app-windows` is the window that will drive the service, as [the app](#the-app) says.
 
 ## What it needs
 
@@ -107,6 +107,21 @@ What a guest writes to its serial port is the one thing on a Windows host that a
 - Its job lets it start no process, keeps it off the desktop and the clipboard, caps its memory, and stops it when `boot` ends. That does what no new privileges does.
 
 The jail's test reads four of these back from Windows inside the jailed process: the AppContainer, and that win32k calls, dynamic code and child processes are refused. The rest are set and not yet read back. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
+
+## The app
+
+`crates/app-windows` is the app for all of this, `guesthouse-app.exe`, a WinUI 3 window made with Microsoft's windows-reactor. It runs as you, with no elevation, and does nothing to a machine itself: it asks the Guesthouse service on its pipe, `\\.\pipe\guesthouse`, in the words in `crates/control`. The service runs as the system, as HCS needs, and keeps every rule. Without it the window says the service isn't running, and asks again every two seconds.
+
+```powershell
+cargo build --release -p guesthouse-app-windows
+.\target\release\guesthouse-app.exe
+```
+
+The first build on a PC downloads the Windows App Runtime from NuGet, and every build copies it beside the exe, so the app needs nothing installed. Copy the whole folder to move it. Every Windows program here carries its C runtime inside it, as `.cargo/config.toml` says, so none needs Visual C++'s runtime on the PC either.
+
+On the left is each machine, with its system and where it stands. A machine's page has Start, Stop and Delete. Stop asks the guest to shut down, and while it does, the button says Stop now, which turns it off at once. Delete asks first, and only a stopped machine can go. The page says whether the machine is set up: its first boot sets it up without the card, and every boot after that has it. It also shows the guest's administrator and password when asked, opens Remote Desktop on a Windows guest's address, and gives the `ssh` line for an Ubuntu guest. Under that is its log, as the service sends it, with problems in red. New machine makes one from an image, and shows the service's progress as it goes.
+
+Closing the window ends the app, and the machines go on as they were. A panic leaves its words in `guesthouse-app\panic.txt` in your temporary folder, as the app has no console.
 
 ## What it doesn't do yet
 

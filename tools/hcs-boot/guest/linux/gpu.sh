@@ -12,6 +12,13 @@ say_each() {
     while IFS= read -r line; do say "$1: $line"; done
 }
 
+# The serial port is the host's window on this guest, and dxgkrnl logs each driver request the host
+# refuses as a kernel error, a handful per nvidia-smi, which is normal over GPU-PV. Only the kernel's
+# critical messages and worse go to the console now. The rest are still in dmesg and the journal,
+# and this script writes to the port itself, so its lines are unaffected.
+printf 'kernel.printk = 3 4 1 3\n' > /etc/sysctl.d/90-guesthouse-console.conf
+sysctl -q -p /etc/sysctl.d/90-guesthouse-console.conf
+
 # Hyper-V's network card, by its driver, so it asks for an address whatever its MAC, which the
 # installer's own settings may be tied to.
 netplan=/etc/netplan/90-guesthouse.yaml

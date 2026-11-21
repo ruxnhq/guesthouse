@@ -15,6 +15,10 @@ pub struct Record {
     pub installer: Option<PathBuf>,
     #[serde(default)]
     pub installed: bool,
+    /// The machine's network card's address, the same at every boot, so the guest's network
+    /// settings and its DHCP lease keep to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
 }
 
 impl Record {
@@ -56,7 +60,12 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         let disk = folder.join("ubuntu.vhdx");
         assert_eq!(Record::load(&disk).unwrap(), Record::default(), "no record is a Windows guest");
-        let record = Record { guest: Guest::Linux, installer: Some(folder.join("u.iso")), installed: false };
+        let record = Record {
+            guest: Guest::Linux,
+            installer: Some(folder.join("u.iso")),
+            installed: false,
+            mac: Some("00-15-5D-00-00-01".into()),
+        };
         record.save(&disk).unwrap();
         assert_eq!(Record::load(&disk).unwrap(), record);
         assert!(fs::read_to_string(Record::path(&disk)).unwrap().contains("\"guest\": \"linux\""));

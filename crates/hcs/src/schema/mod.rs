@@ -277,13 +277,15 @@ impl ModifySettingRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PropertyQuery {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub property_types: Vec<String>,
 }
 
 impl PropertyQuery {
-    /// The machine's state and IDs, which every machine has.
+    /// The machine's state and IDs, which every machine has. That's an empty query: "Basic" is no
+    /// property type of the schema's, and a running machine refuses it as a document that isn't valid.
     pub fn basic() -> Self {
-        PropertyQuery { property_types: vec!["Basic".to_owned()] }
+        PropertyQuery { property_types: Vec::new() }
     }
 }
 

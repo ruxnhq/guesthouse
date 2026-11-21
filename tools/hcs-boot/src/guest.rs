@@ -94,7 +94,7 @@ pub mod linux {
 
     /// Files written to the files disk, by their path on it. The boot menu is in each place
     /// Ubuntu's GRUB may look for it, by the folder it started from or by its own search.
-    pub const FILES: [(&str, &str); 12] = [
+    pub const FILES: [(&str, &str); 13] = [
         (r"EFI\BOOT\grub.cfg", GRUB),
         (r"EFI\ubuntu\grub.cfg", GRUB),
         (r"boot\grub\grub.cfg", GRUB),
@@ -102,6 +102,7 @@ pub mod linux {
         ("user-data", include_str!("../guest/linux/user-data")),
         ("meta-data", include_str!("../guest/linux/meta-data")),
         (r"guesthouse\install.sh", include_str!("../guest/linux/install.sh")),
+        (r"guesthouse\start.sh", include_str!("../guest/linux/start.sh")),
         (r"guesthouse\gpu.sh", include_str!("../guest/linux/gpu.sh")),
         (r"guesthouse\guesthouse-gpu.service", include_str!("../guest/linux/guesthouse-gpu.service")),
         (r"guesthouse\dxgkrnl\build.sh", include_str!("../guest/linux/dxgkrnl/build.sh")),

@@ -58,7 +58,11 @@ pub fn boot(options: &Options) -> Result<(), String> {
             eprintln!("{error}");
         }
     }
-    let record = Record::load(&disk)?;
+    let mut record = Record::load(&disk)?;
+    if record.mac.is_none() {
+        record.mac = Some(network::mac_from(&host::new_guid().map_err(|error| error.to_string())?));
+        record.save(&disk)?;
+    }
     match record.guest {
         Guest::Windows => {
             if let Some(card) = &card {
@@ -74,7 +78,8 @@ pub fn boot(options: &Options) -> Result<(), String> {
     }
     let stop = host::catch_ctrl_c().map_err(|error| error.to_string())?;
 
-    let (_endpoint, adapter) = if options.network { plug_in()? } else { (None, None) };
+    let mac = record.mac.clone().expect("the record has a MAC by now");
+    let (_endpoint, adapter) = if options.network { plug_in(&mac)? } else { (None, None) };
     let machine = machine(options, disk, &record, adapter);
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
@@ -131,13 +136,17 @@ pub fn boot(options: &Options) -> Result<(), String> {
     waited
 }
 
-/// An endpoint on Guesthouse's network, deleted when dropped, and the card that plugs into it.
-fn plug_in() -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
+/// An endpoint on Guesthouse's network, deleted when dropped, and the card with this MAC that plugs
+/// into it.
+fn plug_in(mac: &str) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
     network::ensure_ics_network(&NETWORK_ID, NETWORK_NAME).map_err(|error| error.to_string())?;
     let id = host::new_guid().map_err(|error| error.to_string())?;
-    let mac = network::mac_from(&id);
-    let endpoint = Endpoint::create(&NETWORK_ID, id, &mac).map_err(|error| error.to_string())?;
-    let adapter = NetworkAdapter { endpoint_id: endpoint.id_string(), mac_address: mac };
+    let endpoint = Endpoint::create(&NETWORK_ID, id, mac).map_err(|error| error.to_string())?;
+    match endpoint.properties() {
+        Ok(properties) => println!("The network gave its card: {properties}"),
+        Err(error) => eprintln!("{error}"),
+    }
+    let adapter = NetworkAdapter { endpoint_id: endpoint.id_string(), mac_address: mac.to_owned() };
     Ok((Some(endpoint), Some(adapter)))
 }
 

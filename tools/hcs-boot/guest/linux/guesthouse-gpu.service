@@ -6,7 +6,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh /usr/lib/guesthouse/gpu.sh
+ExecStart=/bin/sh /usr/lib/guesthouse/start.sh
 # The first start may build dxgkrnl, which downloads and compiles.
 TimeoutStartSec=30min
 

@@ -1,11 +1,36 @@
 #!/bin/sh
-# Runs at every start of a Linux guest on a Windows host. It puts the host's GPU files from the
-# files disk at /usr/lib/wsl, where WSL has them, loads dxgkrnl, the guest's half of GPU-PV, building
-# it first if this kernel has none, and says on the serial port what came of it.
+# Runs at every start of a Linux guest on a Windows host. It makes sure the network card asks for an
+# address, puts the host's GPU files from the files disk at /usr/lib/wsl, where WSL has them, loads
+# dxgkrnl, the guest's half of GPU-PV, building it first if this kernel has none, and says on the
+# serial port what came of each.
 set -u
+here=$(dirname "$0")
 say() {
     printf 'guesthouse: %s\n' "$*" > /dev/ttyS0
 }
+say_each() {
+    while IFS= read -r line; do say "$1: $line"; done
+}
+
+# Hyper-V's network card, by its driver, so it asks for an address whatever its MAC, which the
+# installer's own settings may be tied to.
+netplan=/etc/netplan/90-guesthouse.yaml
+if [ ! -f "$netplan" ]; then
+    printf 'network:\n  version: 2\n  ethernets:\n    guesthouse:\n      match:\n        driver: hv_netvsc\n      dhcp4: true\n' > "$netplan"
+    chmod 600 "$netplan"
+    netplan apply 2>&1 | say_each netplan
+fi
+# DHCP may still be answering, so the address gets a minute before anything needs the network.
+waited=0
+while [ "$waited" -lt 60 ] && [ -z "$(ip -4 -o address show scope global)" ]; do
+    sleep 2
+    waited=$((waited + 2))
+done
+ip -o link show | say_each link
+ip -o address show | say_each address
+networkctl --no-legend list 2>&1 | say_each networkctl
+journalctl -b -u systemd-networkd --no-pager -n 15 2>&1 | say_each networkd
+resolvectl dns 2>&1 | say_each dns
 
 files=/run/guesthouse/files
 mkdir -p "$files" /usr/lib/wsl
@@ -22,11 +47,11 @@ ldconfig 2> /dev/null
 if ! modprobe dxgkrnl 2> /dev/null; then
     say "dxgkrnl: building it for $(uname -r)"
     log=/var/log/guesthouse-dxgkrnl.log
-    if sh /usr/lib/guesthouse/dxgkrnl/build.sh > "$log" 2>&1 && modprobe dxgkrnl; then
+    if sh "$here/dxgkrnl/build.sh" > "$log" 2>&1 && modprobe dxgkrnl; then
         say "dxgkrnl: built"
     else
         say "dxgkrnl: the build failed, and its log's end follows"
-        tail -n 30 "$log" | while IFS= read -r line; do say "build: $line"; done
+        tail -n 30 "$log" | say_each build
     fi
 fi
 
@@ -35,9 +60,6 @@ for driver in /usr/lib/wsl/drivers/*; do
     [ -d "$driver" ] && say "host driver: ${driver##*/}"
 done
 if [ -x /usr/lib/wsl/lib/nvidia-smi ]; then
-    /usr/lib/wsl/lib/nvidia-smi -L 2>&1 | while IFS= read -r line; do say "nvidia-smi: $line"; done
+    /usr/lib/wsl/lib/nvidia-smi -L 2>&1 | say_each nvidia-smi
 fi
-ip -4 -o address show scope global | while read -r _ name _ address _; do
-    say "address: $address on $name"
-done
 say "report done"

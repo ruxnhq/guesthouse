@@ -7,7 +7,8 @@ use crate::text::{guid_text, take_co_task, wide};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows_sys::Win32::System::HostComputeNetwork::{
-    HcnCloseEndpoint, HcnCloseNetwork, HcnCreateEndpoint, HcnCreateNetwork, HcnDeleteEndpoint, HcnOpenNetwork,
+    HcnCloseEndpoint, HcnCloseNetwork, HcnCreateEndpoint, HcnCreateNetwork, HcnDeleteEndpoint,
+    HcnOpenEndpoint, HcnOpenNetwork, HcnQueryEndpointProperties,
 };
 use windows_sys::core::PWSTR;
 
@@ -87,6 +88,31 @@ impl Endpoint {
     /// As HCS's machine document names it.
     pub fn id_string(&self) -> String {
         guid_text(&self.id)
+    }
+
+    /// What HCN says of the endpoint, as JSON: the address it gave it and its network's settings.
+    pub fn properties(&self) -> Result<String> {
+        let doing = "Reading the endpoint's settings";
+        let mut endpoint = null_mut();
+        let mut record: PWSTR = null_mut();
+        // SAFETY: the GUID outlives the call, and the other two are places for HCN's answers.
+        let opened = unsafe { HcnOpenEndpoint(&self.id, &mut endpoint, &mut record) };
+        // SAFETY: as in `ensure_ics_network`.
+        let record = unsafe { take_co_task(record) };
+        if opened < 0 {
+            return Err(Error::new(doing, opened, record));
+        }
+        let query = wide("{}");
+        let mut properties: PWSTR = null_mut();
+        let mut record: PWSTR = null_mut();
+        // SAFETY: the endpoint is open, the query ends in a zero, and the rest are places for answers.
+        let asked =
+            unsafe { HcnQueryEndpointProperties(endpoint, query.as_ptr(), &mut properties, &mut record) };
+        // SAFETY: HCN allocates both with the COM allocator for the caller to free.
+        let (properties, record) = unsafe { (take_co_task(properties), take_co_task(record)) };
+        // SAFETY: the handle came from HcnOpenEndpoint and isn't used after this.
+        unsafe { HcnCloseEndpoint(endpoint) };
+        if asked < 0 { Err(Error::new(doing, asked, record)) } else { Ok(properties.unwrap_or_default()) }
     }
 }
 

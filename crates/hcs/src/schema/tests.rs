@@ -154,6 +154,6 @@ fn the_network_documents_use_hcn_names() {
 }
 
 #[test]
-fn a_query_for_basic_properties_names_them() {
-    assert_eq!(serde_json::to_value(PropertyQuery::basic()).unwrap(), json!({"PropertyTypes": ["Basic"]}));
+fn a_query_for_basic_properties_is_empty() {
+    assert_eq!(serde_json::to_value(PropertyQuery::basic()).unwrap(), json!({}));
 }

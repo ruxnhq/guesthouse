@@ -19,6 +19,8 @@ use guesthouse_hcs::gpu::Card;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The folder on the files disk that holds the guest's own scripts.
+const GUEST_SCRIPTS: &str = "guesthouse\\";
 /// Room on the files disk beyond the GPU files, for a driver update that's larger.
 const HEADROOM_BYTES: u64 = BYTES_PER_GB;
 const SMALLEST_FILES_DISK_GB: u64 = 2;
@@ -101,7 +103,7 @@ fn make(
     write(&root, ACCOUNT, &account(&options.user, &password))?;
     refresh(&root, card)?;
 
-    Record { guest: Guest::Linux, installer: Some(iso.to_owned()), installed: false }.save(disk_path)?;
+    Record { guest: Guest::Linux, installer: Some(iso.to_owned()), ..Record::default() }.save(disk_path)?;
     write_account(disk_path, &options.user, &password)?;
     println!(
         "The first boot installs Ubuntu, which takes a while, and then the machine turns itself off. \
@@ -126,6 +128,10 @@ pub fn refresh_disk(files: &Path, card: Option<&Card>) -> Result<(), String> {
 /// The GPU files on the files disk at `root`. WSL's own libraries go first and the driver's on top,
 /// as WSL lays one over the other. Only the card's driver folder is kept, so an old driver's goes.
 fn refresh(root: &Path, card: Option<&Card>) -> Result<(), String> {
+    // The guest runs its scripts from here at every start, so these are always this build's.
+    for (path, text) in FILES.iter().filter(|(path, _)| path.starts_with(GUEST_SCRIPTS)) {
+        write(root, path, &unix_text(text))?;
+    }
     let lib = root.join(WSL_LIB);
     for source in library_folders().into_iter().filter(|folder| folder.is_dir()) {
         let copied = copy_folder(&source, &lib).map_err(|error| error.to_string())?;

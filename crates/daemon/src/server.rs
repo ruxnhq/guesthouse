@@ -210,10 +210,10 @@ impl<B: Backend, M: GuestMemory> Server<B, M> {
                 if now - since < SPIN_LIMIT {
                     return Some(Duration::ZERO);
                 }
-                // With the GPU's interrupts to wake the loop, a fence is looked for when something
-                // says it may have moved, and at this pace otherwise. Without them, the old tight
-                // cadence stands.
-                Some(if self.wake.is_some() { BACKGROUND_POLL } else { FENCE_POLL })
+                // Only the copy channel raises the surface's interrupt, and these fences are the
+                // guest's own channels', which nothing binds: they keep the tight pace whatever the
+                // surface's descriptor is doing for the copies.
+                Some(FENCE_POLL)
             }
         }
     }

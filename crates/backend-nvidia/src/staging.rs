@@ -328,15 +328,18 @@ impl<R: Rm> NvidiaBackend<R> {
     fn retry_copy(&mut self, host: &mut dyn HostServices) -> Result<(), RmError> {
         let mut copier = self.copier.take().expect("a copy is running");
         let mut words = std::mem::take(&mut copier.channel.last_words);
+        // The surface's unbinds name the channel and its unmap the space, so it closes while both
+        // still live: a refused unbind on a dead channel can take the surface's own freeing down
+        // with it.
+        if let Some(mut old) = copier.wakes.take()
+            && let Err(error) = old.close(&mut self.device)
+        {
+            log::warn!("closing the old surface: {error}");
+        }
         if let Some(space) = self.spaces.get(&copier.space)
             && let Err(error) = copier.channel.channel.close(&mut self.device, space)
         {
             log::warn!("closing the old copy channel: {error}");
-        }
-        // The old surface has died with the channel it was bound to, so a new one comes with the
-        // new channel, from the same allocator.
-        if let Some(mut old) = copier.wakes.take() {
-            let _ = old.close(&mut self.device);
         }
         let (mut channel, wakes) = self.make_copy_channel(copier.area, copier.space, host)?;
         copier.wakes = wakes;

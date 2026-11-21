@@ -32,8 +32,8 @@ use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, FreeSid, NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_CAPABILITIES,
+    ACL, DACL_SECURITY_INFORMATION, FreeSid, GetTokenInformation, NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID,
+    SECURITY_CAPABILITIES, TOKEN_QUERY, TokenIsAppContainer,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::JobObjects::{
@@ -44,11 +44,13 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, GetProcessMitigationPolicy,
+    INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken,
+    PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy, ProcessSystemCallDisablePolicy,
+    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject,
 };
 
 /// Process mitigations, by the bits Windows' SDK gives them in the first word of
@@ -233,6 +235,65 @@ impl Jailed {
         // SAFETY: the process handle is open.
         check(unsafe { TerminateProcess(self.process.as_raw_handle(), 1) })
     }
+}
+
+/// What the jail gave the process that asks, read back from Windows rather than taken on trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Applied {
+    pub app_container: bool,
+    pub no_win32k_calls: bool,
+    pub no_dynamic_code: bool,
+    pub no_child_processes: bool,
+}
+
+impl Applied {
+    pub fn whole(&self) -> bool {
+        self.app_container && self.no_win32k_calls && self.no_dynamic_code && self.no_child_processes
+    }
+}
+
+/// What this process got, for a jailed program to check, or to say.
+pub fn applied() -> Applied {
+    Applied {
+        app_container: in_app_container(),
+        // Each policy's first flag is the one that matters here: win32k calls refused, dynamic code
+        // refused, child processes refused.
+        no_win32k_calls: first_flag(ProcessSystemCallDisablePolicy),
+        no_dynamic_code: first_flag(ProcessDynamicCodePolicy),
+        no_child_processes: first_flag(ProcessChildProcessPolicy),
+    }
+}
+
+fn first_flag(policy: i32) -> bool {
+    let mut flags: u32 = 0;
+    // SAFETY: each of these policies is one 32-bit word of flags, and the buffer is that word.
+    let read = unsafe {
+        GetProcessMitigationPolicy(GetCurrentProcess(), policy, (&raw mut flags).cast(), size_of::<u32>())
+    };
+    read != 0 && flags & 1 != 0
+}
+
+fn in_app_container() -> bool {
+    let mut token: HANDLE = null_mut();
+    // SAFETY: the pseudo-handle for this process needs no closing, and `token` is a place for one.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    // SAFETY: OpenProcessToken gave the handle to this process, to own.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut is: u32 = 0;
+    let mut written = 0;
+    // SAFETY: the answer is one 32-bit word, and the buffer is that word.
+    let read = unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenIsAppContainer,
+            (&raw mut is).cast(),
+            size_of::<u32>() as u32,
+            &mut written,
+        )
+    };
+    read != 0 && is != 0
 }
 
 /// An AppContainer's SID, freed when dropped.

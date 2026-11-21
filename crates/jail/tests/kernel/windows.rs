@@ -1,7 +1,7 @@
 //! The case for Windows' jail: the test program runs itself jailed, and from inside it tries what
 //! the jail must allow and what it must refuse.
 
-use guesthouse_jail::windows::{Handles, Jail};
+use guesthouse_jail::windows::{Handles, Jail, applied};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -52,6 +52,7 @@ pub fn main() {
     let code = jailed.wait().unwrap();
     let _ = fs::remove_dir_all(&folder);
 
+    assert!(!applied().whole(), "the test's own process isn't jailed, so the check can tell");
     let passed = code == 0 && said.contains("pong");
     println!("windows jail ... {}", if passed { "ok" } else { "FAILED" });
     assert!(
@@ -65,6 +66,8 @@ fn inside(folder: &Path, port: u16) {
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line).unwrap();
     assert_eq!(line.trim(), "ping", "its own input reaches it");
+    let got = applied();
+    assert!(got.whole(), "Windows says the jail is all there: {got:?}");
 
     assert!(refused(fs::read(folder.join("theirs"))), "a user's file can't be read");
     assert!(refused(fs::write(folder.join("new"), "")), "a user's folder can't be written");

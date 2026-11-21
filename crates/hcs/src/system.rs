@@ -19,6 +19,9 @@ use windows_sys::Win32::System::HostComputeSystem::{
 
 /// HCS's word for waiting as long as it takes.
 const WAIT_FOREVER: u32 = u32::MAX;
+/// How long a question about a machine's state may take. One that's asked over and over, as a
+/// running machine's is, must come back even when HCS doesn't answer, so its asker can go on.
+const STATE_WAIT_MS: u32 = 5000;
 
 /// One call's handle, which HCS fills with the call's result.
 struct Operation(HCS_OPERATION);
@@ -32,11 +35,11 @@ impl Operation {
 
     /// Waits for the call that was started with this operation, given what starting it returned.
     /// The document HCS answers with, if any, comes back either way.
-    fn finish(self, started: i32, doing: &str) -> Result<Option<String>> {
+    fn finish(self, started: i32, doing: &str, wait_ms: u32) -> Result<Option<String>> {
         check(started, doing)?;
         let mut answer = null_mut();
         // SAFETY: the operation is ours and open, and `answer` is a place for HCS's string.
-        let code = unsafe { HcsWaitForOperationResult(self.0, WAIT_FOREVER, &mut answer) };
+        let code = unsafe { HcsWaitForOperationResult(self.0, wait_ms, &mut answer) };
         // SAFETY: HCS allocates its answer with LocalAlloc for the caller to free.
         let answer = unsafe { take_local(answer) };
         if code < 0 { Err(Error::new(doing, code, answer)) } else { Ok(answer) }
@@ -71,7 +74,7 @@ impl ComputeSystem {
         };
         // Built before the wait, so the handle is closed even if creating fails after HCS gave one.
         let system = (!handle.is_null()).then(|| ComputeSystem { handle, id: id.to_owned() });
-        operation.finish(started, &doing)?;
+        operation.finish(started, &doing, WAIT_FOREVER)?;
         system.ok_or_else(|| Error::new(doing, -1, Some("HCS gave no handle".into())))
     }
 
@@ -126,7 +129,7 @@ impl ComputeSystem {
 
     pub fn properties(&self) -> Result<Properties> {
         let query = wide(serde_json::to_string(&PropertyQuery::basic()).expect("a query always serialises"));
-        let answer = self.call("Reading the state of", |handle, operation| {
+        let answer = self.call_waiting("Reading the state of", STATE_WAIT_MS, |handle, operation| {
             // SAFETY: the query ends in a zero and outlives the call.
             unsafe { HcsGetComputeSystemProperties(handle, operation, query.as_ptr()) }
         })?;
@@ -143,10 +146,20 @@ impl ComputeSystem {
         doing: &str,
         start: impl FnOnce(HCS_SYSTEM, HCS_OPERATION) -> i32,
     ) -> Result<Option<String>> {
+        self.call_waiting(doing, WAIT_FOREVER, start)
+    }
+
+    /// As `call`, giving up after `wait_ms`. Closing the operation then cancels the call.
+    fn call_waiting(
+        &self,
+        doing: &str,
+        wait_ms: u32,
+        start: impl FnOnce(HCS_SYSTEM, HCS_OPERATION) -> i32,
+    ) -> Result<Option<String>> {
         let doing = format!("{doing} the machine {}", self.id);
         let operation = Operation::new(&doing)?;
         let started = start(self.handle, operation.0);
-        operation.finish(started, &doing)
+        operation.finish(started, &doing, wait_ms)
     }
 }
 

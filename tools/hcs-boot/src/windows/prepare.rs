@@ -68,10 +68,11 @@ fn image_file(image: &Path) -> Result<(Option<VirtualDisk>, PathBuf), String> {
     }
     let mut iso = VirtualDisk::open(image, Kind::Iso).map_err(|error| error.to_string())?;
     iso.attach(true).map_err(|error| error.to_string())?;
+    // DISM is given the drive letter Windows gave the ISO, and the volume's own path only without one.
     let root = volumes(&iso)?
         .into_iter()
         .next()
-        .map(|volume| volume.root)
+        .map(|volume| volume.mount_points.into_iter().next().unwrap_or(volume.root))
         .ok_or_else(|| format!("Windows showed no volume for {}.", image.display()))?;
     let wim = ["install.wim", "install.esd"]
         .iter()

@@ -283,7 +283,7 @@ pub struct PropertyQuery {
 impl PropertyQuery {
     /// The machine's state and IDs, which every machine has.
     pub fn basic() -> Self {
-        PropertyQuery { property_types: Vec::new() }
+        PropertyQuery { property_types: vec!["Basic".to_owned()] }
     }
 }
 
@@ -301,11 +301,20 @@ pub struct Properties {
     pub stopped: bool,
     #[serde(default)]
     pub exit_type: String,
+    /// HCS's whole answer, as it was.
+    #[serde(skip)]
+    pub raw: String,
 }
 
 impl Properties {
     pub fn running(&self) -> bool {
         self.state == "Running"
+    }
+
+    /// Whether the answer says the machine has stopped. An answer that names no state says
+    /// nothing either way.
+    pub fn stopped(&self) -> bool {
+        self.stopped || (!self.state.is_empty() && !self.running())
     }
 }
 

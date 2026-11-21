@@ -3,7 +3,7 @@
 
 use crate::error::{Error, Result};
 use crate::schema::network::{Endpoint as EndpointDocument, NETWORK_SCHEMA_VERSION, Network};
-use crate::text::{guid_text, take_local, wide};
+use crate::text::{guid_text, take_co_task, wide};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use windows_sys::Win32::System::HostComputeNetwork::{
@@ -21,8 +21,8 @@ pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
     let mut record: PWSTR = null_mut();
     // SAFETY: `id` is a GUID that outlives the call, and the other two are places for HCN's answers.
     let opened = unsafe { HcnOpenNetwork(id, &mut network, &mut record) };
-    // SAFETY: HCN allocates its error record with LocalAlloc for the caller to free.
-    drop(unsafe { take_local(record) });
+    // SAFETY: HCN allocates its error record with the COM allocator for the caller to free.
+    drop(unsafe { take_co_task(record) });
     if opened >= 0 {
         close_network(network);
         return Ok(());
@@ -33,7 +33,7 @@ pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
     // SAFETY: as above, and the settings end in a zero and outlive the call.
     let created = unsafe { HcnCreateNetwork(id, settings.as_ptr(), &mut network, &mut record) };
     // SAFETY: as above.
-    let record = unsafe { take_local(record) };
+    let record = unsafe { take_co_task(record) };
     if created < 0 {
         return Err(Error::new(format!("Making the network {name}"), created, record));
     }
@@ -55,7 +55,7 @@ impl Endpoint {
         // SAFETY: as in `ensure_ics_network`.
         let opened = unsafe { HcnOpenNetwork(network_id, &mut network, &mut record) };
         // SAFETY: as in `ensure_ics_network`.
-        let record = unsafe { take_local(record) };
+        let record = unsafe { take_co_task(record) };
         if opened < 0 {
             return Err(Error::new(doing, opened, record));
         }
@@ -73,7 +73,7 @@ impl Endpoint {
         let created =
             unsafe { HcnCreateEndpoint(network, &id, settings.as_ptr(), &mut endpoint, &mut record) };
         // SAFETY: as in `ensure_ics_network`.
-        let record = unsafe { take_local(record) };
+        let record = unsafe { take_co_task(record) };
         close_network(network);
         if created < 0 {
             return Err(Error::new(doing, created, record));
@@ -96,7 +96,7 @@ impl Drop for Endpoint {
         // SAFETY: the GUID outlives the call, and `record` is a place for HCN's answer.
         unsafe { HcnDeleteEndpoint(&self.id, &mut record) };
         // SAFETY: as in `ensure_ics_network`.
-        drop(unsafe { take_local(record) });
+        drop(unsafe { take_co_task(record) });
     }
 }
 

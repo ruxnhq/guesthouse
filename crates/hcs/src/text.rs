@@ -3,6 +3,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::core::{GUID, PWSTR};
 
 /// A string as Windows takes it: UTF-16, ending in a zero.
@@ -16,12 +17,35 @@ pub(crate) fn from_wide(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-/// Takes a string Windows allocated with LocalAlloc for its caller to free, as HCS and HCN do for
-/// their answers, and frees it.
+/// Takes a string HCS allocated with LocalAlloc for its caller to free, as it does for its answers,
+/// and frees it.
 ///
 /// # Safety
 /// `text` is null or a zero-ended string from LocalAlloc that nothing else will free.
 pub(crate) unsafe fn take_local(text: PWSTR) -> Option<String> {
+    // SAFETY: the caller's promise is passed on.
+    let owned = unsafe { read(text) }?;
+    // SAFETY: the caller says the string came from LocalAlloc and is ours to free.
+    unsafe { LocalFree(text.cast()) };
+    Some(owned)
+}
+
+/// Takes a string HCN allocated with the COM allocator, as it does for its error records, and
+/// frees it.
+///
+/// # Safety
+/// `text` is null or a zero-ended string from CoTaskMemAlloc that nothing else will free.
+pub(crate) unsafe fn take_co_task(text: PWSTR) -> Option<String> {
+    // SAFETY: the caller's promise is passed on.
+    let owned = unsafe { read(text) }?;
+    // SAFETY: the caller says the string came from the COM allocator and is ours to free.
+    unsafe { CoTaskMemFree(text.cast()) };
+    Some(owned)
+}
+
+/// # Safety
+/// `text` is null or a zero-ended string.
+unsafe fn read(text: PWSTR) -> Option<String> {
     if text.is_null() {
         return None;
     }
@@ -31,10 +55,7 @@ pub(crate) unsafe fn take_local(text: PWSTR) -> Option<String> {
         length += 1;
     }
     // SAFETY: the `length` units before the zero were just read one by one.
-    let owned = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-    // SAFETY: the caller says the string came from LocalAlloc and is ours to free.
-    unsafe { LocalFree(text.cast()) };
-    Some(owned)
+    Some(String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) }))
 }
 
 /// A GUID as HCS and HCN write one: lower case, with no braces.

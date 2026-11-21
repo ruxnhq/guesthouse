@@ -51,10 +51,10 @@ cargo build --release -p guesthouse-hcs-boot
 .\target\release\guesthouse-hcs-boot.exe boot --disk D:\vms\win11.vhdx
 ```
 
-The first start takes a few minutes, as Windows sets itself up. Then lines like these show the card working:
+The first start takes a few minutes, as Windows sets itself up. Lines like these are what to look for, the first saying the guest has the card and its driver:
 
 ```
-guest: guesthouse: card: NVIDIA GeForce RTX 5090, driver 32.0.16.2135, status OK
+guest: guesthouse: card: NVIDIA GeForce RTX 5090, driver 32.0.16.xxxx, status OK
 guest: guesthouse: nvidia-smi: GPU 0: NVIDIA GeForce RTX 5090 (UUID: ...)
 guest: guesthouse: address: 172.24.80.12
 ```

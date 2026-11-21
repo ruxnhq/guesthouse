@@ -131,9 +131,11 @@ impl ComputeSystem {
             unsafe { HcsGetComputeSystemProperties(handle, operation, query.as_ptr()) }
         })?;
         let answer = answer.unwrap_or_default();
-        serde_json::from_str(&answer).map_err(|error| {
+        let mut properties: Properties = serde_json::from_str(&answer).map_err(|error| {
             Error::new(format!("Reading the state of {}", self.id), -1, Some(format!("{error}: {answer}")))
-        })
+        })?;
+        properties.raw = answer;
+        Ok(properties)
     }
 
     fn call(

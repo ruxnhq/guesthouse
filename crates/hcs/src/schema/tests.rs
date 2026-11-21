@@ -124,10 +124,12 @@ fn properties_read_the_state_and_ignore_the_rest() {
     let answer = r#"{"Id":"a","SystemType":"VirtualMachine","Name":"a","Owner":"guesthouse",
         "RuntimeId":"6a7f3c3e-0000-0000-0000-000000000000","State":"Running","Stopped":false}"#;
     let properties: Properties = serde_json::from_str(answer).unwrap();
-    assert!(properties.running());
+    assert!(properties.running() && !properties.stopped());
     assert_eq!(properties.runtime_id, "6a7f3c3e-0000-0000-0000-000000000000");
     let stopped: Properties = serde_json::from_str(r#"{"State":"Stopped","Stopped":true}"#).unwrap();
-    assert!(!stopped.running());
+    assert!(!stopped.running() && stopped.stopped());
+    let silent: Properties = serde_json::from_str(r#"{"Id":"a"}"#).unwrap();
+    assert!(!silent.stopped());
 }
 
 #[test]
@@ -152,6 +154,6 @@ fn the_network_documents_use_hcn_names() {
 }
 
 #[test]
-fn a_query_for_basic_properties_names_no_types() {
-    assert_eq!(serde_json::to_value(PropertyQuery::basic()).unwrap(), json!({"PropertyTypes": []}));
+fn a_query_for_basic_properties_names_them() {
+    assert_eq!(serde_json::to_value(PropertyQuery::basic()).unwrap(), json!({"PropertyTypes": ["Basic"]}));
 }

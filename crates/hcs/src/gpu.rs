@@ -7,12 +7,13 @@ use crate::text::{from_wide, wide};
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CR_SUCCESS, DICS_FLAG_GLOBAL, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, DIREG_DRV,
-    GUID_DEVCLASS_DISPLAY, HDEVINFO, MAX_DEVICE_ID_LEN, SETUP_DI_REGISTRY_PROPERTY, SP_DEVICE_INTERFACE_DATA,
-    SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SPDRP_SERVICE,
-    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInterfaceDetailW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
-    SetupGetInfDriverStoreLocationW,
+    CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_IDW, CM_Get_Device_Interface_List_SizeW,
+    CM_Get_Device_Interface_ListW, CR_SUCCESS, DICS_FLAG_GLOBAL, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
+    DIREG_DRV, GUID_DEVCLASS_DISPLAY, HDEVINFO, MAX_DEVICE_ID_LEN, SETUP_DI_REGISTRY_PROPERTY,
+    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA, SPDRP_DEVICEDESC,
+    SPDRP_FRIENDLYNAME, SPDRP_SERVICE, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces,
+    SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW, SetupDiGetDeviceRegistryPropertyW,
+    SetupDiOpenDevRegKey, SetupGetInfDriverStoreLocationW,
 };
 use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, MAX_PATH};
 use windows_sys::Win32::System::Registry::{KEY_READ, RegCloseKey, RegQueryValueExW};
@@ -100,7 +101,7 @@ impl DeviceSet {
             DevInst: 0,
             Reserved: 0,
         };
-        let interface_path = self.interface_path(interface, &mut device)?;
+        let setup_path = self.interface_path(interface, &mut device)?;
         if !same_guid(&device.ClassGuid, &GUID_DEVCLASS_DISPLAY) {
             return None;
         }
@@ -111,6 +112,7 @@ impl DeviceSet {
         {
             return None;
         }
+        let interface_path = configured_path(&instance, &setup_path)?;
         let name = self
             .property(&device, SPDRP_FRIENDLYNAME)
             .or_else(|| self.property(&device, SPDRP_DEVICEDESC))
@@ -219,4 +221,41 @@ impl DeviceSet {
 
 fn same_guid(a: &GUID, b: &GUID) -> bool {
     (a.data1, a.data2, a.data3, a.data4) == (b.data1, b.data2, b.data3, b.data4)
+}
+
+/// The interface's path as the configuration manager spells it, which is the spelling HCS knows.
+/// SetupAPI gives the same path in lower case, and the two are matched ignoring case.
+fn configured_path(instance: &[u16], setup_path: &str) -> Option<String> {
+    let mut units = 0;
+    // SAFETY: the GUID and the instance ID, which ends in a zero, outlive the call.
+    let sized = unsafe {
+        CM_Get_Device_Interface_List_SizeW(
+            &mut units,
+            &GPU_PARTITION_ADAPTER,
+            instance.as_ptr(),
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        )
+    };
+    if sized != CR_SUCCESS || units < 2 {
+        return None;
+    }
+    let mut list = vec![0u16; units as usize];
+    // SAFETY: as above, and the buffer is as long as the count given.
+    let listed = unsafe {
+        CM_Get_Device_Interface_ListW(
+            &GPU_PARTITION_ADAPTER,
+            instance.as_ptr(),
+            list.as_mut_ptr(),
+            units,
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        )
+    };
+    if listed != CR_SUCCESS {
+        return None;
+    }
+    // A list of strings, each ending in a zero, with one more zero at the end.
+    list.split(|&unit| unit == 0)
+        .take_while(|part| !part.is_empty())
+        .map(from_wide)
+        .find(|path| path.eq_ignore_ascii_case(setup_path))
 }

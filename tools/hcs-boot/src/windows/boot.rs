@@ -21,6 +21,8 @@ const NETWORK_NAME: &str = "Guesthouse";
 const POLL: Duration = Duration::from_secs(1);
 /// How long the guest's serial port may take to appear once the machine starts.
 const SERIAL_SECONDS: u64 = 30;
+/// While the machine's state can't be read, the reason is told once in this many tries.
+const UNREADABLE_REPEAT: u32 = 60;
 
 pub fn boot(options: &Options) -> Result<(), String> {
     need_elevation()?;
@@ -29,6 +31,14 @@ pub fn boot(options: &Options) -> Result<(), String> {
         return Err(format!("There is no disk at {}. prepare makes one.", disk.display()));
     }
     let card = chosen_card(options)?;
+    // A machine left from an earlier run still has the disk open, so it goes before the disk is
+    // attached for the driver.
+    if let Some(earlier) = ComputeSystem::open(&options.name) {
+        println!("A machine called {} is still there from an earlier run. Stopping it.", options.name);
+        if let Err(error) = earlier.terminate() {
+            eprintln!("{error}");
+        }
+    }
     if let Some(card) = &card {
         copy_driver_to_disk(&disk, card)?;
     }
@@ -42,10 +52,6 @@ pub fn boot(options: &Options) -> Result<(), String> {
         system::grant_vm_access(&machine.name, path).map_err(|error| error.to_string())?;
     }
 
-    if let Some(earlier) = ComputeSystem::open(&machine.name) {
-        println!("A machine called {} is still there from an earlier run. Stopping it.", machine.name);
-        let _ = earlier.terminate();
-    }
     let document = machine.document();
     let running = ComputeSystem::create(&machine.name, &document).map_err(|error| {
         let sent = serde_json::to_string_pretty(&document).unwrap_or_default();
@@ -78,14 +84,22 @@ fn plug_in() -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
     Ok((Some(endpoint), Some(adapter)))
 }
 
+/// Waits for the machine to stop. Returning closes the last handle, which stops the machine, so only
+/// an answer that says it has stopped, or a second Ctrl+C, ends this: an answer that can't be read
+/// is told and waited past.
 fn wait(running: &ComputeSystem, stop: &std::sync::atomic::AtomicBool) -> Result<(), String> {
     let mut asked = false;
+    let mut first_answer = true;
+    let mut unreadable = 0u32;
     loop {
         thread::sleep(POLL);
         if stop.swap(false, Ordering::SeqCst) {
             if asked {
                 println!("Stopping it now.");
-                running.terminate().map_err(|error| error.to_string())?;
+                if let Err(error) = running.terminate() {
+                    eprintln!("{error}");
+                }
+                return Ok(());
             } else {
                 asked = true;
                 println!("Asking the guest to shut down. Ctrl+C again stops it at once.");
@@ -101,15 +115,22 @@ fn wait(running: &ComputeSystem, stop: &std::sync::atomic::AtomicBool) -> Result
             }
         }
         match running.properties() {
-            Ok(properties) if properties.running() => {}
             Ok(properties) => {
-                println!("The machine stopped: {} {}", properties.state, properties.exit_type);
-                return Ok(());
+                if first_answer {
+                    println!("HCS says: {}", properties.raw);
+                    first_answer = false;
+                }
+                unreadable = 0;
+                if properties.stopped() {
+                    println!("The machine stopped: {} {}", properties.state, properties.exit_type);
+                    return Ok(());
+                }
             }
-            // Once the machine has gone, HCS may no longer answer for it at all.
             Err(error) => {
-                println!("The machine has gone: {error}");
-                return Ok(());
+                if unreadable.is_multiple_of(UNREADABLE_REPEAT) {
+                    eprintln!("The machine's state can't be read, so it's left running: {error}");
+                }
+                unreadable += 1;
             }
         }
     }

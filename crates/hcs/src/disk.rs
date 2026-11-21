@@ -341,6 +341,13 @@ fn mount_points(volume_name: &[u16]) -> Vec<PathBuf> {
 mod tests {
     use super::*;
 
+    /// The host's first disk is a real one on nearly every PC, so this is run by hand only.
+    #[test]
+    #[ignore = "reads the host's own first disk"]
+    fn the_hosts_first_disk_is_not_a_file() {
+        assert!(!is_file_backed(0).unwrap());
+    }
+
     #[test]
     fn a_device_number_is_read_from_the_end_of_its_path() {
         assert_eq!(device_number_in(r"\\.\PhysicalDrive3"), Some(3));

@@ -1,8 +1,32 @@
 # Says what the guest sees of its GPU and network, so the host can read it with no screen. Each line
 # goes to a file on the guest's own disk, which the host reads once the machine has stopped, and to
 # the first serial port too if there is one, which the host prints while the guest runs. It runs as
-# SYSTEM at every start, from the task SetupComplete.cmd makes.
+# SYSTEM at every start, from a task of its own, which SetupComplete.cmd has it register with
+# -Register.
+param([switch]$Register)
 $ErrorActionPreference = 'Continue'
+
+# The task starts it at every start, whatever the guest's clock says and with no rule about
+# batteries. schtasks /sc onstart gives a task the time it was made as its start, and a guest's
+# clock can be hours behind when it starts, which kept the report from running at all; and a
+# guest can see the host's battery. A guest made before this has such a task, so the report puts
+# it right whenever it runs.
+$taskName = 'Guesthouse report'
+$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$wrong = -not $task -or ($task.Triggers | Where-Object { $_.StartBoundary }) -or
+    $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries
+if ($wrong) {
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Guesthouse\report.ps1'
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+}
+if ($Register) {
+    Start-ScheduledTask -TaskName $taskName
+    exit 0
+}
+
 $report = 'C:\Guesthouse\report.txt'
 Set-Content -LiteralPath $report -Value "started $(Get-Date -Format o)" -Encoding utf8
 

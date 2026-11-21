@@ -140,7 +140,15 @@ cargo build --release -p guesthouse-app-windows
 
 The first build on a PC downloads the Windows App Runtime from NuGet, and every build copies it beside the exe, so the app needs nothing installed. Copy the whole folder to move it. Every Windows program here carries its C runtime inside it, as `.cargo/config.toml` says, so none needs Visual C++'s runtime on the PC either.
 
-On the left is each machine, with its system and where it stands. A machine's page has Start, Stop and Delete. Stop asks the guest to shut down, and while it does, the button says Stop now, which turns it off at once. Delete asks first, and only a stopped machine can go. The page says whether the machine is set up: its first boot sets it up without the card, and every boot after that has it. It also shows the guest's administrator and password when asked, opens Remote Desktop on a Windows guest's address, and gives the `ssh` line for an Ubuntu guest. Under that is its log, as the service sends it, with problems in red. New machine makes one from an image, and shows the service's progress as it goes.
+On the left is each machine, with its system and a dot for where it stands: green running, amber on its way, grey stopped. A machine's page has Start and Stop at its top, and Delete under More. Stop asks the guest to shut down, and while it does, the button says Stop now, which turns it off at once. Delete asks first, and only a stopped machine can go. Below that are its Status, Connect and Details. Status says whether the machine is set up: its first boot sets it up without the card, and every boot after that has it. Connect shows the guest's administrator and password when asked, opens Remote Desktop on a Windows guest's address, and gives the `ssh` line for an Ubuntu guest. Under that is its log, as the service sends it, with problems marked in red. New machine makes one from an image, and shows the service's progress as it goes.
+
+A build with the `preview` feature shows made-up machines instead of the service's, so each of the window's states can be looked at, light or dark, with no service and no GPU. It never reaches the service. `src/app/preview.rs` lists the states:
+
+```powershell
+cargo build -p guesthouse-app-windows --features preview
+$env:GUESTHOUSE_APP_PREVIEW = "running"; $env:GUESTHOUSE_APP_THEME = "light"
+.\target\debug\guesthouse-app.exe
+```
 
 Closing the window ends the app, and the machines go on as they were. A panic leaves its words in `guesthouse-app\panic.txt` in your temporary folder, as the app has no console.
 

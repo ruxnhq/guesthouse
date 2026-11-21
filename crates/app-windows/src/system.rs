@@ -118,10 +118,38 @@ pub fn remote_desktop(address: &str) -> Result<(), String> {
         .map_err(|error| format!("Remote Desktop didn't open: {error}"))
 }
 
+/// The exe's icon, as make-icon.ps1 draws it: a PNG for each size.
+const ICON: &[u8] = include_bytes!("../assets/guesthouse.ico");
+/// An icon file's header: where it says how many sizes follow, and its length. Each size's entry
+/// after it has its width (one byte, as is its height), and where its picture is in the file and
+/// how long, as little-endian u32s.
+const ICON_COUNT_AT: usize = 4;
+const ICON_HEADER: usize = 6;
+const ICON_ENTRY: usize = 16;
+const ENTRY_WIDTH_AT: usize = 0;
+const ENTRY_LENGTH_AT: usize = 8;
+const ENTRY_OFFSET_AT: usize = 12;
+
+/// One size of the icon, as a PNG. The small ones are drawn plainer than the SVG, so they stay
+/// clear at a title bar's size, and they're the same picture the taskbar shows.
+pub fn icon_frame(size: u8) -> Option<&'static [u8]> {
+    let field = |at: usize, len: usize| ICON.get(at..at + len);
+    let word = |bytes: &[u8], at: usize| -> Option<usize> {
+        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize)
+    };
+    let count = u16::from_le_bytes(field(ICON_COUNT_AT, 2)?.try_into().ok()?) as usize;
+    (0..count).find_map(|n| {
+        let entry = field(ICON_HEADER + n * ICON_ENTRY, ICON_ENTRY)?;
+        if entry[ENTRY_WIDTH_AT] != size {
+            return None;
+        }
+        field(word(entry, ENTRY_OFFSET_AT)?, word(entry, ENTRY_LENGTH_AT)?)
+    })
+}
+
 /// The window's icon, which WinUI takes as a file: written once into this user's temporary folder,
 /// as it's part of the exe and nothing ships beside it.
 pub fn icon_file() -> Option<String> {
-    const ICON: &[u8] = include_bytes!("../assets/guesthouse.ico");
     let folder = std::env::temp_dir().join("guesthouse-app");
     let path = folder.join("guesthouse.ico");
     if std::fs::read(&path).ok().as_deref() != Some(ICON) {

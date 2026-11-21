@@ -3,6 +3,9 @@
 //!
 //! The window is the whole app, so it's a single component, run as the root. Closing it ends the
 //! app, and the machines go on as they are, since the service runs them.
+//!
+//! A build with the `preview` feature can show made-up machines instead, for looking at the
+//! window's states without a service: see app/preview.rs.
 
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -10,10 +13,13 @@ use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use guesthouse_control::client::Unreached;
-use guesthouse_control::{Answer, Card, Event, Machine, NewMachine, State, valid_name};
+use guesthouse_control::{Answer, Card, CardInfo, Event, Machine, NewMachine, State, valid_name};
 use windows_reactor::*;
 
 use crate::bridge::{self, Ended, Job, Seen, Watch, Window};
+
+#[cfg(feature = "preview")]
+mod preview;
 
 /// The most lines a log keeps. The oldest go first.
 const LOG_LIMIT: usize = 500;
@@ -28,6 +34,24 @@ pub struct Start {
     /// The service's first answer, asked before the window opens, so the window doesn't start out
     /// saying the service isn't running.
     pub first: Seen,
+}
+
+impl Start {
+    pub fn new() -> Start {
+        // A preview never reaches the service, not even to ask how things stand.
+        if !live() {
+            return Start { first: Err(String::new()) };
+        }
+        Start { first: bridge::status() }
+    }
+}
+
+/// Whether the machines shown are the service's, which they are but in a preview.
+fn live() -> bool {
+    #[cfg(feature = "preview")]
+    return !preview::wanted();
+    #[cfg(not(feature = "preview"))]
+    true
 }
 
 /// What the right side shows.
@@ -181,7 +205,17 @@ pub struct Main {
     /// The window's handle, for the file dialog and the clipboard.
     hwnd: isize,
     pub icon: Option<Rc<str>>,
+    /// Light or dark, or as Windows is. Only a preview chooses.
+    pub theme: WindowTheme,
+    /// Whether the machines are the service's. A preview's aren't, and nothing is asked of it.
+    live: bool,
 }
+
+/// The key of Delete in a machine's More menu.
+pub const DELETE_KEY: &str = "delete";
+
+/// The tag of the navigation's New machine item. It has a space, which no machine's name can.
+pub const NEW_TAG: &str = " new";
 
 #[derive(Clone)]
 pub enum Message {
@@ -192,12 +226,13 @@ pub enum Message {
     WatchEnded(u64, Ended),
     Creating(Event),
     Created(Option<String>),
-    /// A row of the list was chosen, by its place in the list.
-    Select(Option<usize>),
+    /// An item of the navigation was chosen, by its tag: a machine's name, or `NEW_TAG`.
+    Navigate(Option<String>),
     NewMachine,
     Start,
     Stop,
-    Delete,
+    /// An item of a machine's More menu, by its key.
+    More(Option<String>),
     DeleteAnswered(ContentDialogResult),
     SignIn,
     RemoteDesktop,
@@ -236,6 +271,11 @@ impl Main {
         self.making.as_ref().is_some_and(|making| making.ended.is_none())
     }
 
+    /// The cards the service offers, as it last said.
+    pub fn cards(&self) -> &[CardInfo] {
+        self.status().map(|status| status.cards.as_slice()).unwrap_or_default()
+    }
+
     /// The cards the form offers, in the list's order.
     pub fn card_choices(&self) -> Vec<Card> {
         let named = self.status().into_iter().flat_map(|status| &status.cards);
@@ -248,6 +288,9 @@ impl Main {
     }
 
     fn ask(&mut self, job: impl FnOnce(String) -> Job) {
+        if !self.live {
+            return;
+        }
         if let Some(name) = self.selected.clone() {
             // The thread only goes when the window does, so this can't fail while it's open.
             let _ = self.jobs.send(job(name));
@@ -261,7 +304,7 @@ impl Main {
         self.rewatch = false;
         self.log.clear();
         self.account = None;
-        if let Some(name) = self.selected.clone() {
+        if let Some(name) = self.selected.clone().filter(|_| self.live) {
             self.watch_id += 1;
             self.watch = Some(bridge::watch(self.watch_id, name, self.window.clone()));
         }
@@ -322,7 +365,7 @@ impl Main {
     }
 
     fn create(&mut self) {
-        if self.busy() {
+        if self.busy() || !self.live {
             return;
         }
         let Some(machine) = self.form.machine() else { return };
@@ -331,7 +374,7 @@ impl Main {
     }
 
     fn remote_desktop(&mut self) {
-        let Some(address) = self.machine().and_then(address) else { return };
+        let Some(address) = self.machine().and_then(address).filter(|_| self.live) else { return };
         if let Err(words) = crate::system::remote_desktop(&address.to_string()) {
             self.tell(words, true);
         }
@@ -365,7 +408,9 @@ impl Component for Main {
     fn create(start: &Start, context: &ComponentContext<Self>) -> Self {
         let _ = context.run_window(|window| Message::Hwnd(window.as_raw() as isize));
         let window = Window(context.completion());
-        let jobs = bridge::start(window.clone());
+        let live = live();
+        // A preview's calls go nowhere, as nothing takes them.
+        let jobs = if live { bridge::start(window.clone()) } else { std::sync::mpsc::channel().0 };
         let mut main = Main {
             seen: Err(Unreached::NoService.words().to_owned()),
             page: Page::Machine,
@@ -383,7 +428,14 @@ impl Component for Main {
             window,
             hwnd: 0,
             icon: crate::system::icon_file().map(Rc::from),
+            theme: WindowTheme::System,
+            live,
         };
+        #[cfg(feature = "preview")]
+        if !live {
+            preview::stage(&mut main);
+            return main;
+        }
         main.take_status(start.first.clone());
         main
     }
@@ -408,22 +460,28 @@ impl Component for Main {
                     making.ended = Some(ended);
                 }
             }
-            Message::Select(Some(index)) => {
-                let name =
-                    self.status().and_then(|status| status.machines.get(index)).map(|m| m.name.clone());
-                if let Some(name) = name {
+            Message::Navigate(Some(tag)) if tag == NEW_TAG => self.page = Page::New,
+            Message::Navigate(Some(name)) => {
+                let known =
+                    self.status().is_some_and(|status| status.machines.iter().any(|m| m.name == name));
+                if known {
                     self.page = Page::Machine;
-                    // The list says what's selected whenever it's drawn, so only a new choice counts.
+                    // The navigation says what's selected whenever it's drawn, so only a new choice
+                    // counts.
                     if self.selected.as_ref() != Some(&name) {
                         self.select(Some(name));
                     }
                 }
             }
-            Message::Select(None) => {}
+            Message::Navigate(None) => {}
             Message::NewMachine => self.page = Page::New,
             Message::Start => self.ask(Job::Start),
             Message::Stop => self.ask(Job::Stop),
-            Message::Delete => self.deleting = self.selected.clone(),
+            Message::More(key) => {
+                if key.as_deref() == Some(DELETE_KEY) {
+                    self.deleting = self.selected.clone();
+                }
+            }
             Message::DeleteAnswered(result) => {
                 if let Some(name) = self.deleting.take()
                     && result == ContentDialogResult::Primary

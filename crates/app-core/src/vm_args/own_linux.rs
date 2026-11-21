@@ -160,7 +160,7 @@ mod tests {
         };
         let plan = VmPlan { jail: Some(jail), ..plan };
         let command = plan.qemu_command();
-        assert_eq!(command[0], "bwrap");
+        assert_eq!(command[0], crate::vm_args::program_word("bwrap"));
         let launcher = command.iter().rposition(|word| word == "/p/guesthouse-jail").unwrap();
         assert_eq!(&command[launcher - 3..launcher], ["setarch", "x86_64", "-L"]);
         let rules = plan.qemu_jail_plan(plan.jail.as_ref().unwrap());

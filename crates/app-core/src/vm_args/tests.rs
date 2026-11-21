@@ -380,3 +380,10 @@ fn standalone_keeps_the_drives_and_opens_them_by_name() {
     ));
     assert!(!arguments.iter().any(|word| word == "-add-fd" || word.contains("fdset")));
 }
+
+#[test]
+fn a_program_for_a_cleared_environment_is_given_by_where_path_finds_it() {
+    let shell = program_word("sh");
+    assert!(shell.starts_with('/') && shell.ends_with("/sh"), "{shell}");
+    assert_eq!(program_word("no-such-program-here"), "no-such-program-here");
+}

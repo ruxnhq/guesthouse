@@ -263,6 +263,16 @@ fn qemu_with_no_display_says_what_to_install() {
     assert_eq!(super::local::start_failure("it broke"), "The VM did not start. it broke");
 }
 
+/// A NixOS tester saw only "No such file or directory (os error 2)", which didn't say what was missing.
+#[test]
+fn a_program_that_cant_be_run_is_named() {
+    let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert_eq!(super::local::not_run("bwrap", &missing).0, "The VM did not start: bwrap wasn't found.");
+    let refused = std::io::Error::from_raw_os_error(13);
+    let said = super::local::not_run("/p/guesthouse-jail", &refused).0;
+    assert!(said.starts_with("The VM did not start: /p/guesthouse-jail couldn't be run. "), "{said}");
+}
+
 #[test]
 fn no_qemu_at_all_says_so() {
     let scratch = Scratch::new();

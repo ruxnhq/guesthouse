@@ -129,7 +129,8 @@ impl LocalHost<'_> {
             .stdin(Stdio::null())
             .stdout(output.try_clone()?)
             .stderr(output)
-            .spawn()?;
+            .spawn()
+            .map_err(|error| not_run(program, &error))?;
         Ok(spawned)
     }
 
@@ -395,6 +396,14 @@ pub(super) fn start_failure(said: &str) -> String {
         return NO_DBUS_DISPLAY_HELP.to_owned();
     }
     format!("The VM did not start. {said}").trim().to_owned()
+}
+
+/// What to tell the user when QEMU's first word can't be run, which the system's error leaves out.
+pub(super) fn not_run(program: &str, error: &std::io::Error) -> Failure {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return Failure(format!("The VM did not start: {program} wasn't found."));
+    }
+    Failure(format!("The VM did not start: {program} couldn't be run. {error}"))
 }
 
 pub fn last_words(context: &Context) -> String {

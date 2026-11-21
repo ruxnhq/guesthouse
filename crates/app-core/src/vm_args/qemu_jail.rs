@@ -65,12 +65,16 @@ const DEVICES: [&str; 5] = ["/dev/kvm", "/dev/null", "/dev/zero", "/dev/random",
 /// group, and the filter refuses typing into a terminal instead. The pid namespace is left out too:
 /// in one, the viewer's pid reads as 0, and QEMU's D-Bus display then refuses to let it in. Landlock
 /// still keeps QEMU from tracing what's outside its jail, and from signalling it where it has scopes.
-const NAMESPACES: &str = "bwrap --unshare-user --unshare-ipc --unshare-uts --unshare-cgroup-try \
+const NAMESPACES: &str = "--unshare-user --unshare-ipc --unshare-uts --unshare-cgroup-try \
     --tmpfs /tmp --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin \
     --symlink usr/sbin /sbin --proc /proc --dev /dev --ro-bind /sys /sys";
+/// Given by its full path, see [`super::program_word`].
+const BUBBLEWRAP: &str = "bwrap";
 /// Already in the namespaces' base.
 const IN_THE_BASE: [&str; 3] = ["/usr", "/proc", "/sys"];
-const PATH: &str = "/usr/bin:/usr/sbin";
+/// A jailed QEMU's `PATH`, which `setarch`, `taskset` and `prlimit` in front of the launcher are also
+/// found on. NixOS has them in its system's programs, which are among the folders a jail grants.
+const PATH: &str = "/usr/bin:/usr/sbin:/run/current-system/sw/bin";
 
 /// The folder above the one QEMU is in: a QEMU in its build folder finds its firmware and libraries
 /// through links to there, and for the system's it's `/usr`.
@@ -228,7 +232,8 @@ impl VmPlan {
     /// bubblewrap's words, with each path of the plan bound at its own place, so the plan means the
     /// same inside.
     fn namespace_words(plan: &Plan, launcher: &Path) -> Vec<String> {
-        let mut words: Vec<String> = NAMESPACES.split_whitespace().map(str::to_owned).collect();
+        let mut words = vec![super::program_word(BUBBLEWRAP)];
+        words.extend(NAMESPACES.split_whitespace().map(str::to_owned));
         let bind = |kind: &str, path: &Path| {
             [kind.to_owned(), path.display().to_string(), path.display().to_string()]
         };

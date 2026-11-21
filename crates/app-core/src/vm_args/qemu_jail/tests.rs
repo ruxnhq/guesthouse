@@ -4,7 +4,12 @@ use crate::network::Forward;
 use crate::slots;
 use crate::testing::{Scratch, scratch_context};
 use crate::vm_args::PASST_PID_FILE;
-use crate::vm_args::{Boot, NetworkPlan};
+use crate::vm_args::{Boot, NetworkPlan, program_word};
+
+/// bubblewrap's word, which is its full path wherever this test's PATH finds it.
+fn bubblewrap() -> String {
+    program_word("bwrap")
+}
 
 fn jail(namespaces: bool) -> QemuJail {
     QemuJail {
@@ -95,7 +100,7 @@ fn a_udp_forward_answers_whatever_port_it_was_sent_from() {
 fn bubblewrap_comes_first_and_binds_each_file_where_it_is() {
     let (_scratch, plan) = jailed(windows(), true);
     let command = plan.qemu_command();
-    assert_eq!(command[0], "bwrap");
+    assert_eq!(command[0], bubblewrap(), "where the app's PATH finds it");
     let bound = |kind: &str, path: &str| command.windows(3).any(|three| three == [kind, path, path]);
     assert!(bound("--bind-try", "/m/win/disk.qcow2"));
     assert!(bound("--ro-bind", "/p/guesthouse-jail"));
@@ -116,7 +121,10 @@ fn without_namespaces_the_launcher_comes_first() {
     let (_scratch, bridged) = jailed(Machine { network_mode: Mode::Bridged, ..windows() }, false);
     let command = bridged.qemu_command();
     assert_eq!(command[0], "/p/guesthouse-jail");
-    assert!(!command.iter().any(|word| word == "--open-only" || word == "bwrap"), "one launcher does it all");
+    assert!(
+        !command.iter().any(|word| *word == "--open-only" || *word == bubblewrap()),
+        "one launcher does it all"
+    );
     assert!(command.iter().any(|word| word == "--tap"));
 }
 
@@ -126,7 +134,7 @@ fn a_bridged_machine_gets_its_device_from_the_launcher_before_bubblewrap() {
     let command = plan.qemu_command();
     assert_eq!(command[..2], ["/p/guesthouse-jail".to_owned(), "--open-only".to_owned()]);
     let tap = command.iter().position(|word| word == "--tap").unwrap();
-    assert!(tap < command.iter().position(|word| word == "bwrap").unwrap());
+    assert!(tap < command.iter().position(|word| *word == bubblewrap()).unwrap());
     assert_eq!(command.iter().filter(|word| *word == "--tap").count(), 1);
     assert_eq!(command[tap + 2..tap + 4], ["br0".to_owned(), TAP_FD.to_string()]);
     assert!(
@@ -166,10 +174,10 @@ fn in_namespaces_passt_starts_before_bubblewrap() {
     let command = plan.qemu_command();
     assert_eq!(command[..2], ["/p/guesthouse-jail".to_owned(), "--open-only".to_owned()]);
     let at = |word: &str| command.iter().position(|found| found == word).unwrap();
-    assert!(at("--passt") < at("bwrap"));
+    assert!(at("--passt") < at(&bubblewrap()));
     assert_eq!(command.iter().filter(|word| *word == "--passt").count(), 1);
     let inner = command.iter().rposition(|word| word == "/p/guesthouse-jail").unwrap();
-    assert!(inner > at("bwrap") && command[inner + 1] != "--open-only");
+    assert!(inner > at(&bubblewrap()) && command[inner + 1] != "--open-only");
 }
 
 #[test]
@@ -188,6 +196,9 @@ fn a_jailed_qemu_gets_a_clean_environment() {
     let environment = plan.qemu_environment();
     let names: Vec<&str> = environment.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["PATH", "TMPDIR", "XDG_RUNTIME_DIR", "SHARE"]);
+    let path: Vec<&str> = environment[0].1.split(':').collect();
+    assert!(path.contains(&"/usr/bin"), "most systems' programs");
+    assert!(path.contains(&"/run/current-system/sw/bin"), "NixOS's, for setarch and taskset");
     assert_eq!(
         environment[1].1,
         plan.run_folder.display().to_string(),
@@ -347,12 +358,12 @@ fn the_forwarded_gpu_gets_its_device_files_and_not_windows_ones() {
 fn the_forwarded_gpu_keeps_its_address_layout_and_the_viewers_pid() {
     let (_scratch, plan) = ubuntu_with_gpu(true);
     let command = plan.qemu_command();
-    assert_eq!(command[0], "bwrap");
+    assert_eq!(command[0], bubblewrap(), "where the app's PATH finds it");
     assert!(!command.iter().any(|word| word == "--unshare-pid"), "the D-Bus display needs the viewer's pid");
     // The last time each word comes: bubblewrap binds the launcher before it runs it.
     let at = |word: &str| command.iter().rposition(|found| found == word).unwrap();
     // The filter refuses changing it, so it's set before the launcher.
-    assert!(at("bwrap") < at("setarch") && at("setarch") < at("/p/guesthouse-jail"));
+    assert!(at(&bubblewrap()) < at("setarch") && at("setarch") < at("/p/guesthouse-jail"));
     assert_eq!(command[at("setarch")..at("setarch") + 3], ["setarch", "x86_64", "-L"]);
     assert!(at("/p/guesthouse-jail") < at("/p/qemu/build/qemu-system-x86_64"));
     assert!(command.iter().any(|word| word == "--no-new-unix-sockets"), "its frames socket is opened for it");

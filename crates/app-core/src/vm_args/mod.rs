@@ -243,6 +243,14 @@ pub fn program_on_path(program: &str) -> Option<PathBuf> {
     std::env::split_paths(&path).map(|folder| folder.join(program)).find(|found| is_program(found))
 }
 
+/// A program's first word in a command run with a cleared environment: where the app's own `PATH`
+/// finds it. The cleared environment's `PATH` is the one the program is looked for on, and it may not
+/// have the folder the program is in. NixOS keeps programs in its store, and the app's package adds
+/// their folders to the app's `PATH` only. One that isn't found keeps its name.
+pub fn program_word(program: &str) -> String {
+    program_on_path(program).map_or_else(|| program.to_owned(), |found| found.display().to_string())
+}
+
 fn is_program(path: &Path) -> bool {
     rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok() && path.is_file()
 }

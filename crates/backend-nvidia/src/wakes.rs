@@ -28,7 +28,9 @@ const SLOTS: u32 = 4096 / SLOT as u32;
 pub struct Wakes {
     memory: Handle,
     surface: Handle,
-    bound: Vec<Handle>,
+    /// Each bound channel and the notify index it was bound by, so what close takes off matches
+    /// what bind put on.
+    bound: Vec<(Handle, u32)>,
     armed: Vec<(u32, u64)>,
     gpu_address: u64,
 }
@@ -87,7 +89,7 @@ impl Wakes {
         params[12..16].copy_from_slice(&index.to_le_bytes());
         let status = device.rm.control(self.surface, SURFACE_BIND_CHANNEL, &mut params)?;
         RmError::check(|| "binding a channel to the surface".to_owned(), status)?;
-        self.bound.push(channel);
+        self.bound.push((channel, index));
         Ok(())
     }
 
@@ -145,11 +147,12 @@ impl Wakes {
             params[8..16].copy_from_slice(&value.to_le_bytes());
             let _ = device.rm.control(self.surface, SURFACE_UNREGISTER_WAITER, &mut params);
         }
-        for channel in self.bound.drain(..) {
+        for (channel, index) in self.bound.drain(..) {
             let mut params = [0; 40];
             params[0..4].copy_from_slice(&channel.to_le_bytes());
-            params[4..8].copy_from_slice(&1u32.to_le_bytes());
-            params[8..12].copy_from_slice(&NOTIFY_COPY.to_le_bytes());
+            // Both of the entries the bind made: the FIFO's and the engine's own.
+            params[4..8].copy_from_slice(&2u32.to_le_bytes());
+            params[8..12].copy_from_slice(&index.to_le_bytes());
             let _ = device.rm.control(self.surface, SURFACE_UNBIND_CHANNEL, &mut params);
         }
         let surface = self.surface;
@@ -173,5 +176,41 @@ mod tests {
         let wakes = Wakes::from_parts(1, 2, 0x400_0000);
         assert_eq!(wakes.slot_address(0), 0x400_0000);
         assert_eq!(wakes.slot_address(3), 0x400_0000 + 3 * SLOT as u64);
+    }
+
+    #[test]
+    fn closing_takes_off_both_of_a_bound_channels_entries() {
+        use crate::profile::HOST_615;
+        use crate::rm::classes::{NOTIFY_COPY, SURFACE_BIND_CHANNEL, SURFACE_UNBIND_CHANNEL};
+        use crate::rm::device::Device;
+        use crate::rm::fake::{Call, FakeRm};
+        use crate::rm::STATUS_OK;
+
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.answer(SURFACE_BIND_CHANNEL, |_| STATUS_OK);
+        let mut device = Device::open(rm, &HOST_615).unwrap();
+        let space = device.create_address_space(&[(0x400_0000, 0x1_0000_0000)]).unwrap();
+        let subdevice = device.subdevice;
+        let mut wakes = Wakes::new(&mut device, &space, 0x800_0000, subdevice).unwrap();
+        wakes.bind(&mut device, 0x1234, true).unwrap();
+        wakes.close(&mut device).unwrap();
+        let word = |params: &[u8], at: usize| {
+            u32::from_le_bytes(params[at..at + 4].try_into().expect("four bytes"))
+        };
+        let unbinds: Vec<_> = device
+            .rm
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                Call::Control { command, params, .. } if *command == SURFACE_UNBIND_CHANNEL => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unbinds.len(), 1);
+        assert_eq!(word(&unbinds[0], 4), 2, "the FIFO's entry and the engine's own");
+        assert_eq!(word(&unbinds[0], 8), NOTIFY_COPY, "the index it was bound by");
     }
 }

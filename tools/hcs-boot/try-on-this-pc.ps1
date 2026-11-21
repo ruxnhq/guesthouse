@@ -39,11 +39,18 @@ function Write-Log([string]$Text) {
 # Runs a program, shows and logs each line it prints, logs how it ended, and gives its exit code.
 function Invoke-Step([string]$Name, [string]$File, [string[]]$Arguments) {
     Write-Log "=== $Name"
-    & $File @Arguments 2>&1 | ForEach-Object {
-        $text = "$_"
-        Write-Output $text
-        Add-Content -LiteralPath $log -Value $text -Encoding utf8
-    } | Out-Host
+    $finished = $false
+    try {
+        & $File @Arguments 2>&1 | ForEach-Object {
+            $text = "$_"
+            Write-Output $text
+            Add-Content -LiteralPath $log -Value $text -Encoding utf8
+        } | Out-Host
+        $finished = $true
+    } finally {
+        # Ctrl+C ends the whole script, not only the step, and this is the last word the log gets.
+        if (-not $finished) { Write-Log "=== $Name was stopped by Ctrl+C, and so was the rest of the run" }
+    }
     $code = $LASTEXITCODE
     Write-Log "=== $Name ended with exit code $code"
     return $code

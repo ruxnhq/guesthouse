@@ -148,10 +148,10 @@ impl Wakes {
         self.gpu_address + u64::from(index) * SLOT as u64
     }
 
-    /// Takes the waiters off and the channels away, unmaps the page, and frees the surface and its
-    /// memory. Run this before the channels and the space are freed, so the unbinds name live
-    /// channels and the unmap a live space.
-    pub fn close<R: Rm>(&mut self, device: &mut Device<R>) -> Result<(), RmError> {
+    /// Takes the waiters off and the channels away. Run this while the bound channels still live,
+    /// so the unbinds name live handles. The page stays mapped: a channel that is still running can
+    /// end its batch by writing the slot, so the page goes only once the channel is closed.
+    pub fn unbind<R: Rm>(&mut self, device: &mut Device<R>) {
         for (index, value) in self.armed.drain(..) {
             let mut params = [0; 32];
             params[0..4].copy_from_slice(&index.to_le_bytes());
@@ -168,6 +168,13 @@ impl Wakes {
             params[12..16].copy_from_slice(&index.to_le_bytes());
             let _ = device.rm.control(self.surface, SURFACE_UNBIND_CHANNEL, &mut params);
         }
+    }
+
+    /// Unbinds what is still bound, unmaps the page, and frees the surface, its memory and the
+    /// event posting. Run this after the channels it was bound to are closed, as a closed channel
+    /// can no longer write the slot, and before the space is freed, so the unmap names a live space.
+    pub fn close<R: Rm>(&mut self, device: &mut Device<R>) -> Result<(), RmError> {
+        self.unbind(device);
         device.unmap(&self.space, self.memory, self.gpu_address, 4096)?;
         let surface = self.surface;
         device.free(surface)?;

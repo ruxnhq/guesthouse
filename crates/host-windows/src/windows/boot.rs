@@ -18,13 +18,13 @@ use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
 use guesthouse_hcs::system::{self, ComputeSystem};
 use guesthouse_jail::windows::{Handles, Jail, Jailed};
-use std::fs::File;
-use std::io::{BufRead, BufReader, PipeReader};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, PipeReader, Write};
 use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,10 @@ const RELAY_PROFILE: &str = "guesthouse.serial-relay";
 const UNREADABLE_REPEAT: u32 = 60;
 /// How long a guest asked to shut down at the end of its time has before it's stopped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(180);
+/// What the host writes on a guest's serial port to ask it to shut down. HCS's own request needs
+/// Hyper-V's integration services in the guest, which a machine HCS makes doesn't have, so the guest
+/// listens for this and shuts itself down, as App Sandbox's guest agent does when asked.
+pub const SHUTDOWN_LINE: &str = "guesthouse: shutdown";
 /// Ubuntu's installer speaks on the serial port soon after it starts, but only when the files
 /// disk's own menu started it. An install boot this quiet for this long started something else.
 const INSTALL_SILENCE: Duration = Duration::from_secs(300);
@@ -175,11 +179,14 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     let serial_sink = Arc::clone(sink);
     let ended = Arc::new(AtomicBool::new(false));
     let serial_ended = Arc::clone(&ended);
-    thread::spawn(move || print_serial(&pipe, unjailed, on_line, serial_sink, &serial_ended));
+    // The port's writing end, while the guest has it open, for asking the guest to shut down.
+    let port: Port = Arc::new(Mutex::new(None));
+    let serial_port = Arc::clone(&port);
+    thread::spawn(move || print_serial(&pipe, unjailed, on_line, serial_sink, &serial_ended, &serial_port));
     sink.note("Waiting for the guest.");
     let limit = settings.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
     let silence = installing.then_some((INSTALL_SILENCE, heard));
-    let waited = wait(&running, &stop, limit, silence, sink);
+    let waited = wait(&running, &stop, limit, silence, &port, sink);
     ended.store(true, Ordering::SeqCst);
     // The report a Windows guest writes on its own disk can be read once the machine has let go.
     drop(running);
@@ -204,6 +211,17 @@ fn plug_in(mac: &str, sink: &dyn Sink) -> Result<(Option<Endpoint>, Option<Netwo
     Ok((Some(endpoint), Some(adapter)))
 }
 
+/// The serial port's writing end, while the guest has the port open.
+type Port = Arc<Mutex<Option<File>>>;
+
+/// Asks the guest to shut down on its serial port. Gives whether the line was written.
+fn ask_on_port(port: &Port) -> bool {
+    let Ok(mut held) = port.lock() else { return false };
+    let Some(file) = held.as_mut() else { return false };
+    let written = file.write_all(format!("{SHUTDOWN_LINE}\n").as_bytes()).and_then(|()| file.flush());
+    written.is_ok()
+}
+
 /// Waits for the machine to stop. Returning closes the last handle, which stops the machine, so only
 /// an answer that says it has stopped, or a second Ctrl+C, ends this: an answer that can't be read
 /// is told and waited past.
@@ -212,6 +230,7 @@ fn wait(
     stop: &AtomicBool,
     limit: Option<Duration>,
     silence: Option<(Duration, Arc<AtomicBool>)>,
+    port: &Port,
     sink: &Arc<dyn Sink>,
 ) -> Result<(), String> {
     let started = Instant::now();
@@ -251,8 +270,14 @@ fn wait(
                 return Ok(());
             } else {
                 asked = true;
-                sink.note("Asking the guest to shut down. Asking again stops it at once.");
                 sink.state(State::Stopping);
+                if ask_on_port(port) {
+                    sink.note(
+                        "Asked the guest to shut down, on its serial port. Asking again stops it at once.",
+                    );
+                    continue;
+                }
+                sink.note("Asking the guest to shut down. Asking again stops it at once.");
                 // The call waits for the guest, so it has a handle and a thread of its own.
                 let name = running.id().to_owned();
                 let shutdown_sink = Arc::clone(sink);
@@ -297,10 +322,15 @@ fn print_serial(
     mut on_line: impl FnMut(&str),
     sink: Arc<dyn Sink>,
     ended: &AtomicBool,
+    writer: &Port,
 ) {
     let mut opened_before = false;
     while !ended.load(Ordering::SeqCst) {
         let Some(port) = open_port(pipe, opened_before, ended, sink.as_ref()) else { return };
+        // The reader has the port; the host keeps its own handle to write to it.
+        if let Ok(mut held) = writer.lock() {
+            *held = port.try_clone().ok();
+        }
         if opened_before {
             sink.note("The guest restarted, so its serial port is read again.");
         }
@@ -334,7 +364,8 @@ fn open_port(pipe: &str, opened_before: bool, ended: &AtomicBool, sink: &dyn Sin
         if ended.load(Ordering::SeqCst) {
             return None;
         }
-        match File::open(pipe) {
+        // Read and write, so the guest can be asked to shut down on it; read only if that's refused.
+        match OpenOptions::new().read(true).write(true).open(pipe).or_else(|_| File::open(pipe)) {
             Ok(port) => return Some(port),
             Err(error) if !opened_before && started.elapsed() >= Duration::from_secs(SERIAL_SECONDS) => {
                 sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));

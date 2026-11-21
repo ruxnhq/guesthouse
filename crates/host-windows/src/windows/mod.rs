@@ -111,7 +111,8 @@ pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
 }
 
 /// Brings a Windows guest's disk up to date before it boots, which no machine may have open then:
-/// the card's driver, and the guest's screen when there's a remoteman installer to give it.
+/// the card's driver, the guest's report, which also listens for the host asking it to shut down,
+/// and the guest's screen when there's a remoteman installer to give it.
 fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
     let setup = screen_setup();
     if card.is_none() && setup.is_none() {
@@ -132,6 +133,10 @@ fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Re
         })?;
         copy_into(folder, &windows.root, sink)?;
     }
+    // Written again at every boot, as guests made before it changed have an older one.
+    let report = windows.root.join(crate::guest::REPORT_PATH);
+    std::fs::write(&report, crate::guest::REPORT)
+        .map_err(|error| format!("{}: {error}", report.display()))?;
     match setup {
         Some(setup) => give_screen(disk, &windows.root, &setup, card, sink),
         None => Ok(()),
@@ -157,8 +162,7 @@ fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<bool> {
 
 /// Puts what the guest needs for its screen in its screen folder: remoteman's installer, the script
 /// that runs it, the viewer as the one the guest trusts, the encoder for its card, and its account,
-/// so it signs in by itself. The report, which runs the script, is written again too, as guests
-/// made before there was a screen have one that doesn't.
+/// so it signs in by itself. The report, written before this, runs the script.
 fn give_screen(
     disk: &Path,
     root: &Path,
@@ -189,9 +193,6 @@ fn give_screen(
     }
     // A guest given remoteman's files before its installer could run unattended has them still.
     let _ = std::fs::remove_dir_all(folder.join("remoteman-host"));
-    let report = root.join(crate::guest::REPORT_PATH);
-    std::fs::write(&report, crate::guest::REPORT)
-        .map_err(|error| format!("{}: {error}", report.display()))?;
     sink.note(format!("The guest has remoteman for its screen. The viewer's folder is {}.", state.display()));
     Ok(())
 }

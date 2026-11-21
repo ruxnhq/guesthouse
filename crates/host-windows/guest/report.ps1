@@ -51,6 +51,27 @@ function Send-Line([string]$Text) {
 
 Send-Line "started $(Get-Date -Format o)"
 
+# The host asks the guest to shut down on this port, as HCS's own request needs Hyper-V's
+# integration services, which a machine HCS makes doesn't have. The port is listened to on a thread
+# of its own from now on, while the report goes on, and for as long as the guest runs. Asked, the
+# guest shuts down as Windows does from Start, with programs closed if they don't close.
+$listener = $null
+if ($port) {
+    $listener = [powershell]::Create()
+    [void]$listener.AddScript({
+        param($port)
+        while ($true) {
+            try { $line = $port.ReadLine() } catch [TimeoutException] { continue } catch { return }
+            if ($line.Trim() -eq 'guesthouse: shutdown') {
+                try { $port.WriteLine('guesthouse: shutting down, as the host asked') } catch { }
+                & shutdown.exe /s /f /t 0 /d p:0:0 /c 'Guesthouse: the host asked this machine to shut down'
+                return
+            }
+        }
+    }).AddArgument($port)
+    [void]$listener.BeginInvoke()
+}
+
 # The card's driver can take a while to start after Windows does.
 $waitedSeconds = 0
 while ($waitedSeconds -lt 120) {
@@ -102,4 +123,7 @@ if (Test-Path -LiteralPath $screenScript) {
 }
 
 Send-Line 'report done'
+# The port stays open for the listener, so the host can still ask the guest to shut down. The task
+# has no time limit, and this ends with the guest.
+while ($listener) { Start-Sleep -Seconds 3600 }
 if ($port) { $port.Close() }

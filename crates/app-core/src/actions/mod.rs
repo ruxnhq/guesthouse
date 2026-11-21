@@ -19,6 +19,7 @@ mod identity_switch;
 mod install;
 mod intel_device;
 mod intel_files;
+mod nvme_move;
 mod own_linux;
 mod remote_access;
 mod ubuntu;
@@ -195,8 +196,26 @@ fn boot(task: &mut Task) -> Result<()> {
     ready
 }
 
-/// Starts QEMU and the daemon, and says which identity the render device has in this VM.
+/// Starts QEMU and the daemon, and says which identity the render device has in this VM. A machine
+/// whose first start on NVMe fails goes back to SATA and starts again there: see [`nvme_move`].
 fn start_gpu_vm(task: &mut Task) -> Result<PciIdentity> {
+    let started = start_gpu_vm_once(task);
+    let Err(failure) = &started else {
+        // The agent answered, so Windows booted from the disk it was given.
+        nvme_move::passed(task);
+        return started;
+    };
+    if !nvme_move::on_trial(task.context, &task.machine) {
+        return started;
+    }
+    nvme_move::give_up(task, &failure.0)?;
+    wait_for_memory(task);
+    let shown = start_gpu_vm_once(task)?;
+    task.error = [nvme_move::BACK_ON_SATA, &task.error].join(" ").trim().to_owned();
+    Ok(shown)
+}
+
+fn start_gpu_vm_once(task: &mut Task) -> Result<PciIdentity> {
     let plan = plan_for(task.context, &task.machine, Boot::Gpu);
     let started = task.host.start(&plan, &task.machine);
     if started.is_err() && task.pid().is_none() {
@@ -214,8 +233,10 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
     if get_gpu_ready_on_this_desktop(task, picture_first)? != Gpu::Working {
         return Ok(());
     }
-    if new_vm_needed(shown, &read_state(task.context, &task.machine), &task.machine) {
-        start_again_for_new_identity(task)?;
+    let new_identity = new_vm_needed(shown, &read_state(task.context, &task.machine), &task.machine);
+    let to_nvme = nvme_move::ready_windows(task)?;
+    if new_identity || to_nvme {
+        start_again_in_new_vm(task, new_identity)?;
         if get_gpu_ready_on_this_desktop(task, picture_first)? != Gpu::Working {
             return Ok(());
         }
@@ -308,10 +329,16 @@ fn start_again_on_software_desktop(task: &mut Task, why: &str) -> Result<Gpu> {
     Ok(Gpu::StartedAgain)
 }
 
-/// The same start goes on in a new VM, which shows the card maker's number. What the first one said is about a
-/// VM that's gone.
-fn start_again_for_new_identity(task: &mut Task) -> Result<()> {
-    stop_for_new_identity(task)?;
+/// The same start goes on in a new VM, which shows the card maker's number if `new_identity`, and has
+/// the disk on NVMe if the machine is now there. What the first one said is about a VM that's gone.
+fn start_again_in_new_vm(task: &mut Task, new_identity: bool) -> Result<()> {
+    let stopped = if new_identity {
+        stop_for_new_identity(task)?
+    } else {
+        task.step(nvme_move::MOVING);
+        task.host.stop(&task.machine, STOP_WAIT_SECONDS)?
+    };
+    nvme_move::after_stop(task, stopped)?;
     wait_for_memory(task);
     task.error.clear();
     start_gpu_vm(task).map(|_| ())

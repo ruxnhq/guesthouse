@@ -249,6 +249,12 @@ pub struct Machine {
     /// can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub disk_folder: String,
+    /// The disk is on an NVMe controller rather than the emulated SATA one every machine had before.
+    /// Windows has its own driver for it, and it's faster. A new Windows machine is made on it, and an
+    /// older one moves once Windows has been readied for it. Left out of the file when off, so an
+    /// older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub nvme: bool,
 }
 
 impl Machine {
@@ -295,6 +301,7 @@ impl Machine {
             window_speed_off: false,
             file_drop_off: false,
             disk_folder: String::new(),
+            nvme: false,
         }
     }
 
@@ -727,6 +734,15 @@ mod tests {
         let allowed = serde_json::to_string(&Machine { start_without_jail: true, ..sample() }).unwrap();
         let read: Machine = serde_json::from_str(&allowed).unwrap();
         assert!(read.start_without_jail);
+    }
+
+    #[test]
+    fn a_machine_on_sata_is_one_an_older_build_can_read() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("nvme"), "{text}");
+        assert!(!serde_json::from_str::<Machine>(&text).unwrap().nvme);
+        let on_nvme = serde_json::to_string(&Machine { nvme: true, ..sample() }).unwrap();
+        assert!(serde_json::from_str::<Machine>(&on_nvme).unwrap().nvme);
     }
 
     #[test]

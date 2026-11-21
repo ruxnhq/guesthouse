@@ -52,5 +52,12 @@ foreach ($address in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyC
     if ($address.IPAddress -ne '127.0.0.1') { Send-Line "address: $($address.IPAddress)" }
 }
 
+# The guest's screen, when the host gave it one, before the last line, as the host takes that line
+# to mean the guest is set up.
+$screenScript = 'C:\Guesthouse\screen\screen.ps1'
+if (Test-Path -LiteralPath $screenScript) {
+    try { . $screenScript } catch { Send-Line "screen: failed: $($_.Exception.Message)" }
+}
+
 Send-Line 'report done'
 if ($port) { $port.Close() }

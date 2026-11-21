@@ -19,6 +19,9 @@ pub struct Record {
     /// settings and its DHCP lease keep to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// The fingerprint of the remoteman host in a Windows guest, as the guest last said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
 }
 
 impl Record {
@@ -65,6 +68,7 @@ mod tests {
             installer: Some(folder.join("u.iso")),
             installed: false,
             mac: Some("00-15-5D-00-00-01".into()),
+            screen: Some("ab".repeat(32)),
         };
         record.save(&disk).unwrap();
         assert_eq!(Record::load(&disk).unwrap(), record);

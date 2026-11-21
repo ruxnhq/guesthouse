@@ -11,6 +11,7 @@ pub mod guest;
 pub mod machine;
 pub mod printable;
 pub mod record;
+pub mod screen;
 pub mod settings;
 pub mod wim_info;
 #[cfg(windows)]

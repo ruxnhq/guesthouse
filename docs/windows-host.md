@@ -164,6 +164,24 @@ The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, re
 
 `--silent` has no pages, `--uninstall --delete-machines` deletes the machines too, and `--dry-run` shows every page and walks every step with no administrator and no change to the PC. Its log is `%TEMP%\guesthouse-setup.log`, and the install's own is `setup.log` in the install folder. `crates/installer-windows/test/walk.ps1` drives the pages in a dry run and takes a picture of each.
 
+## A Windows guest's screen
+
+A Windows guest's screen is [remoteman](https://github.com/xnixy/remoteman)'s: its host runs in the guest and encodes the guest's desktop on the guest's card, and its viewer runs on this PC. Guesthouse holds both ends, so it pairs them itself, and nobody is asked to:
+
+- `boot` looks for remoteman's host installer at `screen\remoteman-host-setup.exe` beside itself, beside the service or `guesthouse-hcs-boot`. When it's there, every boot puts it on the guest's disk with `guest/screen.ps1`, and the guest's report runs that script as SYSTEM. It installs remoteman, again whenever the installer changes.
+- The viewer's identity is made on the host, as remoteman makes its own, beside the machine's disk in `NAME.screen`. The guest is told to trust only that, before its host starts, and its host is started with no way to pair anyone else.
+- The guest says its host's fingerprint on its serial port, and `boot` keeps it in the machine's record. The service's `Screen` answer gives the app the guest's address and fingerprint and the viewer's identity, and the app writes them into a state folder of the user's, in remoteman's layout, and starts the viewer with it.
+- The guest signs in to its own account by itself at every start, as remoteman's host shows a sign-in screen otherwise. Its password is kept in its own registry, where Windows keeps an automatic sign-in's, and it has no lock screen and doesn't lock when idle. That starts from the boot after the first one with the installer.
+- remoteman's host picks NVIDIA's encoder itself. AMD's and Intel's encoders for Media Foundation aren't registered in a guest, so with their cards it's told to use Direct3D 12's video encoding, which both have.
+
+To try it before the app has a button for it, with the service running:
+
+```powershell
+cargo run -p guesthouse-control --example screen -- NAME D:\Projects\remoteman\target\release\remoteman-app.exe
+```
+
+The viewer needs FFmpeg's DLLs beside it or on `PATH`. The viewer isn't jailed yet, though it decodes what the guest sends: that's next for it.
+
 ## What it doesn't do yet
 
 - The service hasn't run as a service yet, and the installer hasn't installed it for real: they've been tried only by their tests and a dry run, which run unelevated.

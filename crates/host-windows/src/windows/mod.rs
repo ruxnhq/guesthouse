@@ -7,6 +7,7 @@ pub mod prepare;
 use crate::events::{Event, Sink};
 use crate::machine::{Guest, Machine};
 use crate::record::{Record, files_disk};
+use crate::screen;
 use crate::settings::{BootSettings, GpuChoice};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
@@ -108,18 +109,77 @@ pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
     }
 }
 
-/// Copies the card's driver onto the Windows volume of the disk, which no machine may have open.
-fn copy_driver_to_disk(disk: &Path, card: &Card, sink: &dyn Sink) -> Result<(), String> {
-    let folder = card.driver_folder.as_ref().ok_or_else(|| {
-        format!("The folder of {}'s driver could not be found, so the guest can't be given it.", card.name)
-    })?;
+/// Brings a Windows guest's disk up to date before it boots, which no machine may have open then:
+/// the card's driver, and the guest's screen when there's a remoteman installer to give it.
+fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
+    let setup = screen_setup();
+    if card.is_none() && setup.is_none() {
+        return Ok(());
+    }
     let mut attached = VirtualDisk::open(disk, Kind::Vhdx).map_err(|error| error.to_string())?;
     attached.attach(false).map_err(|error| error.to_string())?;
     let windows = volumes(&attached)?
         .into_iter()
         .find(|volume| volume.root.join(r"Windows\System32").is_dir())
         .ok_or_else(|| format!("{} has no volume with Windows on it.", disk.display()))?;
-    copy_into(folder, &windows.root, sink)
+    if let Some(card) = card {
+        let folder = card.driver_folder.as_ref().ok_or_else(|| {
+            format!(
+                "The folder of {}'s driver could not be found, so the guest can't be given it.",
+                card.name
+            )
+        })?;
+        copy_into(folder, &windows.root, sink)?;
+    }
+    match setup {
+        Some(setup) => give_screen(disk, &windows.root, &setup, card, sink),
+        None => Ok(()),
+    }
+}
+
+/// remoteman's host installer, beside the program that boots the machine, if it's there.
+fn screen_setup() -> Option<PathBuf> {
+    let beside = std::env::current_exe().ok()?.parent()?.join(screen::SETUP);
+    beside.is_file().then_some(beside)
+}
+
+/// Puts what the guest needs for its screen in its screen folder: remoteman's installer, the script
+/// that runs it, the viewer as the one the guest trusts, the encoder for its card, and its account,
+/// so it signs in by itself. The report, which runs the script, is written again too, as guests
+/// made before there was a screen have one that doesn't.
+fn give_screen(
+    disk: &Path,
+    root: &Path,
+    setup: &Path,
+    card: Option<&Card>,
+    sink: &dyn Sink,
+) -> Result<(), String> {
+    let folder = root.join(screen::GUEST_FOLDER);
+    let write = |name: &str, text: &str| {
+        let path = folder.join(name);
+        std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    std::fs::create_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    let state = screen::state_beside(disk);
+    let viewer = screen::viewer_identity(&state)?;
+    write("trusted", &screen::trust_list(&viewer))?;
+    write("encoder.txt", card.map_or("auto", |card| screen::encoder_for(&card.instance_id)))?;
+    write("screen.ps1", screen::SCRIPT)?;
+    let account = disk.with_extension("account.txt");
+    if let Ok(text) = std::fs::read_to_string(&account) {
+        write("logon.txt", &text)?;
+    }
+    let installer = folder.join("remoteman-host-setup.exe");
+    let same = std::fs::metadata(&installer).ok().map(|kept| kept.len())
+        == std::fs::metadata(setup).ok().map(|given| given.len());
+    if !same {
+        std::fs::copy(setup, &installer).map_err(|error| format!("{}: {error}", installer.display()))?;
+    }
+    let report = root.join(crate::guest::REPORT_PATH);
+    std::fs::write(&report, crate::guest::REPORT)
+        .map_err(|error| format!("{}: {error}", report.display()))?;
+    sink.note(format!("The guest has remoteman for its screen. The viewer's folder is {}.", state.display()));
+    Ok(())
 }
 
 fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> {

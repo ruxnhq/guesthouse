@@ -284,3 +284,21 @@ fn machines_left_running_are_ended_when_the_service_starts_and_stops() {
     again.stop_all(Duration::from_secs(2));
     assert!(again.machines().lock()["win"].idle(), "asked to shut down, it did");
 }
+
+#[test]
+fn a_machine_is_ended_only_while_it_runs_and_has_a_screen_only_once_its_guest_says() {
+    let setup = setup("end", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    assert!(matches!(ask(service, Request::End { name: "win".into() }).as_slice(), [Answer::Refused { .. }]));
+    assert!(matches!(
+        ask(service, Request::Screen { name: "win".into() }).as_slice(),
+        [Answer::Refused { .. }]
+    ));
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    assert_eq!(ask(service, Request::End { name: "win".into() }), [Answer::Ok]);
+    assert_eq!(*service.work.ended.lock().unwrap(), ["guesthouse-win"]);
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}

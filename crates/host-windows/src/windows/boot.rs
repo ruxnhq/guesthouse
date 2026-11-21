@@ -3,7 +3,9 @@
 //! gives a GPU only to a running machine. It stays until the machine stops, as the machine stops
 //! when its last handle closes, or until its time is up.
 
-use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation, print_guest_report};
+use super::{
+    absolute, chosen_card, linux, machine, need_elevation, print_guest_report, refresh_windows_disk,
+};
 use crate::events::{Event, Sink, State};
 use crate::guest::linux::install_finished;
 use crate::guest::report_done;
@@ -83,11 +85,7 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
         record.save(&disk)?;
     }
     match record.guest {
-        Guest::Windows => {
-            if let Some(card) = &card {
-                copy_driver_to_disk(&disk, card, sink.as_ref())?;
-            }
-        }
+        Guest::Windows => refresh_windows_disk(&disk, card.as_ref(), sink.as_ref())?,
         Guest::Linux => {
             linux::refresh_disk(&files_disk(&disk), card.as_ref(), sink.as_ref())?;
             if !record.installed {
@@ -153,10 +151,19 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
             // Its report only runs once Windows has finished setting itself up.
             Guest::Windows => report_done(line),
         };
+        // Each change is made to the record as it is on the disk now, so neither undoes the other.
+        if let Some(fingerprint) = crate::screen::fingerprint_in(line) {
+            let kept =
+                Record::load(&disk).and_then(|kept| Record { screen: Some(fingerprint), ..kept }.save(&disk));
+            match kept {
+                Ok(()) => line_sink.note("The guest's screen is ready, and the viewer knows it."),
+                Err(error) => line_sink.problem(error),
+            }
+        }
         if set_up && !record.installed && !marked {
             marked = true;
-            let installed = Record { installed: true, ..record.clone() };
-            match installed.save(&disk) {
+            let kept = Record::load(&disk).and_then(|kept| Record { installed: true, ..kept }.save(&disk));
+            match kept {
                 Ok(()) => line_sink.note("The guest is set up. The next boot gives it its card."),
                 Err(error) => line_sink.problem(error),
             }

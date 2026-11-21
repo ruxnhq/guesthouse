@@ -91,6 +91,8 @@ impl<W: Work> Service<W> {
             Request::Create { machine } => return self.create(machine, connection),
             Request::Start { name } => self.start(&name),
             Request::Stop { name } => self.stop(&name),
+            Request::End { name } => self.end(&name),
+            Request::Screen { name } => self.screen(&name),
             Request::Delete { name } => self.delete(&name),
             Request::Account { name } => self.account(&name),
             Request::Watch { name } => return self.watch(&name, connection),
@@ -190,10 +192,12 @@ impl<W: Work> Service<W> {
         if !image.is_absolute() || image.to_string_lossy().starts_with(r"\\") {
             return Some(format!("{} isn't a file on this PC's own drives.", image.display()));
         }
-        if !image.is_file() {
-            return Some(format!("There is no file at {}.", image.display()));
+        // Opened as the user first: the service looking for the file itself would tell anyone
+        // whether a file is there in a folder they can't look in.
+        if let Err(reason) = connection.may_read(image) {
+            return Some(reason);
         }
-        connection.may_read(image).err()
+        (!image.is_file()).then(|| format!("{} isn't a file.", image.display()))
     }
 
     fn create(self: &Arc<Self>, machine: NewMachine, connection: &mut dyn Connection) {
@@ -330,6 +334,48 @@ impl<W: Work> Service<W> {
                 Answer::Ok
             }
             None => Answer::Refused { reason: format!("{name} isn't running.") },
+        }
+    }
+
+    /// Stops a running machine at once. Its boot sees it stopped and ends as for any stop.
+    fn end(&self, asked: &str) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if self.machines.lock()[&name].stop.is_none() {
+            return Answer::Refused { reason: format!("{name} isn't running.") };
+        }
+        self.machines.tell(&name, Event::Note("Stopping it at once, as asked.".into()));
+        self.work.end(&vm_id(&name));
+        Answer::Ok
+    }
+
+    fn screen(&self, asked: &str) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        let disk = self.machines.store.disk(&name);
+        let record = Record::load(&disk).unwrap_or_default();
+        let Some(host_fingerprint) = record.screen else {
+            return Answer::Refused {
+                reason: format!(
+                    "{name} has no screen yet. A Windows guest gets one at a boot after remoteman's installer is beside the service."
+                ),
+            };
+        };
+        let Some(address) = self.machines.lock()[&name].settings.address.clone() else {
+            return Answer::Refused { reason: format!("{name} hasn't said its address yet.") };
+        };
+        let client = guesthouse_host_windows::screen::state_beside(&disk).join("client");
+        let read =
+            |file: &str| fs::read(client.join(file)).map(|bytes| guesthouse_control::screen::hex(&bytes));
+        match (read("cert.der"), read("key.der")) {
+            (Ok(viewer_certificate), Ok(viewer_key)) => Answer::Screen {
+                address,
+                port: guesthouse_host_windows::screen::PORT,
+                host_fingerprint,
+                viewer_certificate,
+                viewer_key,
+            },
+            _ => Answer::Refused {
+                reason: format!("{name}'s viewer identity is missing from {}.", client.display()),
+            },
         }
     }
 

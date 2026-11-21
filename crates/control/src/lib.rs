@@ -11,6 +11,7 @@
 
 pub mod client;
 pub mod events;
+pub mod screen;
 
 pub use events::{Event, State};
 
@@ -34,6 +35,10 @@ pub enum Request {
     Start { name: String },
     /// Asks a running machine's guest to shut down. Asked again, the machine is stopped at once.
     Stop { name: String },
+    /// Stops a running machine at once, as pulling its power would, with no shutdown in the guest.
+    End { name: String },
+    /// What the remoteman viewer needs to show a Windows guest's screen.
+    Screen { name: String },
     /// Deletes a machine that isn't running, with its disks.
     Delete { name: String },
     /// The guest's administrator and password, for Remote Desktop or SSH.
@@ -93,6 +98,15 @@ pub enum Answer {
     Account {
         user: String,
         password: String,
+    },
+    /// Where a guest's screen is and what the viewer proves itself and expects with, for
+    /// [`screen::viewer_state`]. The certificate and key are hex.
+    Screen {
+        address: String,
+        port: u16,
+        host_fingerprint: String,
+        viewer_certificate: String,
+        viewer_key: String,
     },
 }
 

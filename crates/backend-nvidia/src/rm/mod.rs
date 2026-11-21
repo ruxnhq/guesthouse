@@ -148,27 +148,9 @@ pub trait Rm {
         Err(RmError::System("this RM has no events".to_owned()))
     }
 
-    /// Takes the event posting back. Nothing waits on the descriptor after this.
-    fn free_os_event(&mut self, device: Handle) -> Result<(), RmError> {
-        let _ = device;
-        Err(RmError::System("this RM has no events".to_owned()))
-    }
-
     /// The descriptor a poll sleeps on until the GPU signals a waiter of this client, if it has
     /// one.
     fn wake_fd(&self) -> Option<RawFd> {
         None
-    }
-
-    /// The same, with the kernel allowed to map the pages too, for memory whose consumer maps
-    /// it behind the scenes. The default is the same answer as [`Rm::alloc_host_pages`].
-    fn alloc_host_pages_kernel_mapped(
-        &mut self,
-        device: Handle,
-        handle: Handle,
-        address: u64,
-        size: u64,
-    ) -> Result<(), RmError> {
-        self.alloc_host_pages(device, handle, address, size)
     }
 }

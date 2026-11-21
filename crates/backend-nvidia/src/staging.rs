@@ -147,14 +147,16 @@ impl<R: Rm> NvidiaBackend<R> {
                 match crate::wakes::Wakes::new(&mut self.device, address_space, at, parent) {
                     Ok(mut made) => match made.bind(&mut self.device, channel.channel.handle(), true) {
                         Ok(()) => {
-                            channel.signal = Some((made.slot_address(0), made.surface_control(), fd));
+                            channel.signal = Some((made.slot_address(0), made.surface, fd));
                             wakes = Some(made);
                         }
                         Err(error) => {
                             // A surface nothing is bound to never raises the interrupt, so its
                             // waiters would only ever time out on the backstop. Closed, and the
                             // copies take the polling they always had.
-                            log::warn!("the copy channel is not bound to the surface, so its copies are polled: {error}");
+                            log::warn!(
+                                "the copy channel is not bound to the surface, so its copies are polled: {error}"
+                            );
                             let _ = made.close(&mut self.device);
                         }
                     },
@@ -760,10 +762,7 @@ mod tests {
         let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
         let space = backend.create_address_space(&[range]).unwrap();
         let copy = SlotCopy { own_space: space, ..slot_copy(None) };
-        assert!(matches!(
-            backend.start_frame_copy(&mut AreaOnly(AREA), &copy),
-            StagingStart::Running
-        ));
+        assert!(matches!(backend.start_frame_copy(&mut AreaOnly(AREA), &copy), StagingStart::Running));
         // No waiter is armed for a copy that is only polled, and the surface and its memory were
         // taken back rather than left half-made.
         let calls = &backend.device().rm.calls;
@@ -787,10 +786,7 @@ mod tests {
         let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
         let space = backend.create_address_space(&[range]).unwrap();
         let copy = SlotCopy { own_space: space, ..slot_copy(None) };
-        assert!(matches!(
-            backend.start_frame_copy(&mut AreaOnly(AREA), &copy),
-            StagingStart::Running
-        ));
+        assert!(matches!(backend.start_frame_copy(&mut AreaOnly(AREA), &copy), StagingStart::Running));
         let calls = &backend.device().rm.calls;
         assert!(calls.iter().any(|call| matches!(
             call,

@@ -33,7 +33,6 @@ const ESCAPE_UNMAP_MEMORY_DMA: u64 = 0x58;
 const ESCAPE_REGISTER_FD: u64 = 200 + 1;
 const ESCAPE_CHECK_VERSION: u64 = 200 + 10;
 const ESCAPE_ALLOC_OS_EVENT: u64 = 200 + 6;
-const ESCAPE_FREE_OS_EVENT: u64 = 200 + 7;
 
 const VERSION_REQUEST_SIZE: usize = 72;
 const VERSION_STRING_AT: usize = 8;
@@ -330,18 +329,6 @@ impl Rm for LinuxRm {
         self.alloc_host_pages_flags(device, handle, address, size, OS_DESCRIPTOR_FLAGS)
     }
 
-    /// The same, with the kernel allowed to map the pages too: what a semaphore surface's
-    /// constructor does behind the scenes, and the no-kernel-mapping flag would stop it.
-    fn alloc_host_pages_kernel_mapped(
-        &mut self,
-        device: Handle,
-        handle: Handle,
-        address: u64,
-        size: u64,
-    ) -> Result<(), RmError> {
-        self.alloc_host_pages_flags(device, handle, address, size, OS_DESCRIPTOR_FLAGS & !0x4000_0000)
-    }
-
     fn map_dma(&mut self, map: &DmaMap) -> Result<(), RmError> {
         let sizes = self.sizes;
         let mut request = map_dma_request(sizes, self.client, map);
@@ -437,14 +424,6 @@ impl Rm for LinuxRm {
         put32(&mut request, 4, device);
         put32(&mut request, 8, self.control_file.as_raw_fd() as u32);
         ioctl(&self.control_file, ESCAPE_ALLOC_OS_EVENT, &mut request)
-    }
-
-    fn free_os_event(&mut self, device: Handle) -> Result<(), RmError> {
-        let mut request = [0; 16];
-        put32(&mut request, 0, self.client);
-        put32(&mut request, 4, device);
-        put32(&mut request, 8, self.control_file.as_raw_fd() as u32);
-        ioctl(&self.control_file, ESCAPE_FREE_OS_EVENT, &mut request)
     }
 
     fn wake_fd(&self) -> Option<RawFd> {

@@ -21,13 +21,12 @@ use crate::rm::{Handle, Rm, RmError, STATUS_ALREADY_SIGNALLED, STATUS_OK};
 
 /// One slot, in bytes: the count at the start, the kernel's threshold in the middle.
 const SLOT: usize = 32;
-/// How many slots a page holds.
-const SLOTS: u32 = 4096 / SLOT as u32;
 
 /// The surface, its memory, and what hangs from it.
 pub struct Wakes {
     memory: Handle,
-    surface: Handle,
+    /// The surface's own handle, for the batch's waiter arm.
+    pub(crate) surface: Handle,
     /// Each bound channel and the notify index it was bound by, so what close takes off matches
     /// what bind put on.
     bound: Vec<(Handle, u32)>,
@@ -122,22 +121,6 @@ impl Wakes {
         self.gpu_address + u64::from(index) * SLOT as u64
     }
 
-    /// A Wakes over pieces a probe made itself. The surface's own constructor is what `new`
-    /// runs; this is for asking the mechanism questions one step at a time.
-    pub fn from_parts(memory: Handle, surface: Handle, gpu_address: u64) -> Self {
-        Self { memory, surface, bound: Vec::new(), armed: Vec::new(), gpu_address }
-    }
-
-    /// The surface's own handle, for a probe that talks to it directly.
-    pub fn surface_control(&self) -> Handle {
-        self.surface
-    }
-
-    /// How many slots the page holds.
-    pub fn slots(&self) -> u32 {
-        SLOTS
-    }
-
     /// Takes the waiters off and the channels away, and frees the surface and its memory. Run this
     /// before the channels and the space are freed, so the unbinds name live channels.
     pub fn close<R: Rm>(&mut self, device: &mut Device<R>) -> Result<(), RmError> {
@@ -167,13 +150,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_page_holds_a_hundred_and_twenty_eight_slots() {
-        assert_eq!(SLOTS, 128);
-    }
-
-    #[test]
     fn a_slot_address_steps_by_the_slot() {
-        let wakes = Wakes::from_parts(1, 2, 0x400_0000);
+        use crate::profile::HOST_615;
+        use crate::rm::device::Device;
+        use crate::rm::fake::FakeRm;
+
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        let mut device = Device::open(rm, &HOST_615).unwrap();
+        let space = device.create_address_space(&[(0x400_0000, 0x1_0000_0000)]).unwrap();
+        let subdevice = device.subdevice;
+        let wakes = Wakes::new(&mut device, &space, 0x400_0000, subdevice).unwrap();
         assert_eq!(wakes.slot_address(0), 0x400_0000);
         assert_eq!(wakes.slot_address(3), 0x400_0000 + 3 * SLOT as u64);
     }
@@ -181,10 +168,10 @@ mod tests {
     #[test]
     fn closing_takes_off_both_of_a_bound_channels_entries() {
         use crate::profile::HOST_615;
+        use crate::rm::STATUS_OK;
         use crate::rm::classes::{NOTIFY_COPY, SURFACE_BIND_CHANNEL, SURFACE_UNBIND_CHANNEL};
         use crate::rm::device::Device;
         use crate::rm::fake::{Call, FakeRm};
-        use crate::rm::STATUS_OK;
 
         let mut rm = FakeRm::new();
         rm.wake = Some(0);
@@ -195,9 +182,8 @@ mod tests {
         let mut wakes = Wakes::new(&mut device, &space, 0x800_0000, subdevice).unwrap();
         wakes.bind(&mut device, 0x1234, true).unwrap();
         wakes.close(&mut device).unwrap();
-        let word = |params: &[u8], at: usize| {
-            u32::from_le_bytes(params[at..at + 4].try_into().expect("four bytes"))
-        };
+        let word =
+            |params: &[u8], at: usize| u32::from_le_bytes(params[at..at + 4].try_into().expect("four bytes"));
         let unbinds: Vec<_> = device
             .rm
             .calls

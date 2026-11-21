@@ -140,7 +140,7 @@ cargo build --release -p guesthouse-app-windows
 
 The first build on a PC downloads the Windows App Runtime from NuGet, and every build copies it beside the exe, so the app needs nothing installed. Copy the whole folder to move it. Every Windows program here carries its C runtime inside it, as `.cargo/config.toml` says, so none needs Visual C++'s runtime on the PC either.
 
-On the left is each machine, with its system and a dot for where it stands: green running, amber on its way, grey stopped. A machine's page has Start and Stop at its top, and Delete under More. Stop asks the guest to shut down, and while it does, the button says Stop now, which turns it off at once. Delete asks first, and only a stopped machine can go. Below that are its Status, Connect and Details. Status says whether the machine is set up: its first boot sets it up without the card, and every boot after that has it. Connect shows the guest's administrator and password when asked, opens Remote Desktop on a Windows guest's address, and gives the `ssh` line for an Ubuntu guest. Under that is its log, as the service sends it, with problems marked in red. New machine makes one from an image, and shows the service's progress as it goes.
+On the left is each machine, with its system and a dot for where it stands: green running, amber on its way, grey stopped. A machine's page has Start and Stop at its top, and Delete under More. Stop asks the guest to shut down, and while it does, the button says Stop now, which turns it off at once. Delete asks first, and only a stopped machine can go. Below that are its Status, Connect and Details. Status says whether the machine is set up: its first boot sets it up without the card, and every boot after that has it. Connect shows the guest's administrator and password when asked, opens a Windows guest's screen in remoteman's viewer once it's set up (Open screen) or Remote Desktop on its address, and gives the `ssh` line for an Ubuntu guest. Under that is its log, as the service sends it, with problems marked in red. New machine makes one from an image, and shows the service's progress as it goes.
 
 A build with the `preview` feature shows made-up machines instead of the service's, so each of the window's states can be looked at, light or dark, with no service and no GPU. It never reaches the service. `src/app/preview.rs` lists the states:
 
@@ -182,7 +182,7 @@ A Windows guest's screen is [remoteman](https://github.com/xnixy/remoteman)'s: i
 - The guest signs in to its own account by itself at every start, as remoteman's host shows a sign-in screen otherwise. Its password is kept in its own registry, where Windows keeps an automatic sign-in's, and it has no lock screen and doesn't lock when idle. That starts from the boot after the first one with the installer.
 - remoteman's host picks NVIDIA's encoder itself. AMD's and Intel's encoders for Media Foundation aren't registered in a guest, so with their cards it's told to use Direct3D 12's video encoding, which both have.
 
-To try it before the app has a button for it, with the service running:
+The app's Open screen does all of that. It starts the viewer at `viewer\remoteman-app.exe` beside itself, or at `GUESTHOUSE_VIEWER` when that's set, as when trying the app from a build. Without the app, with the service running:
 
 ```powershell
 cargo run -p guesthouse-control --example screen -- NAME D:\Projects\remoteman\target\release\remoteman-app.exe
@@ -195,5 +195,5 @@ The viewer needs FFmpeg's DLLs beside it or on `PATH`. The viewer isn't jailed y
 - The service hasn't run as a service yet, and the installer hasn't installed it for real: they've been tried only by their tests and a dry run, which run unelevated.
 - A Windows guest gets only the driver's folder in the driver store. That's what Direct3D needs. The files a driver also puts in `System32`, which some programs look for there, aren't placed yet.
 - An Ubuntu guest without WSL on the host has no `libdxcore.so`, so `nvidia-smi` and CUDA won't run in it.
-- There's no screen but Remote Desktop or SSH.
+- A Windows guest's console, its own display before it's set up or when its network is down, isn't in the app yet.
 - When it fails, HCS's own answer is printed with the document that was sent. That answer names what it refused.

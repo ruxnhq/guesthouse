@@ -40,6 +40,8 @@ pub enum Job {
     Stop(String),
     Delete(String),
     Account(String),
+    /// What remoteman's viewer needs to show a Windows guest's screen.
+    Screen(String),
 }
 
 impl Job {
@@ -49,6 +51,7 @@ impl Job {
             Job::Stop(name) => Request::Stop { name },
             Job::Delete(name) => Request::Delete { name },
             Job::Account(name) => Request::Account { name },
+            Job::Screen(name) => Request::Screen { name },
         }
     }
 }

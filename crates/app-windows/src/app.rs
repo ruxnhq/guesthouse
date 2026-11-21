@@ -236,6 +236,8 @@ pub enum Message {
     DeleteAnswered(ContentDialogResult),
     SignIn,
     RemoteDesktop,
+    /// Open the guest's screen in remoteman's viewer.
+    Screen,
     Copy(String),
     WatchAgain,
     Name(String),
@@ -328,6 +330,16 @@ impl Main {
             (Job::Account(machine), Ok(Answer::Account { user, password })) => {
                 if self.selected.as_deref() == Some(machine.as_str()) {
                     self.account = Some(Account { machine, user, password });
+                }
+            }
+            (
+                Job::Screen(name),
+                Ok(Answer::Screen { address, port, host_fingerprint, viewer_certificate, viewer_key }),
+            ) => {
+                let screen =
+                    crate::screen::Screen { address, port, host_fingerprint, viewer_certificate, viewer_key };
+                if let Err(words) = crate::screen::open(&name, &screen) {
+                    self.tell(words, true);
                 }
             }
             (Job::Delete(name), Ok(Answer::Ok)) => self.tell(format!("{name} is deleted."), false),
@@ -490,6 +502,7 @@ impl Component for Main {
                 }
             }
             Message::SignIn => self.ask(Job::Account),
+            Message::Screen => self.ask(Job::Screen),
             Message::RemoteDesktop => self.remote_desktop(),
             Message::Copy(text) => {
                 if crate::system::copy(self.hwnd, &text) {

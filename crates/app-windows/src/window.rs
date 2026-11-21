@@ -63,6 +63,7 @@ mod glyph {
     pub const PROBLEM: &str = "\u{EA39}";
     pub const WARNING: &str = "\u{E7BA}";
     pub const REFRESH: &str = "\u{E72C}";
+    pub const SCREEN: &str = "\u{E7F4}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -359,7 +360,17 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
     let mut rows = Vec::new();
     match machine.system {
         System::Windows => {
-            let open = button("Remote Desktop", glyph::REMOTE, context.message(Message::RemoteDesktop), true)
+            // remoteman's host is put in the guest at its boots after the first, which set it up.
+            let streams = reachable && machine.set_up;
+            let screen = button("Open screen", glyph::SCREEN, context.message(Message::Screen), true)
+                .is_enabled(streams);
+            rows.push(row(
+                glyph::SCREEN,
+                "Screen",
+                &["The guest's screen at full speed, drawn by its card and streamed by remoteman."],
+                Some(screen.into()),
+            ));
+            let open = button("Remote Desktop", glyph::REMOTE, context.message(Message::RemoteDesktop), false)
                 .is_enabled(reachable);
             rows.push(row(
                 glyph::REMOTE,

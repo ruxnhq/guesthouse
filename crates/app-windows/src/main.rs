@@ -4,7 +4,7 @@
 //! The Guesthouse service does all of that, as the system, because HCS needs it. The app runs as its
 //! user and asks the service on its pipe, through `guesthouse-control`, and holds no rule of its own.
 //! It's WinUI 3 through Microsoft's windows-reactor: `app.rs` is the app's state and what changes
-//! it, `window.rs` what's shown, `bridge.rs` the calls to the service, and `system.rs` the rest of
+//! it, `window.rs` what's shown, `bridge.rs` the calls to the service, `screen.rs` remoteman's viewer, and `system.rs` the rest of
 //! what's asked of Windows.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -13,6 +13,8 @@
 mod app;
 #[cfg(windows)]
 mod bridge;
+#[cfg(windows)]
+mod screen;
 #[cfg(windows)]
 mod system;
 #[cfg(windows)]

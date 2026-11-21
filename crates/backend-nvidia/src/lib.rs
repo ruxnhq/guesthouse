@@ -378,6 +378,10 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         Ok(backend)
     }
 
+    fn wake_descriptor(&self) -> Option<std::os::fd::RawFd> {
+        self.copier.as_ref().and_then(|copier| copier.channel.signal).map(|(_, _, fd)| fd)
+    }
+
     fn facts(&self) -> &AdapterFacts {
         &self.facts
     }

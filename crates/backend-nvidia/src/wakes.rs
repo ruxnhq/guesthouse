@@ -33,6 +33,12 @@ pub struct Wakes {
     gpu_address: u64,
 }
 
+impl std::fmt::Debug for Wakes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wakes").field("surface", &self.surface).finish_non_exhaustive()
+    }
+}
+
 impl Wakes {
     /// Makes a surface over fresh host pages mapped at `gpu_address` in the space, and tells the
     /// driver to post this client's waiters on the descriptor [`Rm::wake_fd`] names. The surface

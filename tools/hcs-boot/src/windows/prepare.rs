@@ -33,6 +33,12 @@ pub fn prepare(options: &Options) -> Result<(), String> {
             disk.display()
         ));
     }
+    if guest::windows_account(&options.user) {
+        return Err(format!(
+            "{} is one of Windows' own accounts, which are disabled. Pick another name with --user.",
+            options.user
+        ));
+    }
     let card = chosen_card(options)?;
 
     // An ISO stays attached while its image is applied or its files are copied.

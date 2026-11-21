@@ -20,6 +20,15 @@ const COMPONENT: &str = r#"processorArchitecture="amd64" publicKeyToken="31bf385
 
 /// An answer file for the oobeSystem pass: English (US), every first-start question skipped, and one
 /// local administrator.
+/// The accounts every Windows has. The answer file's account takes the existing one when the name
+/// matches, whatever its case, and those are disabled, so none can be the guest's administrator.
+const WINDOWS_ACCOUNTS: [&str; 4] = ["Administrator", "DefaultAccount", "Guest", "WDAGUtilityAccount"];
+
+/// Whether `user` is one of Windows' own accounts, and so can't be made as a new one.
+pub fn windows_account(user: &str) -> bool {
+    WINDOWS_ACCOUNTS.iter().any(|account| account.eq_ignore_ascii_case(user))
+}
+
 pub fn answer_file(user: &str, password: &str) -> String {
     let (user, password) = (escape(user), escape(password));
     format!(
@@ -61,6 +70,13 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_own_accounts_are_known_whatever_their_case() {
+        assert!(windows_account("guest"));
+        assert!(windows_account("ADMINISTRATOR"));
+        assert!(!windows_account("guesthouse"));
+    }
 
     #[test]
     fn the_answer_file_makes_the_named_administrator() {

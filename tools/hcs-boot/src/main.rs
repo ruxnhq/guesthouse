@@ -47,7 +47,7 @@ options:
                            relay beside it.
   --size-gb N              prepare: the disk's largest size (128).
   --edition NAME           prepare: the edition in the image (Windows 11 Pro).
-  --user NAME              prepare: the guest's administrator (guest). Its password goes in a file
+  --user NAME              prepare: the guest's administrator (guesthouse). Its password goes in a file
                            beside the disk.";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +94,7 @@ impl Default for Options {
             for_minutes: None,
             size_gb: 128,
             edition: "Windows 11 Pro".into(),
-            user: "guest".into(),
+            user: "guesthouse".into(),
         }
     }
 }

@@ -237,18 +237,21 @@ impl CopyChannel {
         // replays what is kept, and the old surface's slot died with the channel it was bound to.
         self.last_words = words.clone();
         if let Some((slot, surface, fd)) = self.signal {
+            // The count the batch will write. It wraps with the sequence, as overflow checks stay
+            // on in release builds.
+            let wake = self.sequence.wrapping_add(1);
             // A waiter for the sequence this batch will write, armed before the batch runs so the
             // interrupt cannot beat the arm. A refused arm leaves the poll to time out, which is
             // what the backstop is for.
             let mut arm = [0; 32];
-            arm[8..16].copy_from_slice(&u64::from(self.sequence + 1).to_le_bytes());
+            arm[8..16].copy_from_slice(&u64::from(wake).to_le_bytes());
             arm[24..28].copy_from_slice(&(fd as u32).to_le_bytes());
             let _ = device.rm.control(surface, SURFACE_REGISTER_WAITER, &mut arm);
             words.extend([
                 increasing(COPY_SUBCHANNEL, METHOD_SET_SEMAPHORE, 4),
                 (slot >> 32) as u32,
                 slot as u32,
-                self.sequence + 1,
+                wake,
                 0,
                 increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1),
                 LAUNCH_SIGNAL_INTR,

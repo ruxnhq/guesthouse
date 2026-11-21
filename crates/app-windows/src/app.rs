@@ -335,6 +335,10 @@ impl Main {
         if let Err(words) = crate::system::remote_desktop(&address.to_string()) {
             self.tell(words, true);
         }
+        // Remote Desktop asks for them at once, so they're shown beside it.
+        if self.account.is_none() {
+            self.ask(Job::Account);
+        }
     }
 
     fn browse(&mut self) {

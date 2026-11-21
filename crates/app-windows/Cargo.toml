@@ -3,8 +3,8 @@ name = "guesthouse-app-windows"
 description = "The app on a Windows host: a window that lists the machines and starts, stops, makes and deletes them, by asking the Guesthouse service on its pipe."
 version.workspace = true
 edition.workspace = true
-# windows-reactor needs this on Windows. Elsewhere the crate is a stub that any newer Rust builds.
-rust-version = "1.95"
+# The stub elsewhere needs nothing newer. On Windows, windows-reactor asks for 1.95 itself.
+rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 

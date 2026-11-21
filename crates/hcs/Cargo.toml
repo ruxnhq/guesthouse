@@ -1,0 +1,39 @@
+[package]
+name = "guesthouse-hcs"
+description = "Windows' Host Compute System, for a Windows host: the machine document, and the calls that create, start and change a VM with only Virtual Machine Platform."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The machine document and the network documents are JSON, and HCS answers in JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The calls into computecore.dll, computenetwork.dll, virtdisk.dll, SetupAPI and the rest of Win32.
+# Its bindings link each DLL by name, so no import library or SDK is needed to build.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Vhd",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    # Only for SetupGetInfDriverStoreLocationW, whose binding asks for these two.
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_HostComputeNetwork",
+    "Win32_System_HostComputeSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+]
+
+[lints]
+workspace = true

@@ -13,6 +13,7 @@ Everything in this repo is under GPL-2.0-or-later, apart from what's listed here
 - The platform numbers in `crates/backend-intel/src/generation.rs` and `protocol/`, the names of the fields they fill, the node numbering in `protocol/nodes.rs` (gmmlib's `UmKmEnum.h`) and the order of the GPU address partition in `protocol/partition.rs` (compute-runtime's `sharedata_wrapper.h`) come from Intel's [gmmlib](https://github.com/intel/gmmlib) and [compute-runtime](https://github.com/intel/compute-runtime), under the MIT licence. Their notice is below. The structure of the slice arrays in `protocol/shape.rs` follows gmmlib's `gtsysinfo.h` and the reader in compute-runtime's `wddm.cpp`, and the choice of feature flags in `protocol/record.rs` follows compute-runtime's Lunar Lake table (`hw_info_lnl.cpp`) and its default table (`hw_info.cpp`), under the same licence.
 - A release comes with Microsoft's installer of [OpenSSH for Windows](https://github.com/PowerShell/Win32-OpenSSH), as Microsoft publishes it, which goes into a Windows guest whose SSH is on. It isn't in this repo. OpenSSH is under a BSD licence, and the installer carries its licence and the notices of what it's built with, and puts them beside the programs in the guest.
 - A release's QEMU comes with [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer), built from upstream's source as it is, under the MIT licence. It isn't in this repo, and its source is in the release's bundled source, with its licence.
+- What a Windows host does through HCS, in `crates/hcs/` and `tools/hcs-boot/src/machine.rs`, follows James Stringer's [App Sandbox](https://github.com/jamesstringer90/appsandbox), under the MIT licence: the machine document a UEFI Windows guest needs to start with only Virtual Machine Platform (its Secure Boot template, its state files, its TPM, and the screen HCS won't start without), giving the GPU only once the machine runs and by its partition adapter's path, finding each card and its driver's folder through SetupAPI, the guest's host driver store taking that folder under its own name, the ICS network and its endpoint, and the sector sizes of a new VHDX. None of its code is copied, as it's C and this is Rust, but those choices are its. Its notice is below.
 - `linux/layer/zink_on_nvidia.c` and `linux/cast/glx_dri3.c` are mine, under the MIT licence, so that their fixes can go to Mesa.
 
 The guest's modules build against NVIDIA's headers and `nvidia-drm` from NVIDIA's own source, which you get yourself. A driver image carries the host's own driver files into a VM on your machine. None of that is in this repo.
@@ -396,6 +397,32 @@ MIT License
 
 Copyright (c) 2017 Intel Corporation
 Copyright (C) 2021 Intel Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## App Sandbox
+
+```
+MIT License
+
+Copyright (c) 2026 James Stringer
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

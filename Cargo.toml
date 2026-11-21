@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tools/card-check"]
+members = ["crates/*", "tools/card-check", "tools/hcs-boot"]
 # The app needs GTK's development files, which nothing else here does. Build it with `-p guesthouse-app`.
 default-members = [
     "crates/app-core",
@@ -11,12 +11,14 @@ default-members = [
     "crates/core",
     "crates/daemon",
     "crates/frame-socket",
+    "crates/hcs",
     "crates/jail",
     "crates/messages",
     "crates/replay",
     "crates/sensors",
     "crates/transport",
     "tools/card-check",
+    "tools/hcs-boot",
 ]
 
 [workspace.package]
@@ -41,6 +43,7 @@ guesthouse-frame-socket = { path = "crates/frame-socket" }
 guesthouse-sensors = { path = "crates/sensors" }
 guesthouse-jail = { path = "crates/jail" }
 guesthouse-card-check = { path = "tools/card-check" }
+guesthouse-hcs = { path = "crates/hcs" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

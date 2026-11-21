@@ -853,6 +853,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-hcs"
+version = "0.7.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
+name = "guesthouse-hcs-boot"
+version = "0.7.1"
+dependencies = [
+ "guesthouse-hcs",
+ "serde_json",
+]
+
+[[package]]
 name = "guesthouse-jail"
 version = "0.7.1"
 dependencies = [

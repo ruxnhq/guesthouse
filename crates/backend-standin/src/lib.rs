@@ -10,6 +10,9 @@
 //! | 12..16 | surface height |
 //! | 16    | nonzero asks for the GPU's cache |
 
+// Linux only, as the backend it stands in for is. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod memory;
 mod random_messages;
 

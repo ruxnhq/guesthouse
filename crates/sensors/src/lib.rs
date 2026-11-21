@@ -5,6 +5,9 @@
 //! app showing the host's figures over a guest's screen. A reader takes no lock and never waits.
 //! What reads the card, and when, is the reader's own business and lives elsewhere.
 
+// Linux only: it uses mmap, flock and getuid. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod shared;
 
 pub use shared::SharedSnapshot;

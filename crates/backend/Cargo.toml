@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 guesthouse-messages.workspace = true
 
 [lints]

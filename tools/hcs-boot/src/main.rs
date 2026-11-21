@@ -43,6 +43,9 @@ options:
   --no-tpm                 No TPM.
   --for-minutes N          boot: asks the guest to shut down after N minutes, and stops it
                            three minutes later if it hasn't.
+  --until-report           boot: asks the guest to shut down once it has said what it sees of its
+                           card, as its report's last line. A first boot that's still setting
+                           up runs on until then.
   --no-jail                Reads the guest's serial port in this process, not in the jailed
                            relay beside it.
   --size-gb N              prepare: the disk's largest size (128).
@@ -64,6 +67,7 @@ pub struct Options {
     pub tpm: bool,
     pub jail: bool,
     pub for_minutes: Option<u64>,
+    pub until_report: bool,
     pub size_gb: u64,
     pub edition: String,
     pub user: String,
@@ -92,6 +96,7 @@ impl Default for Options {
             tpm: true,
             jail: true,
             for_minutes: None,
+            until_report: false,
             size_gb: 128,
             edition: "Windows 11 Pro".into(),
             user: "guesthouse".into(),
@@ -127,6 +132,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--no-tpm" => options.tpm = false,
             "--no-jail" => options.jail = false,
             "--for-minutes" => options.for_minutes = Some(number(&flag, &value()?)?),
+            "--until-report" => options.until_report = true,
             _ => return Err(format!("{flag} is not an option")),
         }
     }

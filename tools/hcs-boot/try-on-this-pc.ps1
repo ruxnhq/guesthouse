@@ -11,8 +11,9 @@ param(
     [Parameter(Mandatory)][string]$Folder,
     [string]$WindowsIso,
     [string]$UbuntuIso,
-    # How long each guest runs before it's asked to shut down.
-    [int]$Minutes = 20,
+    # The longest each guest may run. It's asked to shut down as soon as it has reported, and a
+    # Windows guest's first boot, which sets Windows up, can take most of this.
+    [int]$Minutes = 30,
     # How long Ubuntu's installer may take.
     [int]$InstallMinutes = 90
 )
@@ -103,7 +104,7 @@ if ($WindowsIso) {
         $null = Invoke-Step 'Windows: prepare' $program @('prepare', '--image', $WindowsIso, '--disk', $disk)
     }
     if (Test-Path -LiteralPath $disk) {
-        Invoke-Boot 'Windows: boot' @('boot', '--disk', $disk, '--name', 'guesthouse-windows', '--for-minutes', "$Minutes")
+        Invoke-Boot 'Windows: boot' @('boot', '--disk', $disk, '--name', 'guesthouse-windows', '--for-minutes', "$Minutes", '--until-report')
     }
 }
 
@@ -118,7 +119,7 @@ if ($UbuntuIso) {
         $null = Invoke-Step 'Ubuntu: install' $program (@('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$InstallMinutes") + $jail)
     }
     if ((Test-Path -LiteralPath $record) -and (Get-Content -LiteralPath $record -Raw | ConvertFrom-Json).installed) {
-        $null = Invoke-Step 'Ubuntu: boot' $program (@('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$Minutes") + $jail)
+        $null = Invoke-Step 'Ubuntu: boot' $program (@('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$Minutes", '--until-report') + $jail)
     }
 }
 

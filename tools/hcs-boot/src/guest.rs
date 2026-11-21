@@ -7,6 +7,14 @@ pub const REPORT: &str = include_str!("../guest/report.ps1");
 /// The report's file, from the root of the guest's Windows volume, which `boot` reads once the
 /// machine has stopped. `report.ps1` names it as `C:\Guesthouse\report.txt`.
 pub const REPORT_FILE: &str = r"Guesthouse\report.txt";
+/// The report's last line, on either system's serial port.
+pub const REPORT_DONE: &str = "guesthouse: report done";
+
+/// Whether a line from the guest is its report's last.
+pub fn report_done(line: &str) -> bool {
+    line.starts_with(REPORT_DONE)
+}
+
 /// Where the report goes, from the root of the guest's Windows volume. `SetupComplete.cmd` names it
 /// as `C:\Guesthouse\report.ps1`.
 pub const REPORT_PATH: &str = r"Guesthouse\report.ps1";
@@ -84,6 +92,16 @@ mod tests {
         assert!(file.contains("<Name>guest</Name>"));
         assert!(file.contains("<Value>p&amp;ss&lt;word&gt;</Value>"));
         assert!(file.contains("<Group>Administrators</Group>"));
+    }
+
+    #[test]
+    fn both_reports_end_with_the_line_boot_waits_for() {
+        let done = REPORT_DONE.trim_start_matches("guesthouse: ");
+        assert!(REPORT.contains(&format!("Send-Line '{done}'")));
+        let gpu = linux::FILES.iter().find(|(path, _)| path.ends_with("gpu.sh")).unwrap().1;
+        assert!(gpu.contains(&format!("say \"{done}\"")));
+        assert!(report_done("guesthouse: report done"));
+        assert!(!report_done("say \"guesthouse: report done\""));
     }
 
     #[test]

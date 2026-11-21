@@ -6,6 +6,7 @@
 use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation, print_guest_report};
 use crate::Options;
 use crate::guest::linux::install_finished;
+use crate::guest::report_done;
 use crate::machine::Guest;
 use crate::printable::printable;
 use crate::record::{Record, files_disk};
@@ -116,8 +117,14 @@ pub fn boot(options: &Options) -> Result<(), String> {
     let installing = record.guest == Guest::Linux && !record.installed;
     let guest = record.guest;
     // The guest's line saying its install is done is when the installer stops being attached.
+    let until_report = options.until_report;
     let on_line = move |line: &str| {
         heard_here.store(true, Ordering::SeqCst);
+        // The same as Ctrl+C: the guest is asked to shut down, and stopped if it won't.
+        if until_report && report_done(line) {
+            println!("The guest has reported, so it's asked to shut down.");
+            stop.store(true, Ordering::SeqCst);
+        }
         if install_finished(line) && record.guest == Guest::Linux && !record.installed {
             let installed = Record { installed: true, ..record.clone() };
             match installed.save(&disk) {

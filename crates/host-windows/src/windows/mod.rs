@@ -1,17 +1,18 @@
-//! The commands themselves, which call into Windows.
+//! The work that calls into Windows: making a machine's disks, and running the machine.
 
-mod boot;
-mod linux;
-mod prepare;
+pub mod boot;
+pub mod linux;
+pub mod prepare;
 
+use crate::events::{Event, Sink};
 use crate::machine::{Guest, Machine};
 use crate::record::{Record, files_disk};
-use crate::{Command, Options};
+use crate::settings::{BootSettings, GpuChoice};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
 use guesthouse_hcs::gpu::{self, Card};
 use guesthouse_hcs::host;
-use guesthouse_hcs::schema::{Attachment, AttachmentType, Gpu, ModifySettingRequest};
+use guesthouse_hcs::schema::{Attachment, AttachmentType};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,61 +20,20 @@ use std::time::{Duration, Instant};
 /// How long Windows may take to show the volumes of a disk it has just attached.
 const VOLUMES_SECONDS: u64 = 15;
 
-pub fn run(options: &Options) -> Result<(), String> {
-    match options.command {
-        Command::Gpus => list_cards(),
-        Command::Document => print_document(options),
-        Command::Prepare => prepare::prepare(options),
-        Command::Boot => boot::boot(options),
-    }
-}
-
-fn list_cards() -> Result<(), String> {
-    let cards = gpu::cards().map_err(|error| error.to_string())?;
-    if cards.is_empty() {
-        println!("No card on this host can be shared with a guest.");
-    }
-    for (number, card) in cards.iter().enumerate() {
-        println!("{number}: {}", card.name);
-        println!("   device:    {}", card.instance_id);
-        println!("   interface: {}", card.interface_path);
-        match &card.driver_folder {
-            Some(folder) => println!("   driver:    {}", folder.display()),
-            None => println!("   driver:    (its folder could not be found)"),
-        }
-    }
-    Ok(())
-}
-
-fn print_document(options: &Options) -> Result<(), String> {
-    let disk = absolute(options.disk.as_deref().expect("parse asks for a disk"))?;
-    let record = Record::load(&disk)?;
-    let machine = machine(options, disk, &record, None);
-    println!("{}", serde_json::to_string_pretty(&machine.document()).expect("a document always serialises"));
-    if options.network {
-        eprintln!("(boot adds a network card here, plugged into an endpoint it makes then.)");
-    }
-    if let Some(card) = chosen_card(options)? {
-        println!("\nThen, once the machine runs:");
-        let change = ModifySettingRequest::gpu(&Gpu::list([card.interface_path.as_str()]));
-        println!("{}", serde_json::to_string_pretty(&change).expect("a change always serialises"));
-    }
-    Ok(())
-}
-
-fn machine(
-    options: &Options,
+/// The machine `settings` asks for, on this disk, with this record and network card.
+pub fn machine(
+    settings: &BootSettings,
     disk: PathBuf,
     record: &Record,
     network: Option<guesthouse_hcs::schema::NetworkAdapter>,
 ) -> Machine {
     Machine {
-        name: options.name.clone(),
+        name: settings.name.clone(),
         more_disks: more_disks(&disk, record),
         disk,
-        memory_mb: options.memory_mb,
-        processors: options.processors,
-        tpm: options.tpm,
+        memory_mb: settings.memory_mb,
+        processors: settings.processors,
+        tpm: settings.tpm,
         network,
         guest: record.guest,
     }
@@ -96,34 +56,32 @@ fn more_disks(disk: &Path, record: &Record) -> Vec<Attachment> {
     disks
 }
 
-/// The card asked for, or the first NVIDIA card, or the first card; none with `--no-gpu`.
-fn chosen_card(options: &Options) -> Result<Option<Card>, String> {
-    if options.no_gpu {
-        return Ok(None);
-    }
+/// The card asked for, or the first NVIDIA card, or the first card, or none.
+pub fn chosen_card(choice: &GpuChoice) -> Result<Option<Card>, String> {
     let cards = gpu::cards().map_err(|error| error.to_string())?;
-    let chosen = match &options.gpu {
-        Some(text) => {
+    let chosen = match choice {
+        GpuChoice::None => return Ok(None),
+        GpuChoice::Matching(text) => {
             let text = text.to_lowercase();
             cards.iter().find(|card| {
                 card.name.to_lowercase().contains(&text) || card.instance_id.to_lowercase().contains(&text)
             })
         }
-        None => cards.iter().find(|card| card.is_nvidia()).or(cards.first()),
+        GpuChoice::Default => cards.iter().find(|card| card.is_nvidia()).or(cards.first()),
     };
     match chosen {
         Some(card) => Ok(Some(card.clone())),
         None if cards.is_empty() => {
-            Err("No card on this host can be shared with a guest. Use --no-gpu to boot without one.".into())
+            Err("No card on this host can be shared with a guest, so it can only boot with none.".into())
         }
         None => Err(format!(
-            "No card matches --gpu. These can be shared: {}",
+            "No card matches the one asked for. These can be shared: {}",
             cards.iter().map(|card| card.name.as_str()).collect::<Vec<_>>().join(", ")
         )),
     }
 }
 
-fn need_elevation() -> Result<(), String> {
+pub(crate) fn need_elevation() -> Result<(), String> {
     if host::is_elevated() {
         Ok(())
     } else {
@@ -134,12 +92,12 @@ fn need_elevation() -> Result<(), String> {
 }
 
 /// HCS and DISM resolve no relative paths, so every path they're given is made whole first.
-fn absolute(path: &Path) -> Result<PathBuf, String> {
+pub fn absolute(path: &Path) -> Result<PathBuf, String> {
     std::path::absolute(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// The volumes of an attached disk, once Windows shows any.
-fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
+pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
     let started = Instant::now();
     loop {
         let found = disk.volumes().map_err(|error| error.to_string())?;
@@ -151,7 +109,7 @@ fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
 }
 
 /// Copies the card's driver onto the Windows volume of the disk, which no machine may have open.
-fn copy_driver_to_disk(disk: &Path, card: &Card) -> Result<(), String> {
+fn copy_driver_to_disk(disk: &Path, card: &Card, sink: &dyn Sink) -> Result<(), String> {
     let folder = card.driver_folder.as_ref().ok_or_else(|| {
         format!("The folder of {}'s driver could not be found, so the guest can't be given it.", card.name)
     })?;
@@ -161,13 +119,13 @@ fn copy_driver_to_disk(disk: &Path, card: &Card) -> Result<(), String> {
         .into_iter()
         .find(|volume| volume.root.join(r"Windows\System32").is_dir())
         .ok_or_else(|| format!("{} has no volume with Windows on it.", disk.display()))?;
-    copy_into(folder, &windows.root)
+    copy_into(folder, &windows.root, sink)
 }
 
-fn copy_into(folder: &Path, root: &Path) -> Result<(), String> {
+fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> {
     let copied = copy_driver(folder, root).map_err(|error| error.to_string())?;
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
-    println!("Driver {name}: {} files copied, {} already there.", copied.copied, copied.kept);
+    sink.note(format!("Driver {name}: {} files copied, {} already there.", copied.copied, copied.kept));
     Ok(())
 }
 
@@ -176,7 +134,7 @@ const RELEASE_SECONDS: u64 = 30;
 
 /// Prints the report a Windows guest wrote on its own disk, which says what it saw of its card
 /// even when its serial port said nothing.
-fn print_guest_report(disk: &Path) {
+fn print_guest_report(disk: &Path, sink: &dyn Sink) {
     let started = Instant::now();
     let attached = loop {
         let opened =
@@ -186,7 +144,7 @@ fn print_guest_report(disk: &Path) {
             Err(_) if started.elapsed() < Duration::from_secs(RELEASE_SECONDS) => {
                 thread::sleep(Duration::from_secs(1))
             }
-            Err(error) => return eprintln!("The guest's report couldn't be read: {error}"),
+            Err(error) => return sink.problem(format!("The guest's report couldn't be read: {error}")),
         }
     };
     let report = volumes(&attached)
@@ -196,14 +154,14 @@ fn print_guest_report(disk: &Path) {
         .find(|path| path.is_file());
     match report.map(std::fs::read) {
         Some(Ok(bytes)) => {
-            println!("The guest's report, from its disk:");
+            sink.note("The guest's report, from its disk:");
             for line in bytes.split(|&byte| byte == b'\n') {
-                println!("report: {}", crate::printable::printable(line));
+                sink.event(Event::Report(crate::printable::printable(line)));
             }
         }
-        Some(Err(error)) => eprintln!("The guest's report couldn't be read: {error}"),
-        None => println!(
-            "The guest wrote no report on its disk, so it never got as far as its first sign-in screen."
+        Some(Err(error)) => sink.problem(format!("The guest's report couldn't be read: {error}")),
+        None => sink.note(
+            "The guest wrote no report on its disk, so it never got as far as its first sign-in screen.",
         ),
     }
 }

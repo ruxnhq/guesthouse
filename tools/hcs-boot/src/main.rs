@@ -1,6 +1,8 @@
-//! `guesthouse-hcs-boot`: the first step of Guesthouse on a Windows host. It boots a Windows 11
-//! VM with GPU-PV through HCS, with only Virtual Machine Platform on, so it runs on Windows 11 Home,
-//! and with no Hyper-V and none of its tools. It can also make the VM's disk from a Windows ISO.
+//! `guesthouse-hcs-boot`: Guesthouse on a Windows host from the command line. It makes a Windows or
+//! Ubuntu guest's disk from an ISO and boots it with GPU-PV through HCS, with only Virtual Machine
+//! Platform on, so it runs on Windows 11 Home, and with no Hyper-V and none of its tools. The work
+//! is `guesthouse-host-windows`, which the Guesthouse service uses too; this is its options and
+//! its printing.
 //!
 //! The guest has no screen anyone can see yet, so it tells the host over its serial port what it
 //! sees of its card, and the program prints that.
@@ -9,14 +11,10 @@
 // Windows commands use go unused there.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-mod guest;
-mod machine;
-mod printable;
-mod record;
-mod wim_info;
 #[cfg(windows)]
 mod windows;
 
+use guesthouse_host_windows::settings::{BootSettings, GpuChoice, PrepareSettings};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -100,6 +98,42 @@ impl Default for Options {
             size_gb: 128,
             edition: "Windows 11 Pro".into(),
             user: "guesthouse".into(),
+        }
+    }
+}
+
+impl Options {
+    fn gpu_choice(&self) -> GpuChoice {
+        match (&self.gpu, self.no_gpu) {
+            (_, true) => GpuChoice::None,
+            (Some(text), false) => GpuChoice::Matching(text.clone()),
+            (None, false) => GpuChoice::Default,
+        }
+    }
+
+    fn prepare_settings(&self) -> PrepareSettings {
+        PrepareSettings {
+            disk: self.disk.clone().unwrap_or_default(),
+            image: self.image.clone().unwrap_or_default(),
+            user: self.user.clone(),
+            edition: self.edition.clone(),
+            size_gb: self.size_gb,
+            gpu: self.gpu_choice(),
+        }
+    }
+
+    fn boot_settings(&self) -> BootSettings {
+        BootSettings {
+            name: self.name.clone(),
+            disk: self.disk.clone().unwrap_or_default(),
+            memory_mb: self.memory_mb,
+            processors: self.processors,
+            tpm: self.tpm,
+            network: self.network,
+            jail: self.jail,
+            gpu: self.gpu_choice(),
+            for_minutes: self.for_minutes,
+            until_report: self.until_report,
         }
     }
 }
@@ -200,6 +234,18 @@ mod tests {
         assert_eq!((options.memory_mb, options.processors), (16384, 8));
         assert_eq!(options.gpu.as_deref(), Some("5090"));
         assert!(!options.tpm && options.network);
+    }
+
+    #[test]
+    fn options_become_the_librarys_settings() {
+        let boot =
+            parsed("boot --disk a.vhdx --gpu 5090 --until-report --for-minutes 30").unwrap().boot_settings();
+        assert_eq!(boot.gpu, GpuChoice::Matching("5090".into()));
+        assert_eq!((boot.until_report, boot.for_minutes), (true, Some(30)));
+        let none = parsed("boot --disk a.vhdx --gpu 5090 --no-gpu").unwrap().boot_settings();
+        assert_eq!(none.gpu, GpuChoice::None, "--no-gpu wins");
+        let prepare = parsed("prepare --image u.iso --disk a.vhdx").unwrap().prepare_settings();
+        assert_eq!((prepare.user.as_str(), prepare.gpu), ("guesthouse", GpuChoice::Default));
     }
 
     #[test]

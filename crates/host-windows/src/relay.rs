@@ -3,9 +3,7 @@
 //! part of Guesthouse on a Windows host that reads bytes a guest chose. It needs nothing else: no
 //! files, no network and no other process.
 
-mod printable;
-
-use printable::{LINE_LIMIT, printable};
+use guesthouse_host_windows::printable::{LINE_LIMIT, printable};
 use std::io::{self, BufRead, Read, Write};
 
 fn main() {

@@ -5,10 +5,11 @@
 //! to `linux` instead, where Ubuntu's own installer does the work on the first boot.
 
 use super::{absolute, chosen_card, copy_into, linux, need_elevation, system_program, volumes};
-use crate::Options;
+use crate::events::Sink;
 use crate::guest;
 use crate::machine::Guest;
 use crate::record::Record;
+use crate::settings::PrepareSettings;
 use crate::wim_info;
 use guesthouse_hcs::disk::{self, Kind, VirtualDisk};
 use guesthouse_hcs::host;
@@ -23,30 +24,30 @@ const SYSTEM_PARTITION_MB: u32 = 260;
 const RESERVED_PARTITION_MB: u32 = 16;
 pub(super) const BYTES_PER_GB: u64 = 1 << 30;
 
-pub fn prepare(options: &Options) -> Result<(), String> {
+pub fn prepare(settings: &PrepareSettings, sink: &dyn Sink) -> Result<(), String> {
     need_elevation()?;
-    let disk = absolute(options.disk.as_deref().expect("parse asks for a disk"))?;
-    let image = absolute(options.image.as_deref().expect("parse asks for an image"))?;
+    let disk = absolute(&settings.disk)?;
+    let image = absolute(&settings.image)?;
     if disk.exists() {
         return Err(format!(
             "{} is there already. prepare makes a new disk, and never writes over one.",
             disk.display()
         ));
     }
-    if guest::windows_account(&options.user) {
+    if guest::windows_account(&settings.user) {
         return Err(format!(
-            "{} is one of Windows' own accounts, which are disabled. Pick another name with --user.",
-            options.user
+            "{} is one of Windows' own accounts, which are disabled. Pick another name.",
+            settings.user
         ));
     }
-    let card = chosen_card(options)?;
+    let card = chosen_card(&settings.gpu)?;
 
     // An ISO stays attached while its image is applied or its files are copied.
     let is_iso = image.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("iso"));
     let (_iso, wim) = if is_iso {
         let (iso, root) = attach_iso(&image)?;
         if root.join(guest::linux::INSTALLER_KERNEL).is_file() {
-            return linux::prepare(options, &disk, &image, &root, card.as_ref());
+            return linux::prepare(settings, &disk, &image, &root, card.as_ref(), sink);
         }
         let wim = ["install.wim", "install.esd"]
             .iter()
@@ -70,19 +71,21 @@ pub fn prepare(options: &Options) -> Result<(), String> {
             .arg("/Get-WimInfo")
             .raw_arg(format!("/WimFile:\"{}\"", wim.display())),
     )?;
-    let index = wim_info::index_of(&listing, &options.edition).ok_or_else(|| {
+    let index = wim_info::index_of(&listing, &settings.edition).ok_or_else(|| {
         let names: Vec<String> = wim_info::editions(&listing).into_iter().map(|(_, name)| name).collect();
-        format!(
-            "The image has no {}. It has: {}. Pick one with --edition.",
-            options.edition,
-            names.join(", ")
-        )
+        format!("The image has no {}. It has: {}. Pick one of them.", settings.edition, names.join(", "))
     })?;
 
-    println!("Making {} ({} GB at most).", disk.display(), options.size_gb);
-    disk::create_vhdx(&disk, options.size_gb * BYTES_PER_GB).map_err(|error| error.to_string())?;
-    let made =
-        fill(&disk, &wim, index, options, card.as_ref().and_then(|card| card.driver_folder.as_deref()));
+    sink.note(format!("Making {} ({} GB at most).", disk.display(), settings.size_gb));
+    disk::create_vhdx(&disk, settings.size_gb * BYTES_PER_GB).map_err(|error| error.to_string())?;
+    let made = fill(
+        &disk,
+        &wim,
+        index,
+        settings,
+        card.as_ref().and_then(|card| card.driver_folder.as_deref()),
+        sink,
+    );
     if made.is_err() {
         // A half-made disk would only be refused by the next run, so it goes.
         let _ = fs::remove_file(&disk);
@@ -107,8 +110,9 @@ fn fill(
     disk_path: &Path,
     wim: &Path,
     index: u32,
-    options: &Options,
+    settings: &PrepareSettings,
     driver: Option<&Path>,
+    sink: &dyn Sink,
 ) -> Result<(), String> {
     let (_attached, number) = attach_new(disk_path)?;
     let [system, windows] = free_letters()?;
@@ -127,7 +131,7 @@ fn fill(
     )?;
     let windows_root = PathBuf::from(format!("{windows}:\\"));
 
-    println!("Applying {} from {}. This takes a while.", options.edition, wim.display());
+    sink.note(format!("Applying {} from {}. This takes a while.", settings.edition, wim.display()));
     run(Command::new(system_program("dism.exe"))
         .arg("/Apply-Image")
         .raw_arg(format!("/ImageFile:\"{}\"", wim.display()))
@@ -141,16 +145,16 @@ fn fill(
     ]))?;
 
     let password = new_password()?;
-    write(&windows_root, guest::ANSWER_FILE_PATH, &guest::answer_file(&options.user, &password))?;
+    write(&windows_root, guest::ANSWER_FILE_PATH, &guest::answer_file(&settings.user, &password))?;
     write(&windows_root, guest::SETUP_COMPLETE_PATH, guest::SETUP_COMPLETE)?;
     write(&windows_root, guest::REPORT_PATH, guest::REPORT)?;
     if let Some(folder) = driver {
-        copy_into(folder, &windows_root)?;
+        copy_into(folder, &windows_root, sink)?;
     }
 
     Record { guest: Guest::Windows, ..Record::default() }.save(disk_path)?;
-    write_account(disk_path, &options.user, &password)?;
-    println!("Boot it with: guesthouse-hcs-boot boot --disk \"{}\"", disk_path.display());
+    write_account(disk_path, &settings.user, &password, sink)?;
+    sink.note("It's ready to boot.");
     Ok(())
 }
 
@@ -173,11 +177,11 @@ pub(super) fn new_password() -> Result<String, String> {
 }
 
 /// Keeps the guest's administrator and password beside its disk, the one place the host has them.
-pub(super) fn write_account(disk: &Path, user: &str, password: &str) -> Result<(), String> {
+pub(super) fn write_account(disk: &Path, user: &str, password: &str, sink: &dyn Sink) -> Result<(), String> {
     let account = disk.with_extension("account.txt");
     fs::write(&account, format!("user: {user}\npassword: {password}\n"))
         .map_err(|error| format!("{}: {error}", account.display()))?;
-    println!("Done. The guest's administrator and password are in {}.", account.display());
+    sink.note(format!("Done. The guest's administrator and password are in {}.", account.display()));
     Ok(())
 }
 

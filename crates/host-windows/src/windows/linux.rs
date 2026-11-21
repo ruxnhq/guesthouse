@@ -7,12 +7,13 @@
 
 use super::prepare::{BYTES_PER_GB, attach_new, diskpart, free_letters, new_password, write, write_account};
 use super::volumes;
-use crate::Options;
+use crate::events::Sink;
 use crate::guest::linux::{
     ACCOUNT, BOOT_FILES, FILES, INSTALLER_INITRD, LABEL, WSL_DRIVERS, WSL_LIB, account, unix_text,
 };
 use crate::machine::Guest;
 use crate::record::{Record, files_disk};
+use crate::settings::PrepareSettings;
 use guesthouse_hcs::disk::{self, Kind, VirtualDisk};
 use guesthouse_hcs::drivers::copy_folder;
 use guesthouse_hcs::gpu::Card;
@@ -30,15 +31,16 @@ const LARGEST_FILES_DISK_GB: u64 = 32;
 const DXCORE: &str = "libdxcore.so";
 
 pub fn prepare(
-    options: &Options,
+    settings: &PrepareSettings,
     disk_path: &Path,
     iso: &Path,
     iso_root: &Path,
     card: Option<&Card>,
+    sink: &dyn Sink,
 ) -> Result<(), String> {
-    if !valid_user(&options.user) {
+    if !valid_user(&settings.user) {
         return Err(
-            "--user for a Linux guest takes lower-case letters, digits, - and _, from a letter.".into()
+            "A Linux guest's administrator takes lower-case letters, digits, - and _, from a letter.".into(),
         );
     }
     for needed in [INSTALLER_INITRD, BOOT_FILES[0].0, BOOT_FILES[1].0] {
@@ -50,7 +52,7 @@ pub fn prepare(
     if files.exists() {
         return Err(format!("{} is there already, and prepare never writes over a disk.", files.display()));
     }
-    let made = make(options, disk_path, &files, iso, iso_root, card);
+    let made = make(settings, disk_path, &files, iso, iso_root, card, sink);
     if made.is_err() {
         // Half-made disks would only be refused by the next run, so they go.
         let _ = fs::remove_file(disk_path);
@@ -60,22 +62,23 @@ pub fn prepare(
 }
 
 fn make(
-    options: &Options,
+    settings: &PrepareSettings,
     disk_path: &Path,
     files: &Path,
     iso: &Path,
     iso_root: &Path,
     card: Option<&Card>,
+    sink: &dyn Sink,
 ) -> Result<(), String> {
-    println!(
+    sink.note(format!(
         "Making {} ({} GB at most), for Ubuntu's installer to fill.",
         disk_path.display(),
-        options.size_gb
-    );
-    disk::create_vhdx(disk_path, options.size_gb * BYTES_PER_GB).map_err(|error| error.to_string())?;
+        settings.size_gb
+    ));
+    disk::create_vhdx(disk_path, settings.size_gb * BYTES_PER_GB).map_err(|error| error.to_string())?;
 
     let size = files_disk_bytes(card);
-    println!("Making its files disk, {} ({} GB).", files.display(), size / BYTES_PER_GB);
+    sink.note(format!("Making its files disk, {} ({} GB).", files.display(), size / BYTES_PER_GB));
     disk::create_vhdx(files, size).map_err(|error| error.to_string())?;
     let (_attached, number) = attach_new(files)?;
     let [letter] = free_letters()?;
@@ -100,34 +103,33 @@ fn make(
         write(&root, path, &unix_text(text))?;
     }
     let password = new_password()?;
-    write(&root, ACCOUNT, &account(&options.user, &password))?;
-    refresh(&root, card)?;
+    write(&root, ACCOUNT, &account(&settings.user, &password))?;
+    refresh(&root, card, sink)?;
 
     Record { guest: Guest::Linux, installer: Some(iso.to_owned()), ..Record::default() }.save(disk_path)?;
-    write_account(disk_path, &options.user, &password)?;
-    println!(
-        "The first boot installs Ubuntu, which takes a while, and then the machine turns itself off. \
-         Boot it again to start it.\nBoot it with: guesthouse-hcs-boot boot --disk \"{}\"",
-        disk_path.display()
+    write_account(disk_path, &settings.user, &password, sink)?;
+    sink.note(
+        "It's ready. The first boot installs Ubuntu, which takes a while, and then the machine turns \
+         itself off. The boot after that starts it.",
     );
     Ok(())
 }
 
 /// Brings the host's GPU files on the files disk up to date with the host's, while no machine has
 /// the disk open.
-pub fn refresh_disk(files: &Path, card: Option<&Card>) -> Result<(), String> {
+pub fn refresh_disk(files: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
     let mut attached = VirtualDisk::open(files, Kind::Vhdx).map_err(|error| error.to_string())?;
     attached.attach(false).map_err(|error| error.to_string())?;
     let volume = volumes(&attached)?
         .into_iter()
         .next()
         .ok_or_else(|| format!("{} has no volume on it.", files.display()))?;
-    refresh(&volume.root, card)
+    refresh(&volume.root, card, sink)
 }
 
 /// The GPU files on the files disk at `root`. WSL's own libraries go first and the driver's on top,
 /// as WSL lays one over the other. Only the card's driver folder is kept, so an old driver's goes.
-fn refresh(root: &Path, card: Option<&Card>) -> Result<(), String> {
+fn refresh(root: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
     // The guest runs its scripts from here at every start, so these are always this build's.
     for (path, text) in FILES.iter().filter(|(path, _)| path.starts_with(GUEST_SCRIPTS)) {
         write(root, path, &unix_text(text))?;
@@ -135,13 +137,18 @@ fn refresh(root: &Path, card: Option<&Card>) -> Result<(), String> {
     let lib = root.join(WSL_LIB);
     for source in library_folders().into_iter().filter(|folder| folder.is_dir()) {
         let copied = copy_folder(&source, &lib).map_err(|error| error.to_string())?;
-        println!("{}: {} files copied, {} already there.", source.display(), copied.copied, copied.kept);
+        sink.note(format!(
+            "{}: {} files copied, {} already there.",
+            source.display(),
+            copied.copied,
+            copied.kept
+        ));
     }
     if !lib.join(DXCORE).is_file() {
-        eprintln!(
+        sink.problem(format!(
             "This host has no {DXCORE}, which comes with WSL, so nvidia-smi and CUDA won't run in the \
              guest. Installing WSL gives it."
-        );
+        ));
     }
 
     let drivers = root.join(WSL_DRIVERS);
@@ -149,12 +156,12 @@ fn refresh(root: &Path, card: Option<&Card>) -> Result<(), String> {
     let Some(folder) = card.and_then(|card| card.driver_folder.as_deref()) else { return Ok(()) };
     let name = folder.file_name().expect("a driver folder has a name");
     let copied = copy_folder(folder, &drivers.join(name)).map_err(|error| error.to_string())?;
-    println!(
+    sink.note(format!(
         "Driver {}: {} files copied, {} already there.",
         name.to_string_lossy(),
         copied.copied,
         copied.kept
-    );
+    ));
     for entry in fs::read_dir(&drivers).map_err(|error| format!("{}: {error}", drivers.display()))?.flatten()
     {
         if entry.file_name() != name && entry.path().is_dir() {
@@ -233,19 +240,20 @@ mod tests {
 #[cfg(test)]
 mod host_tests {
     use super::*;
+    use crate::events::Kept;
 
     /// Reads this host's own WSL and driver libraries, so it's run by hand only.
     #[test]
     #[ignore = "copies this host's WSL libraries"]
     fn the_files_disk_gets_wsl_and_the_drivers_libraries_with_dxcore() {
         let root = std::env::temp_dir().join(format!("gh-files-{}", std::process::id()));
-        refresh(&root, None).unwrap();
+        refresh(&root, None, &Kept::default()).unwrap();
         let lib = root.join(WSL_LIB);
         assert!(lib.join(DXCORE).is_file(), "WSL's DXCore");
         assert!(lib.join("libcuda.so.1").is_file(), "the driver's CUDA");
         assert!(lib.join("nvidia-smi").is_file(), "the driver's nvidia-smi");
         assert!(root.join(WSL_DRIVERS).is_dir());
-        refresh(&root, None).unwrap();
+        refresh(&root, None, &Kept::default()).unwrap();
         let _ = fs::remove_dir_all(root);
     }
 }

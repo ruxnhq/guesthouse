@@ -866,6 +866,15 @@ name = "guesthouse-hcs-boot"
 version = "0.7.1"
 dependencies = [
  "guesthouse-hcs",
+ "guesthouse-host-windows",
+ "serde_json",
+]
+
+[[package]]
+name = "guesthouse-host-windows"
+version = "0.7.1"
+dependencies = [
+ "guesthouse-hcs",
  "guesthouse-jail",
  "serde",
  "serde_json",

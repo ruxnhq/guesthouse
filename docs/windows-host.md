@@ -2,7 +2,7 @@
 
 This is the first step of Guesthouse on Windows: Windows 11 and Ubuntu VMs with GPU-PV, run through Windows' Host Compute System with only the Virtual Machine Platform feature on. Hyper-V isn't needed, so Windows 11 Home can do it, and none of Hyper-V's tools are used. The rest of Guesthouse, the daemon and the app, still runs on Linux only. On Windows those crates build empty, so the whole workspace builds.
 
-`tools/hcs-boot` is the program, and `crates/hcs` is what it calls.
+`tools/hcs-boot` is the program. `crates/host-windows` is the work it does, which the Guesthouse service will share, and `crates/hcs` is the calls into Windows underneath.
 
 ## What it needs
 

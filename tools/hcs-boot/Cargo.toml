@@ -1,6 +1,6 @@
 [package]
 name = "guesthouse-hcs-boot"
-description = "Boots a Windows 11 VM with GPU-PV on a Windows host, through HCS and Virtual Machine Platform alone, and prepares its disk from an ISO."
+description = "Makes and boots Windows and Ubuntu guests with GPU-PV on a Windows host from the command line, through HCS and Virtual Machine Platform alone."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,20 +11,12 @@ license.workspace = true
 name = "guesthouse-hcs-boot"
 path = "src/main.rs"
 
-# The jailed reader of a guest's serial port, which boot starts beside it.
-[[bin]]
-name = "guesthouse-serial-relay"
-path = "src/relay.rs"
-
 [dependencies]
+guesthouse-host-windows.workspace = true
+# The card list and the GPU change `document` prints.
 guesthouse-hcs.workspace = true
-# The record beside each disk, and the machine document `document` prints.
-serde = { version = "1", features = ["derive"] }
+# To print the machine document for `document`.
 serde_json = "1"
-
-# The jail the serial relay runs in.
-[target.'cfg(windows)'.dependencies]
-guesthouse-jail.workspace = true
 
 [lints]
 workspace = true

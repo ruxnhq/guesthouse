@@ -4,12 +4,13 @@
 //! when its last handle closes, or until its time is up.
 
 use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation, print_guest_report};
-use crate::Options;
+use crate::events::{Event, Sink, State};
 use crate::guest::linux::install_finished;
 use crate::guest::report_done;
 use crate::machine::Guest;
 use crate::printable::printable;
 use crate::record::{Record, files_disk};
+use crate::settings::BootSettings;
 use guesthouse_hcs::host;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
@@ -47,19 +48,33 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(180);
 /// disk's own menu started it. An install boot this quiet for this long started something else.
 const INSTALL_SILENCE: Duration = Duration::from_secs(300);
 
-pub fn boot(options: &Options) -> Result<(), String> {
+/// Boots the machine `settings` names and runs it until it stops, its time is up, or `stop` is set:
+/// once to ask the guest to shut down, and again to stop it at once. Everything it has to say goes
+/// to `sink`, ending with the machine's state as stopped. An error that ends it is returned, for the
+/// caller to report, and not sent too.
+pub fn boot(settings: &BootSettings, sink: Arc<dyn Sink>, stop: Arc<AtomicBool>) -> Result<(), String> {
+    sink.state(State::Starting);
+    let ran = run(settings, &sink, stop);
+    sink.state(State::Stopped);
+    ran
+}
+
+fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> Result<(), String> {
     need_elevation()?;
-    let disk = absolute(options.disk.as_deref().expect("parse asks for a disk"))?;
+    let disk = absolute(&settings.disk)?;
     if !disk.is_file() {
         return Err(format!("There is no disk at {}. prepare makes one.", disk.display()));
     }
-    let card = chosen_card(options)?;
+    let card = chosen_card(&settings.gpu)?;
     // A machine left from an earlier run still has the disk open, so it goes before the disk is
     // attached for the driver.
-    if let Some(earlier) = ComputeSystem::open(&options.name) {
-        println!("A machine called {} is still there from an earlier run. Stopping it.", options.name);
+    if let Some(earlier) = ComputeSystem::open(&settings.name) {
+        sink.note(format!(
+            "A machine called {} is still there from an earlier run. Stopping it.",
+            settings.name
+        ));
         if let Err(error) = earlier.terminate() {
-            eprintln!("{error}");
+            sink.problem(format!("{error}"));
         }
     }
     let mut record = Record::load(&disk)?;
@@ -70,21 +85,19 @@ pub fn boot(options: &Options) -> Result<(), String> {
     match record.guest {
         Guest::Windows => {
             if let Some(card) = &card {
-                copy_driver_to_disk(&disk, card)?;
+                copy_driver_to_disk(&disk, card, sink.as_ref())?;
             }
         }
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref())?;
+            linux::refresh_disk(&files_disk(&disk), card.as_ref(), sink.as_ref())?;
             if !record.installed {
-                println!("This boot installs Ubuntu. The machine turns itself off when it's done.");
+                sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }
         }
     }
-    let stop = host::catch_ctrl_c().map_err(|error| error.to_string())?;
-
     let mac = record.mac.clone().expect("the record has a MAC by now");
-    let (_endpoint, adapter) = if options.network { plug_in(&mac)? } else { (None, None) };
-    let machine = machine(options, disk, &record, adapter);
+    let (_endpoint, adapter) = if settings.network { plug_in(&mac, sink.as_ref())? } else { (None, None) };
+    let machine = machine(settings, disk, &record, adapter);
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
     let mut opened = vec![machine.disk.clone(), machine.guest_state_path(), machine.runtime_state_path()];
@@ -99,63 +112,67 @@ pub fn boot(options: &Options) -> Result<(), String> {
         format!("{error}\n\nThe document sent:\n{sent}")
     })?;
     running.start().map_err(|error| error.to_string())?;
-    println!("{} started.", machine.name);
+    sink.note(format!("{} started.", machine.name));
+    sink.state(State::Running);
 
     if let Some(card) = &card {
         let change = ModifySettingRequest::gpu(&Gpu::list([card.interface_path.as_str()]));
         match running.modify(&change) {
-            Ok(()) => println!("It has {} by GPU-PV.", card.name),
-            Err(error) => eprintln!("It runs without its card, as HCS refused it: {error}"),
+            Ok(()) => sink.note(format!("It has {} by GPU-PV.", card.name)),
+            Err(error) => sink.problem(format!("It runs without its card, as HCS refused it: {error}")),
         }
     }
 
     let pipe = machine.serial_pipe();
-    let unjailed = !options.jail;
+    let unjailed = !settings.jail;
     let disk = machine.disk.clone();
     let heard = Arc::new(AtomicBool::new(false));
     let heard_here = Arc::clone(&heard);
     let installing = record.guest == Guest::Linux && !record.installed;
     let guest = record.guest;
     // The guest's line saying its install is done is when the installer stops being attached.
-    let until_report = options.until_report;
+    let until_report = settings.until_report;
+    let line_sink = Arc::clone(sink);
+    let line_stop = Arc::clone(&stop);
     let on_line = move |line: &str| {
         heard_here.store(true, Ordering::SeqCst);
         // The same as Ctrl+C: the guest is asked to shut down, and stopped if it won't.
         if until_report && report_done(line) {
-            println!("The guest has reported, so it's asked to shut down.");
-            stop.store(true, Ordering::SeqCst);
+            line_sink.note("The guest has reported, so it's asked to shut down.");
+            line_stop.store(true, Ordering::SeqCst);
         }
         if install_finished(line) && record.guest == Guest::Linux && !record.installed {
             let installed = Record { installed: true, ..record.clone() };
             match installed.save(&disk) {
-                Ok(()) => println!("The install is done. The next boot starts the installed system."),
-                Err(error) => eprintln!("{error}"),
+                Ok(()) => line_sink.note("The install is done. The next boot starts the installed system."),
+                Err(error) => line_sink.problem(error),
             }
         }
     };
-    thread::spawn(move || print_serial(&pipe, unjailed, on_line));
-    println!("Waiting for the guest. Ctrl+C asks it to shut down.");
-    let limit = options.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
+    let serial_sink = Arc::clone(sink);
+    thread::spawn(move || print_serial(&pipe, unjailed, on_line, serial_sink));
+    sink.note("Waiting for the guest.");
+    let limit = settings.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
     let silence = installing.then_some((INSTALL_SILENCE, heard));
-    let waited = wait(&running, stop, limit, silence);
+    let waited = wait(&running, &stop, limit, silence, sink);
     // The report a Windows guest writes on its own disk can be read once the machine has let go.
     drop(running);
     if guest == Guest::Windows {
-        print_guest_report(&machine.disk);
+        print_guest_report(&machine.disk, sink.as_ref());
     }
     waited
 }
 
 /// An endpoint on Guesthouse's network, deleted when dropped, and the card with this MAC that plugs
 /// into it.
-fn plug_in(mac: &str) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
+fn plug_in(mac: &str, sink: &dyn Sink) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
     let _ = network::delete_network(&OLD_NETWORK_ID);
     network::ensure_ics_network(&NETWORK_ID, NETWORK_NAME).map_err(|error| error.to_string())?;
     let id = host::new_guid().map_err(|error| error.to_string())?;
     let endpoint = Endpoint::create(&NETWORK_ID, id, mac).map_err(|error| error.to_string())?;
     match endpoint.properties() {
-        Ok(properties) => println!("The network gave its card: {properties}"),
-        Err(error) => eprintln!("{error}"),
+        Ok(properties) => sink.note(format!("The network gave its card: {properties}")),
+        Err(error) => sink.problem(error.to_string()),
     }
     let adapter = NetworkAdapter { endpoint_id: endpoint.id_string(), mac_address: mac.to_owned() };
     Ok((Some(endpoint), Some(adapter)))
@@ -169,6 +186,7 @@ fn wait(
     stop: &AtomicBool,
     limit: Option<Duration>,
     silence: Option<(Duration, Arc<AtomicBool>)>,
+    sink: &Arc<dyn Sink>,
 ) -> Result<(), String> {
     let started = Instant::now();
     let mut asked = false;
@@ -181,7 +199,7 @@ fn wait(
         if let Some(limit) = limit {
             let elapsed = started.elapsed();
             if (!asked && elapsed >= limit) || (asked && elapsed >= limit + SHUTDOWN_GRACE) {
-                println!("Its time is up.");
+                sink.note("Its time is up.");
                 stop.store(true, Ordering::SeqCst);
             }
         }
@@ -189,32 +207,34 @@ fn wait(
             && !heard.load(Ordering::SeqCst)
             && started.elapsed() >= *quiet
         {
-            println!(
+            sink.note(
                 "The installer has said nothing on the serial port, which it does only when the files \
-                 disk's menu starts it, so the firmware or GRUB started something else. Stopping it."
+                 disk's menu starts it, so the firmware or GRUB started something else. Stopping it.",
             );
             if let Err(error) = running.terminate() {
-                eprintln!("{error}");
+                sink.problem(format!("{error}"));
             }
             return Ok(());
         }
         if stop.swap(false, Ordering::SeqCst) {
             if asked {
-                println!("Stopping it now.");
+                sink.note("Stopping it now.");
                 if let Err(error) = running.terminate() {
-                    eprintln!("{error}");
+                    sink.problem(format!("{error}"));
                 }
                 return Ok(());
             } else {
                 asked = true;
-                println!("Asking the guest to shut down. Ctrl+C again stops it at once.");
+                sink.note("Asking the guest to shut down. Asking again stops it at once.");
+                sink.state(State::Stopping);
                 // The call waits for the guest, so it has a handle and a thread of its own.
                 let name = running.id().to_owned();
+                let shutdown_sink = Arc::clone(sink);
                 thread::spawn(move || {
                     if let Some(machine) = ComputeSystem::open(&name)
                         && let Err(error) = machine.shut_down()
                     {
-                        eprintln!("{error}");
+                        shutdown_sink.problem(error.to_string());
                     }
                 });
             }
@@ -222,18 +242,18 @@ fn wait(
         match running.properties() {
             Ok(properties) => {
                 if first_answer {
-                    println!("HCS says: {}", properties.raw);
+                    sink.note(format!("HCS says: {}", properties.raw));
                     first_answer = false;
                 }
                 unreadable = 0;
                 if properties.stopped() {
-                    println!("The machine stopped: {} {}", properties.state, properties.exit_type);
+                    sink.note(format!("The machine stopped: {} {}", properties.state, properties.exit_type));
                     return Ok(());
                 }
             }
             Err(error) => {
                 if unreadable.is_multiple_of(UNREADABLE_REPEAT) {
-                    eprintln!("The machine's state can't be read, so it's left running: {error}");
+                    sink.problem(format!("The machine's state can't be read, so it's left running: {error}"));
                 }
                 unreadable += 1;
             }
@@ -241,33 +261,33 @@ fn wait(
     }
 }
 
-/// Prints each line the guest writes to COM1 until the port closes. The port is read by the relay
+/// Sends each line the guest writes to COM1 until the port closes. The port is read by the relay
 /// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here.
-fn print_serial(pipe: &str, unjailed: bool, mut on_line: impl FnMut(&str)) {
+fn print_serial(pipe: &str, unjailed: bool, mut on_line: impl FnMut(&str), sink: Arc<dyn Sink>) {
     let started = Instant::now();
     let port = loop {
         match File::open(pipe) {
             Ok(port) => break port,
             Err(_) if started.elapsed() < Duration::from_secs(SERIAL_SECONDS) => thread::sleep(POLL),
             Err(error) => {
-                eprintln!("The guest's serial port at {pipe} could not be opened: {error}");
+                sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));
                 return;
             }
         }
     };
     if unjailed {
-        println!("Reading the guest's serial port with no jail, as --no-jail asks.");
-        return print_lines(port, &mut on_line);
+        sink.note("Reading the guest's serial port with no jail, as asked.");
+        return print_lines(port, &mut on_line, sink.as_ref());
     }
     match relay(port) {
         Ok((jailed, lines)) => {
-            print_lines(lines, &mut on_line);
+            print_lines(lines, &mut on_line, sink.as_ref());
             let _ = jailed.wait();
         }
-        Err(error) => eprintln!(
+        Err(error) => sink.problem(format!(
             "The guest's serial port is left unread, as its reader couldn't be jailed: {error}. \
-             --no-jail reads it anyway."
-        ),
+             Booting with no jail reads it anyway."
+        )),
     }
 }
 
@@ -284,13 +304,13 @@ fn relay(port: File) -> std::io::Result<(Jailed, PipeReader)> {
     Ok((jailed, lines))
 }
 
-/// Prints each line, made printable, as the guest's, and hands it to `on_line`.
-fn print_lines(source: impl std::io::Read, on_line: &mut impl FnMut(&str)) {
+/// Sends each line, made printable, as the guest's, and hands it to `on_line`.
+fn print_lines(source: impl std::io::Read, on_line: &mut impl FnMut(&str), sink: &dyn Sink) {
     let mut source = BufReader::new(source);
     let mut line = Vec::new();
     while source.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
         let text = printable(&line);
-        println!("guest: {text}");
+        sink.event(Event::Guest(text.clone()));
         on_line(&text);
         line.clear();
     }

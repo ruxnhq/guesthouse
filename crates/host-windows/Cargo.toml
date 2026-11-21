@@ -1,0 +1,27 @@
+[package]
+name = "guesthouse-host-windows"
+description = "Guest machines on a Windows host: making their disks from an ISO, running them through HCS with GPU-PV, and what they say as they do."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The jailed reader of a guest's serial port, which a booting machine starts beside the program
+# that boots it.
+[[bin]]
+name = "guesthouse-serial-relay"
+path = "src/relay.rs"
+
+[dependencies]
+guesthouse-hcs.workspace = true
+# The record beside each disk, and events and settings as the service's pipe carries them.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The jail the serial relay runs in.
+[target.'cfg(windows)'.dependencies]
+guesthouse-jail.workspace = true
+
+[lints]
+workspace = true

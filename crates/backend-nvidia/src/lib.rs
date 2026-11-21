@@ -33,6 +33,7 @@ pub mod staging;
 mod standard;
 pub mod startup;
 mod tiling;
+pub mod wakes;
 
 use answers::adapter::{AdapterAnswers, Inputs};
 use answers::nodes::{ENGINE_VIDEO_ENCODE, Node, node_list};

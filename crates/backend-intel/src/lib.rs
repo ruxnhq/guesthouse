@@ -24,6 +24,9 @@
 //! - The core describes every node but the first as a copy engine, whatever gmmlib's numbering
 //!   says the node is.
 
+// Linux only: it talks to xe through ioctl. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 // The shared test helpers name this crate as a test outside it does.
 #[cfg(test)]
 extern crate self as guesthouse_backend_intel;

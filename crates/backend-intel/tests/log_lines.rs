@@ -1,6 +1,8 @@
 //! What a tester's log holds after a guest's first steps: one line for each kind of exchange, each
 //! starting with `intel` and the kind, and a busy kind cut down to its first few lines.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;

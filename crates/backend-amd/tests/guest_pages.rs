@@ -5,6 +5,8 @@
 //! is read back from the file, and then the same small submission is timed with each of the two in
 //! its buffer list. Without an AMD render node, or without `/dev/udmabuf`, it returns early.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{FilePages, FileRange};
 use guesthouse_backend_amd::{
     Context, CpuAccess, DOMAIN_GTT, Device, GemHandle, HW_IP_DMA, Ib, MapFlags, MemoryType, Syncobj, Udmabuf,

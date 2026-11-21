@@ -1,5 +1,7 @@
 //! What a map of depth memory asks the RM for on each generation.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, GpuRange, MapMemoryType, MapRequest, MemoryKind, RangeView, SpaceId};
 use guesthouse_backend_nvidia::NvidiaBackend;
 use guesthouse_backend_nvidia::fake_guest::start_on_card;

@@ -7,6 +7,9 @@
 //! Architectures and driver branches are a backend's own business. [`Backend::open`] is where it
 //! picks its profiles, and nothing in this trait is per-architecture or per-card.
 
+// Linux only: a guest's memory is handed over as file descriptors. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod driver;
 pub mod guest_text;
 mod memory;

@@ -6,6 +6,9 @@
 //! frame socket from that same thread. The guest's memory comes from the app as descriptors: see
 //! [`handover`]. For a QEMU of someone else's it comes as two files instead: see [`memory_files`].
 
+// Linux only: the daemon is QEMU's peer on a Linux host. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 pub mod card_choice;
 pub mod desktop_note;
 pub mod display_note;

@@ -1,6 +1,8 @@
 //! The steps of a guest's boot, as whole messages through the session and the backend, with the
 //! pretend RM. This proves the parts join up. It proves nothing about a real card or a real guest.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, DriverVersion, GuestMemory, Setup};
 use guesthouse_backend_nvidia::NvidiaBackend;
 use guesthouse_backend_nvidia::fake_guest::{

@@ -4,6 +4,8 @@
 //!
 //! `FUZZ_ROUNDS` runs it for longer, and `FUZZ_SEED` picks where it starts.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, StagingCopy, SurfaceShape};
 use guesthouse_backend_standin::{RandomMessages, SparseMemory, StandIn, WIDE_COLOUR};
 use guesthouse_core::{Config, CopyOrder, MemoryLimits, ReplyTicket, Session};

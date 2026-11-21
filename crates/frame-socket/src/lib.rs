@@ -12,6 +12,9 @@
 //! knows where pictures come from: a buffer is a size and a descriptor, and colour is in CICP's terms.
 //! A peer of another protocol version is refused, and the viewer can't be left guessing.
 
+// Linux only: SEQPACKET sockets and file descriptors. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod message;
 mod shared;
 mod socket;

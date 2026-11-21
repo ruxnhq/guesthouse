@@ -5,6 +5,8 @@
 //! This proves the parts join up and that a submission comes back finished. It proves nothing
 //! about a real card or a real guest.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;

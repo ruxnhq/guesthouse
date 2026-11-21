@@ -1,5 +1,7 @@
 //! The busiest messages must not touch the allocator once a session has warmed up.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, GuestMemory};
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Config, MemoryLimits, ReplyTicket, Session};

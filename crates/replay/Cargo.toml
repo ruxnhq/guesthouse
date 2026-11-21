@@ -11,7 +11,7 @@ license.workspace = true
 name = "guesthouse-replay"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 guesthouse-backend.workspace = true
 guesthouse-backend-standin.workspace = true
 guesthouse-core.workspace = true

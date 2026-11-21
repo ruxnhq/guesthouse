@@ -5,6 +5,9 @@
 //! things are when it opens again. [`context::Context`] holds what the code needs from the PC, and
 //! tests swap those parts for stand-ins. How a VM starts is behind [`vm_host::VmHost`].
 
+// Linux only: it starts QEMU and the daemon, and reads a Linux host. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 pub mod account;
 pub mod actions;
 pub mod agent;

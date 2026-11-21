@@ -6,6 +6,9 @@
 //! Three things vary, and each has its own place. The [`profile`] module holds a generation's classes
 //! and a driver branch's layouts, and cards themselves are read live. See `ARCHITECTURE.md`.
 
+// Linux only: it talks to the NVIDIA driver through ioctl. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 pub mod answers;
 pub mod channel;
 mod context_room;

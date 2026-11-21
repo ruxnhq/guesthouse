@@ -16,6 +16,9 @@
 //! that has the card write the queue's fence, and [`Backend::ring_doorbell`] makes the call. The
 //! guest's fence then moves when the card is through, as the core expects of a GPU.
 
+// Linux only: it talks to amdgpu through ioctl. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod card_name;
 mod channel_order;
 mod copy_ib;

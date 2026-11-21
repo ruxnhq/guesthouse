@@ -9,6 +9,9 @@
 //! the others. A message that can't be answered yet gets [`Answer::Held`]: its reply goes out later,
 //! through [`Session::take_replies`], while other messages carry on.
 
+// Linux only, as the backend trait it serves is. Other systems get an empty crate.
+#![cfg(target_os = "linux")]
+
 mod config;
 mod deferred;
 mod fault_rate;

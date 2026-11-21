@@ -31,7 +31,7 @@ path = "src/bin/vm.rs"
 name = "guesthouse-jail"
 path = "src/bin/jail.rs"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 # The NVIDIA backend's driver profiles, so setup knows the daemon's branches. It opens nothing.
 guesthouse-backend-nvidia.workspace = true
 # Reads a recorded Intel card, for a lab run on a PC without one. It opens nothing.
@@ -48,13 +48,13 @@ guesthouse-sensors.workspace = true
 jiff = { version = "1", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 # Reading C headers for the tables a guest's modules are built with.
 regex = "1"
-# Safe calls for statvfs, flock, kill, access, getxattr and a send that never waits, which keeps `unsafe` out of this crate.
-rustix = { version = "1", features = ["fs", "net", "process"] }
 # Machine files, task files and QMP are all JSON.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Safe calls for statvfs, flock, kill, access, getxattr and a send that never waits, which keeps `unsafe` out of this crate.
+rustix = { version = "1", features = ["fs", "net", "process"] }
 
-[dev-dependencies]
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 # ptrace, for a test that QEMU's jail refuses it.
 libc = "0.2"
 

@@ -3,6 +3,8 @@
 //! cards up in the other order from their device files, as it can on a real PC. Nobody has run this
 //! on a real PC with two cards yet: these are pretend ones.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::PciAddress;
 use guesthouse_backend_nvidia::profile::HOST_615;
 use guesthouse_backend_nvidia::rm::device::Device;

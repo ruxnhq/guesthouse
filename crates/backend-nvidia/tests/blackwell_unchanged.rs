@@ -1,6 +1,8 @@
 //! Holds what a Blackwell guest is told and what its channels ask of the RM to fixed digests. Adding
 //! another generation must leave every one of them alone. All of it runs on the pretend RM.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, GuestBooks, Status, VendorQuery, VideoMemoryUse};
 use guesthouse_backend_nvidia::NvidiaBackend;
 use guesthouse_backend_nvidia::answers::nodes::{copy_record_flags, node_entry, node_list, node_metadata};

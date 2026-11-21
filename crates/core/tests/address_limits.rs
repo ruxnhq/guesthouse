@@ -1,6 +1,8 @@
 //! Address requests whose numbers don't fit together. Each gets a plain refusal, and the session
 //! goes on working after it.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, GuestMemory};
 use guesthouse_backend_standin::{SparseMemory, StandIn};
 use guesthouse_core::{Answer, Config, MemoryLimits, ReplyTicket, Session};

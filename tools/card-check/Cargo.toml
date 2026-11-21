@@ -11,7 +11,7 @@ license.workspace = true
 name = "guesthouse-card-check"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 guesthouse-backend.workspace = true
 guesthouse-backend-nvidia.workspace = true
 

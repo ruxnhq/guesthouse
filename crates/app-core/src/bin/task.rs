@@ -1,30 +1,15 @@
 //! `guesthouse-task ACTION MACHINE [ARGUMENT...]`: one slow job for the app, in the slot named by
 //! `GUESTHOUSE_SLOT`. It outlives the app, and writes each step to a small file the app reads.
 
-use guesthouse_app_core::actions::run_task;
-use guesthouse_app_core::context::Context;
-use guesthouse_app_core::vm_host::LocalHost;
-use std::env;
-use std::process::ExitCode;
+#[cfg(target_os = "linux")]
+#[path = "task/linux.rs"]
+mod linux;
 
-fn main() -> ExitCode {
-    let arguments: Vec<String> = env::args().skip(1).collect();
-    let [action, machine, rest @ ..] = &arguments[..] else {
-        eprintln!("usage: guesthouse-task ACTION MACHINE [ARGUMENT...]");
-        return ExitCode::from(2);
-    };
-    let context = match Context::from_process() {
-        Ok(context) => context,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match run_task(&context, &LocalHost { context: &context }, action, machine, rest) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::FAILURE
-        }
-    }
+#[cfg(target_os = "linux")]
+use linux::main;
+
+#[cfg(not(target_os = "linux"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("guesthouse-task runs on Linux only.");
+    std::process::ExitCode::FAILURE
 }

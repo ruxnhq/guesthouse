@@ -1,6 +1,8 @@
 //! The program on the pretend Ada, Ampere and Turing cards: what it finds, what it says, and what never
 //! reaches the file. Nothing here goes near a card.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::PciAddress;
 use guesthouse_backend_nvidia::profile::{ADA, AMPERE, BLACKWELL, Generation, HOST_615, TURING};
 use guesthouse_backend_nvidia::record::card::UUID;

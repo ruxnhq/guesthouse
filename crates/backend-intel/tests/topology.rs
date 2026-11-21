@@ -1,6 +1,8 @@
 //! The record's slice arrays against compute-runtime's topology reader, for cards of different
 //! shapes: what the reader counts is what the card has, and what the record's scalars say.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;

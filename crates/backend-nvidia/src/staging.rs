@@ -145,13 +145,19 @@ impl<R: Rm> NvidiaBackend<R> {
             let parent = self.device.subdevice;
             if let (Some(fd), Ok(at)) = (fd, host.take_gpu_addresses(4096, CHANNEL_ADDRESS_ALIGN)) {
                 match crate::wakes::Wakes::new(&mut self.device, address_space, at, parent) {
-                    Ok(mut made) => {
-                        if let Err(error) = made.bind(&mut self.device, channel.channel.handle(), true) {
-                            log::warn!("the copy channel is not bound to the surface: {error}");
+                    Ok(mut made) => match made.bind(&mut self.device, channel.channel.handle(), true) {
+                        Ok(()) => {
+                            channel.signal = Some((made.slot_address(0), made.surface_control(), fd));
+                            wakes = Some(made);
                         }
-                        channel.signal = Some((made.slot_address(0), made.surface_control(), fd));
-                        wakes = Some(made);
-                    }
+                        Err(error) => {
+                            // A surface nothing is bound to never raises the interrupt, so its
+                            // waiters would only ever time out on the backstop. Closed, and the
+                            // copies take the polling they always had.
+                            log::warn!("the copy channel is not bound to the surface, so its copies are polled: {error}");
+                            let _ = made.close(&mut self.device);
+                        }
+                    },
                     Err(error) => {
                         log::warn!("no semaphore surface for the copies, so they are polled: {error}")
                     }
@@ -687,12 +693,15 @@ mod tests {
 
     const AREA: u64 = 0x800_0000;
 
-    /// Nothing but a place for the copy channel, as a move asks for no more of the host.
-    struct AreaOnly;
+    /// Places for the copy channel and whatever it needs, handed out one after another as the host
+    /// does, as a copy asks for no more of the host.
+    struct AreaOnly(u64);
 
     impl HostServices for AreaOnly {
-        fn take_gpu_addresses(&mut self, _: u64, _: u64) -> Result<u64, BackendError> {
-            Ok(AREA)
+        fn take_gpu_addresses(&mut self, size: u64, _: u64) -> Result<u64, BackendError> {
+            let at = self.0;
+            self.0 += size.max(0x100_0000);
+            Ok(at)
         }
         fn read_at_gpu_address(&self, _: SpaceId, _: u64, _: &mut [u8]) -> Option<usize> {
             None
@@ -734,8 +743,58 @@ mod tests {
         let space = backend.create_address_space(&[range]).unwrap();
         let (from, _) = backend.allocate_video_memory(0x1000, guesthouse_backend::MemoryKind::PLAIN).unwrap();
         let (to, _) = backend.allocate_video_memory(0x1000, guesthouse_backend::MemoryKind::PLAIN).unwrap();
-        let moved = backend.preserve_contents(&mut AreaOnly, space, from, to, 0x1000);
+        let moved = backend.preserve_contents(&mut AreaOnly(AREA), space, from, to, 0x1000);
         assert!(moved.is_err());
         assert_eq!(backend.device().rm.memory_at(window), None);
+    }
+
+    #[test]
+    fn a_surface_that_will_not_bind_leaves_the_copies_polled() {
+        use crate::rm::classes::{SURFACE_BIND_CHANNEL, SURFACE_REGISTER_WAITER};
+        use crate::rm::fake::Call;
+        use guesthouse_backend::Backend;
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.refuse_control = Some(SURFACE_BIND_CHANNEL);
+        let mut backend = crate::fake_guest::fake_backend(rm);
+        let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
+        let space = backend.create_address_space(&[range]).unwrap();
+        let copy = SlotCopy { own_space: space, ..slot_copy(None) };
+        assert!(matches!(
+            backend.start_frame_copy(&mut AreaOnly(AREA), &copy),
+            StagingStart::Running
+        ));
+        // No waiter is armed for a copy that is only polled, and the surface and its memory were
+        // taken back rather than left half-made.
+        let calls = &backend.device().rm.calls;
+        assert!(!calls.iter().any(|call| matches!(
+            call,
+            Call::Control { command, .. } if *command == SURFACE_REGISTER_WAITER
+        )));
+        assert!(calls.iter().any(|call| matches!(call, Call::Free { .. })));
+    }
+
+    #[test]
+    fn a_bound_surface_arms_a_waiter_for_each_batch() {
+        use crate::rm::STATUS_OK;
+        use crate::rm::classes::{SURFACE_BIND_CHANNEL, SURFACE_REGISTER_WAITER};
+        use crate::rm::fake::Call;
+        use guesthouse_backend::Backend;
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.answer(SURFACE_BIND_CHANNEL, |_| STATUS_OK);
+        let mut backend = crate::fake_guest::fake_backend(rm);
+        let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
+        let space = backend.create_address_space(&[range]).unwrap();
+        let copy = SlotCopy { own_space: space, ..slot_copy(None) };
+        assert!(matches!(
+            backend.start_frame_copy(&mut AreaOnly(AREA), &copy),
+            StagingStart::Running
+        ));
+        let calls = &backend.device().rm.calls;
+        assert!(calls.iter().any(|call| matches!(
+            call,
+            Call::Control { command, .. } if *command == SURFACE_REGISTER_WAITER
+        )));
     }
 }

@@ -76,6 +76,9 @@ pub struct FakeRm {
     pub engine: FakeEngine,
     /// What [`Rm::read_gpu_timer`] says. `None` plays a page that isn't mapped yet.
     pub gpu_timer: Option<u64>,
+    /// What [`Rm::wake_fd`] says. `None`, as it stays, plays an RM whose client has no events, so
+    /// the semaphore surface is never even tried; a test that wants the wakes sets it.
+    pub wake: Option<std::os::fd::RawFd>,
     answers: HashMap<u32, Answer>,
     /// Each range's mappings, address to length, to refuse a map over a map.
     mappings: BTreeMap<(Handle, u64), u64>,
@@ -108,6 +111,7 @@ impl FakeRm {
             copies_looked_at: 0,
             engine: FakeEngine::default(),
             gpu_timer: None,
+            wake: None,
             answers: HashMap::new(),
             mappings: BTreeMap::new(),
             mapped: Mapped::new(),
@@ -402,5 +406,13 @@ impl Rm for FakeRm {
 
     fn read_gpu_timer(&self) -> Option<u64> {
         self.gpu_timer
+    }
+
+    fn alloc_os_event(&mut self, _device: Handle) -> Result<(), RmError> {
+        Ok(())
+    }
+
+    fn wake_fd(&self) -> Option<std::os::fd::RawFd> {
+        self.wake
     }
 }

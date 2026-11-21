@@ -3,9 +3,9 @@
 //! pairs them itself and nobody is asked: it makes the viewer's identity, tells the guest to trust
 //! only that, and learns the guest's own fingerprint from what the guest says on its serial port.
 //!
-//! A viewer's state folder is remoteman's own layout, so the viewer is started with it as is:
-//! `client\cert.der` and `client\key.der` are its identity, and `client\hosts\ADDRESS_PORT` holds
-//! the fingerprint of the host it expects there.
+//! The viewer's identity is kept beside the machine's disk, in `NAME.screen\client`, and the
+//! service hands it to the app, which gives it to remoteman's viewer with its `connect` command.
+//! Everything else remoteman keeps is remoteman's own.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -13,13 +13,12 @@ use std::path::{Path, PathBuf};
 
 /// The port remoteman's host listens on.
 pub const PORT: u16 = 7791;
-/// remoteman's host's files, as its installer would lay them out, which the host looks for beside
-/// the program that boots the machine. The guest runs the `setup.ps1` among them: remoteman's own
-/// installer asks Windows to run it again elevated, which never comes back in a guest with nobody
-/// signed in.
-pub const FILES: &str = r"screen\remoteman-host";
-/// Where the guest finds them, in its screen folder.
-pub const GUEST_FILES: &str = "remoteman-host";
+/// remoteman's host's installer, from remoteman's release, which the host looks for beside the
+/// program that boots the machine. The guest runs it unattended, with the viewer to trust, the
+/// encoder for its card, and no pairing.
+pub const SETUP: &str = r"screen\remoteman-host-setup.exe";
+/// What the guest finds it as, in its screen folder.
+pub const GUEST_SETUP: &str = "remoteman-host-setup.exe";
 /// The guest's folder for its screen, from the root of its Windows volume.
 pub const GUEST_FOLDER: &str = r"Guesthouse\screen";
 pub const SCRIPT: &str = include_str!("../guest/screen.ps1");
@@ -52,15 +51,6 @@ pub fn viewer_identity(state: &Path) -> Result<String, String> {
 /// The guest's trust list: the viewer, and nobody else.
 pub fn trust_list(viewer: &str) -> String {
     format!("{viewer} Guesthouse\n")
-}
-
-/// Tells the viewer which host to expect at `address`, by the name remoteman gives the file.
-pub fn expect_host(state: &Path, address: &str, host: &str) -> Result<PathBuf, String> {
-    let hosts = state.join("client").join("hosts");
-    fs::create_dir_all(&hosts).map_err(|error| format!("{}: {error}", hosts.display()))?;
-    let path = hosts.join(format!("{address}:{PORT}").replace([':', '/'], "_"));
-    fs::write(&path, host).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(path)
 }
 
 /// The host's fingerprint, if `line` is the guest saying it.
@@ -98,8 +88,6 @@ mod tests {
         assert_eq!(viewer_identity(&state).unwrap(), first);
         assert_eq!(first, fingerprint(&fs::read(state.join(r"client/cert.der")).unwrap()));
         assert!(state.join("client").join("key.der").is_file());
-        let expected = expect_host(&state, "172.29.1.2", &first).unwrap();
-        assert_eq!(expected.file_name().unwrap(), "172.29.1.2_7791");
         let _ = fs::remove_dir_all(state);
     }
 
@@ -120,11 +108,10 @@ mod tests {
 
     #[test]
     fn the_guest_script_uses_the_names_the_host_writes() {
-        for name in [GUEST_FILES, "setup.ps1", "trusted", "encoder.txt", "logon.txt", r"C:\Guesthouse\screen"]
-        {
+        for name in [GUEST_SETUP, "trusted", "encoder.txt", "logon.txt", r"C:\Guesthouse\screen"] {
             assert!(SCRIPT.contains(name), "{name}");
         }
-        assert!(FILES.ends_with(GUEST_FILES));
+        assert!(SETUP.ends_with(GUEST_SETUP));
         assert!(SCRIPT.contains("screen: fingerprint"));
     }
 }

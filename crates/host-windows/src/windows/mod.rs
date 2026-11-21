@@ -113,8 +113,8 @@ pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
 /// Brings a Windows guest's disk up to date before it boots, which no machine may have open then:
 /// the card's driver, and the guest's screen when there's a remoteman installer to give it.
 fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
-    let files = screen_files();
-    if card.is_none() && files.is_none() {
+    let setup = screen_setup();
+    if card.is_none() && setup.is_none() {
         return Ok(());
     }
     let mut attached = VirtualDisk::open(disk, Kind::Vhdx).map_err(|error| error.to_string())?;
@@ -132,38 +132,27 @@ fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Re
         })?;
         copy_into(folder, &windows.root, sink)?;
     }
-    match files {
-        Some(files) => give_screen(disk, &windows.root, &files, card, sink),
+    match setup {
+        Some(setup) => give_screen(disk, &windows.root, &setup, card, sink),
         None => Ok(()),
     }
 }
 
-/// remoteman's host's files, beside the program that boots the machine, if they're there.
-fn screen_files() -> Option<PathBuf> {
-    let beside = std::env::current_exe().ok()?.parent()?.join(screen::FILES);
-    beside.join("setup.ps1").is_file().then_some(beside)
+/// remoteman's host's installer, beside the program that boots the machine, if it's there.
+fn screen_setup() -> Option<PathBuf> {
+    let beside = std::env::current_exe().ok()?.parent()?.join(screen::SETUP);
+    beside.is_file().then_some(beside)
 }
 
-/// Copies a folder into another, the files that differ in size or time, and gives how many were.
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
-    std::fs::create_dir_all(to)?;
-    let mut copied = 0;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let (source, target) = (entry.path(), to.join(entry.file_name()));
-        if entry.file_type()?.is_dir() {
-            copied += copy_tree(&source, &target)?;
-            continue;
-        }
-        let given = entry.metadata()?;
-        let same = std::fs::metadata(&target)
-            .is_ok_and(|kept| kept.len() == given.len() && kept.modified().ok() == given.modified().ok());
-        if !same {
-            std::fs::copy(&source, &target)?;
-            copied += 1;
-        }
+/// Copies a file unless the copy there has its size and time already. Gives whether it copied.
+fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<bool> {
+    let given = std::fs::metadata(from)?;
+    let same = std::fs::metadata(to)
+        .is_ok_and(|kept| kept.len() == given.len() && kept.modified().ok() == given.modified().ok());
+    if !same {
+        std::fs::copy(from, to)?;
     }
-    Ok(copied)
+    Ok(!same)
 }
 
 /// Puts what the guest needs for its screen in its screen folder: remoteman's installer, the script
@@ -173,7 +162,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
 fn give_screen(
     disk: &Path,
     root: &Path,
-    files: &Path,
+    setup: &Path,
     card: Option<&Card>,
     sink: &dyn Sink,
 ) -> Result<(), String> {
@@ -192,12 +181,14 @@ fn give_screen(
     if let Ok(text) = std::fs::read_to_string(&account) {
         write("logon.txt", &text)?;
     }
-    let guest_files = folder.join(screen::GUEST_FILES);
-    let copied =
-        copy_tree(files, &guest_files).map_err(|error| format!("{}: {error}", guest_files.display()))?;
-    if copied > 0 {
-        sink.note(format!("remoteman's host: {copied} files given to the guest."));
+    let guest_setup = folder.join(screen::GUEST_SETUP);
+    let copied = copy_if_changed(setup, &guest_setup)
+        .map_err(|error| format!("{}: {error}", guest_setup.display()))?;
+    if copied {
+        sink.note("remoteman's host's installer given to the guest.");
     }
+    // A guest given remoteman's files before its installer could run unattended has them still.
+    let _ = std::fs::remove_dir_all(folder.join("remoteman-host"));
     let report = root.join(crate::guest::REPORT_PATH);
     std::fs::write(&report, crate::guest::REPORT)
         .map_err(|error| format!("{}: {error}", report.display()))?;

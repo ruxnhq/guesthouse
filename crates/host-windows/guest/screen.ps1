@@ -1,18 +1,15 @@
 # The guest's screen: remoteman's host, which shows its desktop to the remoteman viewer on the PC
 # that runs it, encoded on the guest's card. report.ps1 runs this at every start, as SYSTEM, before
 # its last line, so Send-Line is there. The host puts what it needs in C:\Guesthouse\screen before
-# each boot: remoteman's host's files, the viewer's fingerprint, and which encoder suits the card.
-#
-# remoteman's own installer can't be used here: it starts by asking Windows to run it again
-# elevated, and as SYSTEM with nobody signed in that never comes back. So its files are copied
-# where it would put them, and its setup.ps1, which does every step the installer does, is run.
+# each boot: remoteman's host's installer, from remoteman's release, the viewer to trust, and which
+# encoder suits the card. remoteman's installer does all of remoteman's own work, run unattended:
+# where its files go, its service and how it's started, its trust list. This script only signs the
+# guest in, lets the port in and says what happened.
 $screen = 'C:\Guesthouse\screen'
-$files = Join-Path $screen 'remoteman-host'
+$setup = Join-Path $screen 'remoteman-host-setup.exe'
 $folder = 'C:\Program Files\remoteman host'
 $hostExe = Join-Path $folder 'remoteman-host.exe'
 $state = 'C:\ProgramData\remoteman\host'
-# remoteman keeps a host's identity and trust list in host\ under the folder it's given.
-$identity = Join-Path $state 'host'
 $service = 'remoteman host'
 
 # Signing in by itself at every start, so the screen opens on the desktop and not on a sign-in
@@ -48,7 +45,7 @@ if (Test-Path -LiteralPath $logon) {
     Remove-Item -LiteralPath $logon -Force
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $files 'setup.ps1'))) {
+if (-not (Test-Path -LiteralPath $setup)) {
     Send-Line "screen: remoteman's host wasn't given, so the guest has no screen"
     return
 }
@@ -65,26 +62,26 @@ function Save-ToDisk {
     Write-VolumeCache -DriveLetter C -ErrorAction SilentlyContinue
 }
 
-# remoteman's host is installed again whenever the host brings different files, and whenever its
-# service isn't there, whatever the guest's note of the last install says.
-$wanted = (Get-ChildItem -LiteralPath $files -Recurse -File | Sort-Object FullName |
-    ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ''
+# remoteman's installer is run again whenever the host brings a different one, a different viewer
+# to trust or a different encoder, and whenever its service isn't there, whatever the guest's note
+# of the last install says. Run again, it keeps the host's identity, so its fingerprint stays.
+$trusted = Join-Path $screen 'trusted'
+$encoder = (Get-Content -LiteralPath (Join-Path $screen 'encoder.txt') -Raw).Trim()
+$wanted = ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash, (Get-FileHash -LiteralPath $trusted -Algorithm SHA256).Hash, $encoder) -join ' '
 $installedFile = Join-Path $screen 'installed.txt'
 $installed = if (Test-Path -LiteralPath $installedFile) { (Get-Content -LiteralPath $installedFile -Raw).Trim() } else { '' }
 $missing = -not (Get-Service -Name $service -ErrorAction SilentlyContinue)
 if ($missing -or -not (Test-Path -LiteralPath $hostExe) -or $installed -ne $wanted) {
-    Send-Line 'screen: installing remoteman host'
-    Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $folder | Out-Null
-    Copy-Item -Path (Join-Path $files '*') -Destination $folder -Recurse -Force
-    $setupScript = Join-Path $folder 'setup.ps1'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setupScript install *> $null
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
-        Send-Line "screen: remoteman's setup failed, with $code"
-        $log = Join-Path $folder 'setup.log'
-        if (Test-Path -LiteralPath $log) {
-            foreach ($line in (Get-Content -LiteralPath $log -Tail 8)) { Send-Line "screen: setup: $line" }
+    Send-Line "screen: installing remoteman host, encoder $encoder"
+    # Its own log, where it says each step, and FAILED and why as its last line when it fails.
+    $setupLog = Join-Path $screen 'remoteman-setup.log'
+    # Start-Process joins these unquoted, so the paths are quoted here.
+    $arguments = '--silent', '--trust', "`"$trusted`"", '--encoder', $encoder, '--no-pair', '--log', "`"$setupLog`""
+    $run = Start-Process -FilePath $setup -ArgumentList $arguments -Wait -PassThru
+    if ($run.ExitCode -ne 0) {
+        Send-Line "screen: remoteman's installer failed, with $($run.ExitCode)"
+        if (Test-Path -LiteralPath $setupLog) {
+            foreach ($line in (Get-Content -LiteralPath $setupLog -Tail 12)) { Send-Line "screen: setup: $line" }
         }
         return
     }
@@ -93,23 +90,13 @@ if ($missing -or -not (Test-Path -LiteralPath $hostExe) -or $installed -ne $want
     Send-Line 'screen: remoteman host installed'
 }
 
-# The host is told whom to trust, and which encoder to use, before it starts: it reads its trust
-# list once, when it starts. The installer gives it no --pair, so nobody else is let in, and the
-# command line here drops --ask, which would wait on a question nobody sees.
-Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $identity | Out-Null
-Copy-Item -LiteralPath (Join-Path $screen 'trusted') -Destination (Join-Path $identity 'trusted') -Force
-$encoder = (Get-Content -LiteralPath (Join-Path $screen 'encoder.txt') -Raw).Trim()
-$command = "`"$hostExe`" service --state `"$state`" --log `"$state\host.log`" --encoder $encoder"
-Set-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$service" -Name ImagePath -Value $command
-try {
-    Start-Service -Name $service -ErrorAction Stop
-} catch {
-    Send-Line "screen: remoteman's service didn't start: $($_.Exception.Message)"
-}
-Start-Sleep -Seconds 3
 $status = Get-Service -Name $service -ErrorAction SilentlyContinue
-Send-Line "screen: remoteman's service is $($status.Status), command $((Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$service").ImagePath)"
+if ($status -and $status.Status -ne 'Running') {
+    try { Start-Service -Name $service -ErrorAction Stop } catch { Send-Line "screen: remoteman's service didn't start: $($_.Exception.Message)" }
+    Start-Sleep -Seconds 3
+    $status = Get-Service -Name $service -ErrorAction SilentlyContinue
+}
+Send-Line "screen: remoteman's service is $($status.Status), command $((Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$service" -ErrorAction SilentlyContinue).ImagePath)"
 # Why it stopped, if it did, as Windows saw it: the service manager's word, and any crash of the
 # host's program since this start.
 $since = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
@@ -119,7 +106,8 @@ foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'System'; Provider
 }
 foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $since } -ErrorAction SilentlyContinue |
     Where-Object { $_.Message -like '*remoteman*' } | Select-Object -First 3) {
-    Send-Line "screen: crash: $((($event.Message -replace '\s+', ' ')).Substring(0, [Math]::Min(400, ($event.Message -replace '\s+', ' ').Length)))"
+    $text = $event.Message -replace '\s+', ' '
+    Send-Line "screen: crash: $($text.Substring(0, [Math]::Min(400, $text.Length)))"
 }
 
 # remoteman's installer lets its host's program in on its port. The viewer's packets never reached
@@ -140,22 +128,22 @@ foreach ($found in Get-NetFirewallRule -DisplayName 'remoteman host', $rule -Err
 # The host's command line, the trust list, the rule and the sign-in, all kept now.
 Save-ToDisk
 
-# The host's fingerprint, which the viewer checks it against. The host makes its identity when it
-# first starts.
-$cert = Join-Path $identity 'cert.der'
+# The host's fingerprint, which the viewer checks it against, as remoteman's host says it.
+$fingerprint = ''
 $waited = 0
-while (-not (Test-Path -LiteralPath $cert) -and $waited -lt 30) {
+while ($waited -lt 30) {
+    $said = (& $hostExe fingerprint --state $state 2>$null | Select-Object -First 1)
+    if ($said -match '^[0-9a-fA-F]{64}$') { $fingerprint = $said.ToLowerInvariant(); break }
     Start-Sleep -Seconds 1
     $waited += 1
 }
-if (Test-Path -LiteralPath $cert) {
-    $fingerprint = (Get-FileHash -LiteralPath $cert -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($fingerprint) {
     Start-Sleep -Seconds 5
     $listening = @(Get-NetUDPEndpoint -LocalPort 7791 -ErrorAction SilentlyContinue | ForEach-Object { $_.LocalAddress }) -join ', '
     Send-Line "screen: listening on UDP 7791 at: $listening"
     Send-Line "screen: fingerprint $fingerprint"
 } else {
-    Send-Line "screen: remoteman's host made no identity in $identity"
+    Send-Line "screen: remoteman's host didn't say its fingerprint"
 }
 
 # For a while after it starts, remoteman's own logs go to the serial port as they're written, with

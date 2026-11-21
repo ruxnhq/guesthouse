@@ -13,6 +13,8 @@ const TRIES: u32 = 20;
 const APART: Duration = Duration::from_millis(30);
 /// Windows' answer to an open the pipe's security refuses.
 const ACCESS_DENIED: i32 = 5;
+/// Windows' answer to a read once the service has disconnected its end of the pipe.
+const PIPE_NOT_CONNECTED: i32 = 233;
 /// What the app asks of the pipe: to read it and write to it (`FILE_GENERIC_READ |
 /// FILE_WRITE_DATA`), which is all the pipe's security grants a user. Asking to write as a file is
 /// written would ask to append too, which for a pipe is making an instance of it, and is refused.
@@ -67,6 +69,8 @@ pub fn stream(request: &Request, mut each: impl FnMut(Answer) -> bool) -> Result
                 }
             }
             Ok(None) => return Ok(()),
+            // The service closed its end, which a service older than this app said this way.
+            Err(error) if error.raw_os_error() == Some(PIPE_NOT_CONNECTED) => return Ok(()),
             Err(_) => return Err(Unreached::Garbled),
         }
     }

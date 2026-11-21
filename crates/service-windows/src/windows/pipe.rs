@@ -28,7 +28,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
+    ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, PeekNamedPipe,
 };
 use windows_sys::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
@@ -128,13 +128,11 @@ fn answer<W: Work>(service: &Arc<Service<W>>, pipe: File) {
             let _ = connection.send(&Answer::Refused { reason: reason.into() });
         }
     }
-    // An answer still in the pipe is lost when the instance closes, so it waits until the app has
-    // read it.
+    // The answer is waited on until the app has read it, and then the instance is closed, which
+    // the app reads as the end. Disconnecting it instead would throw away what the app hadn't read,
+    // and the app would read an error, not the end.
     // SAFETY: the pipe's handle is ours and open.
-    unsafe {
-        FlushFileBuffers(pipe.as_raw_handle());
-        DisconnectNamedPipe(pipe.as_raw_handle());
-    }
+    unsafe { FlushFileBuffers(pipe.as_raw_handle()) };
 }
 
 /// Whether the one asking on `pipe` may: the system, an elevated administrator, or the user signed

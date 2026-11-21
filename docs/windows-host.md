@@ -66,6 +66,8 @@ Without an NVIDIA card, `--gpu TEXT` picks the card whose name holds TEXT, and `
 
 ### A Windows guest
 
+A guest's first boot sets it up with no card, and every boot after that has the card. The host's card reset twice while a guest with GPU-PV was setting up or shutting down, and setup doesn't need the card. A Windows guest counts as set up once its first report arrives, and an Ubuntu guest once its install is done.
+
 `prepare` makes a new VHDX, partitions it with diskpart, applies the edition with DISM, and writes the boot files with bcdboot. Then it adds the card's driver, an answer file and a small report. The report writes to the guest's serial port, and to a file on its disk, which `boot` prints once the machine has stopped, in case the serial port said nothing. The first start takes a few minutes, as Windows sets itself up. Lines like these are what to look for, the first saying the guest has the card and its driver:
 
 ```

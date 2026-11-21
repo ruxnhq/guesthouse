@@ -115,7 +115,13 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     sink.note(format!("{} started.", machine.name));
     sink.state(State::Running);
 
-    if let Some(card) = &card {
+    // A guest still setting itself up gets no card: the host's card reset twice while a guest with
+    // GPU-PV was in setup or shutting down, and setup doesn't need it. The guest's first boot
+    // finishes setup, and every boot after has the card.
+    if card.is_some() && !record.installed {
+        sink.note("This boot sets the guest up, with no card. The boots after it have the card.");
+    }
+    if let Some(card) = card.as_ref().filter(|_| record.installed) {
         let change = ModifySettingRequest::gpu(&Gpu::list([card.interface_path.as_str()]));
         match running.modify(&change) {
             Ok(()) => sink.note(format!("It has {} by GPU-PV.", card.name)),
@@ -134,6 +140,7 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     let until_report = settings.until_report;
     let line_sink = Arc::clone(sink);
     let line_stop = Arc::clone(&stop);
+    let mut marked = false;
     let on_line = move |line: &str| {
         heard_here.store(true, Ordering::SeqCst);
         // The same as Ctrl+C: the guest is asked to shut down, and stopped if it won't.
@@ -141,20 +148,29 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
             line_sink.note("The guest has reported, so it's asked to shut down.");
             line_stop.store(true, Ordering::SeqCst);
         }
-        if install_finished(line) && record.guest == Guest::Linux && !record.installed {
+        let set_up = match record.guest {
+            Guest::Linux => install_finished(line),
+            // Its report only runs once Windows has finished setting itself up.
+            Guest::Windows => report_done(line),
+        };
+        if set_up && !record.installed && !marked {
+            marked = true;
             let installed = Record { installed: true, ..record.clone() };
             match installed.save(&disk) {
-                Ok(()) => line_sink.note("The install is done. The next boot starts the installed system."),
+                Ok(()) => line_sink.note("The guest is set up. The next boot gives it its card."),
                 Err(error) => line_sink.problem(error),
             }
         }
     };
     let serial_sink = Arc::clone(sink);
-    thread::spawn(move || print_serial(&pipe, unjailed, on_line, serial_sink));
+    let ended = Arc::new(AtomicBool::new(false));
+    let serial_ended = Arc::clone(&ended);
+    thread::spawn(move || print_serial(&pipe, unjailed, on_line, serial_sink, &serial_ended));
     sink.note("Waiting for the guest.");
     let limit = settings.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
     let silence = installing.then_some((INSTALL_SILENCE, heard));
     let waited = wait(&running, &stop, limit, silence, sink);
+    ended.store(true, Ordering::SeqCst);
     // The report a Windows guest writes on its own disk can be read once the machine has let go.
     drop(running);
     if guest == Guest::Windows {
@@ -263,31 +279,59 @@ fn wait(
 
 /// Sends each line the guest writes to COM1 until the port closes. The port is read by the relay
 /// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here.
-fn print_serial(pipe: &str, unjailed: bool, mut on_line: impl FnMut(&str), sink: Arc<dyn Sink>) {
-    let started = Instant::now();
-    let port = loop {
-        match File::open(pipe) {
-            Ok(port) => break port,
-            Err(_) if started.elapsed() < Duration::from_secs(SERIAL_SECONDS) => thread::sleep(POLL),
+/// The port closes whenever the guest restarts, as Windows does while it sets itself up, so it's
+/// opened again each time until the machine has stopped.
+fn print_serial(
+    pipe: &str,
+    unjailed: bool,
+    mut on_line: impl FnMut(&str),
+    sink: Arc<dyn Sink>,
+    ended: &AtomicBool,
+) {
+    let mut opened_before = false;
+    while !ended.load(Ordering::SeqCst) {
+        let Some(port) = open_port(pipe, opened_before, ended, sink.as_ref()) else { return };
+        if opened_before {
+            sink.note("The guest restarted, so its serial port is read again.");
+        }
+        opened_before = true;
+        if unjailed {
+            sink.note("Reading the guest's serial port with no jail, as asked.");
+            print_lines(port, &mut on_line, sink.as_ref());
+            continue;
+        }
+        match relay(port) {
+            Ok((jailed, lines)) => {
+                print_lines(lines, &mut on_line, sink.as_ref());
+                let _ = jailed.wait();
+            }
             Err(error) => {
-                sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));
+                sink.problem(format!(
+                    "The guest's serial port is left unread, as its reader couldn't be jailed: {error}. \
+                     Booting with no jail reads it anyway."
+                ));
                 return;
             }
         }
-    };
-    if unjailed {
-        sink.note("Reading the guest's serial port with no jail, as asked.");
-        return print_lines(port, &mut on_line, sink.as_ref());
     }
-    match relay(port) {
-        Ok((jailed, lines)) => {
-            print_lines(lines, &mut on_line, sink.as_ref());
-            let _ = jailed.wait();
+}
+
+/// The serial port, once HCS serves it. The first time it has a while to appear before that's told
+/// as a problem; after a restart it's waited for for as long as the machine runs.
+fn open_port(pipe: &str, opened_before: bool, ended: &AtomicBool, sink: &dyn Sink) -> Option<File> {
+    let started = Instant::now();
+    loop {
+        if ended.load(Ordering::SeqCst) {
+            return None;
         }
-        Err(error) => sink.problem(format!(
-            "The guest's serial port is left unread, as its reader couldn't be jailed: {error}. \
-             Booting with no jail reads it anyway."
-        )),
+        match File::open(pipe) {
+            Ok(port) => return Some(port),
+            Err(error) if !opened_before && started.elapsed() >= Duration::from_secs(SERIAL_SECONDS) => {
+                sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));
+                return None;
+            }
+            Err(_) => thread::sleep(POLL),
+        }
     }
 }
 

@@ -37,13 +37,19 @@ pub struct Card {
     pub service: String,
     /// The driver's folder in the host's driver store, which the guest needs a copy of.
     pub driver_folder: Option<PathBuf>,
+    /// The memory it has of its own, in bytes, if its driver says.
+    pub memory: Option<u64>,
 }
 
-impl Card {
-    pub fn is_nvidia(&self) -> bool {
-        self.service.eq_ignore_ascii_case("nvlddmkm")
-            || self.instance_id.to_ascii_uppercase().contains("VEN_10DE")
-    }
+/// The card a guest gets when none is named: the one with the most memory of its own, which is
+/// the discrete card on a PC with an integrated one too, whoever makes it. Among equals, or when
+/// no driver says, the first.
+pub fn default_card(cards: &[Card]) -> Option<&Card> {
+    cards
+        .iter()
+        .enumerate()
+        .max_by_key(|(index, card)| (card.memory.unwrap_or(0), std::cmp::Reverse(*index)))
+        .map(|(_, card)| card)
 }
 
 /// Every card on the host that can be shared with a guest now.
@@ -123,6 +129,7 @@ impl DeviceSet {
             interface_path,
             service: self.property(&device, SPDRP_SERVICE).unwrap_or_default(),
             driver_folder: self.driver_folder(&device),
+            memory: self.memory(&device),
         })
     }
 
@@ -176,6 +183,36 @@ impl DeviceSet {
         };
         let text = from_wide(&buffer);
         (asked != 0 && !text.is_empty()).then_some(text)
+    }
+
+    /// How much memory the card has of its own, as its driver tells Windows. A discrete card has
+    /// gigabytes; an integrated one, which shares the host's memory, has a small part set aside.
+    fn memory(&self, device: &SP_DEVINFO_DATA) -> Option<u64> {
+        // SAFETY: the set is open, and the device was filled in by SetupAPI.
+        let key = unsafe { SetupDiOpenDevRegKey(self.0, device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_READ) };
+        if key.is_null() || key == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        // Newer drivers write the size as 8 bytes, older ones as 4.
+        let read = |name: &str| {
+            let mut value = [0u8; 8];
+            let mut bytes = value.len() as u32;
+            let name = wide(name);
+            // SAFETY: the key is open, the name ends in a zero, and the buffer is `bytes` long.
+            let code = unsafe {
+                RegQueryValueExW(key, name.as_ptr(), null(), null_mut(), value.as_mut_ptr(), &mut bytes)
+            };
+            match (code, bytes) {
+                (0, 8) => Some(u64::from_le_bytes(value)),
+                (0, 4) => Some(u64::from(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))),
+                _ => None,
+            }
+        };
+        let memory =
+            read("HardwareInformation.qwMemorySize").or_else(|| read("HardwareInformation.MemorySize"));
+        // SAFETY: the key is ours and isn't used after this.
+        unsafe { RegCloseKey(key) };
+        memory.filter(|&bytes| bytes > 0)
     }
 
     /// The driver store folder of the device's driver, from the INF it was installed from.
@@ -258,4 +295,30 @@ fn configured_path(instance: &[u16], setup_path: &str) -> Option<String> {
         .take_while(|part| !part.is_empty())
         .map(from_wide)
         .find(|path| path.eq_ignore_ascii_case(setup_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card(name: &str, memory: Option<u64>) -> Card {
+        Card {
+            name: name.into(),
+            instance_id: String::new(),
+            interface_path: String::new(),
+            service: String::new(),
+            driver_folder: None,
+            memory,
+        }
+    }
+
+    #[test]
+    fn the_default_is_the_card_with_the_most_memory_whoever_makes_it() {
+        let cards =
+            [card("Intel UHD", Some(128 << 20)), card("Radeon RX", Some(16 << 30)), card("Arc", None)];
+        assert_eq!(default_card(&cards).unwrap().name, "Radeon RX");
+        let unsaid = [card("first", None), card("second", None)];
+        assert_eq!(default_card(&unsaid).unwrap().name, "first", "among equals, the first");
+        assert!(default_card(&[]).is_none());
+    }
 }

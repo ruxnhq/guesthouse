@@ -62,10 +62,16 @@ fn list_cards() -> Result<(), String> {
     if cards.is_empty() {
         println!("No card on this host can be shared with a guest.");
     }
+    let default = gpu::default_card(&cards).map(|card| card.interface_path.clone());
     for (number, card) in cards.iter().enumerate() {
-        println!("{number}: {}", card.name);
+        let chosen = if default.as_ref() == Some(&card.interface_path) { " (the default)" } else { "" };
+        println!("{number}: {}{chosen}", card.name);
         println!("   device:    {}", card.instance_id);
         println!("   interface: {}", card.interface_path);
+        match card.memory {
+            Some(bytes) => println!("   memory:    {} MB of its own", bytes >> 20),
+            None => println!("   memory:    (its driver doesn't say)"),
+        }
         match &card.driver_folder {
             Some(folder) => println!("   driver:    {}", folder.display()),
             None => println!("   driver:    (its folder could not be found)"),

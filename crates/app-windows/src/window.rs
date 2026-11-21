@@ -320,7 +320,7 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> Vec<View> {
 
     let choices = main.card_choices();
     let names = choices.iter().map(|card| match card {
-        Card::Default => "Default: the first NVIDIA card, or else the first that can be shared".to_owned(),
+        Card::Default => "Default: the card with the most memory of its own".to_owned(),
         Card::Named(name) => name.clone(),
         Card::None => "None".to_owned(),
     });

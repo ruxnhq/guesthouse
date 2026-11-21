@@ -56,7 +56,7 @@ fn more_disks(disk: &Path, record: &Record) -> Vec<Attachment> {
     disks
 }
 
-/// The card asked for, or the first NVIDIA card, or the first card, or none.
+/// The card asked for, or the one with the most memory of its own, or none.
 pub fn chosen_card(choice: &GpuChoice) -> Result<Option<Card>, String> {
     let cards = gpu::cards().map_err(|error| error.to_string())?;
     let chosen = match choice {
@@ -67,7 +67,7 @@ pub fn chosen_card(choice: &GpuChoice) -> Result<Option<Card>, String> {
                 card.name.to_lowercase().contains(&text) || card.instance_id.to_lowercase().contains(&text)
             })
         }
-        GpuChoice::Default => cards.iter().find(|card| card.is_nvidia()).or(cards.first()),
+        GpuChoice::Default => gpu::default_card(&cards),
     };
     match chosen {
         Some(card) => Ok(Some(card.clone())),

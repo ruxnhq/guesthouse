@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GpuChoice {
-    /// The first NVIDIA card, or else the first card that can be shared.
+    /// The card with the most memory of its own, which is the discrete one whoever makes it.
     #[default]
     Default,
     /// The card whose name or device ID holds this text, ignoring case.

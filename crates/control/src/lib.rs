@@ -60,7 +60,7 @@ pub struct NewMachine {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "card", content = "name", rename_all = "snake_case")]
 pub enum Card {
-    /// The first NVIDIA card, or else the first card that can be shared.
+    /// The card with the most memory of its own, which is the discrete one whoever makes it.
     #[default]
     Default,
     /// The card of this name, as `Status` lists it.
@@ -123,7 +123,10 @@ pub enum System {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardInfo {
     pub name: String,
-    pub nvidia: bool,
+    /// The memory it has of its own, in MB, if its driver says.
+    pub memory_mb: Option<u64>,
+    /// Whether it's the card a machine gets when none is named.
+    pub default: bool,
 }
 
 /// Reads one line of JSON, at most `REQUEST_LIMIT` long, as a `T`.

@@ -136,8 +136,7 @@ impl<W: Work> Service<W> {
 
     fn status(&self) -> Answer {
         let cards = self.cards();
-        let default_card =
-            cards.iter().find(|card| card.nvidia).or(cards.first()).map(|card| card.name.clone());
+        let default_card = cards.iter().find(|card| card.default).map(|card| card.name.clone());
         let machines = self
             .machines
             .lock()

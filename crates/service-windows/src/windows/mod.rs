@@ -46,10 +46,17 @@ impl Work for HostWork {
 
     fn cards(&self) -> Vec<CardInfo> {
         match gpu::cards() {
-            Ok(cards) => cards
-                .iter()
-                .map(|card| CardInfo { name: card.name.clone(), nvidia: card.is_nvidia() })
-                .collect(),
+            Ok(cards) => {
+                let default = gpu::default_card(&cards).map(|card| card.interface_path.clone());
+                cards
+                    .iter()
+                    .map(|card| CardInfo {
+                        name: card.name.clone(),
+                        memory_mb: card.memory.map(|bytes| bytes >> 20),
+                        default: default.as_ref() == Some(&card.interface_path),
+                    })
+                    .collect()
+            }
             Err(error) => {
                 log(&format!("The cards couldn't be listed: {error}"));
                 Vec::new()

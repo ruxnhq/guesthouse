@@ -46,8 +46,8 @@ impl Work for Pretend {
 
     fn cards(&self) -> Vec<CardInfo> {
         vec![
-            CardInfo { name: "Basic".into(), nvidia: false },
-            CardInfo { name: "NVIDIA GeForce RTX 5090".into(), nvidia: true },
+            CardInfo { name: "Radeon Graphics".into(), memory_mb: Some(512), default: false },
+            CardInfo { name: "NVIDIA GeForce RTX 5090".into(), memory_mb: Some(32 * 1024), default: true },
         ]
     }
 

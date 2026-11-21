@@ -35,7 +35,7 @@ options:
   --name NAME              The machine's name in HCS (guesthouse-windows).
   --memory-mb N            Its memory (8192).
   --cpus N                 Its processors (4).
-  --gpu TEXT               The card whose name or ID holds TEXT. Without it, the first NVIDIA card.
+  --gpu TEXT               The card whose name or ID holds TEXT. Without it, the card with the most memory of its own.
   --no-gpu                 No card, and no driver copy.
   --no-network             No network card.
   --no-tpm                 No TPM.

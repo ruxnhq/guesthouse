@@ -7,7 +7,8 @@
 //!
 //! The start on NVMe is a trial. If Windows comes up, the machine stays on NVMe. If it doesn't, the
 //! machine goes back to SATA for good and the start goes on there, so a move can't leave a machine
-//! that won't start. Back on SATA, Windows puts the key back by itself. Two files in the machine's
+//! that won't start. The script writes the deleted key to the disk at once, so a Windows that has to
+//! be turned off instead of shutting down moves too. Back on SATA, Windows puts the key back by itself. Two files in the machine's
 //! folder keep this if the app stops halfway: one while the trial is due, and one that says why a
 //! machine stays on SATA, so the move isn't tried at every start.
 
@@ -17,7 +18,6 @@ use crate::context::Context;
 use crate::failure::Result;
 use crate::log::write_log;
 use crate::machine::{Kind, Machine};
-use crate::vm_host::Stopped;
 use std::fs;
 use std::path::PathBuf;
 
@@ -57,7 +57,7 @@ pub(super) fn passed(task: &Task) {
 /// The machine goes back to SATA, where it started before.
 fn back_to_sata(task: &mut Task) -> Result<()> {
     task.machine.nvme = false;
-    task.machine.save(task.context)?;
+    task.machine.save_disk_place(task.context)?;
     let _ = fs::remove_file(trial_file(task.context, &task.machine));
     Ok(())
 }
@@ -101,19 +101,9 @@ pub(super) fn ready_windows(task: &mut Task) -> Result<bool> {
     }
     fs::write(trial_file(task.context, &task.machine), "")?;
     task.machine.nvme = true;
-    task.machine.save(task.context)?;
+    task.machine.save_disk_place(task.context)?;
     write_log(task.context, "nvme: Windows is ready, so the VM starts again on NVMe")?;
     Ok(true)
-}
-
-/// After the VM was stopped to move: one that had to be turned off may not have written the deleted
-/// key to its disk, so this start goes on on SATA, and the next tries again.
-pub(super) fn after_stop(task: &mut Task, stopped: Stopped) -> Result<()> {
-    if stopped == Stopped::TurnedOff && on_trial(task.context, &task.machine) {
-        back_to_sata(task)?;
-        write_log(task.context, "nvme: Windows was turned off, not shut down, so it stays on SATA for now")?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

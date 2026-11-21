@@ -332,13 +332,12 @@ fn start_again_on_software_desktop(task: &mut Task, why: &str) -> Result<Gpu> {
 /// The same start goes on in a new VM, which shows the card maker's number if `new_identity`, and has
 /// the disk on NVMe if the machine is now there. What the first one said is about a VM that's gone.
 fn start_again_in_new_vm(task: &mut Task, new_identity: bool) -> Result<()> {
-    let stopped = if new_identity {
-        stop_for_new_identity(task)?
+    if new_identity {
+        stop_for_new_identity(task)?;
     } else {
         task.step(nvme_move::MOVING);
-        task.host.stop(&task.machine, STOP_WAIT_SECONDS)?
-    };
-    nvme_move::after_stop(task, stopped)?;
+        task.host.stop(&task.machine, STOP_WAIT_SECONDS)?;
+    }
     wait_for_memory(task);
     task.error.clear();
     start_gpu_vm(task).map(|_| ())

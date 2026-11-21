@@ -6,6 +6,7 @@ use crate::agent::GuestAgent;
 use crate::failure::Failure;
 use crate::machine::load;
 use crate::testing::Scratch;
+use crate::vm_host::Stopped;
 use crate::vm_host::stand_in::RecordingHost;
 use std::sync::{Arc, Mutex};
 
@@ -120,15 +121,16 @@ fn a_start_on_nvme_that_fails_goes_back_to_sata_for_good_and_goes_on() {
 }
 
 #[test]
-fn a_windows_that_had_to_be_turned_off_stays_on_sata_for_now() {
+fn a_windows_that_had_to_be_turned_off_moves_too() {
     let rig = rig("ready\r\n");
     *rig.host.stop_answer.lock().unwrap() = Some(Ok(Stopped::TurnedOff));
     let mut task = rig.task();
     boot(&mut task).unwrap();
-    assert_eq!(rig.disks_started_on(), [false, false], "the deleted key may not have reached its disk");
+    assert_eq!(rig.disks_started_on(), [false, true], "the script wrote the deleted key to its disk");
     let saved = rig.saved(&task);
-    assert!(!saved.nvme && !on_trial(&rig.context, &saved));
-    assert!(!refused_file(&rig.context, &saved).exists(), "the next start tries again");
+    assert!(saved.nvme && !on_trial(&rig.context, &saved));
+    boot(&mut task).unwrap();
+    assert_eq!(rig.guest.times_asked(), 1, "it isn't moved at every start");
 }
 
 #[test]
@@ -137,7 +139,7 @@ fn a_first_start_on_nvme_left_over_from_a_stopped_app_is_still_a_trial() {
     *rig.host.nvme_failure.lock().unwrap() = Some(Failure::new("the agent never answered"));
     let mut task = rig.task();
     task.machine.nvme = true;
-    task.machine.save(&rig.context).unwrap();
+    task.machine.save_disk_place(&rig.context).unwrap();
     fs::write(trial_file(&rig.context, &task.machine), "").unwrap();
     boot(&mut task).unwrap();
     assert_eq!(rig.disks_started_on(), [true, false]);

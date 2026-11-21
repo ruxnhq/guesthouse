@@ -21,15 +21,14 @@ pub(super) fn new_vm_needed(running: PciIdentity, state: &IdentityState, machine
     state.shown == Shown::Maker && running != maker_identity(machine)
 }
 
-/// Shuts Windows down so the VM can start again with the new number, and says how it went. A Windows
-/// that had to be turned off has still taken the package, so the start goes on.
-pub(super) fn stop_for_new_identity(task: &mut Task) -> Result<Stopped> {
+/// Shuts Windows down so the VM can start again with the new number. A Windows that had to be turned
+/// off has still taken the package, so the start goes on.
+pub(super) fn stop_for_new_identity(task: &mut Task) -> Result<()> {
     task.step(&restarting_vm(&task.machine));
-    let stopped = task.host.stop(&task.machine, STOP_WAIT_SECONDS)?;
-    if stopped == Stopped::TurnedOff {
+    if task.host.stop(&task.machine, STOP_WAIT_SECONDS)? == Stopped::TurnedOff {
         write_log(task.context, "gpu identity: Windows did not shut down in time, so the VM was turned off")?;
     }
-    Ok(stopped)
+    Ok(())
 }
 
 #[cfg(test)]

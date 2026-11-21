@@ -3,9 +3,9 @@
 //! gives a GPU only to a running machine. It stays until the machine stops, as the machine stops
 //! when its last handle closes, or until its time is up.
 
-use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation};
+use super::{absolute, chosen_card, copy_driver_to_disk, linux, machine, need_elevation, print_guest_report};
 use crate::Options;
-use crate::guest::linux::INSTALL_FINISHED;
+use crate::guest::linux::install_finished;
 use crate::machine::Guest;
 use crate::printable::printable;
 use crate::record::{Record, files_disk};
@@ -18,6 +18,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader};
 use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -37,6 +39,9 @@ const RELAY_PROFILE: &str = "guesthouse.serial-relay";
 const UNREADABLE_REPEAT: u32 = 60;
 /// How long a guest asked to shut down at the end of its time has before it's stopped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(180);
+/// Ubuntu's installer speaks on the serial port soon after it starts, but only when the files
+/// disk's own menu started it. An install boot this quiet for this long started something else.
+const INSTALL_SILENCE: Duration = Duration::from_secs(300);
 
 pub fn boot(options: &Options) -> Result<(), String> {
     need_elevation()?;
@@ -98,9 +103,14 @@ pub fn boot(options: &Options) -> Result<(), String> {
     let pipe = machine.serial_pipe();
     let unjailed = !options.jail;
     let disk = machine.disk.clone();
+    let heard = Arc::new(AtomicBool::new(false));
+    let heard_here = Arc::clone(&heard);
+    let installing = record.guest == Guest::Linux && !record.installed;
+    let guest = record.guest;
     // The guest's line saying its install is done is when the installer stops being attached.
     let on_line = move |line: &str| {
-        if line.contains(INSTALL_FINISHED) && record.guest == Guest::Linux && !record.installed {
+        heard_here.store(true, Ordering::SeqCst);
+        if install_finished(line) && record.guest == Guest::Linux && !record.installed {
             let installed = Record { installed: true, ..record.clone() };
             match installed.save(&disk) {
                 Ok(()) => println!("The install is done. The next boot starts the installed system."),
@@ -111,7 +121,14 @@ pub fn boot(options: &Options) -> Result<(), String> {
     thread::spawn(move || print_serial(&pipe, unjailed, on_line));
     println!("Waiting for the guest. Ctrl+C asks it to shut down.");
     let limit = options.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
-    wait(&running, stop, limit)
+    let silence = installing.then_some((INSTALL_SILENCE, heard));
+    let waited = wait(&running, stop, limit, silence);
+    // The report a Windows guest writes on its own disk can be read once the machine has let go.
+    drop(running);
+    if guest == Guest::Windows {
+        print_guest_report(&machine.disk);
+    }
+    waited
 }
 
 /// An endpoint on Guesthouse's network, deleted when dropped, and the card that plugs into it.
@@ -129,8 +146,9 @@ fn plug_in() -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
 /// is told and waited past.
 fn wait(
     running: &ComputeSystem,
-    stop: &std::sync::atomic::AtomicBool,
+    stop: &AtomicBool,
     limit: Option<Duration>,
+    silence: Option<(Duration, Arc<AtomicBool>)>,
 ) -> Result<(), String> {
     let started = Instant::now();
     let mut asked = false;
@@ -146,6 +164,19 @@ fn wait(
                 println!("Its time is up.");
                 stop.store(true, Ordering::SeqCst);
             }
+        }
+        if let Some((quiet, heard)) = &silence
+            && !heard.load(Ordering::SeqCst)
+            && started.elapsed() >= *quiet
+        {
+            println!(
+                "The installer has said nothing on the serial port, which it does only when the files \
+                 disk's menu starts it, so the firmware or GRUB started something else. Stopping it."
+            );
+            if let Err(error) = running.terminate() {
+                eprintln!("{error}");
+            }
+            return Ok(());
         }
         if stop.swap(false, Ordering::SeqCst) {
             if asked {

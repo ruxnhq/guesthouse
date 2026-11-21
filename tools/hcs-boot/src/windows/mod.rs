@@ -171,6 +171,43 @@ fn copy_into(folder: &Path, root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// How long Windows may take to let go of a machine's disk once the machine has stopped.
+const RELEASE_SECONDS: u64 = 30;
+
+/// Prints the report a Windows guest wrote on its own disk, which says what it saw of its card
+/// even when its serial port said nothing.
+fn print_guest_report(disk: &Path) {
+    let started = Instant::now();
+    let attached = loop {
+        let opened =
+            VirtualDisk::open(disk, Kind::Vhdx).and_then(|mut opened| opened.attach(false).map(|()| opened));
+        match opened {
+            Ok(opened) => break opened,
+            Err(_) if started.elapsed() < Duration::from_secs(RELEASE_SECONDS) => {
+                thread::sleep(Duration::from_secs(1))
+            }
+            Err(error) => return eprintln!("The guest's report couldn't be read: {error}"),
+        }
+    };
+    let report = volumes(&attached)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|volume| volume.root.join(crate::guest::REPORT_FILE))
+        .find(|path| path.is_file());
+    match report.map(std::fs::read) {
+        Some(Ok(bytes)) => {
+            println!("The guest's report, from its disk:");
+            for line in bytes.split(|&byte| byte == b'\n') {
+                println!("report: {}", crate::printable::printable(line));
+            }
+        }
+        Some(Err(error)) => eprintln!("The guest's report couldn't be read: {error}"),
+        None => println!(
+            "The guest wrote no report on its disk, so it never got as far as its first sign-in screen."
+        ),
+    }
+}
+
 /// A program of Windows' own, by its full path, so nothing else on PATH can stand in for it.
 fn system_program(name: &str) -> PathBuf {
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());

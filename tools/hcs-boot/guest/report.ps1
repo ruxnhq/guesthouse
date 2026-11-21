@@ -1,11 +1,25 @@
-# Says on the guest's first serial port what it sees of its GPU and network, so the host can read
-# it with no screen. It runs as SYSTEM at every start, from the task SetupComplete.cmd makes.
+# Says what the guest sees of its GPU and network, so the host can read it with no screen. Each line
+# goes to a file on the guest's own disk, which the host reads once the machine has stopped, and to
+# the first serial port too if there is one, which the host prints while the guest runs. It runs as
+# SYSTEM at every start, from the task SetupComplete.cmd makes.
 $ErrorActionPreference = 'Continue'
-$port = New-Object -TypeName System.IO.Ports.SerialPort -ArgumentList 'COM1', 115200
-$port.Open()
+$report = 'C:\Guesthouse\report.txt'
+Set-Content -LiteralPath $report -Value "started $(Get-Date -Format o)" -Encoding utf8
+
+$port = $null
+try {
+    $port = New-Object -TypeName System.IO.Ports.SerialPort -ArgumentList 'COM1', 115200
+    $port.Open()
+} catch {
+    Add-Content -LiteralPath $report -Value "no serial port: $($_.Exception.Message)" -Encoding utf8
+    $port = $null
+}
 
 function Send-Line([string]$Text) {
-    $port.WriteLine("guesthouse: $Text")
+    Add-Content -LiteralPath $report -Value $Text -Encoding utf8
+    if ($port) {
+        try { $port.WriteLine("guesthouse: $Text") } catch { $port = $null }
+    }
 }
 
 Send-Line "started $(Get-Date -Format o)"
@@ -39,4 +53,4 @@ foreach ($address in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyC
 }
 
 Send-Line 'report done'
-$port.Close()
+if ($port) { $port.Close() }

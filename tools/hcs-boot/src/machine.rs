@@ -74,14 +74,11 @@ impl Machine {
             virtual_machine: VirtualMachine {
                 chipset: Chipset {
                     // A Linux guest gets its GPU through a kernel module it builds itself, which no one
-                    // signs, so its firmware leaves Secure Boot off.
+                    // signs, so its firmware is given no Secure Boot keys at all, as in the Linux
+                    // document App Sandbox has booted.
                     uefi: Some(Uefi {
                         console: Some(UefiConsole::Default),
-                        apply_secure_boot_template: Some(if windows {
-                            SecureBootTemplate::Apply
-                        } else {
-                            SecureBootTemplate::Skip
-                        }),
+                        apply_secure_boot_template: windows.then_some(SecureBootTemplate::Apply),
                         secure_boot_template_id: windows.then(|| SECURE_BOOT_WINDOWS.to_owned()),
                     }),
                 },
@@ -157,8 +154,7 @@ mod tests {
     fn a_linux_guest_has_no_secure_boot_and_no_tpm() {
         let document = serde_json::to_value(linux().document()).unwrap();
         let vm = &document["VirtualMachine"];
-        assert_eq!(vm["Chipset"]["Uefi"]["ApplySecureBootTemplate"], json!("Skip"));
-        assert!(vm["Chipset"]["Uefi"].get("SecureBootTemplateId").is_none());
+        assert_eq!(vm["Chipset"]["Uefi"], json!({"Console": "Default"}));
         assert!(vm.get("SecuritySettings").is_none());
         assert!(vm.get("GuestState").is_some(), "its firmware still keeps its boot entries");
     }

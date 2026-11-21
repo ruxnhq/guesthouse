@@ -2,8 +2,11 @@
 //! questions with a local account, the script Windows runs when it has set itself up, and the report
 //! that script schedules.
 
-/// Run as SYSTEM at every start, it writes what the guest sees of its GPU to COM1.
+/// Run as SYSTEM at every start, it writes what the guest sees of its GPU to a file and to COM1.
 pub const REPORT: &str = include_str!("../guest/report.ps1");
+/// The report's file, from the root of the guest's Windows volume, which `boot` reads once the
+/// machine has stopped. `report.ps1` names it as `C:\Guesthouse\report.txt`.
+pub const REPORT_FILE: &str = r"Guesthouse\report.txt";
 /// Where the report goes, from the root of the guest's Windows volume. `SetupComplete.cmd` names it
 /// as `C:\Guesthouse\report.ps1`.
 pub const REPORT_PATH: &str = r"Guesthouse\report.ps1";
@@ -71,6 +74,7 @@ mod tests {
     fn the_scripts_agree_on_where_the_report_is() {
         assert!(SETUP_COMPLETE.contains(&format!(r"C:\{REPORT_PATH}")));
         assert!(REPORT.contains("COM1"));
+        assert!(REPORT.contains(&format!(r"C:\{REPORT_FILE}")));
     }
 }
 
@@ -120,6 +124,12 @@ pub mod linux {
     pub const INSTALLER_KERNEL: &str = r"casper\vmlinuz";
     pub const INSTALLER_INITRD: &str = r"casper\initrd";
 
+    /// Whether a line from the guest is the one saying its install is done. Only a line that starts
+    /// with it counts, so the installer showing the command that says it doesn't.
+    pub fn install_finished(line: &str) -> bool {
+        line.starts_with(INSTALL_FINISHED)
+    }
+
     pub fn account(user: &str, password: &str) -> String {
         format!("{user} {password}\n")
     }
@@ -155,6 +165,12 @@ mod linux_tests {
     fn the_install_script_reads_the_account_where_it_is_written() {
         let install = FILES.iter().find(|(path, _)| path.ends_with("install.sh")).unwrap().1;
         assert!(install.contains(&format!("$files/{}", ACCOUNT.replace('\\', "/"))));
+    }
+
+    #[test]
+    fn only_a_line_of_its_own_says_the_install_is_done() {
+        assert!(install_finished("guesthouse-install-finished"));
+        assert!(!install_finished("running 'echo guesthouse-install-finished > /dev/ttyS0'"));
     }
 
     #[test]

@@ -31,19 +31,33 @@ $program = Join-Path $repo 'target\release\guesthouse-hcs-boot.exe'
 
 function Write-Log([string]$Text) {
     $line = "[$(Get-Date -Format 'HH:mm:ss')] $Text"
-    Write-Output $line
+    # To the screen, not the output, which is how Invoke-Step gives back its exit code.
+    $line | Out-Host
     Add-Content -LiteralPath $log -Value $line -Encoding utf8
 }
 
-# Runs a program, shows and logs each line it prints, and logs how it ended.
+# Runs a program, shows and logs each line it prints, logs how it ended, and gives its exit code.
 function Invoke-Step([string]$Name, [string]$File, [string[]]$Arguments) {
     Write-Log "=== $Name"
     & $File @Arguments 2>&1 | ForEach-Object {
         $text = "$_"
         Write-Output $text
         Add-Content -LiteralPath $log -Value $text -Encoding utf8
+    } | Out-Host
+    $code = $LASTEXITCODE
+    Write-Log "=== $Name ended with exit code $code"
+    return $code
+}
+
+# Boots a guest. A boot that fails at once, before its machine could run, is tried again with less:
+# no network, then no TPM as well, as either is a part that has never run on this PC before.
+function Invoke-Boot([string]$Name, [string[]]$Arguments) {
+    foreach ($less in @(@(), @('--no-network'), @('--no-network', '--no-tpm'))) {
+        $started = Get-Date
+        $code = Invoke-Step "$Name $($less -join ' ')" $program ($Arguments + $jail + $less)
+        if ($code -eq 0 -or ((Get-Date) - $started).TotalSeconds -gt 120) { return }
+        Write-Log "$Name failed at once, so it's tried again with less."
     }
-    Write-Log "=== $Name ended with exit code $LASTEXITCODE"
 }
 
 Write-Log "Guesthouse on this PC, logging to $log"
@@ -57,35 +71,45 @@ foreach ($card in Get-CimInstance -ClassName Win32_VideoController) {
 }
 
 Push-Location $repo
-Invoke-Step 'Build' 'cargo' @('build', '--release', '-p', 'guesthouse-hcs-boot')
+$null = Invoke-Step 'Build' 'cargo' @('build', '--release', '-p', 'guesthouse-hcs-boot')
+# The jail's tests have passed unelevated. boot runs elevated, so they run that way too, and if they
+# fail the serial port is read without the jail, rather than left unread.
+$jailTest = Invoke-Step 'Jail, elevated' 'cargo' @('test', '--release', '-p', 'guesthouse-jail', '--test', 'kernel')
+$relayTest = Invoke-Step 'Serial relay in its jail, elevated' 'cargo' @('test', '--release', '-p', 'guesthouse-hcs-boot', '--test', 'relay')
 Pop-Location
+$jail = @()
+if ($jailTest -ne 0 -or $relayTest -ne 0) {
+    Write-Log '!!! The jail failed elevated, so the boots below read the serial port with --no-jail.'
+    $jail = @('--no-jail')
+}
 if (-not (Test-Path -LiteralPath $program)) {
     Write-Log "There's no $program, so nothing more can run."
     exit 1
 }
-Invoke-Step 'Cards' $program @('gpus')
+$null = Invoke-Step 'Cards' $program @('gpus')
 
 if ($WindowsIso) {
     $disk = Join-Path $Folder 'windows.vhdx'
     if (-not (Test-Path -LiteralPath $disk)) {
-        Invoke-Step 'Windows: prepare' $program @('prepare', '--image', $WindowsIso, '--disk', $disk)
+        $null = Invoke-Step 'Windows: prepare' $program @('prepare', '--image', $WindowsIso, '--disk', $disk)
     }
     if (Test-Path -LiteralPath $disk) {
-        Invoke-Step 'Windows: boot' $program @('boot', '--disk', $disk, '--name', 'guesthouse-windows', '--for-minutes', "$Minutes")
+        Invoke-Boot 'Windows: boot' @('boot', '--disk', $disk, '--name', 'guesthouse-windows', '--for-minutes', "$Minutes")
     }
 }
 
 if ($UbuntuIso) {
     $disk = Join-Path $Folder 'ubuntu.vhdx'
     if (-not (Test-Path -LiteralPath $disk)) {
-        Invoke-Step 'Ubuntu: prepare' $program @('prepare', '--image', $UbuntuIso, '--disk', $disk)
+        $null = Invoke-Step 'Ubuntu: prepare' $program @('prepare', '--image', $UbuntuIso, '--disk', $disk)
     }
+    # The installer needs the network for its updates, so its boot is never tried without one.
     $record = Join-Path $Folder 'ubuntu.guesthouse.json'
     if ((Test-Path -LiteralPath $record) -and -not (Get-Content -LiteralPath $record -Raw | ConvertFrom-Json).installed) {
-        Invoke-Step 'Ubuntu: install' $program @('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$InstallMinutes")
+        $null = Invoke-Step 'Ubuntu: install' $program (@('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$InstallMinutes") + $jail)
     }
     if ((Test-Path -LiteralPath $record) -and (Get-Content -LiteralPath $record -Raw | ConvertFrom-Json).installed) {
-        Invoke-Step 'Ubuntu: boot' $program @('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$Minutes")
+        $null = Invoke-Step 'Ubuntu: boot' $program (@('boot', '--disk', $disk, '--name', 'guesthouse-ubuntu', '--for-minutes', "$Minutes") + $jail)
     }
 }
 

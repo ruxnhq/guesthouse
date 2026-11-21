@@ -66,7 +66,7 @@ Without an NVIDIA card, `--gpu TEXT` picks the card whose name holds TEXT, and `
 
 ### A Windows guest
 
-`prepare` makes a new VHDX, partitions it with diskpart, applies the edition with DISM, and writes the boot files with bcdboot. Then it adds the card's driver, an answer file and a small report. The first start takes a few minutes, as Windows sets itself up. Lines like these are what to look for, the first saying the guest has the card and its driver:
+`prepare` makes a new VHDX, partitions it with diskpart, applies the edition with DISM, and writes the boot files with bcdboot. Then it adds the card's driver, an answer file and a small report. The report writes to the guest's serial port, and to a file on its disk, which `boot` prints once the machine has stopped, in case the serial port said nothing. The first start takes a few minutes, as Windows sets itself up. Lines like these are what to look for, the first saying the guest has the card and its driver:
 
 ```
 guest: guesthouse: card: NVIDIA GeForce RTX 5090, driver 32.0.16.xxxx, status OK
@@ -84,7 +84,7 @@ With a Pro guest, Remote Desktop to the address it prints shows its screen.
 - It's the installer's answer file, which cloud-init finds by its label.
 - It keeps the host's GPU files, which the guest mounts at `/usr/lib/wsl` as WSL does. These are WSL's own DXCore and D3D12 libraries, the libraries the driver puts in `lxss\lib`, and the driver's folder from the driver store.
 
-The first `boot` installs Ubuntu. That takes a while, and the machine turns itself off when it's done. `boot` sees the guest say so, and stops attaching the installer. The next `boot` starts the installed system.
+The first `boot` installs Ubuntu. That takes a while, and the machine turns itself off when it's done. `boot` sees the guest say so, and stops attaching the installer. The next `boot` starts the installed system. The installer speaks on the serial port only when the files disk's menu started it, so an install boot that's silent for five minutes started something else, and `boot` stops it and says so.
 
 At every start a service in the guest mounts the GPU files and loads `dxgkrnl`, the guest's half of GPU-PV. Then it reports on the serial port. A distro's kernel has no `dxgkrnl`, as it's only in Microsoft's WSL kernel. So on its first start, and after a kernel update, the guest builds it. It downloads the build tools from Ubuntu and `dxgkrnl`'s source from Microsoft's WSL kernel on GitHub, which Guesthouse never keeps a copy of. The guest's Secure Boot is off, as that module isn't signed. Lines like these are what to look for:
 
@@ -104,7 +104,7 @@ What a guest writes to its serial port is the one thing on a Windows host that a
 - Process mitigations block every win32k call, code made at run time, and DLLs from a share or a low-integrity file. That does what seccomp does.
 - Its job lets it start no process, keeps it off the desktop and the clipboard, caps its memory, and stops it when `boot` ends. That does what no new privileges does.
 
-The jail's test reads these back from Windows inside the jailed process, so they're checked, not assumed. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
+The jail's test reads four of these back from Windows inside the jailed process: the AppContainer, and that win32k calls, dynamic code and child processes are refused. The rest are set and not yet read back. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
 
 ## What it doesn't do yet
 

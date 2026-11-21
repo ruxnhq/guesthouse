@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "tools/card-check", "tools/hcs-boot"]
+# Microsoft's windows-reactor and the windows-rs crates it needs, vendored for the Windows app and
+# used by path from it. Not members: Windows only, and not this workspace's code.
+exclude = ["vendor/windows-reactor", "vendor/windows-rs"]
 # The app needs GTK's development files, which nothing else here does. Build it with `-p guesthouse-app`.
 default-members = [
     "crates/app-core",

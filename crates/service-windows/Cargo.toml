@@ -1,0 +1,42 @@
+[package]
+name = "guesthouse-service"
+description = "The Guesthouse service on a Windows host: it runs as the system, keeps the machines, and does what the app asks on its pipe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "guesthouse-service"
+path = "src/main.rs"
+
+[dependencies]
+# The requests it answers, and the answers.
+guesthouse-control.workspace = true
+# The work itself: making a machine's disks and running it.
+guesthouse-host-windows.workspace = true
+# Each machine's settings, in its folder.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Ending a machine left from an earlier run, and the cards a machine can be given.
+guesthouse-hcs.workspace = true
+
+# The service manager, the pipe and its security, and the store's folder.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+]
+
+[lints]
+workspace = true

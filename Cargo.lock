@@ -921,6 +921,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-service"
+version = "0.7.1"
+dependencies = [
+ "guesthouse-control",
+ "guesthouse-hcs",
+ "guesthouse-host-windows",
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
 name = "guesthouse-transport"
 version = "0.7.1"
 

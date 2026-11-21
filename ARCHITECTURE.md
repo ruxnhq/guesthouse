@@ -38,6 +38,8 @@ They're in `crates/`, listed here from the bottom up. Each depends only on crate
 | `app-core` | The desktop app's work with no UI: machines, tasks, setup, a VM's start, `guesthouse-task`, `guesthouse-share` and `guesthouse-vm`. |
 | `app` | The desktop app's GTK 4 and libadwaita pages. |
 | `hcs` | A Windows host's Host Compute System: the machine document as types, and the calls into `computecore.dll`, `computenetwork.dll` and `virtdisk.dll` that run a VM with only Virtual Machine Platform on. It stands apart from the rest, and only its document builds off Windows. `host-windows` makes and runs Windows and Ubuntu guests with GPU-PV through it, telling what happens through an event sink, and `tools/hcs-boot` is that from the command line, as in [docs/windows-host.md](docs/windows-host.md). |
+| `control` | The words on the pipe between Guesthouse's app and its service on a Windows host: each request, its answers, and the app's end of the pipe. |
+| `service-windows` | The Guesthouse service on a Windows host. It runs as the system, as HCS needs, keeps the machines in a folder of its own, does `host-windows`'s work for the app, and keeps every rule itself, as the app runs as a user who isn't an administrator. |
 
 To follow one message, start at `Server::read_channel` in `daemon`, go through `Router::handle_frame`, and land in `Session::dispatch` in `core/src/session/mod.rs`. The handlers are grouped by subject in that folder.
 

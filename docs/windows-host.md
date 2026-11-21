@@ -108,9 +108,30 @@ What a guest writes to its serial port is the one thing on a Windows host that a
 
 The jail's test reads four of these back from Windows inside the jailed process: the AppContainer, and that win32k calls, dynamic code and child processes are refused. The rest are set and not yet read back. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
 
+## The service
+
+HCS needs an administrator, and Guesthouse's app runs as you, so the app never touches a machine itself. It asks the Guesthouse service, `guesthouse-service`, which runs as the system, on the pipe `\\.\pipe\guesthouse`, in the words of `crates/control`. The service does the same work `guesthouse-hcs-boot` does, and keeps every rule itself:
+
+- It answers the system, an elevated administrator, and the user signed in at the console. Anyone else is refused and written in its log.
+- It keeps the machines in `%ProgramData%\Guesthouse\machines`, a folder each, which it makes its own, so only the system and administrators can open them. A folder that's there already and wasn't made by an administrator is refused rather than taken over. Its log is `%ProgramData%\Guesthouse\service.log`.
+- It opens the ISO you name as you first, and refuses one you couldn't read yourself, or one on a share.
+- A machine's name, memory, processors and disk size are held to limits, and one machine is made at a time.
+- A Linux guest is given a copy of its installer in its folder, as each boot changes the permissions of every disk it's given, and the service mustn't do that to your file. The copy goes once the guest has installed.
+- Machines are HCS's `guesthouse-NAME`, so no other program's machines are touched. One left running when the service last stopped is stopped when it starts.
+- When the service stops, or Windows shuts down, each running guest is asked to shut down, and stopped if it hasn't in a minute.
+
+To try it without installing it, in an elevated prompt:
+
+```powershell
+cargo build --release -p guesthouse-service -p guesthouse-host-windows
+.\target\release\guesthouse-service.exe run
+```
+
+It serves until Ctrl+C. The relay must sit beside it, as `boot` looks for it there, which a release build does.
+
 ## What it doesn't do yet
 
-- None of the boots has run yet. They need an elevated prompt, and `try-on-this-pc.ps1` is the first run.
+- The service hasn't run as a service yet, nor been installed: it's been tried only by its tests, which run unelevated.
 - A Windows guest gets only the driver's folder in the driver store. That's what Direct3D needs. The files a driver also puts in `System32`, which some programs look for there, aren't placed yet.
 - An Ubuntu guest without WSL on the host has no `libdxcore.so`, so `nvidia-smi` and CUDA won't run in it.
 - There's no screen but Remote Desktop or SSH.

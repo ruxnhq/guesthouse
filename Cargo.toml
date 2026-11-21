@@ -21,6 +21,7 @@ default-members = [
     "crates/messages",
     "crates/replay",
     "crates/sensors",
+    "crates/service-windows",
     "crates/transport",
     "tools/card-check",
     "tools/hcs-boot",

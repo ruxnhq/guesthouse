@@ -13,6 +13,11 @@ const TRIES: u32 = 20;
 const APART: Duration = Duration::from_millis(30);
 /// Windows' answer to an open the pipe's security refuses.
 const ACCESS_DENIED: i32 = 5;
+/// What the app asks of the pipe: to read it and write to it (`FILE_GENERIC_READ |
+/// FILE_WRITE_DATA`), which is all the pipe's security grants a user. Asking to write as a file is
+/// written would ask to append too, which for a pipe is making an instance of it, and is refused.
+#[cfg(windows)]
+const PIPE_ACCESS: u32 = 0x0012_008b;
 
 /// Why the service couldn't be asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +74,7 @@ pub fn stream(request: &Request, mut each: impl FnMut(Answer) -> bool) -> Result
 
 fn open() -> Result<File, Unreached> {
     for _ in 0..TRIES {
-        match OpenOptions::new().read(true).write(true).open(PIPE) {
+        match options().open(PIPE) {
             Ok(pipe) => return Ok(pipe),
             Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => return Err(Unreached::Refused),
             // Not there, or busy with another request: wait a moment and try again.
@@ -77,4 +82,19 @@ fn open() -> Result<File, Unreached> {
         }
     }
     Err(Unreached::NoService)
+}
+
+#[cfg(windows)]
+fn options() -> OpenOptions {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.access_mode(PIPE_ACCESS);
+    options
+}
+
+#[cfg(not(windows))]
+fn options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    options
 }

@@ -2,6 +2,8 @@
 //! This shows the tables and the code around them agree with those values, and nothing about a real
 //! card. The engines the pretend cards list are only there to make the nodes come out.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::{Backend, Status, VendorQuery};
 use guesthouse_backend_nvidia::NvidiaBackend;
 use guesthouse_backend_nvidia::channel::{AREA_SIZE, Channel, ChannelPlace, Engine};

@@ -1,6 +1,8 @@
 //! A recording of a tester's Arc B580 stands in for the card: the backend built from it gives the
 //! guest the record the daemon on the real card gave, as that daemon's log line says it.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend_intel::IntelBackend;
 use guesthouse_backend_intel::protocol::features::{self, Feature};
 use guesthouse_backend_intel::protocol::{card_data, record};

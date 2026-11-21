@@ -3,6 +3,8 @@
 //! `GUESTHOUSE_VERBOSE`. The core's own test holds the core to this; this one holds the Intel
 //! backend's reading and logging of each submission to it.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use common::*;

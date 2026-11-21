@@ -4,6 +4,8 @@
 //! known word to it, submits, waits on an eventfd, and checks the word came back. Without an AMD
 //! card it returns early, so the test is green on any machine and real only on one with the card.
 
+#![cfg(target_os = "linux")]
+
 use guesthouse_backend::Backend;
 use guesthouse_backend::{GpuRange, MapRequest, MemoryKind};
 use guesthouse_backend_amd::{

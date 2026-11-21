@@ -30,6 +30,8 @@ pub mod host;
 #[cfg(windows)]
 pub mod network;
 #[cfg(windows)]
+pub mod serial;
+#[cfg(windows)]
 pub mod system;
 #[cfg(windows)]
 mod text;

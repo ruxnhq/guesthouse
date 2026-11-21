@@ -16,10 +16,10 @@ use crate::settings::BootSettings;
 use guesthouse_hcs::host;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
+use guesthouse_hcs::serial::SerialPort;
 use guesthouse_hcs::system::{self, ComputeSystem};
 use guesthouse_jail::windows::{Handles, Jail, Jailed};
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, PipeReader, Write};
+use std::io::{BufRead, BufReader, PipeReader, Read, Write};
 use std::os::windows::io::OwnedHandle;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -211,15 +211,23 @@ fn plug_in(mac: &str, sink: &dyn Sink) -> Result<(Option<Endpoint>, Option<Netwo
     Ok((Some(endpoint), Some(adapter)))
 }
 
-/// The serial port's writing end, while the guest has the port open.
-type Port = Arc<Mutex<Option<File>>>;
+/// The serial port, while the guest has it open.
+type Port = Arc<Mutex<Option<Arc<SerialPort>>>>;
 
 /// Asks the guest to shut down on its serial port. Gives whether the line was written.
 fn ask_on_port(port: &Port) -> bool {
-    let Ok(mut held) = port.lock() else { return false };
-    let Some(file) = held.as_mut() else { return false };
-    let written = file.write_all(format!("{SHUTDOWN_LINE}\n").as_bytes()).and_then(|()| file.flush());
-    written.is_ok()
+    // Taken out of the lock, so a write that waits doesn't hold up the reader putting a new one in.
+    let Some(open) = port.lock().ok().and_then(|held| held.clone()) else { return false };
+    open.write_all(format!("{SHUTDOWN_LINE}\n").as_bytes()).is_ok()
+}
+
+/// The serial port read as a stream.
+struct Reading(Arc<SerialPort>);
+
+impl Read for Reading {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buffer)
+    }
 }
 
 /// Waits for the machine to stop. Returning closes the last handle, which stops the machine, so only
@@ -313,7 +321,9 @@ fn wait(
 }
 
 /// Sends each line the guest writes to COM1 until the port closes. The port is read by the relay
-/// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here.
+/// in its jail, as those are bytes the guest chose, unless `unjailed` says to read it here: this
+/// only copies the bytes, as they come, to the relay's input, as the host keeps the port to write
+/// to it too.
 /// The port closes whenever the guest restarts, as Windows does while it sets itself up, so it's
 /// opened again each time until the machine has stopped.
 fn print_serial(
@@ -327,9 +337,8 @@ fn print_serial(
     let mut opened_before = false;
     while !ended.load(Ordering::SeqCst) {
         let Some(port) = open_port(pipe, opened_before, ended, sink.as_ref()) else { return };
-        // The reader has the port; the host keeps its own handle to write to it.
         if let Ok(mut held) = writer.lock() {
-            *held = port.try_clone().ok();
+            *held = Some(Arc::clone(&port));
         }
         if opened_before {
             sink.note("The guest restarted, so its serial port is read again.");
@@ -337,10 +346,10 @@ fn print_serial(
         opened_before = true;
         if unjailed {
             sink.note("Reading the guest's serial port with no jail, as asked.");
-            print_lines(port, &mut on_line, sink.as_ref());
+            print_lines(Reading(port), &mut on_line, sink.as_ref());
             continue;
         }
-        match relay(port) {
+        match relay(Reading(port)) {
             Ok((jailed, lines)) => {
                 print_lines(lines, &mut on_line, sink.as_ref());
                 let _ = jailed.wait();
@@ -358,15 +367,19 @@ fn print_serial(
 
 /// The serial port, once HCS serves it. The first time it has a while to appear before that's told
 /// as a problem; after a restart it's waited for for as long as the machine runs.
-fn open_port(pipe: &str, opened_before: bool, ended: &AtomicBool, sink: &dyn Sink) -> Option<File> {
+fn open_port(
+    pipe: &str,
+    opened_before: bool,
+    ended: &AtomicBool,
+    sink: &dyn Sink,
+) -> Option<Arc<SerialPort>> {
     let started = Instant::now();
     loop {
         if ended.load(Ordering::SeqCst) {
             return None;
         }
-        // Read and write, so the guest can be asked to shut down on it; read only if that's refused.
-        match OpenOptions::new().read(true).write(true).open(pipe).or_else(|_| File::open(pipe)) {
-            Ok(port) => return Some(port),
+        match SerialPort::open(pipe) {
+            Ok(port) => return Some(Arc::new(port)),
             Err(error) if !opened_before && started.elapsed() >= Duration::from_secs(SERIAL_SECONDS) => {
                 sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));
                 return None;
@@ -376,12 +389,19 @@ fn open_port(pipe: &str, opened_before: bool, ended: &AtomicBool, sink: &dyn Sin
     }
 }
 
-/// The serial relay, started in its jail with the port as its input, and the end of its output.
-fn relay(port: File) -> std::io::Result<(Jailed, PipeReader)> {
+/// The serial relay, started in its jail, and the end of its output. What the guest writes is
+/// copied to its input as it comes, on a thread of its own, until the port closes.
+fn relay(mut port: Reading) -> std::io::Result<(Jailed, PipeReader)> {
     let program = std::env::current_exe()?.with_file_name(RELAY);
     let (lines, relay_output) = std::io::pipe()?;
+    let (relay_input, mut to_relay) = std::io::pipe()?;
+    thread::spawn(move || {
+        // Ends when the port closes or the relay goes, and closing its end ends the relay's input.
+        let _ = std::io::copy(&mut port, &mut to_relay);
+        let _ = to_relay.flush();
+    });
     let handles = Handles {
-        stdin: Some(OwnedHandle::from(port)),
+        stdin: Some(OwnedHandle::from(relay_input)),
         stderr: Some(OwnedHandle::from(relay_output.try_clone()?)),
         stdout: Some(OwnedHandle::from(relay_output)),
     };

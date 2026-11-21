@@ -13,8 +13,13 @@ use std::path::{Path, PathBuf};
 
 /// The port remoteman's host listens on.
 pub const PORT: u16 = 7791;
-/// The installer the guest is given, which the host looks for beside the program that boots it.
-pub const SETUP: &str = r"screen\remoteman-host-setup.exe";
+/// remoteman's host's files, as its installer would lay them out, which the host looks for beside
+/// the program that boots the machine. The guest runs the `setup.ps1` among them: remoteman's own
+/// installer asks Windows to run it again elevated, which never comes back in a guest with nobody
+/// signed in.
+pub const FILES: &str = r"screen\remoteman-host";
+/// Where the guest finds them, in its screen folder.
+pub const GUEST_FILES: &str = "remoteman-host";
 /// The guest's folder for its screen, from the root of its Windows volume.
 pub const GUEST_FOLDER: &str = r"Guesthouse\screen";
 pub const SCRIPT: &str = include_str!("../guest/screen.ps1");
@@ -115,12 +120,11 @@ mod tests {
 
     #[test]
     fn the_guest_script_uses_the_names_the_host_writes() {
-        for name in
-            ["remoteman-host-setup.exe", "trusted", "encoder.txt", "logon.txt", r"C:\Guesthouse\screen"]
+        for name in [GUEST_FILES, "setup.ps1", "trusted", "encoder.txt", "logon.txt", r"C:\Guesthouse\screen"]
         {
             assert!(SCRIPT.contains(name), "{name}");
         }
-        assert!(SETUP.ends_with("remoteman-host-setup.exe"));
+        assert!(FILES.ends_with(GUEST_FILES));
         assert!(SCRIPT.contains("screen: fingerprint"));
     }
 }

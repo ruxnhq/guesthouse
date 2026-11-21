@@ -1,10 +1,15 @@
 # The guest's screen: remoteman's host, which shows its desktop to the remoteman viewer on the PC
 # that runs it, encoded on the guest's card. report.ps1 runs this at every start, as SYSTEM, before
 # its last line, so Send-Line is there. The host puts what it needs in C:\Guesthouse\screen before
-# each boot: remoteman's installer, the viewer's fingerprint, and which encoder suits the card.
+# each boot: remoteman's host's files, the viewer's fingerprint, and which encoder suits the card.
+#
+# remoteman's own installer can't be used here: it starts by asking Windows to run it again
+# elevated, and as SYSTEM with nobody signed in that never comes back. So its files are copied
+# where it would put them, and its setup.ps1, which does every step the installer does, is run.
 $screen = 'C:\Guesthouse\screen'
-$setup = Join-Path $screen 'remoteman-host-setup.exe'
-$hostExe = 'C:\Program Files\remoteman host\remoteman-host.exe'
+$files = Join-Path $screen 'remoteman-host'
+$folder = 'C:\Program Files\remoteman host'
+$hostExe = Join-Path $folder 'remoteman-host.exe'
 $state = 'C:\ProgramData\remoteman\host'
 # remoteman keeps a host's identity and trust list in host\ under the folder it's given.
 $identity = Join-Path $state 'host'
@@ -43,27 +48,34 @@ if (Test-Path -LiteralPath $logon) {
     Remove-Item -LiteralPath $logon -Force
 }
 
-if (-not (Test-Path -LiteralPath $setup)) {
-    Send-Line 'screen: no remoteman installer was given, so the guest has no screen'
+if (-not (Test-Path -LiteralPath (Join-Path $files 'setup.ps1'))) {
+    Send-Line "screen: remoteman's host wasn't given, so the guest has no screen"
     return
 }
 
-# remoteman's installer runs again whenever the host brings a different one.
-$wanted = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+# remoteman's host is installed again whenever the host brings different files.
+$wanted = (Get-ChildItem -LiteralPath $files -Recurse -File | Sort-Object FullName |
+    ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) -join ''
 $installedFile = Join-Path $screen 'installed.txt'
 $installed = if (Test-Path -LiteralPath $installedFile) { (Get-Content -LiteralPath $installedFile -Raw).Trim() } else { '' }
 if (-not (Test-Path -LiteralPath $hostExe) -or $installed -ne $wanted) {
     Send-Line 'screen: installing remoteman host'
-    $log = Join-Path $screen 'setup.log'
-    $run = Start-Process -FilePath $setup -ArgumentList '--silent', '--log', $log -Wait -PassThru
-    if ($run.ExitCode -ne 0) {
-        Send-Line "screen: remoteman's installer failed, with $($run.ExitCode)"
+    Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    Copy-Item -Path (Join-Path $files '*') -Destination $folder -Recurse -Force
+    $setupScript = Join-Path $folder 'setup.ps1'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setupScript install *> $null
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        Send-Line "screen: remoteman's setup failed, with $code"
+        $log = Join-Path $folder 'setup.log'
         if (Test-Path -LiteralPath $log) {
             foreach ($line in (Get-Content -LiteralPath $log -Tail 8)) { Send-Line "screen: setup: $line" }
         }
         return
     }
     Set-Content -LiteralPath $installedFile -Value $wanted -Encoding ascii
+    Send-Line 'screen: remoteman host installed'
 }
 
 # The host is told whom to trust, and which encoder to use, before it starts: it reads its trust

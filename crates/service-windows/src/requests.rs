@@ -355,7 +355,7 @@ impl<W: Work> Service<W> {
         let Some(host_fingerprint) = record.screen else {
             return Answer::Refused {
                 reason: format!(
-                    "{name} has no screen yet. A Windows guest gets one at a boot after remoteman's installer is beside the service."
+                    "{name} has no screen yet. A Windows guest gets one at a boot after remoteman's host's files are beside the service."
                 ),
             };
         };

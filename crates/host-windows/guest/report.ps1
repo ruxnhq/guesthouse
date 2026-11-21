@@ -13,12 +13,15 @@ $ErrorActionPreference = 'Continue'
 # it right whenever it runs.
 $taskName = 'Guesthouse report'
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+# It has no time limit either: the report puts the clock right, a jump of hours, and it ends by
+# itself within minutes.
 $wrong = -not $task -or ($task.Triggers | Where-Object { $_.StartBoundary }) -or
-    $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries
+    $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries -or
+    $task.Settings.ExecutionTimeLimit -ne 'PT0S'
 if ($wrong) {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Guesthouse\report.ps1'
     $trigger = New-ScheduledTaskTrigger -AtStartup
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 }
@@ -75,6 +78,21 @@ if ($smi) {
 foreach ($address in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue) {
     if ($address.IPAddress -ne '127.0.0.1') { Send-Line "address: $($address.IPAddress)" }
 }
+
+# The guest's clock starts out twelve hours behind the host's: its hours are read as if the clock
+# kept the time on a twelve-hour dial. Windows' time service puts it right from the internet's time,
+# once the guest is on the network, and is let make a correction that large, which a workgroup
+# machine otherwise only makes up to fifteen hours. A guest with no network keeps the wrong time.
+$timeSync = (Get-Service -Name vmictimesync -ErrorAction SilentlyContinue).Status
+Send-Line "clock: $([DateTime]::UtcNow.ToString('o')) UTC by the guest, Hyper-V time sync $timeSync"
+$config = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config'
+Set-ItemProperty -LiteralPath $config -Name MaxPosPhaseCorrection -Value 0xFFFFFFFF -Type DWord -ErrorAction SilentlyContinue
+Set-ItemProperty -LiteralPath $config -Name MaxNegPhaseCorrection -Value 0xFFFFFFFF -Type DWord -ErrorAction SilentlyContinue
+Set-Service -Name w32time -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service -Name w32time -ErrorAction SilentlyContinue
+& w32tm.exe /config /manualpeerlist:'time.windows.com,0x9' /syncfromflags:manual /update 2>&1 | Out-Null
+$synced = (& w32tm.exe /resync /force 2>&1 | Out-String).Trim() -replace '\s+', ' '
+Send-Line "clock: $([DateTime]::UtcNow.ToString('o')) UTC after asking the time service: $synced"
 
 # The guest's screen, when the host gave it one, before the last line, as the host takes that line
 # to mean the guest is set up.

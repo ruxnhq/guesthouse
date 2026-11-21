@@ -197,8 +197,11 @@ pub(super) fn free_letters<const N: usize>() -> Result<[char; N], String> {
 /// Wipes disk `number`, makes it GPT, and runs `steps` on it, which must give the partitions these
 /// `letters`. Only ever called on a disk `attach_new` vouched for.
 pub(super) fn diskpart(number: u32, steps: &str, letters: &[char]) -> Result<(), String> {
+    // diskpart's list of disks can lag behind a disk attached a moment ago, most of all while
+    // another diskpart is busy, and then it refuses the number. A rescan brings it up to date.
     let script = format!(
-        "select disk {number}\n\
+        "rescan\n\
+         select disk {number}\n\
          online disk noerr\n\
          attributes disk clear readonly noerr\n\
          clean\n\

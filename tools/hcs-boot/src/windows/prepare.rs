@@ -175,11 +175,14 @@ pub(super) fn write_account(disk: &Path, user: &str, password: &str) -> Result<(
     Ok(())
 }
 
-/// Drive letters nothing uses, from the end of the alphabet, for a new disk's partitions while
-/// they're written.
+/// Drive letters nothing uses or keeps, from the end of the alphabet, for a new disk's partitions
+/// while they're written.
 pub(super) fn free_letters<const N: usize>() -> Result<[char; N], String> {
-    let free: Vec<char> =
-        ('D'..='Z').rev().filter(|letter| !Path::new(&format!("{letter}:\\")).exists()).collect();
+    let taken = disk::letters_taken();
+    let free: Vec<char> = ('D'..='Z')
+        .rev()
+        .filter(|letter| !taken.contains(letter) && !Path::new(&format!("{letter}:\\")).exists())
+        .collect();
     free.get(..N).and_then(|letters| letters.try_into().ok()).ok_or_else(|| {
         format!("{N} free drive letters are needed while the disk is written, and there aren't.")
     })

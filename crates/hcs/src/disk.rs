@@ -5,11 +5,11 @@ use crate::error::{Error, Result, check_win32};
 use crate::text::{from_wide, wide};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
     BusTypeFileBackedVirtual, CreateFileW, FILE_DEVICE_CD_ROM, FILE_DEVICE_DISK, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumePathNamesForVolumeNameW,
-    OPEN_EXISTING,
+    FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetLogicalDrives,
+    GetVolumePathNamesForVolumeNameW, OPEN_EXISTING,
 };
 use windows_sys::Win32::Storage::Vhd::{
     ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER, ATTACH_VIRTUAL_DISK_FLAG_NONE,
@@ -26,6 +26,9 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery,
     STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY, StorageDeviceProperty,
+};
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegEnumValueW, RegOpenKeyExW,
 };
 
 /// A guest's disk reads in 512-byte sectors, as every Windows installer expects, over the 4 KiB
@@ -199,6 +202,77 @@ fn device_number_in(path: &str) -> Option<u32> {
     path[digits..].parse().ok()
 }
 
+/// Where Windows keeps each volume's drive letter, including volumes that aren't attached now.
+const MOUNTED_DEVICES: &str = r"SYSTEM\MountedDevices";
+/// How a drive letter's entry there is named, before its letter.
+const DOS_DEVICE: &str = r"\DosDevices\";
+/// Room for an entry's name there.
+const VALUE_NAME_UNITS: usize = 256;
+
+/// Drive letters that can't be given to a new volume: those in use, a drive with no media in it
+/// included, and those Windows keeps for a volume that isn't attached now. A path test misses both
+/// of the last two, and diskpart refuses such a letter.
+pub fn letters_taken() -> Vec<char> {
+    // SAFETY: GetLogicalDrives only reads which letters are in use.
+    let in_use = unsafe { GetLogicalDrives() };
+    let mut taken: Vec<char> =
+        (0..26u8).filter(|bit| in_use & (1 << bit) != 0).map(|bit| (b'A' + bit) as char).collect();
+    taken.extend(reserved_letters());
+    taken.sort_unstable();
+    taken.dedup();
+    taken
+}
+
+/// The letters MountedDevices keeps. Reading it needs an administrator, so without one this is
+/// empty, and only the letters in use count.
+fn reserved_letters() -> Vec<char> {
+    let path = wide(MOUNTED_DEVICES);
+    let mut key: HKEY = null_mut();
+    // SAFETY: the path ends in a zero, and `key` is a place for the key's handle.
+    if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.as_ptr(), 0, KEY_READ, &mut key) } != 0 {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for index in 0.. {
+        let mut name = [0u16; VALUE_NAME_UNITS];
+        let mut length = name.len() as u32;
+        // SAFETY: the key is open, the name buffer is as long as `length` says, and the type and
+        // data aren't asked for.
+        let read = unsafe {
+            RegEnumValueW(
+                key,
+                index,
+                name.as_mut_ptr(),
+                &mut length,
+                null(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        if read == ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if read != 0 {
+            continue;
+        }
+        if let Some(letter) = reserved_letter(&from_wide(&name)) {
+            found.push(letter);
+        }
+    }
+    // SAFETY: the key is ours and isn't used after this.
+    unsafe { RegCloseKey(key) };
+    found
+}
+
+/// The letter in a MountedDevices entry's name, such as `\DosDevices\E:`.
+fn reserved_letter(name: &str) -> Option<char> {
+    let rest = name.strip_prefix(DOS_DEVICE)?;
+    let mut characters = rest.chars();
+    let letter = characters.next()?.to_ascii_uppercase();
+    (letter.is_ascii_uppercase() && characters.as_str() == ":").then_some(letter)
+}
+
 /// A volume on a disk.
 #[derive(Debug, Clone)]
 pub struct Volume {
@@ -346,6 +420,20 @@ mod tests {
     #[ignore = "reads the host's own first disk"]
     fn the_hosts_first_disk_is_not_a_file() {
         assert!(!is_file_backed(0).unwrap());
+    }
+
+    #[test]
+    fn a_reserved_letter_is_read_from_its_entrys_name() {
+        assert_eq!(reserved_letter(r"\DosDevices\E:"), Some('E'));
+        assert_eq!(reserved_letter(r"\DosDevices\z:"), Some('Z'));
+        assert_eq!(reserved_letter(r"\??\Volume{1234}"), None);
+        assert_eq!(reserved_letter(r"\DosDevices\E:x"), None);
+    }
+
+    #[test]
+    fn the_system_drives_letter_is_taken() {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        assert!(letters_taken().contains(&system.chars().next().unwrap().to_ascii_uppercase()));
     }
 
     #[test]

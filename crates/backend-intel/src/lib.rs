@@ -742,18 +742,19 @@ impl Backend for IntelBackend {
         }
     }
 
-    /// By the CPU, through its view of both. While listening nothing has written the video memory,
-    /// so there is nothing to move.
+    /// By the copy engine where the card has `MEM_COPY`, and by the CPU otherwise (the module
+    /// `work::moves`). While listening nothing has written the video memory, so there is nothing
+    /// to move.
     fn preserve_contents(
         &mut self,
-        _host: &mut dyn HostServices,
-        _own_space: SpaceId,
+        host: &mut dyn HostServices,
+        own_space: SpaceId,
         from: MemoryId,
         to: MemoryId,
         size: u64,
     ) -> Result<(), BackendError> {
         match &mut self.work {
-            Some(work) => work.preserve(from, to, size),
+            Some(work) => work.preserve(host, own_space, from, to, size),
             None => Ok(()),
         }
     }

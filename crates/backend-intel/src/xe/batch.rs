@@ -73,6 +73,8 @@ pub const MEM_COPY_DWORDS: usize = 10;
 pub const MEM_COPY_PAGE: u64 = 256;
 /// The most a width, a height or a pitch field holds, one less than it means.
 const MEM_COPY_FIELD_MOST: u64 = 1 << 16;
+/// The most bytes one copy of [`copy_bytes`] moves, in its page mode.
+pub const MEM_COPY_MOST_BYTES: u64 = MEM_COPY_FIELD_MOST * MEM_COPY_PAGE;
 /// `MEM_COPY_SRC_MOCS_INDEX_MASK` and `MEM_COPY_DST_MOCS_INDEX_MASK` start here.
 const MEM_COPY_SOURCE_MOCS_SHIFT: u32 = 28;
 const MEM_COPY_TARGET_MOCS_SHIFT: u32 = 3;

@@ -4,8 +4,9 @@
 //! [`CardWork`] is what the backend's trait methods call once the stage is past listening. Its
 //! parts are in the modules here: [`memory`] for buffers and guest pages, [`spaces`] for address
 //! spaces and their mappings, [`queues`] for submissions and what became of them, [`marks`] for what
-//! a context's submission has written when it is done, and [`copies`] and [`blits`] for pictures on
-//! their way out. [`choices`] holds what the card has yet to confirm.
+//! a context's submission has written when it is done, [`copies`] and [`blits`] for pictures on
+//! their way out, and [`moves`] for an allocation's contents on its first lock. [`choices`] holds
+//! what the card has yet to confirm.
 
 mod bans;
 pub mod blits;
@@ -15,6 +16,7 @@ pub mod copies;
 pub mod engines;
 pub mod marks;
 mod memory;
+mod moves;
 mod queues;
 #[cfg(test)]
 mod session_tests;
@@ -61,6 +63,8 @@ pub struct CardWork {
     last_look: Option<Instant>,
     /// The copy engine's copies, in the daemon's own space.
     blits: blits::Blits,
+    /// First locks' moves into the guest's pages.
+    moves: moves::Moves,
 }
 
 impl std::fmt::Debug for CardWork {
@@ -104,6 +108,7 @@ impl CardWork {
             left_marks: Vec::new(),
             last_look: None,
             blits: blits::Blits::new(card.main_gt().map_or(0, |gt| gt.ip.major)),
+            moves: moves::Moves::default(),
         })
     }
 

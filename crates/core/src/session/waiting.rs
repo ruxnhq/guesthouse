@@ -574,11 +574,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if self.frames.has_work() {
             self.service_frames(now);
         }
+        let watching = self.pending.iter().any(|item| matches!(item, Pending::Watch { .. }));
+        if watching || self.backend.needs_polling() {
+            self.backend.poll_work(&mut services!(self), now);
+        }
         if self.pending.is_empty() {
             return self.how_soon();
-        }
-        if self.pending.iter().any(|item| matches!(item, Pending::Watch { .. })) {
-            self.backend.poll_work(&mut services!(self), now);
         }
         // The two lists swap places, so polling does not allocate.
         let spare = std::mem::take(&mut self.pending_spare);
@@ -595,7 +596,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     fn how_soon(&self) -> Waiting {
         let copies_or_frames = !self.copies.is_empty() || self.frames.is_urgent();
         let waiting = Waiting::of(self.pending.iter(), copies_or_frames);
-        if waiting == Waiting::Nothing && self.frames.wants_a_look() { Waiting::Background } else { waiting }
+        let look_again = self.frames.wants_a_look() || self.backend.needs_polling();
+        if waiting == Waiting::Nothing && look_again { Waiting::Background } else { waiting }
+    }
+
+    /// The backend's wake descriptor became readable. What the backend writes for the guest then is
+    /// seen by the next [`Session::poll`].
+    pub fn gpu_woke(&mut self, now: Instant) {
+        self.backend.gpu_woke(&mut services!(self), now);
     }
 
     /// Finishes an item if it can. Otherwise hands it back.

@@ -285,6 +285,17 @@ pub trait Backend: Sized {
     /// writing the fence: it stands in at the fence then, as the work will never get there.
     fn poll_work(&mut self, _host: &mut dyn HostServices, _now: Instant) {}
 
+    /// The descriptor from [`Backend::wake_descriptor`] became readable: work the backend asked to
+    /// be woken for may have ended. Called before the core looks at what waits, so what the
+    /// backend writes here for the guest is seen at once.
+    fn gpu_woke(&mut self, _host: &mut dyn HostServices, _now: Instant) {}
+
+    /// Whether work is on the GPU whose end the backend itself must act on, with nothing to wake
+    /// the daemon for it. While it is, the core calls [`Backend::poll_work`] often.
+    fn needs_polling(&self) -> bool {
+        false
+    }
+
     /// A hardware queue has gone, so whatever backs it can go too.
     fn close_queue(&mut self, queue: u32);
 

@@ -258,6 +258,9 @@ impl<B: Backend, M: GuestMemory> Server<B, M> {
         if descriptors[VIEWER_LISTENER].revents != 0 {
             self.viewers.accept(session);
         }
+        if self.wake.is_some() && descriptors[GPU_WAKE].revents != 0 {
+            self.router.session_mut().gpu_woke(Instant::now());
+        }
         let mut sink = Connections { ports: &mut self.ports, scratch: &mut self.scratch };
         self.waiting = self.router.poll(Instant::now(), &mut sink)?;
         self.router.session_mut().offer_frames(&mut self.viewers);

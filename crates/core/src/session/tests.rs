@@ -2912,6 +2912,27 @@ mod address_reuse {
     }
 }
 
+mod backend_polling {
+    use super::*;
+
+    #[test]
+    fn work_only_polling_notices_is_polled_with_nothing_else_waiting_and_soon_again() {
+        let mut session = session();
+        assert_eq!(session.poll(Instant::now()), Waiting::Nothing);
+        assert_eq!(session.backend().work_polls, 0, "nothing to look at");
+        session.backend_mut().needs_polling = true;
+        assert_eq!(session.poll(Instant::now()), Waiting::Background, "looked at again before long");
+        assert_eq!(session.backend().work_polls, 1);
+    }
+
+    #[test]
+    fn a_wake_from_the_gpu_is_handed_to_the_backend() {
+        let mut session = session();
+        session.gpu_woke(Instant::now());
+        assert_eq!(session.backend().wakes, 1);
+    }
+}
+
 mod statistics {
     use super::*;
 

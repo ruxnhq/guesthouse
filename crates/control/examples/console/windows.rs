@@ -1,20 +1,10 @@
-//! Opens a machine's console, the display HCS serves as Remote Desktop on a pipe, in Windows' own
-//! Remote Desktop client, which can't open a pipe: this listens on a port of this PC's loopback only,
-//! carries each connection to the pipe and back, and starts the client on that port.
-//!
-//!     cargo run -p guesthouse-control --example console -- NAME [VM-ID]
-//!
-//! With VM-ID, the relay sends Remote Desktop's pre-connection message naming it ahead of what the
-//! client sends, as Hyper-V's own viewer does, as the console waits for it.
-//! For trying the console before the app has a button for it.
-
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::process::{Command, ExitCode};
 use std::thread;
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(name) = args.first() else {
         eprintln!("Give the machine's name, and if you like HCS's RuntimeId for it.");

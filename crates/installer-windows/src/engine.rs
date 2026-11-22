@@ -908,7 +908,13 @@ mod tests {
     }
 
     fn facts() -> Facts {
-        Facts { version: "9.9.9".into(), has_app: true, has_screen: true, installed: None, app_installed: false }
+        Facts {
+            version: "9.9.9".into(),
+            has_app: true,
+            has_screen: true,
+            installed: None,
+            app_installed: false,
+        }
     }
 
     fn run_in<'a>(ctx: &'a Ctx, facts: &'a Facts, emit: &'a mut dyn FnMut(Event)) -> Run<'a> {

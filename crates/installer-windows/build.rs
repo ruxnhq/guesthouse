@@ -9,11 +9,10 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/setup.ico");
-    if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() != Some("windows") {
-        return;
-    }
     #[cfg(windows)]
-    windows_only();
+    if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() == Some("windows") {
+        windows_only();
+    }
 }
 
 #[cfg(windows)]

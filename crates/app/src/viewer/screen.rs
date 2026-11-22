@@ -355,6 +355,14 @@ impl Screen {
         }
     }
 
+    /// The daemon sent something. A frame goes on screen now rather than at the next look, which
+    /// is a millisecond away at most but still shows as uneven frame times on a screen whose refresh
+    /// follows the frames. One that can't be shown yet is taken in all the same (`poll` keeps up),
+    /// so the socket isn't left readable.
+    fn frames_arrived(&self) {
+        self.poll();
+    }
+
     /// GTK is about to draw, which can be a whole refresh after it was handed its frame: it draws when
     /// the compositor asks, and no sooner. A frame that came since is the one to draw, or everything
     /// on screen is a refresh older than it has to be.
@@ -508,7 +516,14 @@ impl Screen {
     /// The daemon's frames, if it's offering any yet. What was asked of it goes in the log.
     fn connect_to_daemon(&self, folder: &Path, display: &gdk::Display) -> Option<Box<dyn FrameSource>> {
         let (in_memory, tiles) = (self.0.memory_frames.get(), self.wants_tiles());
-        let source = SocketFrames::connect(folder, display, self.monitor_refresh(), in_memory, tiles).ok()?;
+        let screen = Rc::downgrade(&self.0);
+        let arrived = move || {
+            if let Some(inner) = screen.upgrade() {
+                Screen(inner).frames_arrived();
+            }
+        };
+        let source =
+            SocketFrames::connect(folder, display, self.monitor_refresh(), in_memory, tiles, arrived).ok()?;
         self.0.tiles_offered.set(tiles);
         let layout = match (in_memory, tiles) {
             (true, _) => "in memory",

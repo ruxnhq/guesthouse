@@ -5,12 +5,13 @@ use super::frames::{FrameSource, SlotFrame};
 use super::guest_cursor::{CursorPicture, no_pointer};
 use super::import::texture;
 use super::ring::Buffers;
-use gtk::gdk;
 use gtk::prelude::*;
+use gtk::{gdk, gio, glib};
 use guesthouse_frame_socket::{
     CursorMove, Format, Frame, FrameSocket, Hello, Light, Message, Packet, Release, SOCKET_NAME,
 };
 use std::io;
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -37,6 +38,19 @@ pub struct SocketFrames {
     cursor_at: Option<CursorMove>,
     /// The pointer over the screen no longer matches the cursor.
     cursor_changed: bool,
+    /// Wakes the viewer as soon as something comes, so a frame goes on screen when the guest made
+    /// it and not at the next look. A screen that can change its refresh follows the guest then.
+    _watch: SocketWatch,
+}
+
+/// The main loop's watch on the socket, through a copy of its descriptor. It ends by itself once
+/// the socket has gone.
+struct SocketWatch(glib::Source);
+
+impl Drop for SocketWatch {
+    fn drop(&mut self) {
+        self.0.destroy();
+    }
 }
 
 /// What this display can show, in the producer's order of preference. The message holds a limited
@@ -88,13 +102,14 @@ fn in_order(offered: Vec<Format>) -> Vec<Format> {
 impl SocketFrames {
     /// Fails if nothing is offering frames yet. `in_memory` asks for frames in memory here, for a
     /// screen on another GPU than the guest's card. `tiles` lets the producer lay frames out in
-    /// the card's tiles.
+    /// the card's tiles. `arrived` is called from the main loop whenever the socket has something.
     pub fn connect(
         run_folder: &Path,
         display: &gdk::Display,
         refresh_millihertz: u32,
         in_memory: bool,
         tiles: bool,
+        arrived: impl Fn() + 'static,
     ) -> io::Result<Self> {
         let socket = FrameSocket::connect(&run_folder.join(SOCKET_NAME))?;
         let hello = Hello {
@@ -106,6 +121,7 @@ impl SocketFrames {
         socket.send(&Message::Hello(hello), &[])?;
         socket.send(&Message::CursorWanted, &[])?;
         socket.set_nonblocking(true)?;
+        let watch = watch(&socket, arrived)?;
         let (finished, releases) = channel();
         Ok(Self {
             socket,
@@ -119,6 +135,7 @@ impl SocketFrames {
             cursor: None,
             cursor_at: None,
             cursor_changed: false,
+            _watch: watch,
         })
     }
 
@@ -184,6 +201,27 @@ impl SocketFrames {
             }
         }
     }
+}
+
+/// Calls `arrived` each time the socket can be read. A socket that has gone stays readable, so the
+/// watch stops there, and the next look finds the source gone.
+fn watch(socket: &FrameSocket, arrived: impl Fn() + 'static) -> io::Result<SocketWatch> {
+    let copy = socket.as_fd().try_clone_to_owned()?;
+    let watched = gio::Socket::from_fd(copy).map_err(io::Error::other)?;
+    let ended = glib::IOCondition::HUP | glib::IOCondition::ERR;
+    let source = gio::prelude::SocketExtManual::create_source(
+        &watched,
+        glib::IOCondition::IN | ended,
+        None::<&gio::Cancellable>,
+        Some("guest frames"),
+        glib::Priority::DEFAULT,
+        move |_, condition| {
+            arrived();
+            if condition.intersects(ended) { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
+        },
+    );
+    source.attach(None);
+    Ok(SocketWatch(source))
 }
 
 impl FrameSource for SocketFrames {

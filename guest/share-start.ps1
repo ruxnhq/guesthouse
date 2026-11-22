@@ -12,7 +12,7 @@ if ((Get-ItemProperty $parameters).FileSizeLimitInBytes -ne -1) {
 }
 Start-Service WebClient
 $map = "if (-not (net use | Select-String '10.0.2.4')) { net use * http://10.0.2.4/ /persistent:no }"
-$action = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -WindowStyle Hidden -Command `"$map`""
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -Command `"$map`""
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
 Register-ScheduledTask -TaskName gpupv-share -Action $action -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName gpupv-share

@@ -9,7 +9,7 @@ if (-not (Get-NetFirewallRule -DisplayName 'gpupv-files' -ea 0)) {
 # A helper from an earlier viewer may still be there, and Windows wouldn't start a second.
 Stop-ScheduledTask -TaskName gpupv-files -ea 0
 [IO.File]::WriteAllBytes('C:\gpupv\files.ps1', [Convert]::FromBase64String($helper))
-$action = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\gpupv\files.ps1'
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File C:\gpupv\files.ps1'
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
 Register-ScheduledTask -TaskName gpupv-files -Action $action -Principal $principal -Settings $settings -Force | Out-Null

@@ -3,7 +3,7 @@
 $user = '@USER@'
 $ownsExplorer = '\\' + [regex]::Escape($user) + '$'
 if (-not (Get-Process explorer -IncludeUserName -ea 0 | ? UserName -match $ownsExplorer)) { 'not logged in yet'; return }
-$action = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\gpupv\setmode.ps1'
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\gpupv\setmode.ps1'
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
 Register-ScheduledTask -TaskName gpupv-setmode -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null

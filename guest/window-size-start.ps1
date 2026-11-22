@@ -4,7 +4,7 @@
 $user = (Get-Process explorer -IncludeUserName -ea 0 | Select -First 1).UserName
 if (-not $user) { 'nobody is logged in'; return }
 [IO.File]::WriteAllBytes('C:\gpupv\window-size.ps1', [Convert]::FromBase64String($helper))
-$action = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\gpupv\window-size.ps1'
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\gpupv\window-size.ps1'
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
 Stop-ScheduledTask -TaskName gpupv-window-size -ea 0

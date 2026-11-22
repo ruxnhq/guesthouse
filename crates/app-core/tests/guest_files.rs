@@ -126,3 +126,26 @@ fn no_token_is_kept_in_the_folder() {
     assert!(!guest_file(".token").exists());
     assert!(!guest_file("token.txt").exists());
 }
+
+/// A task in the user's session that starts PowerShell by itself gets a window from the default
+/// terminal, which is Windows Terminal on Windows 11, and Windows Terminal doesn't hide it for
+/// -WindowStyle Hidden: an empty PowerShell window stays open as long as the helper runs. Each one
+/// starts PowerShell in a console with no window instead. The agent runs as SYSTEM, with no desktop.
+#[test]
+fn no_task_in_the_user_s_session_opens_a_window() {
+    for name in SENT_TO_THE_GUEST.iter().filter(|name| name.ends_with(".ps1")) {
+        let script = fs::read_to_string(guest_file(name)).unwrap();
+        for line in script.lines().filter(|line| line.contains("New-ScheduledTaskAction")) {
+            if *name == "setup.ps1" {
+                assert!(script.contains("-User 'SYSTEM'"), "{line}");
+                continue;
+            }
+            assert!(
+                line.contains("-Execute conhost.exe -Argument ")
+                    && line.contains("--headless powershell.exe"),
+                "{name}: {line}"
+            );
+            assert!(!line.contains("WindowStyle"), "{name}: {line}");
+        }
+    }
+}

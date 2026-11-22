@@ -5,6 +5,7 @@
 
 mod control;
 mod gpu_range;
+mod logical_gpus;
 mod node_list;
 mod processes;
 mod pstate;
@@ -36,6 +37,10 @@ const FUNCTION_CHECK_DISPLAY: u32 = 0x0100_0001;
 /// Which GPUs there are.
 const FUNCTION_LIST_GPUS: u32 = 0x0700_0002;
 const FUNCTION_LIST_COMPUTE_GPUS: u32 = 0x0700_0003;
+/// Which logical GPUs there are, and which physical GPUs make each one up, for NVAPI.
+const FUNCTION_LIST_LOGICAL_GPUS: u32 = 0x0700_0004;
+const FUNCTION_LOGICAL_OF_PHYSICAL: u32 = 0x0700_0005;
+const FUNCTION_PHYSICAL_OF_LOGICAL: u32 = 0x0700_0006;
 /// Which GPU addresses the compute runtime may treat as its own.
 const FUNCTION_RUNTIME_GPU_RANGE: u32 = 0x0100_0113;
 /// How much video memory there is, for OpenGL's memory queries.
@@ -110,6 +115,9 @@ pub fn answer<R: Rm>(device: &mut Device<R>, facts: EscapeFacts<'_>, data: &mut 
         }
         // A card under the display driver isn't a compute-only one, so this list stays empty.
         FUNCTION_LIST_COMPUTE_GPUS => {}
+        FUNCTION_LIST_LOGICAL_GPUS => logical_gpus::list(device.gpu_id()?, data),
+        FUNCTION_LOGICAL_OF_PHYSICAL => logical_gpus::logical_of(device.gpu_id()?, data),
+        FUNCTION_PHYSICAL_OF_LOGICAL => logical_gpus::physical_of(device.gpu_id()?, data),
         FUNCTION_CHECK_DISPLAY => {}
         FUNCTION_RUNTIME_GPU_RANGE => gpu_range::answer(data),
         FUNCTION_VIDEO_MEMORY => video_memory::answer((facts.books.memory)(), data),
@@ -185,6 +193,17 @@ pub(super) mod tests {
         answer(&mut device(), NO_FACTS, &mut data).unwrap();
         assert_eq!(get(&data, GPU_LIST_COUNT), Some(1));
         assert_eq!(get(&data, GPU_LIST_HANDLES), Some(0x300));
+    }
+
+    #[test]
+    fn the_logical_gpu_list_names_this_card_and_keeps_its_own_size() {
+        let mut data = escape(FUNCTION_LIST_LOGICAL_GPUS, 0x8538);
+        put(&mut data, HEADER_SIZE_FIELD, 0x8538);
+        answer(&mut device(), NO_FACTS, &mut data).unwrap();
+        assert_eq!(get(&data, HEADER_SIZE_FIELD), Some(0x8538));
+        assert_eq!(get(&data, GPU_LIST_COUNT), Some(1));
+        assert_eq!(get(&data, GPU_LIST_HANDLES + 4), Some(0x300), "its first physical GPU");
+        assert_eq!(get(&data, RESULT), Some(1));
     }
 
     #[test]

@@ -158,7 +158,7 @@ function Add-Remoteman($Pin, [string]$To) {
         '',
         '## remoteman in this installer',
         '',
-        "This installer carries $which, under the MIT licence: ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). The licence and notice files that came with the viewer are in ``viewer\`` and ``viewer\licences\``: $(($notices | ForEach-Object Name) -join ', ')."
+        "This installer carries $which, under the GNU General Public License, version 3 or later (its releases before 0.1.3 were under the MIT licence): ``screen\remoteman-host-setup.exe`` (from $(Split-Path -Leaf $setupExe)) and ``viewer\`` (from $(Split-Path -Leaf $zip)). The licence and notice files that came with the viewer are in ``viewer\`` and ``viewer\licences\``: $(($notices | ForEach-Object Name) -join ', ')."
     )
     Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
 }

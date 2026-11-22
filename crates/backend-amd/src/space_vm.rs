@@ -11,10 +11,11 @@
 use crate::device::Device;
 use crate::fault::{self, Fault};
 use crate::fence_ib::{FenceIbs, Writer};
-use crate::info::HW_IP_VCN_ENC;
+use crate::info::{self, HW_IP_VCN_ENC};
 use crate::memory::{self, GemHandle, MapFlags};
 use crate::reset::{self, ContextCalls, Contexts};
 use crate::run_wait::{self, Patience, Waited};
+use crate::share::{RunTimes, Share};
 use crate::submit::{self, Context, Ib, Syncobj};
 use crate::video_ib::{self, Copied, VideoIb};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -154,6 +155,10 @@ pub struct SpaceVm {
     on_card: VecDeque<OnCard>,
     /// The fences of runs seen to retire since they were last asked for.
     retired: Vec<GuestFence>,
+    /// How each engine family gives way to the card's other users, see [`crate::share`].
+    shares: HashMap<u32, Share>,
+    /// How fast the card's clock runs, to read the times runs note.
+    clock_khz: u32,
 }
 
 /// Where a run's fence is in guest memory, by guest physical address, and the value it ends with.
@@ -169,6 +174,9 @@ pub struct GuestFence {
 #[derive(Debug)]
 struct OnCard {
     slot: usize,
+    ip_type: u32,
+    /// The card's clock in nanoseconds once the run was sent, if it could be read.
+    sent: Option<u64>,
     retired: Syncobj,
     /// None once its queue has gone, as the fence's page may then be another queue's.
     fence: Option<GuestFence>,
@@ -187,6 +195,22 @@ pub enum Ran {
     Faulted(Fault),
 }
 
+/// A run's command buffers with the slot's clock notes around them: one first, and one last, after
+/// the fence writer, so the fence's cache flush counts as the run's own time.
+fn with_clock_notes(ibs: &[Ib], slot: usize) -> Vec<Ib> {
+    let [start, end] = FenceIbs::stamp_ibs(slot);
+    let mut stamped = Vec::with_capacity(ibs.len() + 2);
+    stamped.push(start);
+    stamped.extend_from_slice(ibs);
+    stamped.push(end);
+    stamped
+}
+
+/// A time in the card's clock ticks, in nanoseconds.
+fn ticks_to_ns(ticks: u64, clock_khz: u32) -> u64 {
+    (u128::from(ticks) * 1_000_000 / u128::from(clock_khz.max(1))) as u64
+}
+
 impl SpaceVm {
     pub fn open(device: &Device) -> io::Result<Self> {
         Ok(Self {
@@ -200,6 +224,8 @@ impl SpaceVm {
             video_refusal_said: false,
             on_card: VecDeque::new(),
             retired: Vec::new(),
+            shares: HashMap::new(),
+            clock_khz: device.info().counter_freq_khz,
         })
     }
 
@@ -390,12 +416,14 @@ impl SpaceVm {
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
         let mut buffers = self.books.handles();
         buffers.push(fence_ibs.handle());
+        let stamped = with_clock_notes(ibs, slot);
         let submitted = self.contexts.submit(&self.file, ip_type, Some(fence.queue), |context| {
-            submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &retired).map(|_| ())
+            submit::submit_all(&self.file, context, ip_type, &stamped, &buffers, &retired).map(|_| ())
         });
         match submitted {
             Ok(_) => {
-                self.on_card.push_back(OnCard { slot, retired, fence: Some(fence) });
+                let sent = info::read_gpu_clock(&self.file, self.clock_khz).ok();
+                self.on_card.push_back(OnCard { slot, ip_type, sent, retired, fence: Some(fence) });
                 Ok(())
             }
             Err(error) => {
@@ -403,6 +431,19 @@ impl SpaceVm {
                 Err(error)
             }
         }
+    }
+
+    /// Whether a run may go to the engine family `ip_type` now, or should wait while the space gives
+    /// way to others on the card. See [`crate::share`].
+    pub fn may_send(&mut self, ip_type: u32) -> bool {
+        let Some(share) = self.shares.get(&ip_type) else { return true };
+        let Ok(now) = info::read_gpu_clock(&self.file, self.clock_khz) else { return true };
+        if !share.contended(now) {
+            return true;
+        }
+        self.take_back_slots(true);
+        let on_card = self.on_card.iter().filter(|run| run.ip_type == ip_type).count();
+        self.shares.get(&ip_type).is_none_or(|share| share.may_send(now, on_card))
     }
 
     /// The fences of the runs the kernel has retired since this was last asked, looking at them all.
@@ -428,6 +469,12 @@ impl SpaceVm {
             // A sync object that can't be asked about is one the kernel has no run for.
             if run.retired.signalled(&self.file).unwrap_or(true) {
                 run.retired.destroy(&self.file);
+                let (started, ended) = fence_ibs.times(run.slot);
+                if let Some(sent) = run.sent {
+                    let ticks = |ticks| ticks_to_ns(ticks, self.clock_khz);
+                    let times = RunTimes { sent, started: ticks(started), ended: ticks(ended) };
+                    self.shares.entry(run.ip_type).or_default().retired(times);
+                }
                 fence_ibs.give_back(run.slot);
                 self.retired.extend(run.fence);
             } else if all {
@@ -579,12 +626,29 @@ mod tests {
             video_refusal_said: false,
             on_card: VecDeque::new(),
             retired: Vec::new(),
+            shares: HashMap::new(),
+            clock_khz: 100_000,
         }
     }
 
     /// A command buffer where a guest places its own, and one inside the daemon's video buffer.
     const GUESTS: Ib = Ib { address: 0x4_2000_1000, bytes: 0x40 };
     const COPY: Ib = Ib { address: video_ib::ADDRESS + 256, bytes: 0x40 };
+
+    #[test]
+    fn a_run_notes_the_clock_first_and_again_after_its_fence() {
+        let fence_writer = Ib { address: crate::fence_ib::ADDRESS, bytes: 32 };
+        let [start, end] = FenceIbs::stamp_ibs(3);
+        let stamped = with_clock_notes(&[GUESTS, COPY, fence_writer], 3);
+        assert_eq!(stamped, [start, GUESTS, COPY, fence_writer, end]);
+        assert_ne!(start, end);
+    }
+
+    #[test]
+    fn the_cards_ticks_become_nanoseconds_at_its_own_rate() {
+        assert_eq!(ticks_to_ns(100_000, 100_000), 1_000_000);
+        assert_eq!(ticks_to_ns(27_000, 27_000), 1_000_000);
+    }
 
     #[test]
     fn the_video_ring_takes_only_command_buffers_in_the_daemons_video_buffer() {

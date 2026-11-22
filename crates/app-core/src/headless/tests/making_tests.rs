@@ -141,6 +141,8 @@ fn a_recorded_intel_card_is_offered_when_one_is_named_and_wants_intels_driver() 
 
 const AMD_IGPU: &str = "0000:7c:00.0";
 const RDNA3_GRAPHICS: u32 = 11;
+/// In GiB, for an install that no drive has the room for.
+const MORE_ROOM_THAN_ANY_DRIVE_HAS: u64 = 1 << 40;
 
 /// A PC whose only card is an AMD one GPU-PV handles.
 fn with_an_amd_card(scratch: &Scratch) -> Context {
@@ -194,6 +196,45 @@ fn amds_installer_is_refused_where_it_is_no_use_and_nothing_is_made() {
     );
     assert!(amd_driver_folder(&context).is_none());
     assert!(load_all(&nvidia).0.is_empty() && load_all(&context).0.is_empty(), "nothing was made");
+}
+
+/// Unpacking takes a while and takes the place of the driver every AMD machine here runs on, so a
+/// machine that is refused anyway must not get that far.
+#[test]
+fn a_machine_that_is_refused_anyway_leaves_amds_driver_as_it_was() {
+    let scratch = Scratch::new();
+    let mut context = with_an_amd_card(&scratch);
+    let data = wim(&["Windows 11 Pro"], 26300, 9);
+    let disc = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
+    let installer = make_installer(&scratch, &[0x7550]);
+    let words = format!("new Win --iso {disc} --amd-card {AMD_IGPU} --amd-driver {installer}");
+    let refused = |context: &Context, more: &str| failure_of(said(context, &format!("{words} {more}")).1);
+    assert_eq!(refused(&context, "--disk 1"), "The disk must be between 40 and 16384 GiB.");
+    assert_eq!(refused(&context, "--cores many"), "--cores must be a whole number.");
+    assert_eq!(refused(&context, "--ssh perhaps"), "--ssh is on or off.");
+    context.install_room = Some(MORE_ROOM_THAN_ANY_DRIVE_HAS);
+    let no_room = refused(&context, "");
+    assert!(no_room.starts_with("An install needs"), "{no_room}");
+    assert!(amd_driver_folder(&context).is_none(), "the installer was not unpacked");
+    assert!(load_all(&context).0.is_empty(), "nothing was made");
+}
+
+/// A file that isn't Intel's installer is only found out when it is read, so the sizes being said
+/// first shows that it wasn't.
+#[test]
+fn a_machine_that_is_refused_anyway_does_not_read_intels_installer() {
+    let scratch = Scratch::new();
+    let mut context = with_cards(&scratch, &[]);
+    context.drm_class = scratch.path("drm");
+    context.install_room = Some(0);
+    fake_render_node(&scratch, 128, "0000:00:02.0", "0x8086", 0x64a0);
+    let data = wim(&["Windows 11 Pro"], 26300, 9);
+    let disc = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
+    let words = format!("new Arc --iso {disc} --amd-card 0000:00:02.0 --intel-driver {disc}");
+    let refused = |more: &str| failure_of(said(&context, &format!("{words} {more}")).1);
+    assert_eq!(refused("--disk 1"), "The disk must be between 40 and 16384 GiB.");
+    assert_eq!(refused(""), "This file is not Intel's driver installer.");
+    assert!(load_all(&context).0.is_empty(), "nothing was made");
 }
 
 #[test]

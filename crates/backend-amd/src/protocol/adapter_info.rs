@@ -119,13 +119,18 @@ const ALWAYS_ON_UNITS: usize = 0xC30;
 const GRAPHICS_FLAGS: usize = 0xC44;
 /// The counts from [`MAX_VGPRS`] on are filled in.
 const GRAPHICS_COUNTS_VALID: u32 = 1 << 0;
-/// [`ACTIVE_UNITS`] and [`ALWAYS_ON_UNITS`] are filled in. Without this bit, or the one for the
-/// per-engine state arrays (bit 16, whose arrays this block leaves empty), the guest reads no unit
-/// masks at all. Whether a GFX10.3 card sets bit 16 on a real host isn't known; this bit's path is
-/// the one that reads the masks held here.
+/// [`ACTIVE_UNITS`] and [`ALWAYS_ON_UNITS`] are filled in. The GFX10 and GFX11 paths read these when
+/// [`ENGINE_UNIT_MASKS_VALID`] is clear; the GFX12 path never does. Whether a GFX10.3 card sets bit
+/// 16 on a real host isn't known, so GFX10 parts are given only this bit.
 const UNIT_MASKS_VALID: u32 = 1 << 2;
 /// [`TILE_STEERING_OVERRIDE`] is filled in.
 const TILE_STEERING_VALID: u32 = 1 << 4;
+/// [`ENGINE_ACTIVE_UNITS`] and [`ENGINE_ALWAYS_ON_UNITS`] are filled in. The RDNA3 and later
+/// driver (32.0.32015 read) takes its masks from there when this bit is set, and on GFX12 from
+/// nowhere else: its GFX12 path never reads [`ACTIVE_UNITS`], so with this bit clear it counts no
+/// compute units at all. PAL then sizes the scratch ring for no waves and writes WAVES = 0 into
+/// SPI_TMPRING_SIZE, and the first shader that spills never launches and hangs the card.
+const ENGINE_UNIT_MASKS_VALID: u32 = 1 << 16;
 const MAX_VGPRS: usize = 0xC58;
 const WAVEFRONT_SIZE: usize = 0xC5C;
 const SHADER_ENGINES: usize = 0xC60;
@@ -140,6 +145,20 @@ const GS_VGT_TABLE_DEPTH: usize = 0xC80;
 const GS_PRIM_BUFFER_DEPTH: usize = 0xC84;
 const COMPUTE_RINGS: usize = 0xC88;
 const TILE_STEERING_OVERRIDE: usize = 0xCE0;
+/// The per-engine unit masks: one 16-bit mask of active workgroup processors for each of an
+/// engine's two arrays, engine after engine, with room for [`ENGINES_IN_ARRAYS`] engines. The guest
+/// copies `SHADER_ENGINES` times four bytes from here, then turns each workgroup bit into two compute
+/// unit bits. Read in amfrtdrv64.dll 32.0.32015.12012 at 0x1806bc0c2 (GFX12) and 0x1806bb829
+/// (GFX10 and GFX11), where the block sits at device offset 0x9F48.
+const ENGINE_ACTIVE_UNITS: usize = 0xD04;
+/// The units kept on all the time, laid out the same way. The GFX10 path reads them four engines in,
+/// at 0xD14, and is not given these: GFX10 parts keep to [`ACTIVE_UNITS`].
+const ENGINE_ALWAYS_ON_UNITS: usize = 0xD1C;
+/// How many engines the per-engine arrays hold.
+const ENGINES_IN_ARRAYS: usize = 6;
+/// The first generation given the per-engine arrays. GFX10 parts run the RDNA1 and RDNA2 driver,
+/// which reads [`ACTIVE_UNITS`], and the per-engine path there isn't known.
+const FIRST_GFX_WITH_ENGINE_MASKS: u32 = 11;
 
 /// One byte for each of the guest's nodes: AMD's number for the engine behind it, or
 /// [`NO_ENGINE`]. The guest's user-mode driver picks each node's queue type from this.
@@ -369,6 +388,26 @@ pub fn unit_masks(bitmap: &[[u32; 4]; 4], gfx_major: u32) -> [u16; ENGINES_IN_BL
     masks
 }
 
+/// One engine's array as amdgpu's INFO bitmap holds it: four engines by four arrays, with engines
+/// past the fourth folded into the third and fourth columns of the first rows, as amdgpu packs
+/// GFX11's six engines.
+fn bitmap_units(bitmap: &[[u32; 4]; 4], engine: usize, array: usize) -> u32 {
+    let column = array + (engine / ENGINES_IN_BLOCK) * ARRAYS_IN_BLOCK;
+    bitmap.get(engine % ENGINES_IN_BLOCK).and_then(|row| row.get(column)).copied().unwrap_or(0)
+}
+
+/// The per-engine workgroup masks, two to an engine, for [`ENGINES_IN_ARRAYS`] engines.
+pub fn engine_unit_masks(bitmap: &[[u32; 4]; 4]) -> [u16; ENGINES_IN_ARRAYS * ARRAYS_IN_BLOCK] {
+    let mut masks = [0; ENGINES_IN_ARRAYS * ARRAYS_IN_BLOCK];
+    for engine in 0..ENGINES_IN_ARRAYS {
+        for array in 0..ARRAYS_IN_BLOCK {
+            masks[engine * ARRAYS_IN_BLOCK + array] =
+                workgroup_mask(bitmap_units(bitmap, engine, array)) as u16;
+        }
+    }
+    masks
+}
+
 fn put_masks(block: &mut [u8], at: usize, masks: &[u16]) {
     for (index, &mask) in masks.iter().enumerate() {
         put_word(block, at + index * 2, mask);
@@ -387,6 +426,11 @@ fn fill_graphics(block: &mut [u8], details: &CardDetails) {
     put_masks(block, ALWAYS_ON_UNITS, &unit_masks(&details.always_on_cu_bitmap, gfx_major));
 
     let mut flags = GRAPHICS_COUNTS_VALID | UNIT_MASKS_VALID;
+    if gfx_major >= FIRST_GFX_WITH_ENGINE_MASKS {
+        flags |= ENGINE_UNIT_MASKS_VALID;
+        put_masks(block, ENGINE_ACTIVE_UNITS, &engine_unit_masks(&details.cu_bitmap));
+        put_masks(block, ENGINE_ALWAYS_ON_UNITS, &engine_unit_masks(&details.always_on_cu_bitmap));
+    }
     if gfx_major >= FIRST_GFX_WITH_WGPS && details.tile_steering_override != 0 {
         flags |= TILE_STEERING_VALID;
         put_dword(block, TILE_STEERING_OVERRIDE, details.tile_steering_override);
@@ -721,6 +765,90 @@ pub(crate) mod tests {
         let gcn = unit_masks(&bitmap, 9);
         assert_eq!(gcn[0], 0b1111);
         assert_eq!(gcn[3], 0b0111);
+    }
+
+    /// A Navi48 like Short3D's RX 9070 XT: four engines of two arrays, each array four workgroup
+    /// processors, which INFO gives as eight compute units.
+    fn navi48() -> DeviceInfo {
+        let mut info = small_card();
+        info.family = 152;
+        info.details.gfx_version = (12, 0);
+        info.details.shader_engines = 4;
+        info.details.arrays_per_engine = 2;
+        info.details.cus_per_array = 8;
+        let mut bitmap = [[0; 4]; 4];
+        for row in &mut bitmap {
+            row[0] = 0xFF;
+            row[1] = 0xFF;
+        }
+        info.details.cu_bitmap = bitmap;
+        info.details.always_on_cu_bitmap = bitmap;
+        info
+    }
+
+    fn words(block: &[u8], at: usize, count: usize) -> Vec<u16> {
+        (0..count)
+            .map(|index| u16::from_le_bytes([block[at + index * 2], block[at + index * 2 + 1]]))
+            .collect()
+    }
+
+    #[test]
+    fn a_gfx12_card_gets_its_units_in_the_per_engine_masks_the_guest_reads() {
+        let block = build(&navi48());
+        assert_ne!(dword_at(&block, GRAPHICS_FLAGS) & ENGINE_UNIT_MASKS_VALID, 0);
+        // Four workgroups an array, two arrays an engine, four engines, then two empty engines.
+        let expected = [0xF, 0xF, 0xF, 0xF, 0xF, 0xF, 0xF, 0xF, 0, 0, 0, 0];
+        assert_eq!(words(&block, ENGINE_ACTIVE_UNITS, 12), expected);
+        assert_eq!(words(&block, ENGINE_ALWAYS_ON_UNITS, 12), expected);
+        // The guest counts each workgroup bit as two units: 64 compute units, none of them lost.
+        let units: u32 =
+            words(&block, ENGINE_ACTIVE_UNITS, 12).iter().map(|mask| 2 * mask.count_ones()).sum();
+        assert_eq!(units, 64);
+        // The older masks are still there for the older driver, and the sum covers the new ones.
+        assert_eq!(words(&block, ACTIVE_UNITS, 8), [0xF; 8]);
+        assert!(KeyFields::read(&block).unwrap().checksum_holds);
+    }
+
+    /// PAL's scratch ring, as gfx12ShaderRing.cpp sizes it: waves for every slot of every unit, at
+    /// most 32 a unit, where units are engines times arrays times the most units an array has.
+    fn scratch_waves(block: &[u8]) -> u32 {
+        let engines = dword_at(block, SHADER_ENGINES);
+        let arrays = dword_at(block, ARRAYS_PER_ENGINE);
+        let per_array = (0..engines as usize * 2)
+            .map(|index| 2 * words(block, ENGINE_ACTIVE_UNITS + index * 2, 1)[0].count_ones())
+            .max()
+            .unwrap_or(0);
+        let units = engines * arrays * per_array;
+        (16 * 2 * units).min(32 * units)
+    }
+
+    #[test]
+    fn the_guest_can_size_a_scratch_ring_on_gfx12() {
+        // Short3D's hung runs wrote SPI_TMPRING_SIZE 0x9000, WAVES 0, from a 64 KiB ring: no units.
+        assert_eq!(scratch_waves(&build(&navi48())), 2048);
+    }
+
+    #[test]
+    fn the_per_engine_masks_are_given_from_gfx11_and_not_to_gfx10() {
+        let mut gfx11 = navi48();
+        gfx11.details.gfx_version = (11, 0);
+        assert_ne!(dword_at(&build(&gfx11), GRAPHICS_FLAGS) & ENGINE_UNIT_MASKS_VALID, 0);
+        let gfx10 = build(&small_card());
+        assert_eq!(dword_at(&gfx10, GRAPHICS_FLAGS) & ENGINE_UNIT_MASKS_VALID, 0);
+        assert!(gfx10[ENGINE_ACTIVE_UNITS..ENGINE_ALWAYS_ON_UNITS + 24].iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn engines_past_the_fourth_come_from_where_amdgpu_folds_them() {
+        // amdgpu keeps a sixth engine's two arrays in the third and fourth columns of row one.
+        let mut bitmap = [[0; 4]; 4];
+        bitmap[0][0] = 0b11;
+        bitmap[1][2] = 0b1111;
+        bitmap[1][3] = 0b11_0000;
+        let masks = engine_unit_masks(&bitmap);
+        assert_eq!(masks[0], 0b1);
+        assert_eq!(&masks[10..12], &[0b11, 0b100]);
+        assert!(masks[1..10].iter().all(|&mask| mask == 0));
     }
 
     #[test]

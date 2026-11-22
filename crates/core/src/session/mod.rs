@@ -6,6 +6,7 @@ mod batch_note;
 mod context;
 mod copies;
 mod copy_bounds;
+mod first_lock;
 mod frame_ring;
 mod indirect;
 mod mapping;

@@ -178,6 +178,16 @@ fn submit(session: &mut TestSession, queue: u32, value: u64) {
     assert_eq!(send(session, &request), SUCCESS.to_le_bytes());
 }
 
+/// Holds a queue or context's later work back until a sync object reaches a value.
+fn gpu_wait(session: &mut TestSession, handle: u32, object: u32, value: u64) {
+    let mut request = message(Command::WaitOnGpu, 0x28);
+    set_u32(&mut request, 0x18, handle);
+    set_u32(&mut request, 0x1C, 1);
+    request.extend_from_slice(&value.to_le_bytes());
+    request.extend_from_slice(&object.to_le_bytes());
+    assert_eq!(status_of(&send(session, &request)), SUCCESS);
+}
+
 fn signal_message(objects: &[u32], contexts: &[u32], values: &[u64]) -> Vec<u8> {
     let mut request = message(Command::SignalSyncObject, 0x38);
     set_u32(&mut request, 0x18, objects.len() as u32);
@@ -189,6 +199,7 @@ fn signal_message(objects: &[u32], contexts: &[u32], values: &[u64]) -> Vec<u8> 
 
 mod copy_bounds;
 mod failing;
+mod first_lock;
 mod frame_ring;
 mod indirect;
 
@@ -2029,15 +2040,6 @@ mod queues {
         assert_eq!(session.memory().read_u64(session.queues[&queue].fence).unwrap(), 1);
         assert_eq!(status_of(&send(&mut session, &request)), SUCCESS);
         assert_eq!(session.context_queues[&context], [queue]);
-    }
-
-    fn gpu_wait(session: &mut TestSession, handle: u32, object: u32, value: u64) {
-        let mut request = message(Command::WaitOnGpu, 0x28);
-        set_u32(&mut request, 0x18, handle);
-        set_u32(&mut request, 0x1C, 1);
-        request.extend_from_slice(&value.to_le_bytes());
-        request.extend_from_slice(&object.to_le_bytes());
-        assert_eq!(status_of(&send(session, &request)), SUCCESS);
     }
 
     #[test]

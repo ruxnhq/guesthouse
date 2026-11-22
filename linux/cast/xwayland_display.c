@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2026 xnixy
+// Copyright (C) 2026 RUXN LLC and contributors
 /*
  * An EGL vendor for libglvnd that is no vendor at all. It is listed first, so libglvnd loads it before Mesa, and in Xwayland
  * it takes DISPLAY away before Mesa's Zink loads NVIDIA's Vulkan driver, which opens DISPLAY as it loads. In Xwayland that

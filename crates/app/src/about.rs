@@ -7,8 +7,8 @@ use adw::prelude::*;
 use gtk::gio;
 use guesthouse_app_core::updates::VERSION;
 
-const WEBSITE: &str = "https://github.com/xnixy/guesthouse";
-const ISSUES: &str = "https://github.com/xnixy/guesthouse/issues";
+const WEBSITE: &str = "https://github.com/ruxnhq/guesthouse";
+const ISSUES: &str = "https://github.com/ruxnhq/guesthouse/issues";
 const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const WHAT_IT_IS: &str = "Runs VMs on this PC. With its GPU part, Windows gets NVIDIA's own driver on the card the host keeps using.";
 const LICENCE: &str = "Free software, under the GNU General Public License, version 2 or later.";

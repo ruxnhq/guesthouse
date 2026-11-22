@@ -124,7 +124,7 @@ fn send_and_say(context: &Context, bundle: &Bundle, description: &str) -> ExitCo
             println!("It wasn't sent. {}", failure.0);
             println!(
                 "The report is still in {}. You can attach it to an issue at \
-                 https://github.com/xnixy/guesthouse/issues, or run this again later.",
+                 https://github.com/ruxnhq/guesthouse/issues, or run this again later.",
                 bundle.path.display()
             );
             ExitCode::FAILURE

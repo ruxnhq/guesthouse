@@ -22,6 +22,8 @@ fn windows_only() {
     res.set_icon(icon.to_str().expect("the icon's path is text"));
     res.set("ProductName", "Guesthouse");
     res.set("FileDescription", "Guesthouse");
+    res.set("CompanyName", "RUXN LLC");
+    res.set("LegalCopyright", "Copyright (C) 2026 RUXN LLC and contributors");
     res.set("OriginalFilename", "guesthouse-app.exe");
     res.set("InternalName", "guesthouse-app");
     res.compile().expect("embed the app's icon");

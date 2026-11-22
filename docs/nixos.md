@@ -17,7 +17,7 @@ Add the flake as an input, and the module to your system.
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    guesthouse.url = "github:xnixy/guesthouse";
+    guesthouse.url = "github:ruxnhq/guesthouse";
     guesthouse.inputs.nixpkgs.follows = "nixpkgs";
   };
 

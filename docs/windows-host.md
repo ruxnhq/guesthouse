@@ -187,7 +187,7 @@ The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, re
 
 ## A Windows guest's screen
 
-A Windows guest's screen is [remoteman](https://github.com/xnixy/remoteman)'s: its host runs in the guest and encodes the guest's desktop on the guest's card, and its viewer runs on this PC. Guesthouse holds both ends, so it pairs them itself, and nobody is asked to:
+A Windows guest's screen is [remoteman](https://github.com/ruxnhq/remoteman)'s: its host runs in the guest and encodes the guest's desktop on the guest's card, and its viewer runs on this PC. Guesthouse holds both ends, so it pairs them itself, and nobody is asked to:
 
 - `boot` looks for remoteman's host's installer, `screen\remoteman-host-setup.exe` from remoteman's release, beside itself, beside the service or `guesthouse-hcs-boot`. When it's there, every boot puts it on the guest's disk with `guest/screen.ps1`, and the guest's report runs that script as SYSTEM. The script runs the installer unattended: `remoteman-host-setup.exe --silent --trust FILE --encoder NAME --no-pair --log FILE`, again whenever the installer, the viewer to trust or the encoder changes. remoteman's installer does all of remoteman's own work: where its files go, its service and its command line, its trust list. Run again, it keeps the host's identity, so its fingerprint stays the same.
 - The viewer's identity is made on the host, as remoteman makes its own, beside the machine's disk in `NAME.screen`. The guest's installer is told to trust only that, and `--no-pair` leaves its host no way to pair anyone else. The guest asks its host for its fingerprint with `remoteman-host.exe fingerprint --state C:\ProgramData\remoteman\host`.

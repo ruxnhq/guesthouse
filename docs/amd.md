@@ -28,7 +28,7 @@ Testers have run it on these too:
 | RX 6700, RDNA2 | works |
 | RX 6600 XT, RDNA2 | works: OpenGL games and Edge on the GPU |
 
-On an RX 9070 XT, Superposition at 720p Low went from 21,920 to 36,903 with the speed work in 0.5.2, and 4K Optimized reaches 72% of the same card on the host. [#118](https://github.com/xnixy/guesthouse/issues/118) has the rest.
+On an RX 9070 XT, Superposition at 720p Low went from 21,920 to 36,903 with the speed work in 0.5.2, and 4K Optimized reaches 72% of the same card on the host. [#118](https://github.com/ruxnhq/guesthouse/issues/118) has the rest.
 
 ## Setting it up
 

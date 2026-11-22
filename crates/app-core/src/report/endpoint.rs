@@ -13,7 +13,7 @@ pub const MOST_REPORT_BYTES: u64 = 50_000_000;
 /// How long the server keeps a report.
 pub const KEPT_DAYS: u32 = 30;
 /// Where new issues are opened, with the report's ID in them.
-pub const NEW_ISSUE: &str = "https://github.com/xnixy/guesthouse/issues/new";
+pub const NEW_ISSUE: &str = "https://github.com/ruxnhq/guesthouse/issues/new";
 
 /// The address a report is sent to.
 pub fn report_address() -> String {

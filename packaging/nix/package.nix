@@ -67,7 +67,7 @@ stdenvNoCC.mkDerivation {
   inherit version;
 
   src = fetchurl {
-    url = "https://github.com/xnixy/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
+    url = "https://github.com/ruxnhq/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
     hash = "sha256-vMtUs9B4QOyCij7QIQSE4GBQpYhenqRRDboEnvn7/gg=";
   };
   sourceRoot = "guesthouse-${version}-x86_64";
@@ -150,7 +150,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     description = "Windows and Linux machines on KVM, with the real GPU driver";
-    homepage = "https://github.com/xnixy/guesthouse";
+    homepage = "https://github.com/ruxnhq/guesthouse";
     license = lib.licenses.gpl2Plus;
     platforms = [ "x86_64-linux" ];
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

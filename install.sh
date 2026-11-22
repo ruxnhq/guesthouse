@@ -18,10 +18,10 @@ RELEASE_VERSION="0.7.1"
 PAYLOAD_SHA256="bccb54b3d07840ec828a3ed0210484e06050a5885e9ea4510dba049ef9fbfe08"
 SOURCE_SHA256="fa49769141a020fb29685e688e3c53905b867ae70699df56e440dfdf5dd10633"
 
-REPO_URL=https://github.com/xnixy/guesthouse
+REPO_URL=https://github.com/ruxnhq/guesthouse
 DISCORD_URL=https://discord.gg/rN3VARayZV
 RELEASE_URL=$REPO_URL/releases/download
-LATEST_SCRIPT_URL=https://raw.githubusercontent.com/xnixy/guesthouse/main/install.sh
+LATEST_SCRIPT_URL=https://raw.githubusercontent.com/ruxnhq/guesthouse/main/install.sh
 
 APP_ID=io.github.xnixy.Guesthouse
 ARCH=x86_64

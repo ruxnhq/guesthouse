@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2026 xnixy
+// Copyright (C) 2026 RUXN LLC and contributors
 /*
  * A Vulkan layer for a compositor running on Zink over NVIDIA's driver. It corrects the calls below and does nothing else.
  * They are small assumptions in Zink that hold on Mesa's own drivers, and each could equally be a one-line change there,

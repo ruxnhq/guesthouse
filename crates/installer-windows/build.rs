@@ -23,7 +23,8 @@ fn windows_only() {
     // The UAC prompt names the program by its description.
     res.set("ProductName", "Guesthouse");
     res.set("FileDescription", "Guesthouse setup");
-    res.set("CompanyName", "Guesthouse");
+    res.set("CompanyName", "RUXN LLC");
+    res.set("LegalCopyright", "Copyright (C) 2026 RUXN LLC and contributors");
     res.set("OriginalFilename", "guesthouse-setup.exe");
     res.set("InternalName", "guesthouse-setup");
     res.compile().expect("embed the installer's icon");

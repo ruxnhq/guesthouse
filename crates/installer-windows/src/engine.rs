@@ -512,7 +512,7 @@ impl Run<'_> {
         let strings = [
             ("DisplayName", "Guesthouse".to_string()),
             ("DisplayVersion", self.facts.version.clone()),
-            ("Publisher", "Guesthouse".to_string()),
+            ("Publisher", "RUXN LLC".to_string()),
             ("DisplayIcon", format!("{},0", uninstaller.display())),
             ("InstallLocation", real.display().to_string()),
             ("UninstallString", format!("\"{}\" --uninstall", uninstaller.display())),

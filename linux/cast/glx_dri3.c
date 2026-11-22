@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2026 xnixy
+// Copyright (C) 2026 RUXN LLC and contributors
 /*
  * A GLX vendor for libglvnd that is Mesa, with one difference: Zink presents over DRI3 itself. On X11 its usual swapchain
  * goes to NVIDIA's X11 present, which needs a display object a guest does not have. This has to be for GLX alone. On

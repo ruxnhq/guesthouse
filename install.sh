@@ -798,6 +798,7 @@ print_root_plan() {
     elif [ "$IMMUTABLE" = no ] || [ -z "$PACKAGES" ]; then
         say "Nothing here needs root."
     fi
+    [ -z "$PACKAGES" ] || [ "$IMMUTABLE" = yes ] || say "That adds the packages Guesthouse needs: $PACKAGES"
     [ "$HELPER_PLACED" = no ] ||
         say "That puts QEMU's bridge helper in $BRIDGE_HELPER_FOLDER, setuid root, for bridged networking."
     [ "$SWTPM_RULE_ADDED" = no ] ||
@@ -832,8 +833,11 @@ run_root_work() {
 
 # The app has no terminal for sudo to ask in, so pkexec asks in a window. It shows the command too.
 run_root_work_in_a_window() {
-    command -v pkexec >/dev/null 2>&1 ||
+    if ! command -v pkexec >/dev/null 2>&1; then
+        [ -z "$PAYLOAD_DIR" ] ||
+            die "this needs root, and there's no pkexec to ask for it in a window. Install in a terminal instead."
         die "this update needs root, and there's no pkexec to ask for it in a window. Run install.sh --update in a terminal."
+    fi
     pkexec sh -c "$ROOT_COMMAND" </dev/null || die "root's part didn't run, so I'm stopping. Nothing of Guesthouse's was changed."
     [ "$IMMUTABLE" = yes ] || PACKAGES_ADDED=$PACKAGES
 }

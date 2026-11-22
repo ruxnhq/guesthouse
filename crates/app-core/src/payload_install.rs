@@ -124,10 +124,15 @@ pub fn read_plan(said: &str) -> Result<Plan> {
     if planned { Ok(plan) } else { Err(Failure::new(format!("install.sh said no plan:\n{said}"))) }
 }
 
-/// The script's own reason for stopping, or its last words if it gave none.
+/// The script's own reason for stopping, or its last words if it gave none, as a sentence.
 fn reason(said: &str) -> String {
     let last = said.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or_default();
-    said.lines().rev().find_map(|line| line.strip_prefix(SCRIPT_PREFIX)).unwrap_or(last).to_owned()
+    let reason = said.lines().rev().find_map(|line| line.strip_prefix(SCRIPT_PREFIX)).unwrap_or(last);
+    let mut letters = reason.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => String::new(),
+    }
 }
 
 /// `keep_out` names variables the script mustn't have, such as those that point the installer at the
@@ -243,8 +248,8 @@ That was a dry run, so nothing was changed.
     fn the_scripts_own_reason_wins() {
         assert_eq!(
             reason("Checking this PC.\ninstall.sh: this needs glibc 2.39.\n"),
-            "this needs glibc 2.39."
+            "This needs glibc 2.39."
         );
-        assert_eq!(reason("Checking.\nsomething odd\n\n"), "something odd");
+        assert_eq!(reason("Checking.\nsomething odd\n\n"), "Something odd");
     }
 }

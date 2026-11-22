@@ -151,6 +151,16 @@ fn plan_page(plan: &Plan) -> gtk::ScrolledWindow {
         gtk::Label::builder().label(plan.title()).wrap(true).justify(gtk::Justification::Center).build();
     title.add_css_class("title-1");
     column.append(&title);
+    // First, as the plan's own notes speak of the checks above them.
+    if !plan.pc.is_empty() {
+        let pc = group("This PC");
+        let expander = adw::ExpanderRow::builder().title("What was checked").build();
+        for fact in &plan.pc {
+            expander.add_row(&fact_row(fact));
+        }
+        pc.add(&expander);
+        column.append(&pc);
+    }
     let places = group("What goes where");
     places
         .set_description(Some("All of it in your own folders. Your machines and settings stay as they are."));
@@ -169,15 +179,6 @@ fn plan_page(plan: &Plan) -> gtk::ScrolledWindow {
             .build(),
     );
     column.append(&afterwards);
-    if !plan.pc.is_empty() {
-        let pc = group("This PC");
-        let expander = adw::ExpanderRow::builder().title("What was checked").build();
-        for fact in &plan.pc {
-            expander.add_row(&fact_row(fact));
-        }
-        pc.add(&expander);
-        column.append(&pc);
-    }
     let clamp = adw::Clamp::builder().maximum_size(PAGE_WIDTH).child(&column).build();
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)

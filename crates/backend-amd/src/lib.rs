@@ -1042,8 +1042,8 @@ fn answer_query(info: &DeviceInfo, query: &VendorQuery<'_>, out: &mut Vec<u8>) -
 
 /// The registry value this backend has under a name, logged when it has one. A name it has no value
 /// for is the core's to log.
-fn registry_answer(name: &RegistryName) -> Option<RegistryValue> {
-    let value = protocol::guest_driver::registry(name);
+fn registry_answer(name: &RegistryName, card_name: &str) -> Option<RegistryValue> {
+    let value = protocol::guest_driver::registry(name, card_name);
     if let Some(value) = &value {
         traffic::registry(name, value);
     }
@@ -1406,7 +1406,7 @@ impl Backend for AmdBackend {
     }
 
     fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
-        registry_answer(name)
+        registry_answer(name, &self.facts.name)
     }
 
     fn gpu_clock(&mut self) -> Result<u64, BackendError> {

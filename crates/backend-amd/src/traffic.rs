@@ -1131,15 +1131,15 @@ mod tests {
     fn a_registry_value_the_backend_gives_is_named_and_one_it_has_not_is_left_to_the_core() {
         use guesthouse_messages::registry::TYPE_STRING;
         let vulkan = RegistryName::Value("vulkandrivername".into());
-        let given = crate::registry_answer(&vulkan);
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&vulkan), given));
+        let given = crate::registry_answer(&vulkan, "card");
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&vulkan, "card"), given));
         let bytes = given.expect("the backend has this value").bytes.len();
         let line = format!("amd registry name=\"vulkandrivername\" type={TYPE_STRING} bytes={bytes}");
         assert_eq!(lines, [(Level::Debug, line)]);
 
         let store = RegistryName::DriverStorePath;
-        let given = crate::registry_answer(&store);
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&store), given));
+        let given = crate::registry_answer(&store, "card");
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&store, "card"), given));
         let bytes = given.expect("the backend has this path").bytes.len();
         assert_eq!(
             lines,
@@ -1147,7 +1147,7 @@ mod tests {
         );
 
         let unknown = RegistryName::Value("opencldrivername".into());
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&unknown), None));
+        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&unknown, "card"), None));
         assert!(lines.is_empty(), "{lines:?}");
     }
 

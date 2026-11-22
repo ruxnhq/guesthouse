@@ -28,7 +28,12 @@ const OWN_SURFACE_VARIABLE: &str = "GUESTHOUSE_OWN_SURFACE";
 const OWN_SURFACE_OFF: &str = "0";
 /// The window and the screen's background are clear with this.
 const SEE_THROUGH: &str = "see-through";
-const SEE_THROUGH_STYLE: &str = "window.see-through, .see-through .guest-screen { background: transparent; }";
+/// The header bar keeps a background of its own. In a toolbar view libadwaita draws none for it, and
+/// lets the window's show, so with the window clear it showed what was behind the window, blurred by
+/// KDE's compositor (#292). It never lies over the screen: the bar that does is the pill, which has
+/// its own.
+const SEE_THROUGH_STYLE: &str = "window.see-through, .see-through .guest-screen { background: transparent; }\n\
+    .see-through headerbar { background-color: @headerbar_bg_color; }";
 /// Above the user's own stylesheet. A theme in ~/.config/gtk-4.0/gtk.css that gives every window
 /// a background would otherwise win over the app's style, and paint the window over the picture.
 const SEE_THROUGH_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 1;

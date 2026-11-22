@@ -647,6 +647,14 @@ impl OwnSurface {
             for (_, buffer) in self.buffers.drain() {
                 buffer.destroy();
             }
+            // A destroyed buffer hears no release, so its slot's file would stay open for good.
+            let older: Vec<SlotKey> =
+                self.events.held.keys().copied().filter(|key| key.0 != frame.generation).collect();
+            for key in older {
+                if let Some(release) = self.events.held.remove(&key) {
+                    release();
+                }
+            }
             self.asked.clear();
             self.events.refused.clear();
             self.generation = Some(frame.generation);

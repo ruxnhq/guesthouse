@@ -139,6 +139,12 @@ pub fn task_alive(context: &Context, record: &TaskRecord) -> bool {
     words.windows(TASK_PROGRAM.len()).any(|part| part == TASK_PROGRAM.as_bytes())
 }
 
+/// Whether the task with this pid still says it is working, in any slot. A task clears its pid when it
+/// is done, and a start can go on watching a desktop after that: see [`crate::actions`].
+pub fn still_working(context: &Context, pid: u32) -> bool {
+    slots::all().any(|slot| read_task(context, Some(slot)).pid == pid)
+}
+
 /// Whether a task's process has really gone. `task_alive` can't say: `spawn` returns while the kernel
 /// is still loading the task, and until that's done its name isn't there to find.
 fn task_ended(context: &Context, record: &TaskRecord) -> bool {
@@ -454,6 +460,18 @@ mod tests {
         context.make_run_folder(None).unwrap();
         write_note(&context.run_folder(None), true).unwrap();
         assert_eq!(status(&context, &machine()).error, "");
+    }
+
+    #[test]
+    fn a_task_is_working_until_it_clears_its_pid() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        context.make_run_folder(Some(slots::number(2))).unwrap();
+        write_task(&context, Some(slots::number(2)), &record("sample", 79, "")).unwrap();
+        assert!(still_working(&context, 79));
+        assert!(!still_working(&context, 78));
+        write_task(&context, Some(slots::number(2)), &record("sample", 0, "")).unwrap();
+        assert!(!still_working(&context, 79), "done, whatever its process does after");
     }
 
     #[test]

@@ -177,8 +177,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             }
             read.push((candidate.allocation, bytes));
             let Some(stamp) = Stamp::parse(&bytes) else { continue };
+            // The driver starts each ring's generations again, so an older ring's buffer that never
+            // had a frame still carries a stamp like this one. The candidates come newest first.
             if stamp.generation == ring.name.generation
-                && let Some(place) = slots.get_mut(stamp.slot as usize)
+                && let Some(place @ None) = slots.get_mut(stamp.slot as usize)
             {
                 *place = Some(candidate);
             }

@@ -105,6 +105,11 @@ pub struct StandIn {
     pub unfinished_limit: Option<u64>,
     /// How long work may take before its queue is given up, when the core's own time isn't wanted.
     pub work_patience: Option<Duration>,
+    /// Says work is on the GPU that only polling notices: see [`Backend::needs_polling`].
+    pub needs_polling: bool,
+    /// How often the core polled the work, and how often it said the GPU woke the daemon.
+    pub work_polls: u32,
+    pub wakes: u32,
     /// How many submissions to come are answered with no room, as a driver refusing one for now.
     pub busy_starts: u32,
     /// How many doorbells to come are refused for now, as a driver refusing a submission call.
@@ -196,6 +201,9 @@ impl StandIn {
             work_per_submission: 1,
             unfinished_limit: None,
             work_patience: None,
+            needs_polling: false,
+            work_polls: 0,
+            wakes: 0,
             busy_starts: 0,
             refused_rings: 0,
             work_stays: false,
@@ -524,6 +532,18 @@ impl Backend for StandIn {
             self.channel_address = host.take_gpu_addresses(0x10000, 0x10000).ok();
         }
         WorkStart::Started { doorbell: work.fence_value, work: self.work_per_submission }
+    }
+
+    fn poll_work(&mut self, _host: &mut dyn HostServices, _now: Instant) {
+        self.work_polls += 1;
+    }
+
+    fn gpu_woke(&mut self, _host: &mut dyn HostServices, _now: Instant) {
+        self.wakes += 1;
+    }
+
+    fn needs_polling(&self) -> bool {
+        self.needs_polling
     }
 
     fn ring_doorbell(&mut self, queue: u32, doorbell: u64) -> Result<Doorbell, BackendError> {

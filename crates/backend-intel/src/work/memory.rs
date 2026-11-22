@@ -97,8 +97,14 @@ impl CardWork {
         Ok(block.map.as_mut().expect("just made"))
     }
 
-    /// Copies what the card may have written from one block to another, by the CPU.
-    pub fn preserve(&mut self, from: MemoryId, to: MemoryId, size: u64) -> Result<(), BackendError> {
+    /// Copies what the card may have written from one block to another, by the CPU, which reads
+    /// the card's memory uncached: see [`super::moves`].
+    pub(super) fn move_by_cpu(
+        &mut self,
+        from: MemoryId,
+        to: MemoryId,
+        size: u64,
+    ) -> Result<(), BackendError> {
         const STEP: usize = 1 << 20;
         let mut step = vec![0u8; STEP.min(size as usize)];
         let mut done = 0u64;
@@ -188,11 +194,11 @@ mod tests {
         let to = work.adopt(pages.address(), 0x2000).unwrap();
         let picture: Vec<u8> = (0..0x2000u32).map(|byte| byte as u8).collect();
         assert!(work.cpu_view(from).unwrap().write(0, &picture));
-        work.preserve(from, to, 0x2000).unwrap();
+        work.move_by_cpu(from, to, 0x2000).unwrap();
         assert_eq!(pages.bytes(), picture);
         let mut start = [0u8; 16];
         work.read_start(from, &mut start).unwrap();
         assert_eq!(start[..], picture[..16]);
-        assert!(work.preserve(from, to, 0x3000).is_err(), "more than either holds");
+        assert!(work.move_by_cpu(from, to, 0x3000).is_err(), "more than either holds");
     }
 }

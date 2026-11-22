@@ -8,7 +8,7 @@ use crate::pending::{
     SharedWait, Signal, Target, Waiting,
 };
 use crate::session::{Answer, HeldReply, ReplyTicket};
-use crate::tables::Queue;
+use crate::tables::{Queue, Rung};
 use crate::timing::{HeldFor, Stage};
 use guesthouse_backend::{Backend, Doorbell, GuestMemory, SpaceId, UnmapRequest, WorkStart};
 use guesthouse_messages::Status;
@@ -168,6 +168,15 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             self.run_queue_action(action);
         } else {
             let targets = self.queue_targets(handles);
+            self.after_targets(targets, action);
+        }
+    }
+
+    /// Does something once these fences reach their values, or now if they have.
+    pub(crate) fn after_targets(&mut self, targets: Vec<Target>, action: QueueAction) {
+        if self.targets_reached(&targets) {
+            self.run_queue_action(action);
+        } else {
             let deadline = Instant::now() + self.queue_timeout();
             self.pending.push(Pending::AfterQueues { targets, deadline, action });
         }
@@ -398,12 +407,20 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
     }
 
+    /// Notes that the engine has a queue's work up to this value.
+    fn note_rung(&mut self, queue: u32, value: u64) {
+        let Some(record) = self.queues.get_mut(&queue) else { return };
+        let space_writes = self.space_writes.get(&record.space).copied().unwrap_or(0);
+        record.rung = Some(Rung { value, space_writes });
+    }
+
     /// Rings a doorbell. False if the backend refused it for now, and it must be rung again.
     fn ring(&mut self, queue: u32, doorbell: u64, fence: u64, value: u64) -> bool {
         self.space_written(queue);
         match self.backend.ring_doorbell(queue, doorbell) {
             Ok(Doorbell::Rung) => {
                 self.timings.mark(Stage::Rung);
+                self.note_rung(queue, value);
                 if let Some(record) = self.queues.get_mut(&queue) {
                     record.stays = false;
                 }
@@ -413,6 +430,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             // call that a hang, and take a healthy program off the GPU.
             Ok(Doorbell::RungToStay) => {
                 self.timings.mark(Stage::Rung);
+                self.note_rung(queue, value);
                 if let Some(record) = self.queues.get_mut(&queue) {
                     record.stays = true;
                     self.ring_spaces.insert(record.space);
@@ -556,11 +574,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if self.frames.has_work() {
             self.service_frames(now);
         }
+        let watching = self.pending.iter().any(|item| matches!(item, Pending::Watch { .. }));
+        if watching || self.backend.needs_polling() {
+            self.backend.poll_work(&mut services!(self), now);
+        }
         if self.pending.is_empty() {
             return self.how_soon();
-        }
-        if self.pending.iter().any(|item| matches!(item, Pending::Watch { .. })) {
-            self.backend.poll_work(&mut services!(self), now);
         }
         // The two lists swap places, so polling does not allocate.
         let spare = std::mem::take(&mut self.pending_spare);
@@ -577,7 +596,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     fn how_soon(&self) -> Waiting {
         let copies_or_frames = !self.copies.is_empty() || self.frames.is_urgent();
         let waiting = Waiting::of(self.pending.iter(), copies_or_frames);
-        if waiting == Waiting::Nothing && self.frames.wants_a_look() { Waiting::Background } else { waiting }
+        let look_again = self.frames.wants_a_look() || self.backend.needs_polling();
+        if waiting == Waiting::Nothing && look_again { Waiting::Background } else { waiting }
+    }
+
+    /// The backend's wake descriptor became readable. What the backend writes for the guest then is
+    /// seen by the next [`Session::poll`].
+    pub fn gpu_woke(&mut self, now: Instant) {
+        self.backend.gpu_woke(&mut services!(self), now);
     }
 
     /// Finishes an item if it can. Otherwise hands it back.

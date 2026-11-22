@@ -72,6 +72,8 @@ pub struct Context {
     pub udmabuf_limit: PathBuf,
     /// The kernel's security modules that are on, Landlock among them or not.
     pub security_modules: PathBuf,
+    /// AppArmor's profiles, of which swtpm's can keep it out of the run folder.
+    pub apparmor: PathBuf,
     pub driver_version_file: PathBuf,
     pub meminfo: PathBuf,
     /// Makes a GPU guest's memory and claims its RAM. A test has no gigabytes to spare.
@@ -120,6 +122,7 @@ impl Context {
             udmabuf: "/dev/udmabuf".into(),
             udmabuf_limit: "/sys/module/udmabuf/parameters/size_limit_mb".into(),
             security_modules: "/sys/kernel/security/lsm".into(),
+            apparmor: "/etc/apparmor.d".into(),
             driver_version_file: "/sys/module/nvidia/version".into(),
             meminfo: "/proc/meminfo".into(),
             reserve_memory: GuestMemory::claim,

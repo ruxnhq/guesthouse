@@ -13,11 +13,16 @@ version=$3
 parts=${4:-}
 name=guesthouse-$version-x86_64
 tree=$releases/tree-$version/$name
-helper_folder=$(CDPATH='' cd -- "$releases/.." && pwd)/system/libexec/guesthouse
+system=$(CDPATH='' cd -- "$releases/.." && pwd)/system
+helper_folder=$system/libexec/guesthouse
 
-# The scripts as a test runs them, with the helper's folder in reach.
+# The scripts as a test runs them, with the helper's folder, AppArmor's files and the kernel's list of
+# security modules in reach.
 for_tests() {
-    sed "s|^BRIDGE_HELPER_FOLDER=.*|BRIDGE_HELPER_FOLDER=$helper_folder|" "$@"
+    sed -e "s|^BRIDGE_HELPER_FOLDER=.*|BRIDGE_HELPER_FOLDER=$helper_folder|" \
+        -e "s|^SWTPM_PROFILE=.*|SWTPM_PROFILE=$system/apparmor.d/usr.bin.swtpm|" \
+        -e "s|^SWTPM_LOCAL=.*|SWTPM_LOCAL=$system/apparmor.d/local/usr.bin.swtpm|" \
+        -e "s|^SECURITY_MODULES=.*|SECURITY_MODULES=$system/lsm|" "$@"
 }
 
 mkdir -p "$tree/qemu/build" "$tree/qemu/pc-bios" "$tree/share" "$releases/v$version"

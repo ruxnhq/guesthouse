@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for apparmor_parser: it writes down what it was asked to load, and loads nothing.
+printf 'apparmor_parser %s\n' "$*" >>"$STAND_IN_LOG"

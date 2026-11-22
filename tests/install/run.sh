@@ -74,7 +74,7 @@ make_toolbox() {
     for tool in $TOOLS; do
         ln -s "$(command -v "$tool")" "$T/bin/$tool"
     done
-    for stand_in in curl sudo pkexec ldconfig chown; do
+    for stand_in in curl sudo pkexec ldconfig chown apparmor_parser; do
         ln -s "$HERE/stand-ins/$stand_in" "$T/bin/$stand_in"
     done
     for manager in dnf apt-get pacman zypper usermod gpasswd; do
@@ -137,9 +137,11 @@ new_test() {
 
 # The whole filesystem read-only, the test's folder writable, and these few things faked.
 sandbox() {
-    # Some distros, CachyOS for one, keep /etc/os-release as a file of its own, not a link.
     local options=(--ro-bind / / --dev-bind /dev /dev --bind "$T" "$T" --tmpfs /run
-        --ro-bind "$T/os-release" /usr/lib/os-release --ro-bind "$T/os-release" /etc/os-release)
+        --ro-bind "$T/os-release" /usr/lib/os-release)
+    # Some distros, CachyOS for one, keep /etc/os-release as a file of its own. Where it's a link, as on
+    # Ubuntu, it leads to the one above, and bubblewrap can't mount onto a link.
+    [ -L /etc/os-release ] || options+=(--ro-bind "$T/os-release" /etc/os-release)
     [ "$OSTREE" = no ] || options+=(--ro-bind "$T/os-release" /run/ostree-booted)
     [ "$KVM_CLOSED" = no ] || options+=(--ro-bind "$T/closed-kvm" /dev/kvm)
     mkdir -p "$T/firmware"
@@ -184,9 +186,11 @@ install_version() {
     answering 'yes\n' "$SHELL_UNDER_TEST" "$(script_for "$1")" "${@:2}"
 }
 
-# The repo's, with the helper's folder in reach.
+# The repo's, with the helper's folder and AppArmor's files in reach.
 uninstaller() {
-    sed "s|^BRIDGE_HELPER_FOLDER=.*|BRIDGE_HELPER_FOLDER=$T/system/libexec/guesthouse|" "$REPO/uninstall.sh" \
+    sed -e "s|^BRIDGE_HELPER_FOLDER=.*|BRIDGE_HELPER_FOLDER=$T/system/libexec/guesthouse|" \
+        -e "s|^SWTPM_PROFILE=.*|SWTPM_PROFILE=$T/system/apparmor.d/usr.bin.swtpm|" \
+        -e "s|^SWTPM_LOCAL=.*|SWTPM_LOCAL=$T/system/apparmor.d/local/usr.bin.swtpm|" "$REPO/uninstall.sh" \
         >"$T/uninstall.sh"
     printf '%s' "$T/uninstall.sh"
 }

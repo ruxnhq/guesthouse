@@ -28,6 +28,10 @@ pub enum CopyKind {
     Engine,
     /// Red and blue changed over by the CPU after a copy.
     Colours,
+    /// An allocation's contents moved into the guest's pages on its first lock, by the copy engine.
+    MoveByEngine,
+    /// The same, by the CPU.
+    MoveByCpu,
 }
 
 /// How many, how long in all, and the longest.
@@ -67,6 +71,8 @@ pub struct CopyTally {
     cpu: Tally,
     engine: Tally,
     colours: Tally,
+    moved_by_engine: Tally,
+    moved_by_cpu: Tally,
 }
 
 impl CopyTally {
@@ -77,17 +83,21 @@ impl CopyTally {
             CopyKind::Cpu => self.cpu.add(taken),
             CopyKind::Engine => self.engine.add(taken),
             CopyKind::Colours => self.colours.add(taken),
+            CopyKind::MoveByEngine => self.moved_by_engine.add(taken),
+            CopyKind::MoveByCpu => self.moved_by_cpu.add(taken),
         }
         if now.saturating_duration_since(since) < TALLY_EVERY {
             return None;
         }
         let line = format!(
             "intel work: frames in the last {:.1} s: by the copy engine {}; by the CPU {}; red and blue \
-             changed over {}",
+             changed over {}; first locks moved by the copy engine {}; by the CPU {}",
             now.saturating_duration_since(since).as_secs_f64(),
             self.engine,
             self.cpu,
-            self.colours
+            self.colours,
+            self.moved_by_engine,
+            self.moved_by_cpu
         );
         *self = Self { since: Some(now), ..Self::default() };
         Some(line)
@@ -331,6 +341,11 @@ mod tests {
         assert!(line.contains("by the copy engine 1 taking 0.2 ms in all"), "{line}");
         assert!(line.contains("by the CPU 1 taking 14.0 ms in all, 14.00 ms on average"), "{line}");
         assert!(line.contains("changed over 1 taking 1.0 ms"), "{line}");
+        assert!(line.contains("first locks moved by the copy engine 0 taking"), "{line}");
+        assert!(
+            line.ends_with("by the CPU 0 taking 0.0 ms in all, 0.00 ms on average and 0.00 ms at most"),
+            "{line}"
+        );
         let later = start + TALLY_EVERY + Duration::from_secs(1);
         assert_eq!(tally.add(CopyKind::Engine, Duration::from_micros(200), later), None, "ten seconds anew");
         let line = tally.add(CopyKind::Engine, Duration::from_micros(100), start + TALLY_EVERY * 2).unwrap();

@@ -11,6 +11,7 @@ use crate::linux::amd::amd_cards;
 use crate::linux::driver_versions::{branch_refusal, branch_refusal_among, untested_warning};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load_all};
 use crate::setup::intel::{intel_cards_on_i915, supported_intel_cards, xe_force_probe};
+use crate::setup::swtpm_profile::check_swtpm_profile;
 use crate::usb::sysfs_text;
 use crate::vm_args::on_path;
 use guesthouse_backend_nvidia::profile::BRANCHES;
@@ -583,13 +584,9 @@ pub fn check_pc(context: &Context) -> Vec<Check> {
     checks.push(check_kvm(context));
     checks.extend(check_jail(context));
     checks.extend(check_amd_memory(context));
-    checks.extend([
-        check_qemu(context),
-        check_tools(context, &TOOLS),
-        check_ubuntu(context, &UBUNTU_TOOLS),
-        check_ram(context),
-        check_disk(context),
-    ]);
+    checks.extend([check_qemu(context), check_tools(context, &TOOLS)]);
+    checks.extend(check_swtpm_profile(context));
+    checks.extend([check_ubuntu(context, &UBUNTU_TOOLS), check_ram(context), check_disk(context)]);
     checks
 }
 

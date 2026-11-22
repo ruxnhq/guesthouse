@@ -17,7 +17,7 @@ use crate::log::read_log;
 use crate::machine::{Kind, Machine, load_all};
 use crate::setup::checks::machine_gpu_warning;
 use crate::slots;
-use crate::tasks::{State, Status, launch, status};
+use crate::tasks::{State, Status, launch, status, still_working};
 use args::{Command, parse};
 use pick::find;
 use std::fmt;
@@ -206,7 +206,9 @@ fn run_task(
     if !wait {
         return Ok(None);
     }
-    let ended = || !matches!(task.try_wait(), Ok(None));
+    // A start can go on watching the desktop once it has said it's done.
+    let pid = task.id();
+    let ended = || !matches!(task.try_wait(), Ok(None)) || !still_working(context, pid);
     follow(context, machine, &mut steps, out, ended).map(Some)
 }
 

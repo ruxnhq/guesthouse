@@ -717,6 +717,10 @@ impl Backend for IntelBackend {
         &self.facts
     }
 
+    fn wake_descriptor(&self) -> Option<std::os::fd::RawFd> {
+        self.work.as_ref().and_then(CardWork::wake_descriptor)
+    }
+
     fn allocate_video_memory(
         &mut self,
         size: u64,
@@ -742,18 +746,19 @@ impl Backend for IntelBackend {
         }
     }
 
-    /// By the CPU, through its view of both. While listening nothing has written the video memory,
-    /// so there is nothing to move.
+    /// By the copy engine as the kernel moves a buffer, from Alchemist on, and by the CPU before
+    /// (the module `work::moves`). While listening nothing has written the video memory, so there is nothing
+    /// to move.
     fn preserve_contents(
         &mut self,
-        _host: &mut dyn HostServices,
-        _own_space: SpaceId,
+        host: &mut dyn HostServices,
+        own_space: SpaceId,
         from: MemoryId,
         to: MemoryId,
         size: u64,
     ) -> Result<(), BackendError> {
         match &mut self.work {
-            Some(work) => work.preserve(from, to, size),
+            Some(work) => work.preserve(host, own_space, from, to, size),
             None => Ok(()),
         }
     }
@@ -1011,6 +1016,17 @@ impl Backend for IntelBackend {
         if let Some(work) = &mut self.work {
             work.poll(host, now);
         }
+    }
+
+    /// Runs whose end the host finishes wake the daemon through an eventfd: see `work::wake`.
+    fn gpu_woke(&mut self, host: &mut dyn HostServices, now: Instant) {
+        if let Some(work) = &mut self.work {
+            work.woke(host, now);
+        }
+    }
+
+    fn needs_polling(&self) -> bool {
+        self.work.as_ref().is_some_and(CardWork::needs_polling)
     }
 
     fn close_queue(&mut self, queue: u32) {

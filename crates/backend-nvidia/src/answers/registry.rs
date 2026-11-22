@@ -10,6 +10,16 @@ use std::collections::HashMap;
 /// be there, and the guest setup puts them there.
 pub const DRIVER_STORE: &str = "C:\\Windows\\System32\\DriverStore\\FileRepository\\nv_dispi.inf_amd64_gpupv";
 
+/// The same folder as the guest sees it, for a lookup the guest does not translate.
+const HOST_DRIVER_STORE: &str =
+    "C:\\Windows\\System32\\HostDriverStore\\FileRepository\\nv_dispi.inf_amd64_gpupv";
+
+/// Where NGX, which runs DLSS, finds its files. The INF puts it under the driver's service key as
+/// the driver's own folder. The guest asks for it with no translate flag, so it gets the folder as
+/// the guest sees it. Not yet tried in a guest: if the guest rewrites service-key paths anyway,
+/// NGX would see a doubled path, and this should be DRIVER_STORE instead.
+const NGX_PATH: &str = "ngxcore\\ngxpath";
+
 /// What apps look up. DXCore reads the first to learn that an adapter does graphics, and the
 /// Vulkan, OpenGL and OpenCL loaders find their drivers by the others.
 const VALUES: [&str; 13] = [
@@ -71,6 +81,9 @@ impl AdapterRegistry {
             RegistryName::DriverImagePath => {
                 let path = format!("{DRIVER_STORE}\\{}", self.kernel_driver);
                 Some(RegistryValue { value_type: None, bytes: utf16_zero(&path) })
+            }
+            RegistryName::Value(name) if name == NGX_PATH => {
+                Some(RegistryValue { value_type: Some(TYPE_STRING), bytes: utf16_zero(HOST_DRIVER_STORE) })
             }
             RegistryName::Value(name) => self.values.get(name).map(|(value_type, bytes)| RegistryValue {
                 value_type: Some(*value_type),
@@ -138,6 +151,13 @@ mod tests {
     fn a_card_not_in_the_inf_refuses() {
         let card = PciCard { device: 0x9999, ..CARD };
         assert!(AdapterRegistry::from_infs(&[Inf::parse(inf_text().as_bytes())], &card, 0).is_err());
+    }
+
+    #[test]
+    fn ngx_finds_its_files_in_the_guests_folder() {
+        let value = registry().lookup(&RegistryName::Value("ngxcore\\ngxpath".into())).unwrap();
+        assert_eq!(value.value_type, Some(TYPE_STRING));
+        assert_eq!(value.bytes, utf16_zero(HOST_DRIVER_STORE));
     }
 
     #[test]

@@ -4,6 +4,8 @@ Guesthouse starts the daemon and QEMU for you. If you'd rather start them yourse
 
 I've started the daemon on its memory files, with a pretend GPU behind it, and started the patched QEMU with the GPU's devices beside it. QEMU connected to both sockets, and both had the same two files open. I haven't run a Windows guest with the real GPU this way yet, and I don't test it with each release. Treat this page as a map, and expect to find things I missed.
 
+On Proxmox VE, where Proxmox starts QEMU, [Proxmox VE](proxmox.md) says how a VM runs this way and what has run.
+
 ## The pieces
 
 - **A patched QEMU.** QEMU knows nothing about this GPU. My patch adds the VMBus devices below. A release comes with it built, at `qemu/build/qemu-system-x86_64` in the release folder. To build it yourself, see [the QEMU patch](../qemu/README.md). A distro's QEMU won't do.

@@ -37,6 +37,10 @@ pub const COPY_PATIENCE: Duration = Duration::from_secs(2);
 /// The batch's page.
 const BATCH_BYTES: u64 = 0x1000;
 
+/// Where a move's window of addresses starts: a large page's alignment, so neither end's binding is
+/// split for want of it.
+const MOVE_WINDOW_ALIGN: u64 = 2 << 20;
+
 /// How many failed copies the log gets as warnings. The rest go to the debug log.
 const FAILURES_TO_WARN_OF: u64 = 16;
 
@@ -164,6 +168,8 @@ struct CopyEngine {
     batch_address: u64,
     /// The copy under way: its point, and when it was sent.
     running: Option<(u64, Instant)>,
+    /// Where the addresses for a move's two ends start, once taken: see [`CardWork::move_window`].
+    move_window: Option<u64>,
 }
 
 /// The copy engine, once made, and what the log has been told of it.
@@ -210,16 +216,36 @@ impl CardWork {
         space: SpaceId,
         blit: &Blit,
     ) -> Result<(), BackendError> {
-        self.blits.turn_after = None;
         let dwords = blit.dwords(self.blits.mocs).map_err(|batch::NotEncodable(why)| {
             BackendError::new(format!("the copy engine can't be given this copy: {why}: {blit:?}"))
         })?;
-        if self.blits.engine.as_ref().is_some_and(|engine| engine.space != space) {
-            self.close_copy_engine();
+        self.run_on_copy_engine(host, space, &dwords)?;
+        let kind = (blit.source.tiling, blit.target.tiling);
+        if !self.blits.kinds_said.contains(&kind) {
+            self.blits.kinds_said.push(kind);
+            log::info!(
+                "intel work: copies from {:?} to {:?} go by the copy engine; the first is {}x{}, pitches {} and {}",
+                kind.0,
+                kind.1,
+                blit.width,
+                blit.height,
+                blit.source.pitch,
+                blit.target.pitch
+            );
         }
-        if self.blits.engine.is_none() {
-            self.blits.engine = Some(self.make_copy_engine(host, space)?);
-        }
+        Ok(())
+    }
+
+    /// Sends instructions to the copy engine in a batch of their own, in the daemon's own space.
+    /// The engine, its queue and its batch's page are made the first time.
+    pub(super) fn run_on_copy_engine(
+        &mut self,
+        host: &mut dyn HostServices,
+        space: SpaceId,
+        instructions: &[u32],
+    ) -> Result<(), BackendError> {
+        self.blits.turn_after = None;
+        self.copy_engine_in_space(host, space)?;
         let engine = self.blits.engine.as_ref().expect("made just above");
         let (done, sent, batch_memory, batch_address) =
             (engine.done, engine.sent, engine.batch, engine.batch_address);
@@ -239,7 +265,7 @@ impl CardWork {
                 "the copy engine is still on an earlier copy that ran past its time",
             ));
         }
-        let mut words = dwords.to_vec();
+        let mut words = instructions.to_vec();
         words.push(batch::BATCH_END);
         if !self.cpu_view(batch_memory)?.write(0, &batch::bytes(&words)) {
             return Err(BackendError::new("the copy's batch doesn't fit its page"));
@@ -270,20 +296,55 @@ impl CardWork {
         let engine = self.blits.engine.as_mut().expect("made above");
         engine.sent = point;
         engine.running = Some((point, Instant::now()));
-        let kind = (blit.source.tiling, blit.target.tiling);
-        if !self.blits.kinds_said.contains(&kind) {
-            self.blits.kinds_said.push(kind);
-            log::info!(
-                "intel work: copies from {:?} to {:?} go by the copy engine; the first is {}x{}, pitches {} and {}",
-                kind.0,
-                kind.1,
-                blit.width,
-                blit.height,
-                blit.source.pitch,
-                blit.target.pitch
-            );
+        Ok(())
+    }
+
+    /// Makes the copy engine in this space, if it isn't there already.
+    fn copy_engine_in_space(
+        &mut self,
+        host: &mut dyn HostServices,
+        space: SpaceId,
+    ) -> Result<(), BackendError> {
+        if self.blits.engine.as_ref().is_some_and(|engine| engine.space != space) {
+            self.close_copy_engine();
+        }
+        if self.blits.engine.is_none() {
+            self.blits.engine = Some(self.make_copy_engine(host, space)?);
         }
         Ok(())
+    }
+
+    /// Addresses in the daemon's own space for both ends of a move, each `length` long: the
+    /// source's, and the target's after it. Taken once, with the copy engine, and kept with it.
+    pub(super) fn move_window(
+        &mut self,
+        host: &mut dyn HostServices,
+        space: SpaceId,
+        length: u64,
+    ) -> Result<(u64, u64), BackendError> {
+        self.copy_engine_in_space(host, space)?;
+        let engine = self.blits.engine.as_mut().expect("made just above");
+        let start = match engine.move_window {
+            Some(start) => start,
+            None => {
+                let start = host.take_gpu_addresses(2 * length, MOVE_WINDOW_ALIGN)?;
+                engine.move_window = Some(start);
+                start
+            }
+        };
+        Ok((start, start + length))
+    }
+
+    /// Whether the copy engine has nothing still running, not even a copy that ran past its time.
+    pub(super) fn copy_engine_idle(&mut self) -> bool {
+        let Some(engine) = self.blits.engine.as_ref() else { return true };
+        let (done, sent) = (engine.done, engine.sent);
+        sent == 0 || self.xe.point_reached(done, sent, Duration::ZERO).unwrap_or(false)
+    }
+
+    /// The cache index the copy engine's copies use, where the card has one.
+    pub(super) fn copy_mocs(&self) -> Option<u32> {
+        self.blits.mocs
     }
 
     /// Has red and blue changed over in these rows of the copy under way's target once it ends
@@ -296,6 +357,33 @@ impl CardWork {
     /// passes [`COPY_PATIENCE`] counts as failed, and the next copy waits for it to end all the
     /// same, as it reads the same page.
     pub fn poll_blit(&mut self, now: Instant) -> Option<Result<(), BackendError>> {
+        self.finish_copy(now, Some(CopyKind::Engine))
+    }
+
+    /// Waits for the copy under way to end, for as long as [`COPY_PATIENCE`] at most, and says how
+    /// it went. The caller adds its time to the tally.
+    pub(super) fn wait_for_copy(&mut self) -> Result<(), BackendError> {
+        let running = self
+            .blits
+            .engine
+            .as_ref()
+            .and_then(|engine| engine.running.map(|(point, _)| (engine.done, point)));
+        let Some((done, point)) = running else {
+            return Err(BackendError::new("no copy is under way on the copy engine"));
+        };
+        // How it ended is asked again below, with the queue's ban, so a failed wait says nothing yet.
+        let _ = self.xe.point_reached(done, point, COPY_PATIENCE);
+        self.finish_copy(Instant::now(), None).unwrap_or_else(|| {
+            // Waited for as long as its patience, so it counts as failed, as a poll would say later.
+            if let Some(engine) = self.blits.engine.as_mut() {
+                engine.running = None;
+            }
+            Err(BackendError::new(format!("the copy engine had not finished a copy after {COPY_PATIENCE:?}")))
+        })
+    }
+
+    /// Whether the copy under way has ended, as [`CardWork::poll_blit`] says.
+    fn finish_copy(&mut self, now: Instant, kind: Option<CopyKind>) -> Option<Result<(), BackendError>> {
         let nothing = || Some(Err(BackendError::new("no copy is under way on the copy engine")));
         let Some(engine) = self.blits.engine.as_mut() else { return nothing() };
         let Some((point, since)) = engine.running else { return nothing() };
@@ -336,7 +424,9 @@ impl CardWork {
                 now.saturating_duration_since(since)
             );
         }
-        self.note_copy(CopyKind::Engine, now.saturating_duration_since(since));
+        if let Some(kind) = kind {
+            self.note_copy(kind, now.saturating_duration_since(since));
+        }
         if let Some((space, area)) = turn
             && let Err(error) = self.turn_colours(space, &area)
         {
@@ -393,6 +483,7 @@ impl CardWork {
                 batch,
                 batch_address,
                 running: None,
+                move_window: None,
             }),
             Err(error) => {
                 self.release(batch);

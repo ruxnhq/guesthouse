@@ -52,6 +52,7 @@ pub mod network;
 pub mod network_settings;
 pub mod overlay;
 pub mod paths;
+pub mod payload_install;
 pub mod process_stat;
 pub mod processes;
 pub mod random;

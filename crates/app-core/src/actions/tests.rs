@@ -803,6 +803,28 @@ fn an_intel_machine_is_given_the_loaders_from_the_drivers_list_out_of_intels_sto
 }
 
 #[test]
+fn an_intel_guest_whose_list_predates_the_64_bit_runtime_is_sent_it_for_system32() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    crate::setup::intel::stand_in::lay_out_driver(&scratch, "intel-driver");
+    scratch.write("intel-driver/msvcp140.dll", "runtime");
+    let old = "System32\tIntel_OpenCL_ICD64.dll\tOpenCL.dll\n";
+    scratch.write("intel-driver/system-files.txt", old);
+    crate::setup::intel::write_intel_setup(&context, &scratch.path("intel-driver"), "32.0.101.9175").unwrap();
+    let agent = Arc::new(ScriptedAgent::answering(&["device key set\r\n", "", "missing 0\r\n"]));
+    context.agent = agent.clone();
+    let mut intel = machine(&context);
+    intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");
+    crate::agent::make_token(&context, &intel).unwrap();
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", intel);
+    place_files_for_maker(&mut task).unwrap();
+    let sent = crate::text::base64_encode(format!("{old}System32\tmsvcp140.dll\tmsvcp140.dll\n").as_bytes());
+    let asked = agent.requests.lock().unwrap();
+    assert!(asked[1].2.contains(&sent), "the list the guest counts from has the runtime: {}", asked[1].2);
+}
+
+#[test]
 fn an_intel_device_key_that_does_not_take_is_said_and_the_start_goes_on() {
     let scratch = Scratch::new();
     let mut context = plain_task_context(&scratch);

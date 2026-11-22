@@ -133,6 +133,28 @@ fn disk_place_problem(new: &NewMachine, id: &str) -> Option<String> {
 
 /// Says why this new machine can't be made now.
 pub fn create_problems(context: &Context, new: &NewMachine, machine: &Machine) -> Result<Vec<String>> {
+    problems(context, new, machine, Driver::Needed)
+}
+
+/// Refuses a new machine for anything but its card's driver not being there. Unpacking a driver
+/// takes a while and takes the place of the one before, so a caller about to unpack one asks this
+/// first, and a machine that would be refused anyway leaves the driver as it was.
+pub fn refuse_before_its_driver(context: &Context, new: &NewMachine) -> Result<()> {
+    let machine = planned(context, new);
+    match problems(context, new, &machine, Driver::StillToCome)?.into_iter().next() {
+        Some(problem) => Err(Failure(problem)),
+        None => Ok(()),
+    }
+}
+
+/// Whether a new machine's driver has to be there already.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Driver {
+    Needed,
+    StillToCome,
+}
+
+fn problems(context: &Context, new: &NewMachine, machine: &Machine, driver: Driver) -> Result<Vec<String>> {
     let mut found = machine.problems(crate::settings::max_vram_gib_for(context, machine));
     found.extend(account::password_problem(&new.password));
     let disk_gib = new.disk_gib;
@@ -170,7 +192,9 @@ pub fn create_problems(context: &Context, new: &NewMachine, machine: &Machine) -
         if place_is_fine && let Some(short) = install_room_problem(context, place)? {
             found.push(short);
         }
-        if let Err(missing) = guest_driver(context, machine) {
+        if driver == Driver::Needed
+            && let Err(missing) = guest_driver(context, machine)
+        {
             found.push(missing.to_owned());
         }
         found.extend(access_problem(context, &new.access).map(str::to_owned));
@@ -202,8 +226,8 @@ pub fn make_disk(context: &Context, machine: &Machine, gib: u32) -> Result<()> {
     Ok(())
 }
 
-/// Makes a machine's folder, disk and firmware file. Installing Windows is a task of its own.
-pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
+/// The machine a new one would be saved as. Nothing is made yet.
+fn planned(context: &Context, new: &NewMachine) -> Machine {
     let id = new_id(context, &new.name);
     let folder = context.paths.machines.join(&id);
     let disk_folder = disk_home(context, new, &id);
@@ -215,7 +239,7 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     let firmware =
         if new.kind == Kind::Linux { String::new() } else { firmware.to_string_lossy().into_owned() };
     let amd_gpu = new.amd_gpu.clone().unwrap_or_else(|| crate::linux::amd::default_linux_gpu(context));
-    let machine = Machine {
+    Machine {
         refresh_hz: new
             .refresh_hz
             .filter(|hz| (MIN_REFRESH_HZ..=MAX_REFRESH_HZ).contains(hz))
@@ -238,7 +262,13 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
             disk_folder.to_string_lossy().into_owned()
         },
         ..Machine::new(&id, new.name.trim(), &disk.to_string_lossy(), &firmware)
-    };
+    }
+}
+
+/// Makes a machine's folder, disk and firmware file. Installing Windows is a task of its own.
+pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
+    let machine = planned(context, new);
+    let folder = context.paths.machines.join(&machine.id);
     if let Some(problem) = create_problems(context, new, &machine)?.into_iter().next() {
         return Err(Failure(problem));
     }

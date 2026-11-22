@@ -8,6 +8,10 @@
 //! They sit in one buffer for each address space, mapped in the gap between the core's two ranges,
 //! where the guest can never place anything. A run takes a slot of it, and the slot is free again
 //! once the kernel says the run has retired.
+//!
+//! Each slot also has two command buffers that have the card note its clock, one to go first in the
+//! run and one to go last, after the fence writer, and the place the two times go. They say when the run
+//! started and ended, which is how a space finds others waiting for the card: see `share`.
 
 use crate::device::Mapping;
 use crate::info::{HW_IP_COMPUTE, HW_IP_DMA, HW_IP_GFX};
@@ -22,6 +26,13 @@ pub const ADDRESS: u64 = 0x1_0010_0000;
 pub const SLOTS: usize = 256;
 const SLOT_WORDS: usize = 8;
 const SLOT_BYTES: usize = SLOT_WORDS * size_of::<u32>();
+/// Where the clock is noted when a run starts, then ends, then the two times, each region a slot
+/// apart for each slot.
+const STARTS: usize = SLOTS * SLOT_BYTES;
+const ENDS: usize = STARTS + SLOTS * SLOT_BYTES;
+const TIMES: usize = ENDS + SLOTS * SLOT_BYTES;
+const TIMES_BYTES: usize = 2 * size_of::<u64>();
+const BUFFER_BYTES: usize = TIMES + SLOTS * TIMES_BYTES;
 
 // A type 3 packet's header: the type, how many words follow less one, and the opcode.
 const PACKET3: u32 = 3 << 30;
@@ -45,6 +56,24 @@ const FLUSH_CACHES: u32 = GCR_SEQ | GCR_GL2_WB | GCR_GLM_INV | GCR_GLM_WB | CACH
 /// GFX 12's fence leaves out the two GLM actions and keeps the rest.
 const FLUSH_CACHES_GFX12: u32 = FLUSH_CACHES & !(GCR_GLM_INV | GCR_GLM_WB);
 const DATA_64_BIT: u32 = 2 << 29;
+/// RELEASE_MEM's data: the card's 64-bit clock.
+const DATA_CLOCK: u32 = 3 << 29;
+/// The timestamp event when everything before it has left the pipe.
+const EVENT_BOTTOM_OF_PIPE_TS: u32 = 0x28;
+/// Copies one value to another place as soon as the engine reaches it.
+const COPY_DATA: u32 = 0x40;
+const COPY_DATA_WORDS: u32 = 5;
+/// COPY_DATA from the card's clock to memory, both 64-bit words, the way Mesa notes a top-of-pipe
+/// timestamp.
+const COPY_FROM_CLOCK: u32 = 9;
+const COPY_TO_MEMORY: u32 = 5 << 8;
+const COPY_64_BIT: u32 = 1 << 16;
+const COPY_WRITE_CONFIRM: u32 = 1 << 20;
+/// A packet that does nothing, here with one word of its own.
+const NOP: u32 = 0x10;
+/// The DMA engine's packet that stores its clock, all 64 bits, the same clock amdgpu reports.
+const SDMA_TIMESTAMP: u32 = 13;
+const SDMA_GLOBAL_TIMESTAMP: u32 = 2 << 8;
 const SEND_DATA_AFTER_WRITE_CONFIRM: u32 = 3 << 24;
 
 /// How an engine is told to store a value.
@@ -94,6 +123,44 @@ pub fn words(writer: Writer, fence: u64, value: u64) -> [u32; SLOT_WORDS] {
     }
 }
 
+/// Which end of a run a time is noted at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stamp {
+    /// As soon as the engine reaches the run.
+    Start,
+    /// Once the run's work has all left the pipe.
+    End,
+}
+
+/// The command buffer that stores the card's clock at the GPU address `at`.
+pub fn stamp_words(writer: Writer, stamp: Stamp, at: u64) -> [u32; SLOT_WORDS] {
+    let (low, high) = (at as u32, (at >> 32) as u32);
+    match (writer, stamp) {
+        // The DMA engine runs its packets in order, so its one packet serves both ends.
+        (Writer::Dma, _) => [SDMA_TIMESTAMP | SDMA_GLOBAL_TIMESTAMP, low, high, 0, 0, 0, 0, 0],
+        (_, Stamp::Start) => [
+            PACKET3 | (COPY_DATA_WORDS - 1) << PACKET3_COUNT_SHIFT | COPY_DATA << PACKET3_OPCODE_SHIFT,
+            COPY_64_BIT | COPY_WRITE_CONFIRM | COPY_FROM_CLOCK | COPY_TO_MEMORY,
+            0,
+            0,
+            low,
+            high,
+            PACKET3 | NOP << PACKET3_OPCODE_SHIFT,
+            0,
+        ],
+        (_, Stamp::End) => [
+            PACKET3 | (RELEASE_MEM_WORDS - 1) << PACKET3_COUNT_SHIFT | RELEASE_MEM << PACKET3_OPCODE_SHIFT,
+            CACHE_POLICY_BYPASS | EVENT_BOTTOM_OF_PIPE_TS | EVENT_INDEX_TS,
+            DATA_CLOCK,
+            low,
+            high,
+            0,
+            0,
+            0,
+        ],
+    }
+}
+
 /// Which slots are free. Kept apart from the buffer so it can be tested without a card.
 #[derive(Debug)]
 pub struct Slots {
@@ -124,13 +191,13 @@ pub struct FenceIbs {
 }
 
 impl FenceIbs {
-    /// Makes the buffer on a space's own open and maps it there. The card only reads it, and
-    /// uncached, as the CPU writes a slot again for each run.
+    /// Makes the buffer on a space's own open and maps it there, uncached, as the CPU writes a slot
+    /// again for each run and reads the times the card wrote.
     pub fn make(file: &File, alignment: u64) -> io::Result<Self> {
-        let size = ((SLOTS * SLOT_BYTES) as u64).next_multiple_of(alignment.max(1));
+        let size = (BUFFER_BYTES as u64).next_multiple_of(alignment.max(1));
         let handle = memory::create(file, size, alignment, DOMAIN_GTT, CpuAccess::Required)?;
         let flags =
-            MapFlags { readable: true, writable: false, executable: true, memory_type: MemoryType::Uncached };
+            MapFlags { readable: true, writable: true, executable: true, memory_type: MemoryType::Uncached };
         let made = Mapping::of(file, handle, size as usize)
             .and_then(|view| memory::map(file, handle, ADDRESS, 0, size, flags).map(|()| view));
         match made {
@@ -147,14 +214,51 @@ impl FenceIbs {
         self.handle
     }
 
-    /// Writes a fence writer into a free slot. `None` when every slot's run is still on the card.
+    /// Writes a fence writer into a free slot, and the slot's two clock notes. `None` when every
+    /// slot's run is still on the card.
     pub fn write(&mut self, writer: Writer, fence: u64, value: u64) -> Option<(usize, Ib)> {
         let slot = self.slots.take()?;
         let start = slot * SLOT_BYTES;
-        for (index, word) in words(writer, fence, value).into_iter().enumerate() {
-            self.view.write_u32(start + index * size_of::<u32>(), word);
+        self.write_words(start, &words(writer, fence, value));
+        let times = TIMES + slot * TIMES_BYTES;
+        for (region, stamp) in [(STARTS, Stamp::Start), (ENDS, Stamp::End)] {
+            let at = ADDRESS + (times + Self::half(stamp)) as u64;
+            self.write_words(region + start, &stamp_words(writer, stamp, at));
+        }
+        for word in 0..TIMES_BYTES / size_of::<u32>() {
+            self.view.write_u32(times + word * size_of::<u32>(), 0);
         }
         Some((slot, Ib { address: ADDRESS + start as u64, bytes: SLOT_BYTES as u32 }))
+    }
+
+    /// The slot's command buffers that note the clock: one to go first, one last.
+    pub fn stamp_ibs(slot: usize) -> [Ib; 2] {
+        [STARTS, ENDS].map(|region| Ib {
+            address: ADDRESS + (region + slot * SLOT_BYTES) as u64,
+            bytes: SLOT_BYTES as u32,
+        })
+    }
+
+    /// The times the card noted for the slot's run, in its clock's ticks, 0 where it noted none.
+    pub fn times(&self, slot: usize) -> (u64, u64) {
+        let times = TIMES + slot * TIMES_BYTES;
+        let read = |at: usize| {
+            u64::from(self.view.read_u32(at)) | u64::from(self.view.read_u32(at + size_of::<u32>())) << 32
+        };
+        (read(times + Self::half(Stamp::Start)), read(times + Self::half(Stamp::End)))
+    }
+
+    fn half(stamp: Stamp) -> usize {
+        match stamp {
+            Stamp::Start => 0,
+            Stamp::End => size_of::<u64>(),
+        }
+    }
+
+    fn write_words(&mut self, at: usize, words: &[u32]) {
+        for (index, &word) in words.iter().enumerate() {
+            self.view.write_u32(at + index * size_of::<u32>(), word);
+        }
     }
 
     pub fn give_back(&mut self, slot: usize) {
@@ -212,6 +316,32 @@ mod tests {
     }
 
     #[test]
+    fn the_start_note_copies_the_clock_to_memory_as_mesa_does_and_pads_with_a_no_op() {
+        let words = stamp_words(Writer::EndOfPipe, Stamp::Start, FENCE);
+        assert_eq!(words[0], 0xC004_4000);
+        assert_eq!(words[1], 0x0011_0509);
+        assert_eq!(words[2..6], [0, 0, 0x3456_7008, 0x12]);
+        assert_eq!(words[6..], [0xC000_1000, 0]);
+    }
+
+    #[test]
+    fn the_end_note_is_the_bottom_of_pipe_timestamp_with_the_clock_as_data() {
+        let words = stamp_words(Writer::EndOfPipeGfx12, Stamp::End, FENCE);
+        assert_eq!(words[0], 0xC006_4900);
+        assert_eq!(words[1], 0x0600_0528);
+        assert_eq!(words[2], 0x6000_0000);
+        assert_eq!(words[3..], [0x3456_7008, 0x12, 0, 0, 0]);
+    }
+
+    #[test]
+    fn the_dma_engine_notes_its_clock_with_one_packet_at_either_end() {
+        let start = stamp_words(Writer::Dma, Stamp::Start, FENCE);
+        assert_eq!(start, stamp_words(Writer::Dma, Stamp::End, FENCE));
+        assert_eq!(start[..3], [0x20D, 0x3456_7008, 0x12]);
+        assert_eq!(start[3..], [0; 5]);
+    }
+
+    #[test]
     fn a_slot_is_free_again_only_after_it_is_given_back() {
         let mut slots = Slots::new(2);
         let (first, second) = (slots.take().unwrap(), slots.take().unwrap());
@@ -223,7 +353,7 @@ mod tests {
 
     #[test]
     fn the_buffer_ends_before_the_cores_upper_range() {
-        let end = ADDRESS + (SLOTS * SLOT_BYTES) as u64;
+        let end = ADDRESS + BUFFER_BYTES as u64;
         assert!(end.next_multiple_of(0x1_0000) <= guesthouse_backend::GPU_RANGES[1].start);
         assert!(ADDRESS >= guesthouse_backend::GPU_RANGES[0].end + crate::copy_ib::BYTES as u64);
     }

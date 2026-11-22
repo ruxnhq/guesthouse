@@ -3,5 +3,5 @@
 # MinGW and Rust's Windows library build the NVAPI wrapper that goes into Windows guests.
 FROM registry.fedoraproject.org/fedora:44
 RUN dnf -y install gcc git xz findutils which binutils pkgconf-pkg-config rust cargo gtk4-devel \
-      libadwaita-devel curl mingw64-gcc rust-std-static-x86_64-pc-windows-gnu \
+      libadwaita-devel curl squashfs-tools mingw64-gcc rust-std-static-x86_64-pc-windows-gnu \
     && dnf clean all

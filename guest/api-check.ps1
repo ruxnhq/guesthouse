@@ -676,7 +676,7 @@ Add-Report "api-check started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Add-Report "Windows $([Environment]::OSVersion.Version), user $([Environment]::UserName), session $((Get-Process -Id $PID).SessionId), PowerShell $($PSVersionTable.PSVersion), $([IntPtr]::Size * 8)-bit"
 Add-Report 'loader files:'
 foreach ($folder in 'System32', 'SysWOW64') {
-    foreach ($name in 'OpenCL.dll', 'vulkan-1.dll', 'ze_loader.dll', 'opengl32.dll', 'dxgi.dll', 'd3d12.dll', 'd3d11.dll', 'msvcp140.dll', 'vcruntime140.dll') {
+    foreach ($name in 'OpenCL.dll', 'vulkan-1.dll', 'ze_loader.dll', 'opengl32.dll', 'dxgi.dll', 'd3d12.dll', 'd3d11.dll', 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
         $path = Join-Path (Join-Path $env:windir $folder) $name
         $info = if (Test-Path -LiteralPath $path) { "present, $((Get-Item -LiteralPath $path).VersionInfo.FileVersion)" } else { 'absent' }
         Add-Report "  $folder\$name $info"

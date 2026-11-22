@@ -27,6 +27,8 @@ pub struct SocketFrames {
     buffers: Option<Buffers>,
     finished: Sender<Release>,
     releases: Receiver<Release>,
+    /// The newest frame, taken in but not yet handed out.
+    unshown: Option<Frame>,
     alive: bool,
     /// How the newest HDR picture wants to be shown. An SDR picture has none.
     light: Option<Light>,
@@ -111,6 +113,7 @@ impl SocketFrames {
             buffers: None,
             finished,
             releases,
+            unshown: None,
             alive: true,
             light: None,
             cursor: None,
@@ -129,6 +132,16 @@ impl SocketFrames {
     fn send_releases(&mut self) {
         while let Ok(release) = self.releases.try_recv() {
             self.release(release.generation, release.slot);
+        }
+    }
+
+    /// Gives back what has finished and takes in what has come, keeping only the newest frame. Each
+    /// frame left unread holds a slot, so a viewer that stops reading leaves the producer none.
+    fn catch_up(&mut self) {
+        self.send_releases();
+        let Some(newest) = self.take_messages() else { return };
+        if let Some(older) = self.unshown.replace(newest) {
+            self.release(older.generation, older.slot);
         }
     }
 
@@ -180,8 +193,8 @@ impl FrameSource for SocketFrames {
     }
 
     fn newest_slot(&mut self) -> Option<SlotFrame> {
-        self.send_releases();
-        let frame = self.take_messages()?;
+        self.catch_up();
+        let frame = self.unshown.take()?;
         let Some(file) = self.buffers.as_ref().and_then(|buffers| buffers.slot(&frame)) else {
             self.release(frame.generation, frame.slot);
             return None;
@@ -193,6 +206,10 @@ impl FrameSource for SocketFrames {
         });
         let (generation, slot) = (frame.generation, frame.slot);
         Some(SlotFrame { file, descriptor: frame.descriptor, generation, slot, release })
+    }
+
+    fn keep_up(&mut self) {
+        self.catch_up();
     }
 
     fn alive(&self) -> bool {

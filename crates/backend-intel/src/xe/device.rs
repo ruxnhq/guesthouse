@@ -9,7 +9,7 @@ use crate::ioctl::drm_ioctl;
 use crate::protocol::bytes::{dword, qword};
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::time::Duration;
 
@@ -48,6 +48,9 @@ pub trait Xe {
     /// Whether a timeline has reached a point, waiting up to `patience` for it. With no patience
     /// it only looks.
     fn point_reached(&mut self, syncobj: u32, point: u64, patience: Duration) -> io::Result<bool>;
+    /// Has the kernel add one to `eventfd` once a timeline reaches a point. A kernel before Linux
+    /// v6.6 doesn't know the call.
+    fn notify_at(&mut self, syncobj: u32, point: u64, eventfd: RawFd) -> io::Result<()>;
     fn engine_cycles(&mut self, engine: EngineInstance) -> io::Result<EngineCycles>;
     /// Whether this kernel can say which address a VM faulted at. Newer than the rest, and nothing
     /// depends on it.
@@ -316,6 +319,10 @@ impl Xe for XeCard {
             Err(error) if error.raw_os_error() == Some(libc::ETIME) => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    fn notify_at(&mut self, syncobj: u32, point: u64, eventfd: RawFd) -> io::Result<()> {
+        self.call(abi::SYNCOBJ_EVENTFD, &mut abi::syncobj::eventfd(syncobj, point, eventfd))
     }
 
     fn engine_cycles(&mut self, engine: EngineInstance) -> io::Result<EngineCycles> {

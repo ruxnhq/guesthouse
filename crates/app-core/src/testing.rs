@@ -125,6 +125,7 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     context.may_open = |_| true;
     context.card_memories = String::new;
     context.security_modules = scratch.write("lsm", "capability,landlock");
+    context.apparmor = scratch.path("apparmor.d");
     context.udmabuf_limit = scratch.path("udmabuf-limit");
     context
 }

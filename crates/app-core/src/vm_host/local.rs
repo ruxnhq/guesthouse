@@ -16,6 +16,7 @@ use crate::log::write_log;
 use crate::machine::{Machine, sorted_names};
 use crate::monitor::Command as Qmp;
 use crate::processes::{memory_taken, passt_pid, qemu_pid};
+use crate::setup::swtpm_profile::{self, missing_rules};
 use crate::start_checks::SECOND_INSTANCE_REFUSAL;
 use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, Sound, VmPlan};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
@@ -107,7 +108,14 @@ impl LocalHost<'_> {
         fs::create_dir_all(state)?;
         let done = Command::new("swtpm").args(arguments).status()?;
         if !done.success() {
-            return Err(Failure::new("The virtual TPM did not start."));
+            let rules = missing_rules(self.context);
+            if rules.is_empty() {
+                return Err(Failure::new("The virtual TPM did not start."));
+            }
+            let fix = swtpm_profile::fix(self.context, &rules);
+            return Err(Failure::new(format!(
+                "The virtual TPM did not start, as AppArmor keeps swtpm from writing its files. {fix}"
+            )));
         }
         Ok(())
     }

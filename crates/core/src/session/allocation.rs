@@ -3,8 +3,7 @@
 use super::{Handled, Session, answer_status};
 use crate::deferred::{DeferredAction, FreedAllocation};
 use crate::gpu_addresses::ADDRESSES_END;
-use crate::pending::QueueAction;
-use crate::tables::{Allocation, Queue};
+use crate::tables::Allocation;
 use guesthouse_backend::{
     AllocationShape, Backend, BackendError, GuestMemory, MapRequest, MemoryId, MemoryKind, SurfaceShape,
     UnmapRequest,
@@ -337,36 +336,6 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             None => request.refuse(out),
         }
         Ok(())
-    }
-
-    /// Holds a first lock until the queues in its address spaces get to where they are now, if they
-    /// aren't there. Moving an allocation under an engine that's using it loses what the engine
-    /// writes, which shows up as damage here and there in encoded video.
-    fn wait_for_first_lock(&mut self, handle: u32, message: &[u8]) -> bool {
-        let mappings = &self.allocations[&handle].mappings;
-        let in_use = |queue: &Queue| mappings.iter().any(|mapping| mapping.space == queue.space);
-        let queues: Vec<u32> =
-            self.queues.iter().filter(|(_, queue)| in_use(queue)).map(|(&handle, _)| handle).collect();
-        if self.queues_idle(queues.iter().copied()) {
-            return false;
-        }
-        self.first_locks_waited.insert(handle);
-        let action =
-            QueueAction::Retry { message: message.to_vec(), ticket: self.ticket, started: Instant::now() };
-        self.after_queues(queues.iter().copied(), action);
-        self.hold_reply();
-        true
-    }
-
-    /// Whether nothing can have written an allocation's video memory: no work was started in any
-    /// address space since it was first mapped there, none of them runs work unseen, and it was
-    /// never mapped in the daemon's own space, where the daemon's copies write.
-    fn never_written(&self, handle: u32) -> bool {
-        self.allocations[&handle].mapped_at.iter().all(|(space, writes)| {
-            Some(*space) != self.own_space
-                && !self.ring_spaces.contains(space)
-                && self.space_writes.get(space).copied().unwrap_or(0) == *writes
-        })
     }
 
     /// Gives the guest's CPU access. The first lock moves the allocation from video memory to pages

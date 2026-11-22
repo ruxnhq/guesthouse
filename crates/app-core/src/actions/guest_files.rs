@@ -12,7 +12,8 @@ use crate::gpu_identity::INTEL_RENDER;
 use crate::log::write_log;
 use crate::setup::guest_driver::INTEL_STORE_FOLDER;
 use crate::setup::guest_files::guest_file_list;
-use crate::setup::intel::{SYSTEM_LIST, intel_driver_folder};
+use crate::setup::intel::intel_driver_folder;
+use crate::setup::intel_system_list::read_system_list;
 use crate::text::base64_encode;
 use guesthouse_backend_intel::protocol::record::{DEVICE_KEY, DEVICE_KEY_VALUES};
 use sha2::{Digest, Sha256};
@@ -189,11 +190,10 @@ pub(super) fn place_nvapi_wrapper(task: &mut Task) -> Result<()> {
 }
 
 /// What Intel's INF puts in the system folders, from the list unpacked with its driver: the loaders
-/// the guest's programs find Intel's OpenCL, Vulkan and Level Zero drivers through. A guest that
-/// has them all is left alone.
+/// the guest's programs find Intel's OpenCL, Vulkan and Level Zero drivers through, and the C++
+/// runtime they import. A guest that has them all is left alone.
 pub(super) fn place_system_files(task: &mut Task) -> Result<()> {
-    let list = intel_driver_folder(task.context)
-        .and_then(|folder| fs::read_to_string(folder.join(SYSTEM_LIST)).ok());
+    let list = intel_driver_folder(task.context).and_then(|folder| read_system_list(&folder));
     match list.filter(|list| !list.trim().is_empty()) {
         Some(list) => place_listed_files(task, &list, Some(INTEL_STORE_FOLDER)),
         None => {

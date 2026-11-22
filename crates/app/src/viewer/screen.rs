@@ -339,11 +339,15 @@ impl Screen {
         if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
             guest.flush();
         }
-        if !self.show_on_own_surface()
-            && !self.0.waiting.get()
-            && let Some(texture) = self.next_texture()
-        {
-            self.show(texture);
+        if !self.show_on_own_surface() {
+            if !self.0.waiting.get() {
+                if let Some(texture) = self.next_texture() {
+                    self.show(texture);
+                }
+            } else if let Some(source) = self.0.gpu.borrow_mut().as_mut() {
+                // GTK draws only when the compositor asks, and one may not ask for a long time.
+                source.keep_up();
+            }
         }
         if self.0.followed_at.get().elapsed() >= FOLLOW_GUEST {
             self.follow_guest();

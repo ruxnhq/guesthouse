@@ -178,6 +178,16 @@ fn submit(session: &mut TestSession, queue: u32, value: u64) {
     assert_eq!(send(session, &request), SUCCESS.to_le_bytes());
 }
 
+/// Holds a queue or context's later work back until a sync object reaches a value.
+fn gpu_wait(session: &mut TestSession, handle: u32, object: u32, value: u64) {
+    let mut request = message(Command::WaitOnGpu, 0x28);
+    set_u32(&mut request, 0x18, handle);
+    set_u32(&mut request, 0x1C, 1);
+    request.extend_from_slice(&value.to_le_bytes());
+    request.extend_from_slice(&object.to_le_bytes());
+    assert_eq!(status_of(&send(session, &request)), SUCCESS);
+}
+
 fn signal_message(objects: &[u32], contexts: &[u32], values: &[u64]) -> Vec<u8> {
     let mut request = message(Command::SignalSyncObject, 0x38);
     set_u32(&mut request, 0x18, objects.len() as u32);
@@ -189,6 +199,7 @@ fn signal_message(objects: &[u32], contexts: &[u32], values: &[u64]) -> Vec<u8> 
 
 mod copy_bounds;
 mod failing;
+mod first_lock;
 mod frame_ring;
 mod indirect;
 
@@ -2031,15 +2042,6 @@ mod queues {
         assert_eq!(session.context_queues[&context], [queue]);
     }
 
-    fn gpu_wait(session: &mut TestSession, handle: u32, object: u32, value: u64) {
-        let mut request = message(Command::WaitOnGpu, 0x28);
-        set_u32(&mut request, 0x18, handle);
-        set_u32(&mut request, 0x1C, 1);
-        request.extend_from_slice(&value.to_le_bytes());
-        request.extend_from_slice(&object.to_le_bytes());
-        assert_eq!(status_of(&send(session, &request)), SUCCESS);
-    }
-
     #[test]
     fn a_doorbell_that_fails_stands_in_at_the_fence_and_stops_the_queue() {
         let mut session = session();
@@ -2907,6 +2909,27 @@ mod address_reuse {
         let (address, status) = map_buffer(&mut session, PROCESS + 0x1000);
         assert_eq!(status, SUCCESS);
         assert_ne!(address, base, "an address handed out has to work in every space");
+    }
+}
+
+mod backend_polling {
+    use super::*;
+
+    #[test]
+    fn work_only_polling_notices_is_polled_with_nothing_else_waiting_and_soon_again() {
+        let mut session = session();
+        assert_eq!(session.poll(Instant::now()), Waiting::Nothing);
+        assert_eq!(session.backend().work_polls, 0, "nothing to look at");
+        session.backend_mut().needs_polling = true;
+        assert_eq!(session.poll(Instant::now()), Waiting::Background, "looked at again before long");
+        assert_eq!(session.backend().work_polls, 1);
+    }
+
+    #[test]
+    fn a_wake_from_the_gpu_is_handed_to_the_backend() {
+        let mut session = session();
+        session.gpu_woke(Instant::now());
+        assert_eq!(session.backend().wakes, 1);
     }
 }
 

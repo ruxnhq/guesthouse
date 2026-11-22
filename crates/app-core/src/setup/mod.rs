@@ -19,6 +19,8 @@ pub mod inf;
 pub mod intel;
 pub mod intel_driver;
 pub mod intel_inf;
+pub mod intel_system_list;
+pub mod swtpm_profile;
 pub mod toolkit;
 
 use crate::context::Context;

@@ -84,6 +84,17 @@ pub struct Queue {
     pub backlog: VecDeque<(u64, u32)>,
     /// All the work in `backlog`.
     pub unfinished: u64,
+    /// The last work handed to the engine, as opposed to work only started and still held back.
+    pub rung: Option<Rung>,
+}
+
+/// Work a queue handed to the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rung {
+    /// The value its queue's fence reaches once it ends.
+    pub value: u64,
+    /// How much work had started in the queue's address space by then, this work included.
+    pub space_writes: u64,
 }
 
 impl Queue {
@@ -98,6 +109,7 @@ impl Queue {
             stays: false,
             backlog: VecDeque::new(),
             unfinished: 0,
+            rung: None,
         }
     }
 }

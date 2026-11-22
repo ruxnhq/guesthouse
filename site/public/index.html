@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guesthouse: a real GPU in your virtual machines</title>
+<meta name="description" content="Guesthouse runs Windows and Linux virtual machines that share the graphics card your desktop is running on, with the vendor's own driver inside. Direct3D 12, Vulkan, CUDA and more, on Linux with KVM and on Windows 11.">
+<meta name="theme-color" content="#070b1a">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #070b1a; --ink: #eef1fb; --ink-2: #aab3cf; --ink-3: #7480a3;
+    --blue: #2f7ae5; --blue-2: #6aa6ff; --gold: #f6c42d; --gold-2: #fbe36a;
+    --line: rgba(160, 178, 230, 0.14); --card: rgba(255, 255, 255, 0.035);
+    --radius: 18px; --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: inherit; }
+  a:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 10px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+  /* The light behind the top of the page: the house's blue, a warm window's glow, and a faint grid. */
+  .sky { position: absolute; inset: 0 0 auto 0; height: 1100px; pointer-events: none; z-index: 0; overflow: hidden; }
+  .sky::before { content: ""; position: absolute; left: 50%; top: -340px; width: 1400px; height: 900px; transform: translateX(-50%);
+    background: radial-gradient(closest-side at 50% 50%, rgba(47, 122, 229, 0.55), rgba(47, 122, 229, 0.12) 55%, transparent 75%),
+                radial-gradient(420px 260px at 50% 78%, rgba(246, 196, 45, 0.22), transparent 70%); filter: blur(10px); }
+  .sky::after { content: ""; position: absolute; inset: 0;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px; -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 20%, #000 20%, transparent 70%); mask-image: radial-gradient(ellipse 70% 60% at 50% 20%, #000 20%, transparent 70%); opacity: 0.55; }
+
+  header.nav { position: sticky; top: 0; z-index: 10; -webkit-backdrop-filter: saturate(160%) blur(14px); backdrop-filter: saturate(160%) blur(14px); background: rgba(7, 11, 26, 0.62); border-bottom: 1px solid var(--line); }
+  .nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+  .brand img { width: 30px; height: 30px; }
+  .nav nav { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+  .nav nav a { color: var(--ink-2); text-decoration: none; }
+  .nav nav a:hover { color: var(--ink); }
+  .button { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 12px; font-weight: 600; font-size: 15px; text-decoration: none; white-space: nowrap; transition: transform .15s ease, background .15s ease; }
+  .button.primary { background: var(--gold); color: #1a1400; box-shadow: 0 8px 30px -10px rgba(246, 196, 45, 0.85), inset 0 1px 0 rgba(255,255,255,.45); }
+  .button.primary:hover { background: var(--gold-2); transform: translateY(-1px); }
+  .button.ghost { background: rgba(255,255,255,.06); color: var(--ink); border: 1px solid var(--line); }
+  .button.ghost:hover { background: rgba(255,255,255,.1); }
+  .nav .button { padding: 8px 14px; font-size: 14px; }
+
+  main { position: relative; z-index: 1; }
+  .hero { text-align: center; padding: 96px 0 0; }
+  .eyebrow { display: inline-block; max-width: 100%; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--ink-2); font-size: 13px; font-weight: 500; }
+  .eyebrow b { color: var(--gold); font-weight: 600; }
+  h1 { font-size: clamp(42px, 7vw, 84px); line-height: 1.03; letter-spacing: -0.045em; margin: 22px auto; max-width: 14ch; font-weight: 750;
+    background: linear-gradient(180deg, #fff 30%, #bcd3f7 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: clamp(17px, 2vw, 21px); color: var(--ink-2); max-width: 680px; margin: 0 auto 34px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .platforms-line { margin: 26px 0 0; color: var(--ink-3); font-size: 14px; }
+
+  /* The screenshot, in a window, lit from behind. */
+  .stage { position: relative; margin: 64px auto 0; max-width: 1120px; }
+  .stage::before { content: ""; position: absolute; inset: 8% 6% -6%; background: radial-gradient(closest-side, rgba(47,122,229,.6), transparent); filter: blur(60px); z-index: -1; }
+  .window { border-radius: 16px; overflow: hidden; border: 1px solid rgba(190, 205, 255, 0.18); background: #10131f; box-shadow: 0 60px 120px -40px rgba(0,0,0,.9); }
+  .window .titlebar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; background: linear-gradient(#1b2033, #141828); border-bottom: 1px solid rgba(255,255,255,.06); }
+  .window .titlebar i { width: 11px; height: 11px; border-radius: 50%; background: #3a4058; }
+  .window .titlebar span { margin-left: 10px; font-size: 12px; color: var(--ink-3); }
+  .window img { display: block; width: 100%; height: auto; }
+  .caption { text-align: center; color: var(--ink-3); font-size: 13px; margin: 16px 0 0; }
+
+  section { padding: 110px 0 0; }
+  .section-head { max-width: 700px; margin: 0 0 44px; }
+  .kicker { color: var(--gold); font-weight: 600; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; margin: 0 0 10px; }
+  h2 { font-size: clamp(32px, 4.4vw, 52px); line-height: 1.08; letter-spacing: -0.035em; margin: 0 0 14px; font-weight: 720; }
+  .section-head p, .body { color: var(--ink-2); font-size: 18px; margin: 0; }
+
+  .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 80px; text-align: left; }
+  .facts div { background: var(--bg); padding: 26px 24px; }
+  .facts b { display: block; font-size: 24px; letter-spacing: -0.02em; }
+  .facts span { color: var(--ink-3); font-size: 14px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 28px 26px 26px; overflow: hidden; }
+  .card::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(400px 160px at 0% 0%, rgba(47,122,229,.15), transparent 70%); pointer-events: none; }
+  .card svg { width: 30px; height: 30px; color: var(--blue-2); margin-bottom: 16px; }
+  .card h3 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .card h3 small { font-size: 12px; font-weight: 600; color: var(--gold); border: 1px solid rgba(246,196,45,.4); border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 2px; letter-spacing: .02em; }
+  .card p { margin: 0; color: var(--ink-2); font-size: 15.5px; }
+
+  /* The gallery: each screenshot in a plain frame, with no letterbox. */
+  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px 24px; }
+  .shot { margin: 0; }
+  .shot.wide { grid-column: 1 / -1; }
+  .frame { border-radius: 14px; overflow: hidden; border: 1px solid rgba(190, 205, 255, 0.18); box-shadow: 0 40px 80px -30px rgba(0,0,0,.85), 0 0 0 6px rgba(255,255,255,.025); background: #10131f; }
+  .frame img { display: block; width: 100%; height: auto; }
+  .shot figcaption { margin: 16px auto 0; color: var(--ink-2); font-size: 14.5px; max-width: 60ch; text-align: center; }
+  .shot figcaption b { display: block; color: var(--ink); font-size: 15px; margin-bottom: 2px; }
+
+  /* How it works: the guest's driver talks to a daemon, which runs its work on the card. */
+  .how { display: grid; grid-template-columns: 1fr 1.1fr; gap: 48px; align-items: center; }
+  .stack { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: stretch; }
+  .side { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 18px 16px; }
+  .side h4 { margin: 0 0 12px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+  .side div { padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.05); border: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+  .side div + div { margin-top: 8px; }
+  .side div.hot { color: var(--ink); border-color: rgba(246,196,45,.45); background: rgba(246,196,45,.08); }
+  .wire { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; color: var(--gold); font-size: 12px; font-weight: 600; letter-spacing: .05em; }
+  .wire span { width: 2px; flex: 1; min-height: 40px; background: linear-gradient(transparent, var(--gold), transparent); }
+  .checks { list-style: none; padding: 0; margin: 26px 0 0; display: grid; gap: 12px; }
+  .checks li { display: flex; gap: 12px; color: var(--ink-2); }
+  .checks li::before { content: ""; flex: 0 0 20px; height: 20px; border-radius: 50%; margin-top: 3px;
+    background: var(--blue) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/20px no-repeat; }
+  .more { display: inline-block; margin: 22px 0 0; color: var(--gold); text-decoration: none; font-weight: 600; }
+  .more:hover { text-decoration: underline; }
+
+  /* The cards that have run it. */
+  .vendors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .vendor { min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; }
+  .vendor h3 { margin: 0 0 4px; font-size: 19px; }
+  .vendor p { margin: 0 0 16px; color: var(--ink-3); font-size: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips span { font-size: 13.5px; padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,.05); border: 1px solid var(--line); color: var(--ink-2); }
+
+  .downloads { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .platform { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 26px; display: flex; flex-direction: column; min-width: 0; }
+  .platform header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .platform header svg { width: 26px; height: 26px; color: var(--ink); }
+  .platform h3 { margin: 0; font-size: 21px; letter-spacing: -0.01em; }
+  .platform h3 small { font-size: 12px; font-weight: 600; color: var(--gold); border: 1px solid rgba(246,196,45,.4); border-radius: 999px; padding: 1px 8px; margin-left: 8px; vertical-align: 3px; }
+  .platform .req { color: var(--ink-3); font-size: 14px; margin: 0 0 18px; }
+  .cmd { margin: 0 0 14px; padding: 14px 16px; border-radius: 12px; background: #050813; border: 1px solid var(--line); font: 13.5px/1.5 var(--mono); color: var(--ink); overflow-x: auto; white-space: pre; -webkit-user-select: all; user-select: all; }
+  .cmd::before { content: "$ "; color: var(--ink-3); }
+  .files { display: grid; gap: 10px; margin-top: auto; }
+  .file { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid var(--line); text-decoration: none; transition: background .15s, border-color .15s; }
+  a.file:hover { background: rgba(47,122,229,.16); border-color: rgba(106,166,255,.5); }
+  .file svg { width: 18px; height: 18px; color: var(--blue-2); flex: 0 0 auto; }
+  .file .name { font-weight: 600; }
+  .file .meta { margin-left: auto; color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+  .sums { margin: 12px 0 0; font-size: 13px; color: var(--ink-3); }
+  .sums a { color: var(--ink-3); }
+
+  .cta { margin: 120px 0 0; padding: 64px 32px; text-align: center; border-radius: 28px; border: 1px solid var(--line);
+    background: radial-gradient(600px 260px at 50% 0%, rgba(47,122,229,.45), transparent 70%), radial-gradient(300px 140px at 50% 100%, rgba(246,196,45,.16), transparent 70%), linear-gradient(180deg, #0d1640, #090e24); }
+  .cta h2 { margin-bottom: 10px; }
+  .cta p { color: var(--ink-2); margin: 0 auto 28px; font-size: 18px; max-width: 620px; }
+
+  footer.foot { margin-top: 96px; border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--ink-3); font-size: 14px; }
+  footer.foot .wrap { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+  footer.foot a { color: var(--ink-2); text-decoration: none; }
+  footer.foot a:hover { color: var(--ink); }
+  footer.foot .brand { font-size: 15px; } footer.foot .brand img { width: 22px; height: 22px; }
+  footer.foot .right { margin-left: auto; }
+  footer.foot .marks { flex-basis: 100%; font-size: 12.5px; }
+
+  @media (max-width: 900px) {
+    .gallery { grid-template-columns: 1fr; } .shot.wide { grid-column: auto; }
+    .grid { grid-template-columns: 1fr 1fr; } .how { grid-template-columns: 1fr; } .vendors { grid-template-columns: 1fr; }
+    .facts { grid-template-columns: 1fr 1fr; } .downloads { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    .wrap { padding: 0 16px; } .nav .wrap { gap: 12px; } .nav nav { display: none; } .nav .button { margin-left: auto; } .hero { padding-top: 64px; }
+    .grid { grid-template-columns: 1fr; } .facts { grid-template-columns: 1fr; }
+    .stack { grid-template-columns: 1fr; } .wire { flex-direction: row; } .wire span { height: 2px; min-height: 0; width: auto; min-width: 30px; background: linear-gradient(90deg, transparent, var(--gold), transparent); }
+    .file .meta { font-size: 12px; } footer.foot .right { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .button, .file { transition: none; } }
+</style>
+</head>
+<body>
+<div class="sky" aria-hidden="true"></div>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/icon.svg" alt="">Guesthouse</a>
+    <nav aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#cards">Cards</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/xnixy/guesthouse">Source</a>
+    </nav>
+    <a class="button primary" href="#download">Download</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow">Linux <b>0.7.1</b> · Windows <b>0.7.4</b> preview</span>
+      <h1>A real GPU in your virtual machines.</h1>
+      <p class="lede">Guesthouse runs Windows and Linux virtual machines that share the graphics card your desktop is already using, with the card maker's own driver inside. Nothing is passed through, and your desktop keeps its card.</p>
+      <div class="actions">
+        <a class="button primary" href="#download">Get Guesthouse</a>
+        <a class="button ghost" href="#how">See how it works</a>
+      </div>
+      <p class="platforms-line">On Linux with KVM, and on Windows 11 with Virtual Machine Platform. NVIDIA and AMD cards.</p>
+
+      <div class="stage">
+        <div class="window">
+          <div class="titlebar" aria-hidden="true"><i></i><i></i><i></i><span>Windows 11 in Guesthouse, on Linux</span></div>
+          <img src="/shots/vulkan-in-windows.jpg" width="1600" height="900" alt="A Windows 11 desktop in a Guesthouse virtual machine, running a Godot 3D scene with Forward+ rendering on Vulkan, on the host's real graphics card.">
+        </div>
+        <p class="caption">Godot's Forward+ renderer on Vulkan, inside Windows, in a virtual machine on Linux.</p>
+      </div>
+
+      <div class="facts">
+        <div><b>D3D12 · Vulkan · CUDA</b><span>And OpenGL, OpenCL, NVENC and NVDEC</span></div>
+        <div><b>The vendor's driver</b><span>Unmodified, running on the real card</span></div>
+        <div><b>~89% of the host</b><span>Superposition, Direct3D 11, in Windows</span></div>
+        <div><b>About 9 minutes</b><span>From an ISO to Windows with its GPU</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">See it run</p>
+        <h2>The guest gets the card. You keep it too.</h2>
+        <p>Your one big GPU runs your desktop and your virtual machines at once. Each guest sees a real graphics card and loads its normal driver.</p>
+      </div>
+      <div class="gallery">
+        <figure class="shot">
+          <div class="frame"><img src="/shots/windows-guest-gpu.jpg" width="1920" height="1080" loading="lazy" alt="Task Manager inside a Windows 11 guest on a Windows host, on its Performance page, showing GPU 0 as an NVIDIA GeForce RTX 5090 with DirectX 12 and 31.5 GB of dedicated memory."></div>
+          <figcaption><b>Windows in Windows</b>The guest's Task Manager sees an RTX 5090 with its own memory, on Windows 11 with no Hyper-V.</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="frame"><img src="/shots/windows-app.jpg" width="1475" height="1024" loading="lazy" alt="The Guesthouse app on Windows: a machine called win, running, set up with an NVIDIA GeForce RTX 5090, with Open screen, Remote Desktop and its user and password."></div>
+          <figcaption><b>The Windows app</b>Start, stop and open each machine's screen, drawn by its card and streamed by remoteman.</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="frame"><img src="/shots/superposition-running.jpg" width="1600" height="900" loading="lazy" alt="Unigine Superposition benchmarking inside a Windows guest at 122 frames a second."></div>
+          <figcaption><b>Games and benchmarks</b>Superposition in a Windows guest on Linux, on the real card.</figcaption>
+        </figure>
+        <figure class="shot">
+          <div class="frame"><img src="/shots/nvidia-smi-in-ubuntu.jpg" width="1920" height="1080" loading="lazy" alt="An Ubuntu guest's GNOME desktop with a terminal: nvidia-smi lists an NVIDIA GeForce RTX 5090, and a CUDA test checks 4,194,304 values with none wrong."></div>
+          <figcaption><b>Linux guests</b>CUDA and nvidia-smi in Ubuntu, at about the host's speed.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Features</p>
+        <h2>Everything a GPU does, in a virtual machine.</h2>
+        <p>Give it an ISO and Guesthouse installs Windows or Ubuntu by itself, with the GPU set up. No terminal needed.</p>
+      </div>
+      <div class="grid">
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5l7.5-1v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg>
+          <h3>Windows on NVIDIA</h3>
+          <p>Direct3D 12 and 11, Vulkan, OpenGL, OpenCL, CUDA, NVENC and NVDEC all run on the real card, and Edge is hardware accelerated.</p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h3v4H6zM12 10h6M12 14h4"/></svg>
+          <h3>Windows on AMD <small>Experimental</small></h3>
+          <p>AMD's own Windows driver, from AMD's installer. The desktop, Direct3D 12 and 11, Vulkan and OpenGL work, from RDNA2 to RDNA4.</p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6M12 19h8"/></svg>
+          <h3>Linux guests</h3>
+          <p>NVIDIA's Linux driver in the guest, its calls forwarded to the host's: CUDA, Vulkan, NVENC and NVDEC at about host speed. On AMD, Mesa on the real card.</p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 17v4M9 10.5l2 2 4-4"/></svg>
+          <h3>Windows hosts too <small>Preview</small></h3>
+          <p>On Windows 11, Home or Pro, through Virtual Machine Platform. No Hyper-V needed. Windows and Ubuntu guests share your card the same way.</p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 11v6M9 14l3 3 3-3"/></svg>
+          <h3>Drag files in and out</h3>
+          <p>On Linux, drop files on the viewer and they land where you let go in Windows. Drag them off the picture to bring them back as a copy.</p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+          <h3>With or without a desktop</h3>
+          <p>The app for a window, <code>guesthouse-vm</code> for a terminal or a PC with no screen, or beside your own QEMU and libvirt.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap how">
+      <div>
+        <p class="kicker">How it works</p>
+        <h2>Hyper-V's GPU protocol, taught to KVM.</h2>
+        <p class="body">Hyper-V has a way to share a GPU, called GPU-PV: the guest runs the vendor's normal driver on the host's card. It's how WSL gets its GPU. Guesthouse speaks it on Linux, so Windows boots, finds what looks like a Hyper-V GPU, and loads the vendor's driver. On Windows, it uses Windows' own.</p>
+        <ul class="checks">
+          <li>The guest's commands aren't translated: its driver writes them, and the card runs them.</li>
+          <li>Each program in a guest gets its own GPU page tables, and can't read another's memory.</li>
+          <li>On Linux, QEMU and the daemon are jailed with Landlock and seccomp, and the daemon checks everything a guest sends.</li>
+        </ul>
+        <a class="more" href="https://github.com/xnixy/guesthouse/blob/main/ARCHITECTURE.md">Read the architecture →</a>
+      </div>
+      <div class="stack" role="img" aria-label="Inside the Windows guest: your app and the vendor's driver. They talk over VMBus to Guesthouse's daemon on the Linux host, which runs their work on the card through the host's GPU driver.">
+        <div class="side">
+          <h4>Windows guest</h4>
+          <div>Your app</div>
+          <div class="hot">The vendor's driver</div>
+          <div>dxgkrnl, GPU-PV</div>
+        </div>
+        <div class="wire"><span></span>VMBUS<span></span></div>
+        <div class="side">
+          <h4>Linux host</h4>
+          <div class="hot">Guesthouse's daemon</div>
+          <div>The host's GPU driver</div>
+          <div>Your graphics card</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="cards">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Cards</p>
+        <h2>Run on these, by me and by testers.</h2>
+        <p>Windows with the GPU has run on every card below. Other RTX 20 to 50 series and RX 5000 to 7000 cards should work too. Older cards like Polaris and the GTX 10 series, and datacentre cards, aren't handled.</p>
+      </div>
+      <div class="vendors">
+        <article class="vendor">
+          <h3>NVIDIA</h3>
+          <p>Turing to Blackwell, desktop and laptop. On Linux, with the open kernel modules.</p>
+          <div class="chips"><span>RTX 5090</span><span>RTX 5080</span><span>RTX 5060 Ti</span><span>RTX 4090</span><span>RTX 4080</span><span>RTX 3090</span><span>RTX 2080</span><span>GTX 1660 SUPER</span><span>RTX A5500 Laptop</span><span>RTX A1000 Laptop</span><span>RTX 3050 Laptop</span></div>
+        </article>
+        <article class="vendor">
+          <h3>AMD</h3>
+          <p>RDNA2 to RDNA4, and Ryzen graphics. On Linux, with amdgpu.</p>
+          <div class="chips"><span>RX 9070 XT</span><span>RX 7900 XTX</span><span>RX 7800 XT</span><span>RX 6900 XT</span><span>RX 6700 XT</span><span>RX 6700</span><span>RX 6600 XT</span><span>Radeon 610M</span></div>
+        </article>
+        <article class="vendor">
+          <h3>Intel</h3>
+          <p>An experiment, so far on one tester's PC.</p>
+          <div class="chips"><span>Arc B580</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Download</p>
+        <h2>Free, open source, and yours to read.</h2>
+        <p>Bring your own Windows or Ubuntu ISO. There are no NVIDIA, AMD or Microsoft files in Guesthouse: each guest uses the driver you already have.</p>
+      </div>
+      <div class="downloads">
+        <article class="platform">
+          <header><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-2.2 0-3.4 1.9-3.4 4.4 0 1.6-.6 2.6-1.6 4-1.3 1.8-2.5 3.8-2.5 6.1 0 .9.4 1.6 1.2 1.9M12 3c2.2 0 3.4 1.9 3.4 4.4 0 1.6.6 2.6 1.6 4 1.3 1.8 2.5 3.8 2.5 6.1 0 .9-.4 1.6-1.2 1.9"/><path d="M8.5 20.5c1-1 2.2-1.5 3.5-1.5s2.5.5 3.5 1.5"/><circle cx="10.5" cy="7.5" r=".6" fill="currentColor"/><circle cx="13.5" cy="7.5" r=".6" fill="currentColor"/></svg><h3>Linux</h3></header>
+          <p class="req">x86_64 Linux with KVM. For the GPU: an NVIDIA card with the open kernel modules, or an AMD card on amdgpu. Without one it still installs, for plain virtual machines.</p>
+          <div class="cmd">curl -fsSL https://raw.githubusercontent.com/xnixy/guesthouse/main/install.sh | sh</div>
+          <div class="files">
+            <a class="file" href="https://github.com/xnixy/guesthouse/blob/main/docs/install.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">What the script does</span><span class="meta">Step by step</span></a>
+            <a class="file" href="https://github.com/xnixy/guesthouse/releases/tag/v0.7.1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="name">Release 0.7.1</span><span class="meta">x86_64 · 106 MB</span></a>
+            <a class="file" href="https://github.com/xnixy/guesthouse/blob/main/docs/nixos.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">NixOS</span><span class="meta">Flake</span></a>
+          </div>
+          <p class="sums">The installer is meant to be read before you run it.</p>
+        </article>
+        <article class="platform">
+          <header><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5l7.5-1v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg><h3>Windows<small>Preview</small></h3></header>
+          <p class="req">Windows 11 Home or Pro, x64, with Virtual Machine Platform on (WSL 2 turns it on). A card whose driver offers GPU-PV. Not code-signed yet: if Windows says it protected your PC, choose More info, then Run anyway.</p>
+          <div class="files">
+            <a class="file" href="https://files.ruxn.com/p/guesthouse/guesthouse-setup-0.7.4.exe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="name">Guesthouse 0.7.4</span><span class="meta">Installer · 63.2 MB</span></a>
+            <a class="file" href="https://remoteman.ruxn.com"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">remoteman</span><span class="meta">Shows the guests' screens</span></a>
+          </div>
+          <p class="sums">SHA-256: <a href="https://files.ruxn.com/p/guesthouse/guesthouse-setup-0.7.4.exe.sha256">installer</a>. remoteman comes inside the installer.</p>
+        </article>
+      </div>
+
+      <div class="cta">
+        <h2>Try it on your card.</h2>
+        <p>The biggest gap is how few cards have run Guesthouse. Run it on yours and say how it went, in the issues or on Discord.</p>
+        <div class="actions">
+          <a class="button primary" href="https://discord.gg/rN3VARayZV">Join the Discord</a>
+          <a class="button ghost" href="https://github.com/xnixy/guesthouse/issues">Open an issue</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/icon.svg" alt="">Guesthouse</a>
+    <span>© 2026 xnixy · Free software, <a href="https://github.com/xnixy/guesthouse/blob/main/LICENSE">GPL-2.0-or-later</a> · <a href="https://github.com/xnixy/guesthouse">Source on GitHub</a></span>
+    <span class="right"><a href="https://discord.gg/rN3VARayZV">Discord</a> · <a href="mailto:x@ruxn.com">x@ruxn.com</a></span>
+    <span class="marks">A personal project, with nothing to do with NVIDIA, AMD or Microsoft. NVIDIA, GeForce, AMD, Radeon and Windows are trademarks of their owners.</span>
+  </div>
+</footer>
+</body>
+</html>

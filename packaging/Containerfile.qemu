@@ -14,5 +14,4 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
       libcap-ng-dev
 # What the AppImage's install window takes in, for a PC with no GTK or libadwaita yet. Nothing here is
 # built against them.
-RUN apt-get update && apt-get install -y --no-install-recommends libgtk-4-1 libadwaita-1-0 librsvg2-common \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libgtk-4-1 libadwaita-1-0 librsvg2-common

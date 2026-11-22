@@ -5,8 +5,10 @@
 //! [`crate::intel_desktop`].
 //!
 //! A machine that already has the display driver shows its picture first and is watched after,
-//! so nobody looks at a black screen for the length of the watch. One that still has to get the
-//! driver is watched first, as putting a driver into a desktop that is about to go helps nobody.
+//! so nobody looks at a black screen for the length of the watch. Its start is reported done once
+//! the picture is up, and the watch goes on behind it: see [`super::late_watch`]. One that still
+//! has to get the driver is watched first, as putting a driver into a desktop that is about to go
+//! helps nobody.
 //!
 //! A compositor that stays up is not yet a desktop: on a card where what it draws doesn't run, it
 //! lives on and shows nothing. So once the display is set up, the watch's last look is for a
@@ -103,24 +105,30 @@ fn look_script() -> String {
 }
 
 /// Whether this start put the desktop on an Intel card, so that it has to be watched.
-fn watched(task: &Task) -> bool {
+pub(super) fn watched(task: &Task) -> bool {
     task.machine.windows_maker() == Some(GpuMaker::Intel)
         && intel_desktop::for_start(task.context, &task.machine) == Desktop::Hardware
 }
 
-/// Looks until the guest has been up long enough, or the desktop has failed. A guest that stops
-/// answering is not taken as a failure on its own: the look after the GPU check decides. One whose
-/// VM has gone, as Windows shut down from its own menu does, is not looked at any longer, and the
-/// start says how it went.
+/// The watch as a step of the start.
 fn watch(task: &Task) -> Option<String> {
     task.step("Watching the desktop on the card");
+    looks(task, task.pid()?)
+}
+
+/// Looks until the guest has been up long enough, or the desktop has failed. A guest that stops
+/// answering is not taken as a failure on its own: the look after the GPU check decides. Once
+/// `qemu` has gone, as it does when Windows is shut down from its own menu, nothing more is looked
+/// at, and the start says how it went. Another VM in the slot is not this watch's either.
+pub(super) fn looks(task: &Task, qemu: u32) -> Option<String> {
     for attempt in 0..LOOKS {
         if attempt > 0 {
             task.sleep(POLL);
         }
+        if task.pid() != Some(qemu) {
+            return None;
+        }
         let Some(look) = Look::parse(&task.ask_guest(&look_script(), LOOK_SECONDS)) else {
-            // A VM that has gone is the end of the watch.
-            task.pid()?;
             continue;
         };
         if let Some(why) = look.failure() {
@@ -149,7 +157,7 @@ pub(super) fn picture_first(task: &Task) -> bool {
 }
 
 /// Whether the hardware desktop failed on this boot, and why. `gpu_missing` is the after-boot check
-/// having found no card. With `picture_first` the watch is left for [`failed_with_picture`].
+/// having found no card. With `picture_first` the watch is left for after the start.
 pub(super) fn failed(task: &Task, gpu_missing: bool, picture_first: bool) -> Option<String> {
     if !watched(task) {
         return None;
@@ -158,14 +166,6 @@ pub(super) fn failed(task: &Task, gpu_missing: bool, picture_first: bool) -> Opt
         return Some("Windows started without the card".to_owned());
     }
     if picture_first {
-        return None;
-    }
-    watch(task)
-}
-
-/// The watch of a start that showed its picture first, once the picture is up.
-pub(super) fn failed_with_picture(task: &Task) -> Option<String> {
-    if !watched(task) {
         return None;
     }
     watch(task)
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn a_watch_ends_once_the_vm_has_gone() {
+    fn a_watch_looks_at_nothing_once_the_vm_has_gone() {
         use crate::agent::stand_in::ScriptedAgent;
         use crate::vm_host::stand_in::RecordingHost;
         use std::sync::Arc;
@@ -266,7 +266,30 @@ mod tests {
         let host = RecordingHost::default();
         let task = Task::new(&context, &host, "start", intel);
         assert_eq!(watch(&task), None);
-        assert_eq!(agent.requests.lock().unwrap().len(), 1, "one look, and no more once QEMU is gone");
+        assert!(agent.requests.lock().unwrap().is_empty(), "no QEMU, no guest to ask");
+    }
+
+    #[test]
+    fn a_watch_stops_looking_when_another_vm_has_the_slot() {
+        use crate::agent::stand_in::ScriptedAgent;
+        use crate::vm_host::stand_in::RecordingHost;
+        use std::sync::Arc;
+        let scratch = crate::testing::Scratch::new();
+        let mut context = super::super::tests::plain_task_context(&scratch);
+        let young = format!("{MARK}20 0 1 0\r\n");
+        let agent = Arc::new(ScriptedAgent::answering(&[&young, &young, &young]));
+        context.agent = agent.clone();
+        super::super::tests::with_vm_running(&context);
+        let mut intel = super::super::tests::machine(&context);
+        intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");
+        crate::agent::make_token(&context, &intel).unwrap();
+        let host = RecordingHost::default();
+        let task = Task::new(&context, &host, "start", intel);
+        let qemu = task.pid().unwrap();
+        assert_eq!(looks(&task, qemu + 1), None);
+        assert!(agent.requests.lock().unwrap().is_empty(), "the VM in the slot is not the one watched");
+        assert_eq!(looks(&task, qemu), None, "a guest that stays young runs out of looks");
+        assert_eq!(agent.requests.lock().unwrap().len(), LOOKS as usize);
     }
 
     #[test]

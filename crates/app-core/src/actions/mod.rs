@@ -19,6 +19,7 @@ mod identity_switch;
 mod install;
 mod intel_device;
 mod intel_files;
+mod late_watch;
 mod macos;
 mod macos_install;
 mod nvme_move;
@@ -94,11 +95,21 @@ pub struct Task<'a> {
     /// The RAM a GPU machine starts with this time, when less than its own is free. The machine keeps
     /// its own, so the next start asks for all of it again.
     pub ram_this_run: Option<u32>,
+    /// The desktop on the card is still to be watched once the start is reported done.
+    watch_after_start: bool,
 }
 
 impl<'a> Task<'a> {
     pub fn new(context: &'a Context, host: &'a dyn VmHost, action: &str, machine: Machine) -> Self {
-        Self { context, host, action: action.to_owned(), machine, error: String::new(), ram_this_run: None }
+        Self {
+            context,
+            host,
+            action: action.to_owned(),
+            machine,
+            error: String::new(),
+            ram_this_run: None,
+            watch_after_start: false,
+        }
     }
 
     /// The machine as it starts this time.
@@ -278,10 +289,10 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
     if let Some(why) = hardware_desktop::no_picture(task) {
         return start_again_on_software_desktop(task, &why).map(|_| ());
     }
-    if picture_first && let Some(why) = hardware_desktop::failed_with_picture(task) {
-        return start_again_on_software_desktop(task, &why).map(|_| ());
-    }
-    finish_on_desktop(task)
+    finish_on_desktop(task)?;
+    // The picture is up, so the start is done, and the watch goes on behind it.
+    task.watch_after_start = picture_first && hardware_desktop::watched(task);
+    Ok(())
 }
 
 /// The settings and the card maker's files, which are all asked of the guest. A VM that has gone by
@@ -571,6 +582,9 @@ pub fn run_task(
     task.finish();
     keep_ended_run(context, action);
     let _ = writeln!(std::io::stdout(), "{} {action} finished", clock_text());
+    if result.is_ok() && task.watch_after_start {
+        late_watch::watch_after_start(&mut task);
+    }
     result
 }
 

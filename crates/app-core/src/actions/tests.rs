@@ -168,6 +168,37 @@ fn a_gpu_machine_starts_through_the_same_host_and_sets_up_its_desktop() {
 }
 
 #[test]
+fn a_start_with_less_ram_gives_the_vm_less_and_the_machine_keeps_its_own() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/display.ps1", "what the session sees");
+    let agent = Arc::new(ScriptedAgent::answering(&[
+        "3\n",
+        "gpu working 1\n",
+        "device missing",
+        "",
+        "screen basic 1920x1080 64 hdr 0",
+        "",
+        "screen 1920x1080\n",
+        "",
+        "screen basic 1920x1080 64 hdr 0",
+    ]));
+    context.agent = agent;
+    let vm = Machine { ram_gib: 6, ..machine(&context) };
+    crate::agent::make_token(&context, &vm).unwrap();
+    fs::create_dir_all(context.run_folder(None)).unwrap();
+    with_vm_running(&context);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm);
+    task.ram_this_run = Some(5);
+    boot(&mut task).unwrap();
+    assert_eq!(host.plans.lock().unwrap()[0].ram, "5G");
+    assert_eq!(task.machine.ram_gib, 6, "the next start asks for all of it again");
+    let note = smaller_start_note(5, 6);
+    assert!(note.starts_with("Only room for 5 GiB of RAM, so Windows has 5 GiB this time, not 6."), "{note}");
+}
+
+#[test]
 fn a_desktop_at_the_wrong_size_is_set_and_checked_again() {
     let scratch = Scratch::new();
     let mut context = plain_task_context(&scratch);

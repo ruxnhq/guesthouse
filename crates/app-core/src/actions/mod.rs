@@ -48,7 +48,7 @@ use crate::failure::{Failure, Result};
 use crate::gpu_identity::{PciIdentity, read_state};
 use crate::gpu_maker::GpuMaker;
 use crate::guest_memory::is_no_room;
-use crate::host::{GIB, cpu_list, fits_now, ram_limit_for, vcache_cpus};
+use crate::host::{GIB, cpu_list, fits_now, ram_limit_for, smaller_start, vcache_cpus};
 use crate::kept_logs;
 use crate::library::MAX_DISK_GIB;
 use crate::log::{clock_text, write_log};
@@ -89,11 +89,21 @@ pub struct Task<'a> {
     pub action: String,
     pub machine: Machine,
     pub error: String,
+    /// The RAM a GPU machine starts with this time, when less than its own is free. The machine keeps
+    /// its own, so the next start asks for all of it again.
+    pub ram_this_run: Option<u32>,
 }
 
 impl<'a> Task<'a> {
     pub fn new(context: &'a Context, host: &'a dyn VmHost, action: &str, machine: Machine) -> Self {
-        Self { context, host, action: action.to_owned(), machine, error: String::new() }
+        Self { context, host, action: action.to_owned(), machine, error: String::new(), ram_this_run: None }
+    }
+
+    /// The machine as it starts this time.
+    fn machine_this_run(&self) -> Machine {
+        let mut machine = self.machine.clone();
+        machine.ram_gib = self.ram_this_run.unwrap_or(machine.ram_gib);
+        machine
     }
 
     fn record(&self, pid: u32, step: &str) -> TaskRecord {
@@ -152,7 +162,7 @@ pub fn plan_for(context: &Context, machine: &Machine, boot: Boot) -> VmPlan {
 /// still short after that, the start says so.
 fn wait_for_memory(task: &Task) {
     let end = task.now() + MEMORY_WAIT;
-    let ram = u64::from(task.machine.ram_gib) * GIB;
+    let ram = u64::from(task.machine_this_run().ram_gib) * GIB;
     while fits_now(task.context, ram).is_some() && task.now() < end {
         task.sleep(KEY_POLL);
     }
@@ -175,14 +185,28 @@ pub fn start(task: &mut Task) -> Result<()> {
     if machine.has_gpu()
         && let Some(short) = fits_now(task.context, u64::from(machine.ram_gib) * GIB)
     {
-        return Err(Failure(short));
+        // Less than it wants is better than not starting at all.
+        task.ram_this_run = Some(smaller_start(task.context, machine.ram_gib).ok_or(Failure(short))?);
     }
     if !machine.has_gpu() {
         task.step("Starting the VM");
         let plan = plan_for(task.context, &machine, Boot::Plain { iso: machine.iso.clone() });
         return task.host.start(&plan, &machine);
     }
-    boot(task)
+    boot(task)?;
+    if let Some(gib) = task.ram_this_run {
+        let note = smaller_start_note(gib, machine.ram_gib);
+        task.error = [note.as_str(), &task.error].join(" ").trim().to_owned();
+    }
+    Ok(())
+}
+
+/// What a machine that started with less RAM than its own is told.
+pub fn smaller_start_note(gib: u32, own: u32) -> String {
+    format!(
+        "Only room for {gib} GiB of RAM, so Windows has {gib} GiB this time, not {own}. Close some programs \
+         before the next start to give it all {own}."
+    )
 }
 
 /// Starts a GPU machine. One that fails leaves nothing running, and says why.
@@ -216,8 +240,9 @@ fn start_gpu_vm(task: &mut Task) -> Result<PciIdentity> {
 }
 
 fn start_gpu_vm_once(task: &mut Task) -> Result<PciIdentity> {
-    let plan = plan_for(task.context, &task.machine, Boot::Gpu);
-    let started = task.host.start(&plan, &task.machine);
+    let machine = task.machine_this_run();
+    let plan = plan_for(task.context, &machine, Boot::Gpu);
+    let started = task.host.start(&plan, &machine);
     if started.is_err() && task.pid().is_none() {
         // The daemon and shared memory are still there.
         task.host.release()?;

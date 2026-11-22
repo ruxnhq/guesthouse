@@ -59,6 +59,14 @@ pub(crate) enum QueueChannel {
 }
 
 impl QueueChannel {
+    fn channel(&self) -> Option<&Channel> {
+        match self {
+            Self::Unusable => None,
+            Self::Ring { channel, .. } => Some(channel),
+            Self::List(list) => Some(&list.channel),
+        }
+    }
+
     pub(crate) fn close<R: Rm>(
         self,
         device: &mut crate::rm::device::Device<R>,
@@ -416,6 +424,7 @@ impl<R: Rm> NvidiaBackend<R> {
                 } else if let Some(queue) = self.queues.get_mut(&work.queue) {
                     queue.local_memory_tried = local_memory.is_some();
                     queue.channel = QueueChannel::Ring { channel, ring_address };
+                    self.give_sked_page(work.queue);
                 }
             }
             Err(error) => log::warn!("a channel failed: {error}"),
@@ -667,6 +676,7 @@ impl<R: Rm> NvidiaBackend<R> {
         }
         let usable = matches!(queue.channel, QueueChannel::List(_));
         self.queues.insert(work.queue, queue);
+        self.give_sked_page(work.queue);
         usable
     }
 
@@ -862,11 +872,29 @@ impl<R: Rm> NvidiaBackend<R> {
         self.local_window.forget(handle);
         self.pool_mirror.forget(handle);
         let Some(queue) = self.queues.remove(&handle) else { return };
-        if let Some(space) = self.spaces.get(&queue.space)
-            && let Err(error) = queue.channel.close(&mut self.device, space)
-        {
+        let Some(space) = self.spaces.get(&queue.space) else { return };
+        let page_down = self.sked_pages.queue_closing(&mut self.device, queue.space, space, handle);
+        if let Err(error) = queue.channel.close(&mut self.device, space) {
             log::warn!("closing queue {handle:#x}: {}", memory_error(error));
         }
+        if page_down {
+            let next = self.queues.iter().find(|(_, other)| {
+                other.space == queue.space
+                    && other.channel.channel().and_then(Channel::compute_object).is_some()
+            });
+            if let Some((&next, _)) = next {
+                self.give_sked_page(next);
+            }
+        }
+    }
+
+    /// Maps the queue's address space's SKED page from the queue's compute object, if the space has
+    /// none yet. See [`crate::sked_page`].
+    fn give_sked_page(&mut self, handle: u32) {
+        let Some(queue) = self.queues.get(&handle) else { return };
+        let Some(compute) = queue.channel.channel().and_then(Channel::compute_object) else { return };
+        let Some(space) = self.spaces.get(&queue.space) else { return };
+        self.sked_pages.give(&mut self.device, queue.space, space, handle, compute);
     }
 }
 

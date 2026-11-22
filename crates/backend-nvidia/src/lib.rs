@@ -32,6 +32,7 @@ mod ring_position;
 mod ring_request;
 pub mod rm;
 pub mod sensors;
+mod sked_page;
 pub mod staging;
 mod standard;
 pub mod startup;
@@ -84,8 +85,8 @@ const CLIENT_HINT_VULKAN: u32 = 4;
 const VIDEO_CONTEXT_WORD: usize = 0xD7C;
 
 const RECORD_QUEUE_TOKEN: usize = 0x40;
-const RECORD_QUEUE_HEAP: usize = 0x5C;
-const QUEUE_HEAP_SIZE: u64 = 1 << 32;
+/// Where the guest's driver reads the address its kernels launch work through.
+const RECORD_QUEUE_SKED_PAGE: usize = 0x5C;
 /// A queue that brings no ring of its own asks here how many entries a list it sends may have, and
 /// reads the answer from the second field. Direct3D 9 makes no device if it gets fewer than it asked.
 const QUEUE_LIST_ENTRIES_ASKED: usize = 0x14;
@@ -169,6 +170,8 @@ pub struct NvidiaBackend<R> {
     pub(crate) local_window: local_window::LocalWindow,
     /// Compute drivers' own pools, for their contexts' other channels.
     pub(crate) pool_mirror: local_window::PoolMirror,
+    /// Each address space's SKED page, and which channel's object backs it.
+    pub(crate) sked_pages: sked_page::SkedPages,
     /// The memory made last, which the private data finished next belongs to.
     last_memory: Option<MemoryId>,
     /// The host's live readings, if it has any.
@@ -284,6 +287,7 @@ impl<R: Rm> NvidiaBackend<R> {
             ring_moves: RingMoves::default(),
             local_window: local_window::LocalWindow::default(),
             pool_mirror: local_window::PoolMirror::default(),
+            sked_pages: sked_page::SkedPages::default(),
             last_memory: None,
             sensors: None,
             card_uuid,
@@ -436,8 +440,9 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     }
 
     fn create_address_space(&mut self, ranges: &[GpuRange]) -> Result<SpaceId, BackendError> {
-        let space =
-            self.device.create_address_space(&context_room::without_room(ranges)).map_err(memory_error)?;
+        let mut ranges = context_room::without_room(ranges);
+        ranges.push(sked_page::SKED_RANGE);
+        let space = self.device.create_address_space(&ranges).map_err(memory_error)?;
         let id = SpaceId(self.next_space);
         self.next_space += 1;
         self.spaces.insert(id, space);
@@ -446,6 +451,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn destroy_address_space(&mut self, space: SpaceId) {
         self.pool_mirror.forget_space(space);
+        self.sked_pages.forget_space(space);
         if let Some(space) = self.spaces.remove(&space)
             && let Err(error) = self.device.destroy_address_space(&space)
         {
@@ -524,7 +530,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         }
     }
 
-    /// Each queue gets a number of its own, which can't be zero, and the guest needs a heap size.
+    /// Each queue gets a number of its own, which can't be zero, and the address of its SKED page.
     fn finish_queue_data(&mut self, queue: u32, private: &mut [u8], serial: u32) -> Result<(), BackendError> {
         let too_short = || BackendError::new("a queue's private data is too short");
         match GuestRing::of_queue(private) {
@@ -536,8 +542,9 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         let token = serial.wrapping_add(1).max(1);
         let field = private.get_mut(RECORD_QUEUE_TOKEN..RECORD_QUEUE_TOKEN + 4).ok_or_else(too_short)?;
         field.copy_from_slice(&token.to_le_bytes());
-        let field = private.get_mut(RECORD_QUEUE_HEAP..RECORD_QUEUE_HEAP + 8).ok_or_else(too_short)?;
-        field.copy_from_slice(&QUEUE_HEAP_SIZE.to_le_bytes());
+        let field =
+            private.get_mut(RECORD_QUEUE_SKED_PAGE..RECORD_QUEUE_SKED_PAGE + 8).ok_or_else(too_short)?;
+        field.copy_from_slice(&sked_page::SKED_PAGE_ADDRESS.to_le_bytes());
         Ok(())
     }
 

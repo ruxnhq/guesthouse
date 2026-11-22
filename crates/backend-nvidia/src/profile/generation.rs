@@ -50,6 +50,8 @@ pub struct Generation {
     pub video_decode_class: u32,
     pub video_encode_class: u32,
     pub usermode_class: u32,
+    /// The compute class, one of `graphics_classes`. Its objects are what the RM maps as a SKED page.
+    pub compute_class: u32,
     /// What graphics channels bind, in subchannel order, which the guest's commands assume.
     pub graphics_classes: &'static [ChannelClass],
     /// The class of each object a guest's channel starts with.
@@ -113,6 +115,7 @@ pub const BLACKWELL: Generation = Generation {
     video_decode_class: 0xCFB0,
     video_encode_class: 0xCFB7,
     usermode_class: 0xC761,
+    compute_class: BLACKWELL_COMPUTE_B,
     graphics_classes: &[
         (BLACKWELL_B, 16),
         (BLACKWELL_COMPUTE_B, 16),
@@ -186,6 +189,7 @@ pub const ADA: Generation = Generation {
     video_decode_class: 0xC9B0,
     video_encode_class: 0xC9B7,
     usermode_class: 0xC561,
+    compute_class: ADA_COMPUTE_A,
     graphics_classes: &[
         (ADA_A, 16),
         (ADA_COMPUTE_A, 16),
@@ -218,6 +222,7 @@ pub const AMPERE: Generation = Generation {
     video_decode_class: 0xC7B0,
     video_encode_class: 0xC7B7,
     usermode_class: 0xC561,
+    compute_class: AMPERE_COMPUTE_B,
     graphics_classes: &[
         (AMPERE_B, 16),
         (AMPERE_COMPUTE_B, 16),
@@ -252,6 +257,7 @@ pub const TURING: Generation = Generation {
     video_decode_class: 0xC4B0,
     video_encode_class: 0xC4B7,
     usermode_class: 0xC461,
+    compute_class: TURING_COMPUTE_A,
     graphics_classes: &[
         (TURING_A, 16),
         (TURING_COMPUTE_A, 16),

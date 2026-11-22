@@ -155,6 +155,8 @@ pub struct Channel {
     channel: Handle,
     /// The object that runs deferred controls, which graphics channels have.
     deferred_api: Option<Handle>,
+    /// The compute object, which graphics channels have. The RM maps it as a SKED page.
+    compute: Option<Handle>,
     token: u32,
     ring_entries: u32,
     /// Words before the cache invalidate. Local memory setup stays out of the invalidate, so a
@@ -241,6 +243,7 @@ impl Channel {
         let channel = device.alloc(group, generation.channel_class, &mut params)?;
 
         let mut deferred_api = None;
+        let mut compute = None;
         let mut bind_with = Vec::with_capacity(classes.len());
         for (class, params) in &mut classes {
             let object = device.alloc(channel, *class, params)?;
@@ -248,6 +251,9 @@ impl Channel {
             if *class == DEFERRED_API {
                 deferred_api = Some(object);
                 binding = class_engine_id(device, channel, object).unwrap_or(*class);
+            }
+            if *class == generation.compute_class {
+                compute = Some(object);
             }
             bind_with.push(binding);
         }
@@ -280,6 +286,7 @@ impl Channel {
             group,
             channel,
             deferred_api,
+            compute,
             token: u32::from_le_bytes(token),
             ring_entries: place.ring_entries,
             setup_words,
@@ -287,6 +294,11 @@ impl Channel {
             local_memory: None,
             late_pool_words: None,
         })
+    }
+
+    /// The compute object, for a graphics channel.
+    pub fn compute_object(&self) -> Option<Handle> {
+        self.compute
     }
 
     /// A slice of its own for this channel's group. Only before the channel has been given work, as

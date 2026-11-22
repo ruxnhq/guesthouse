@@ -122,7 +122,7 @@ From amdgpu's counts in fdinfo, the two Windows guests had 49 % and 47 % of the 
 
 ## Things to know
 
-- **Don't install `qemu-utils`.** Guesthouse's messages suggest it on Debian, and on Proxmox it removes `proxmox-ve`, `pve-manager`, `pve-qemu-kvm` and `qemu-server`. Proxmox's own packages have `qemu-img` already.
+- **Don't install `qemu-utils`.** On Proxmox it removes `proxmox-ve`, `pve-manager`, `pve-qemu-kvm` and `qemu-server`. Proxmox's own packages have `qemu-img` already. Guesthouse's setup check named it on every Debian host up to 0.7.0. Since 0.7.1 it names a package only for a tool that's missing, so on Proxmox it doesn't.
 - **Landlock is off in Proxmox's kernel.** Without it Guesthouse won't start a GPU machine of its own unless the machine is allowed to run unjailed, and the guest has to be made and started with Guesthouse first. The host here runs with `lsm=landlock,lockdown,yama,integrity,apparmor` on the kernel's line, which is Proxmox's list with Landlock first. A daemon on a host without it wasn't tried.
 - **Proxmox doesn't count the guest's RAM.** It's a file in `/dev/shm`, so Proxmox shows a VM using under 100 MiB, while the whole of its RAM is taken from the start. Leave room for it yourself, and in `/dev/shm`, which is half the RAM by default.
 - **The three RAM sizes go together.** `memory:`, the `size=` of the RAM backend and `GUESTHOUSE_RAM`. The hookscript here refuses to start a VM when they differ, so what QEMU does then wasn't seen.

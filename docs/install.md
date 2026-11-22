@@ -34,7 +34,9 @@ It never installs or changes a GPU driver, kernel arguments or services. On an i
 
 Each release also has `guesthouse-VERSION-x86_64.AppImage`, for anyone who'd rather download one file than pipe a script. It isn't a second kind of install. It carries the same release, and `install.sh` from inside it, which does every step above except the download, and puts the release in the same place. So the app, its updates and `uninstall.sh` are the same whichever way it came. It needs no FUSE library.
 
-Opened from the file manager, it opens a terminal for the install, as the plan has to be shown and agreed to there, and `sudo` asks there too. Then it starts the app, and the terminal closes. Once this release or a newer one is installed, opening it again only starts the app, so it can be deleted after the first time. `Guesthouse.AppImage install --dry-run` shows the plan and stops, and `Guesthouse.AppImage uninstall` runs the installed `uninstall.sh`.
+Opened from the file manager, it shows Guesthouse's own install window. That's the same plan the script prints, as a page: what goes where, what needs root and why, the exact command, and what it found on this PC. Install runs it, a window asks for your password if a part needs root, and then the app starts. It installs in a terminal instead when the window can't open, because GTK or libadwaita isn't on the PC yet, and when you pick Use a Terminal.
+
+Started from a terminal, it installs in that terminal. Once this release or a newer one is installed, opening it again only starts the app, so it can be deleted after the first time. Updates come from the app, as for any install. `Guesthouse.AppImage install --dry-run` shows the plan and stops, and `Guesthouse.AppImage uninstall` runs the installed `uninstall.sh`.
 
 The app doesn't run from inside the AppImage. Its folder goes away when the AppImage stops, and a VM's QEMU has to keep running after the app closes. Check the AppImage against `SHA256SUMS` on the release, as nothing else checks it.
 

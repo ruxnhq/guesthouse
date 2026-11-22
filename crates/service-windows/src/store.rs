@@ -165,10 +165,7 @@ mod tests {
 
     #[test]
     fn the_account_is_read_as_prepare_writes_it() {
-        assert_eq!(
-            parse_account("user: guesthouse\npassword: x\n"),
-            Some(("guesthouse".into(), "x".into()))
-        );
+        assert_eq!(parse_account("user: guesthouse\npassword: x\n"), Some(("guesthouse".into(), "x".into())));
         assert_eq!(parse_account("user: guesthouse\n"), None);
         let store = store("account");
         store.make("win").unwrap();

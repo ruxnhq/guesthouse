@@ -58,7 +58,7 @@ let
     procps
     curl
   ];
-  version = "0.7.1";
+  version = "0.7.5";
   # One folder for everything the app finds by where its own program is, as it does with the guest files.
   home = "$out/lib/guesthouse";
 in
@@ -68,7 +68,7 @@ stdenvNoCC.mkDerivation {
 
   src = fetchurl {
     url = "https://github.com/ruxnhq/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
-    hash = "sha256-vMtUs9B4QOyCij7QIQSE4GBQpYhenqRRDboEnvn7/gg=";
+    hash = "sha256-vqSe5nbdgSimStnsF0CBv5DdZvdxMgDAeBM7XlrSwAk=";
   };
   sourceRoot = "guesthouse-${version}-x86_64";
 

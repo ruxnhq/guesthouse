@@ -38,7 +38,7 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 | **Windows hosts** · Windows 11 Home or Pro, no Hyper-V needed | **The app** · give it an ISO, and it installs the guest with its GPU |
 
 > [!NOTE]
-> **Early days.** Linux 0.7.1 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS guests are a [preview](docs/macos.md). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
+> **Early days.** Linux 0.7.5 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS guests are a [preview](docs/macos.md). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
 
 ## Install
 

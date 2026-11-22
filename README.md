@@ -79,10 +79,12 @@ On Windows 11, with Rust 1.95 or newer and Visual Studio's C++ build tools:
 
 ```powershell
 cargo test                               # everything but the app
+cargo build --release -p guesthouse-service -p guesthouse-host-windows
+.\target\release\guesthouse-service.exe run   # in an elevated prompt, until Ctrl+C
 cargo run -p guesthouse-app-windows      # the window, which asks the service for everything
 ```
 
-Cargo doesn't build everything a VM needs. On Linux that's the QEMU patch in `qemu/`, and on Windows the window needs the service running.
+The service is in `crates/service-windows`, and the serial relay it needs beside it comes from `crates/host-windows`. On Linux a VM also needs QEMU with the patch in `qemu/`, which cargo doesn't build.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest, and [ARCHITECTURE.md](ARCHITECTURE.md) explains how it fits together.
 

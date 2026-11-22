@@ -111,7 +111,7 @@ impl CardWork {
             left_marks: Vec::new(),
             last_look: None,
             blits: blits::Blits::new(card.main_gt().map_or(0, |gt| gt.ip.major)),
-            moves: moves::Moves::default(),
+            moves: moves::Moves::for_card(card.main_gt().map(|gt| gt.ip)),
             wake: wake::Wake::default(),
         })
     }

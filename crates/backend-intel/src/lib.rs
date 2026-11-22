@@ -746,8 +746,8 @@ impl Backend for IntelBackend {
         }
     }
 
-    /// By the copy engine where the card has `MEM_COPY`, and by the CPU otherwise (the module
-    /// `work::moves`). While listening nothing has written the video memory, so there is nothing
+    /// By the copy engine as the kernel moves a buffer, from Alchemist on, and by the CPU before
+    /// (the module `work::moves`). While listening nothing has written the video memory, so there is nothing
     /// to move.
     fn preserve_contents(
         &mut self,

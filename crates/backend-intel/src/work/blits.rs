@@ -342,12 +342,6 @@ impl CardWork {
         sent == 0 || self.xe.point_reached(done, sent, Duration::ZERO).unwrap_or(false)
     }
 
-    /// Whether the card's copy engine has `MEM_COPY`, as every Xe2 card does: the same cards whose
-    /// fast copy takes a cache index.
-    pub(super) fn has_mem_copy(&self) -> bool {
-        self.blits.mocs.is_some()
-    }
-
     /// The cache index the copy engine's copies use, where the card has one.
     pub(super) fn copy_mocs(&self) -> Option<u32> {
         self.blits.mocs

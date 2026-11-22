@@ -114,6 +114,8 @@ pub struct StandIn {
     pub busy_starts: u32,
     /// How many doorbells to come are refused for now, as a driver refusing a submission call.
     pub refused_rings: u32,
+    /// A time the next doorbell is refused until, once, as a backend that knows when work may run.
+    pub ring_not_before: Option<Instant>,
     /// Work rung in runs until the guest ends it.
     pub work_stays: bool,
     /// The commands the last submission named, as the core passed them on.
@@ -206,6 +208,7 @@ impl StandIn {
             wakes: 0,
             busy_starts: 0,
             refused_rings: 0,
+            ring_not_before: None,
             work_stays: false,
             last_commands: None,
             slots_in_guest_pages: false,
@@ -553,6 +556,9 @@ impl Backend for StandIn {
         if self.refused_rings > 0 {
             self.refused_rings -= 1;
             return Ok(Doorbell::NotYet);
+        }
+        if let Some(not_before) = self.ring_not_before.take() {
+            return Ok(Doorbell::NotBefore(not_before));
         }
         self.doorbells.push((queue, doorbell));
         Ok(if self.work_stays { Doorbell::RungToStay } else { Doorbell::Rung })

@@ -1,6 +1,6 @@
 use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::gpu_check::gpu_found;
-use super::guest_files::{place_driver_files, place_nvapi_wrapper, place_profile_store};
+use super::guest_files::{place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store};
 use super::guest_upload::stand_in::FilesGuest;
 use super::window_speed::apply_window_speed;
 use super::*;
@@ -800,6 +800,62 @@ fn an_intel_machine_is_given_the_loaders_from_the_drivers_list_out_of_intels_sto
     let asked = agent.requests.lock().unwrap();
     assert_eq!(asked.len(), 5, "the device key, the list, the count, the script and the run");
     assert!(asked[4].2.contains("-StoreFolder iigd_dch.inf_amd64_gpupv"), "{}", asked[4].2);
+}
+
+/// A machine on an AMD card whose driver has the media runtime, and a guest that answers as told.
+fn amd_runtime_machine(scratch: &Scratch, answers: &[&str]) -> (Context, Arc<ScriptedAgent>, Machine) {
+    let mut context = plain_task_context(scratch);
+    let files = ["amfrt64.dll", "amfrt32.dll"];
+    let folder = crate::setup::amd_system_files::stand_in::driver_with_runtime(scratch, &files);
+    crate::setup::amd::write_amd_setup(&context, &folder, "32.0.32015.12012").unwrap();
+    scratch.write("program/guest/nv-files.ps1", "copies files");
+    let agent = Arc::new(ScriptedAgent::answering(answers));
+    context.agent = agent.clone();
+    let mut amd = machine(&context);
+    amd.use_windows_card(GpuMaker::Amd, "0000:7c:00.0");
+    crate::agent::make_token(&context, &amd).unwrap();
+    (context, agent, amd)
+}
+
+#[test]
+fn an_amd_machine_is_given_the_media_runtime_in_its_system_folders_from_amds_store_folder() {
+    let scratch = Scratch::new();
+    let answers = ["", "missing 2\r\n", "", "copied System32\\amfrt64.dll\r\n"];
+    let (context, agent, amd) = amd_runtime_machine(&scratch, &answers);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", amd);
+    place_amd_runtime(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked.len(), 4, "the list, the count, the script and the run");
+    assert!(asked[0].2.contains(&crate::text::base64_encode(
+        b"System32\tamfrt64.dll\tamfrt64.dll\nSysWOW64\tamfrt32.dll\tamfrt32.dll\n"
+    )));
+    assert!(asked[3].2.contains("-StoreFolder amdxc.inf_amd64_gpupv"), "{}", asked[3].2);
+}
+
+#[test]
+fn an_amd_guest_that_has_the_media_runtime_is_only_asked_what_it_lacks() {
+    let scratch = Scratch::new();
+    let (context, agent, amd) = amd_runtime_machine(&scratch, &["", "missing 0\r\n"]);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", amd);
+    place_amd_runtime(&mut task).unwrap();
+    assert_eq!((task.error.as_str(), agent.requests.lock().unwrap().len()), ("", 2));
+}
+
+#[test]
+fn a_driver_with_no_media_runtime_is_said_and_the_guest_is_asked_nothing() {
+    let scratch = Scratch::new();
+    let (context, agent, amd) = amd_runtime_machine(&scratch, &[]);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", amd);
+    fs::remove_file(scratch.path("Display/WT6A_INF/B026716/amfrt64.dll")).unwrap();
+    fs::remove_file(scratch.path("Display/WT6A_INF/B026716/amfrt32.dll")).unwrap();
+    place_amd_runtime(&mut task).unwrap();
+    assert!(agent.requests.lock().unwrap().is_empty());
+    assert_eq!(task.error, "");
+    assert!(crate::log::read_log(&context).contains("no media runtime"));
 }
 
 #[test]

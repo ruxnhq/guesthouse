@@ -49,6 +49,9 @@ pub struct Config {
     pub limits: MemoryLimits,
     /// Tell the guest it may send without waiting. The guest reads this once, as it boots.
     pub async_messages: bool,
+    /// Tell the guest to keep a locked allocation's CPU view until the allocation is destroyed.
+    /// A lock's address never changes here, so this costs the host nothing.
+    pub keep_cpu_views: bool,
     /// The longest a copy to the screen waits for its frame, on the message thread.
     pub frame_wait: Duration,
     pub copy_order: CopyOrder,
@@ -59,7 +62,13 @@ impl Config {
     pub const FRAME_WAIT: Duration = Duration::from_millis(50);
 
     pub fn new(limits: MemoryLimits) -> Self {
-        Self { limits, async_messages: false, frame_wait: Self::FRAME_WAIT, copy_order: CopyOrder::Blocking }
+        Self {
+            limits,
+            async_messages: false,
+            keep_cpu_views: true,
+            frame_wait: Self::FRAME_WAIT,
+            copy_order: CopyOrder::Blocking,
+        }
     }
 }
 

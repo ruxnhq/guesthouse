@@ -324,6 +324,10 @@ pub enum Doorbell {
     RungToStay,
     /// The driver refused it for now. Nothing changed, and the same doorbell should be rung again.
     NotYet,
+    /// The backend won't let it run before this time. Nothing changed. The core rings the same
+    /// doorbell again once the time has come, holding the queue's later work behind it, and isn't
+    /// in a hurry meanwhile: the queue's other work and every other message go on as usual.
+    NotBefore(std::time::Instant),
 }
 
 /// Where a GPU address lies in memory shared with the guest.

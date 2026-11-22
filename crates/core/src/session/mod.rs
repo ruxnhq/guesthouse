@@ -161,6 +161,9 @@ pub struct Session<B, M> {
     /// What each process has asked to keep of each memory group, by (process, group).
     pub(crate) reservations: HashMap<(u32, u32), u64>,
     pub(crate) gates: HashMap<u32, Gate>,
+    /// Queues whose doorbell the backend won't take before a time, by queue. Their gate waits for
+    /// it without hurry.
+    pub(crate) rings_not_before: HashMap<u32, Instant>,
     /// The number of the next wait to join a line.
     pub(crate) next_wait: u64,
     /// Waits that hold more than one queue, by number.
@@ -230,7 +233,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     pub fn new(backend: B, memory: M, config: Config) -> Self {
         let gpu_addresses = GpuAddresses::keeping_clear(backend.kept_gpu_ranges())
-            .with_guest_only(backend.guest_placed_gpu_ranges());
+            .with_guest_only(backend.guest_placed_gpu_ranges())
+            .holding_freed(backend.hold_freed_gpu_addresses());
         Self {
             backend,
             memory,
@@ -267,6 +271,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             first_locks_waited: HashSet::new(),
             display_driver_seen: false,
             gates: HashMap::new(),
+            rings_not_before: HashMap::new(),
             queues_made: 0,
             statistics_refused: false,
             unknown_commands: HashSet::new(),

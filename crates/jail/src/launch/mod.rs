@@ -25,7 +25,7 @@ use crate::{Plan, filters, landlock};
 use std::ffi::OsString;
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const END_OF_PLAN: &str = "--";
@@ -210,7 +210,9 @@ impl Launch {
             return error;
         }
         let (program, arguments) = self.program.split_first().expect("parse makes sure there's a program");
-        Command::new(program).args(arguments).exec()
+        let error = Command::new(program).args(arguments).exec();
+        // A missing loader or library gives the same error as a missing program, so say which one.
+        io::Error::new(error.kind(), format!("{} couldn't start: {error}", Path::new(program).display()))
     }
 
     fn jail(&self, plan: &Plan) -> io::Result<()> {

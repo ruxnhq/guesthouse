@@ -15,7 +15,7 @@
 use crate::ioctl::{self, call, get64, put32, put64};
 use crate::memory::GemHandle;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 // Context op and offsets.
 const CTX_OP_ALLOC: u32 = 1;
@@ -145,6 +145,15 @@ impl Syncobj {
         put32(&mut request, EVENTFD_FD, event.as_raw_fd() as u32);
         ioctl::drm_ioctl(file, call::syncobj_eventfd(), &mut request)?;
         Ok(event)
+    }
+
+    /// Has the kernel add one to the eventfd `event` when this sync object is signalled. Several
+    /// sync objects can post to the same eventfd.
+    pub fn post_to(&self, file: &impl AsRawFd, event: RawFd) -> io::Result<()> {
+        let mut request = [0u8; EVENTFD_REQUEST_SIZE];
+        put32(&mut request, EVENTFD_HANDLE, self.handle);
+        put32(&mut request, EVENTFD_FD, event as u32);
+        ioctl::drm_ioctl(file, call::syncobj_eventfd(), &mut request)
     }
 
     /// Whether the kernel has signalled it, without waiting. A submission must have named it.

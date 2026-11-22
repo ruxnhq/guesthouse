@@ -19,6 +19,13 @@ const GUEST_ADAPTER_ID_AT: usize = HEADER_SIZE + 8;
 /// waiting for each reply. Needs interface version 40.
 pub const ASYNC_MESSAGES: u32 = 0x40;
 
+/// Set in the identity answer to have the guest keep the CPU view of a locked allocation until the
+/// allocation goes, instead of taking it away at the last unlock, as a native driver's memory manager
+/// does. Programs and drivers that read through a pointer after unlocking need it. The guest then
+/// sends every lock and uses only the first answer's address, which the host keeps for the
+/// allocation's life. Needs interface version 0x21.
+pub const KEEP_CPU_VIEWS: u32 = 0x20;
+
 const DESCRIPTION_CHARS: usize = 80;
 const HARDWARE_ID_CHARS: usize = 260;
 

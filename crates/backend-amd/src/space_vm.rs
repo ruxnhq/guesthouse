@@ -18,9 +18,12 @@ use crate::run_wait::{self, Patience, Waited};
 use crate::share::{RunTimes, Share};
 use crate::submit::{self, Context, Ib, Syncobj};
 use crate::video_ib::{self, Copied, VideoIb};
+use crate::video_runs::{Retired, VideoRuns};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io;
+use std::os::fd::RawFd;
+use std::time::Instant;
 
 /// Which buffers a space has taken in, and its mappings of them. Kept apart from the files so the
 /// counting can be tested without a card.
@@ -144,17 +147,20 @@ pub struct SpaceVm {
     faults: fault::Watch,
     /// The command buffers that have the card write a fence, made on first use.
     fence_ibs: Option<FenceIbs>,
-    /// The daemon's copy of the video commands being run here, made on first use.
+    /// The daemon's copies of the video commands run here, made on first use.
     video_ib: Option<VideoIb>,
-    /// A run from that buffer was sent and never seen to end, so the card may still read it. It is
-    /// not written again, and no more video work is run here: see [`Self::run_video`].
-    video_in_doubt: bool,
-    /// Whether that has been said yet, as it is said once.
-    video_refusal_said: bool,
+    /// The video runs on the card, and the places in that buffer they hold.
+    video_runs: VideoRuns<Syncobj>,
     /// The runs sent without waiting that the kernel hasn't been seen to retire, oldest first.
     on_card: VecDeque<OnCard>,
     /// The fences of runs seen to retire since they were last asked for.
     retired: Vec<GuestFence>,
+    /// The video runs seen to retire since they were last asked for.
+    video_retired: Vec<Retired>,
+    /// When a video run here was last seen to retire.
+    video_last_retired: Option<Instant>,
+    /// Whether amdgpu refused to post a run's end to the daemon's eventfd, which is said once.
+    video_wake_failed: bool,
     /// How each engine family gives way to the card's other users, see [`crate::share`].
     shares: HashMap<u32, Share>,
     /// How fast the card's clock runs, to read the times runs note.
@@ -190,9 +196,12 @@ pub enum Ran {
     Refused,
     /// The kernel neither finished nor reset it in time.
     Hung,
-    /// Work here reached an address with nothing mapped, in this run or an earlier one. Nothing
-    /// more is run here.
+    /// This run reached an address with nothing mapped, or amdgpu recorded such a fault for the
+    /// space while it ran. Nothing more is run here.
     Faulted(Fault),
+    /// Nothing was sent, as work here had already faulted in an earlier run. amdgpu keeps a space's
+    /// last fault, so the fault is that earlier run's, not this one's.
+    Stopped(Fault),
 }
 
 /// A run's command buffers with the slot's clock notes around them: one first, and one last, after
@@ -220,10 +229,12 @@ impl SpaceVm {
             faults: fault::Watch::default(),
             fence_ibs: None,
             video_ib: None,
-            video_in_doubt: false,
-            video_refusal_said: false,
+            video_runs: VideoRuns::default(),
             on_card: VecDeque::new(),
             retired: Vec::new(),
+            video_retired: Vec::new(),
+            video_last_retired: None,
+            video_wake_failed: false,
             shares: HashMap::new(),
             clock_khz: device.info().counter_freq_khz,
         })
@@ -267,67 +278,129 @@ impl SpaceVm {
         ibs: &[Ib],
         patience: Patience,
     ) -> io::Result<Ran> {
-        self.run_with(ip_type, queue, ibs, None, patience)
+        only_copies_for_the_video_ring(ip_type, ibs)?;
+        if let Some(fault) = self.faults.look(&self.file) {
+            return Ok(Ran::Stopped(fault));
+        }
+        let ran = self.submit_and_wait(ip_type, queue, ibs, patience);
+        match (ran, self.faults.look(&self.file)) {
+            (Ok(Ran::Retired), Some(fault)) => Ok(Ran::Faulted(fault)),
+            (ran, _) => ran,
+        }
     }
 
-    /// Runs a copy of a guest's video commands on the card's video ring, and waits for it as
-    /// [`Self::run`] does. The copy is written into a buffer of the daemon's own here, made at the
-    /// first run: see [`crate::video_ib`] for why the guest's own buffers are never run there.
+    /// Copies a submission's video commands into a free place of the daemon's video buffer here,
+    /// made at the first: see [`crate::video_ib`] for why the guest's own buffers are never run on
+    /// the video ring. Returns the place, or `None` while every place's run is still on the card.
     /// `alignment` is the card's for a new buffer.
-    ///
-    /// The one buffer is written again for each run, so a run has to be over before the next. One
-    /// that was sent and not seen to end, because it hung past the daemon's patience or the wait
-    /// for it failed, may still be read by the card, with its own lengths. Writing the next run's
-    /// commands over it would have the card run a mix of the two. So from then on nothing is
-    /// written and no video work is run here: see [`Self::video_stopped`].
-    pub fn run_video(
-        &mut self,
-        alignment: u64,
-        queue: u32,
-        copied: &Copied,
-        patience: Patience,
-    ) -> io::Result<Ran> {
-        if self.video_in_doubt {
-            return Err(io::Error::other(VIDEO_STOPPED));
-        }
+    pub fn place_video(&mut self, alignment: u64, copied: &Copied) -> io::Result<Option<usize>> {
+        self.take_back_video(Instant::now());
         if self.video_ib.is_none() {
             let made = VideoIb::make(&self.file, alignment)
                 .map_err(|error| step("making the buffer for video commands", error))?;
             self.video_ib = Some(made);
         }
-        let ib = self.video_ib.as_mut().expect("made above");
-        ib.write(copied);
-        let own = ib.handle();
-        self.run_with(HW_IP_VCN_ENC, Some(queue), copied.runs(), Some(own), patience)
+        let Some(slot) = self.video_runs.take_slot() else { return Ok(None) };
+        self.video_ib.as_mut().expect("made above").write(slot, copied);
+        Ok(Some(slot))
     }
 
-    /// Whether video work is no longer run here, as an earlier run was sent and never seen to end.
-    pub fn video_stopped(&self) -> bool {
-        self.video_in_doubt
+    /// Frees a place in the video buffer whose run won't be sent.
+    pub fn drop_video_slot(&mut self, slot: usize) {
+        self.video_runs.give_back(slot);
     }
 
-    /// True the first time it is asked, for a warning that is to be said once for this space.
-    pub fn first_video_refusal(&mut self) -> bool {
-        !std::mem::replace(&mut self.video_refusal_said, true)
-    }
-
-    /// [`Self::run`], with a buffer of the daemon's own here that the run reads its commands from.
-    fn run_with(
+    /// Sends the video commands in `slot` to the card's video ring, laid out as `runs`, and doesn't
+    /// wait for them. The run keeps its place until the kernel says it has retired, and the host
+    /// then writes `fence`, if there is one: see [`Self::take_retired_video`]. A run that amdgpu
+    /// refuses for now (`WouldBlock`) or at all keeps its place too, for the caller to send again
+    /// or give back.
+    pub fn send_video(
         &mut self,
-        ip_type: u32,
-        queue: Option<u32>,
-        ibs: &[Ib],
-        own: Option<GemHandle>,
-        patience: Patience,
-    ) -> io::Result<Ran> {
-        only_copies_for_the_video_ring(ip_type, ibs)?;
+        slot: usize,
+        runs: &[Ib],
+        queue: u32,
+        fence: Option<GuestFence>,
+        wake: Option<RawFd>,
+        now: Instant,
+    ) -> io::Result<()> {
+        only_copies_for_the_video_ring(HW_IP_VCN_ENC, runs)?;
+        // As in `run`: nothing more is sent to a space whose work has faulted. amdgpu keeps the
+        // space's last fault, so it is an earlier run's, and this run is not sent rather than faulted.
         if let Some(fault) = self.faults.look(&self.file) {
-            return Ok(Ran::Faulted(fault));
+            return Err(io::Error::other(format!(
+                "work here reached {:#x} earlier, where nothing is mapped (fault status {:#x}), so nothing \
+                 more is sent",
+                fault.address, fault.status
+            )));
         }
-        let ran = self.submit_and_wait(ip_type, queue, ibs, own, patience);
-        match (ran, self.faults.look(&self.file)) {
-            (Ok(Ran::Retired), Some(fault)) => Ok(Ran::Faulted(fault)),
-            (ran, _) => ran,
+        let Some(own) = self.video_ib.as_ref().map(VideoIb::handle) else {
+            return Err(io::Error::other("no buffer for video commands was made here"));
+        };
+        let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
+        // The guest doesn't say which buffers the work uses, so it may use any mapped here.
+        let mut buffers = self.books.handles();
+        buffers.push(own);
+        let submitted = self.contexts.submit(&self.file, HW_IP_VCN_ENC, Some(queue), |context| {
+            submit::submit_all(&self.file, context, HW_IP_VCN_ENC, runs, &buffers, &retired).map(|_| ())
+        });
+        match submitted {
+            Ok(()) => {
+                // Without it the run is still seen to retire at the next poll.
+                if let Some(wake) = wake
+                    && let Err(error) = retired.post_to(&self.file, wake)
+                    && !std::mem::replace(&mut self.video_wake_failed, true)
+                {
+                    log::debug!(
+                        "amdgpu won't post a video run's end to an eventfd ({error}), so it is polled"
+                    );
+                }
+                self.video_runs.sent(slot, retired, queue, fence, now);
+                Ok(())
+            }
+            Err(error) => {
+                retired.destroy(&self.file);
+                Err(error)
+            }
+        }
+    }
+
+    /// The video runs the kernel has retired since this was last asked, with the fence the host is
+    /// to write for each. The kernel says a run it reset has retired too.
+    pub fn take_retired_video(&mut self, now: Instant) -> Vec<Retired> {
+        self.take_back_video(now);
+        std::mem::take(&mut self.video_retired)
+    }
+
+    /// Whether any video run of this space is on the card.
+    #[cfg(test)]
+    pub fn video_on_card(&self) -> bool {
+        self.video_runs.any_on_card()
+    }
+
+    /// Looks at the video runs here: whether any is still on the card after those the kernel has
+    /// retired are taken off, and when one was last seen to retire. The fences of those taken off
+    /// wait for [`Self::take_retired_video`].
+    pub fn video_state(&mut self, now: Instant) -> (bool, Option<Instant>) {
+        self.take_back_video(now);
+        (self.video_runs.any_on_card(), self.video_last_retired)
+    }
+
+    /// Frees the places of the video runs the kernel says have retired, and keeps what to say of
+    /// them for [`Self::take_retired_video`].
+    fn take_back_video(&mut self, now: Instant) {
+        if !self.video_runs.any_on_card() {
+            return;
+        }
+        let file = &self.file;
+        // A sync object that can't be asked about is one the kernel has no run for.
+        let retired = self.video_runs.retire(|signal| signal.signalled(file).unwrap_or(true), now);
+        if !retired.is_empty() {
+            self.video_last_retired = Some(now);
+        }
+        for (signal, run) in retired {
+            signal.destroy(file);
+            self.video_retired.push(run);
         }
     }
 
@@ -336,32 +409,25 @@ impl SpaceVm {
         ip_type: u32,
         queue: Option<u32>,
         ibs: &[Ib],
-        own: Option<GemHandle>,
         patience: Patience,
     ) -> io::Result<Ran> {
         let signal = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
-        let mut buffers = self.books.handles();
-        buffers.extend(own);
+        let buffers = self.books.handles();
         let submitted = self.contexts.submit(&self.file, ip_type, queue, |context| {
             submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &signal).map(|_| ())
         });
         let ran = match submitted {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(Ran::Refused),
             Err(error) => Err(step("submitting", error)),
-            Ok(()) => {
-                let waited = signal
-                    .arm_eventfd(&self.file)
-                    .map_err(|error| step("arming the eventfd", error))
-                    .and_then(|event| run_wait::wait_for_run(&event, patience, ip_type))
-                    .map(|waited| match waited {
-                        Waited::Retired { .. } => Ran::Retired,
-                        Waited::Hung => Ran::Hung,
-                    });
-                // The card reads the daemon's video buffer for as long as the run is on it.
-                self.video_in_doubt |= own.is_some() && may_still_be_on_the_card(&waited);
-                waited
-            }
+            Ok(()) => signal
+                .arm_eventfd(&self.file)
+                .map_err(|error| step("arming the eventfd", error))
+                .and_then(|event| run_wait::wait_for_run(&event, patience, ip_type))
+                .map(|waited| match waited {
+                    Waited::Retired { .. } => Ran::Retired,
+                    Waited::Hung => Ran::Hung,
+                }),
         };
         signal.destroy(&self.file);
         ran
@@ -408,7 +474,8 @@ impl SpaceVm {
         // As in `run`: nothing more is sent to a space whose work has faulted.
         if let Some(fault) = self.faults.look(&self.file) {
             return Err(io::Error::other(format!(
-                "work here reached {:#x}, where nothing is mapped (fault status {:#x}), so nothing more is sent",
+                "work here reached {:#x} earlier, where nothing is mapped (fault status {:#x}), so nothing \
+                 more is sent",
                 fault.address, fault.status
             )));
         }
@@ -455,6 +522,8 @@ impl SpaceVm {
     /// Forgets the fences of a queue that has gone.
     pub fn forget_queue(&mut self, queue: u32) {
         self.contexts.forget_queue(queue);
+        self.video_runs.forget_queue(queue);
+        self.video_retired.retain(|run| run.queue != queue);
         self.retired.retain(|fence| fence.queue != queue);
         for run in &mut self.on_card {
             run.fence = run.fence.filter(|fence| fence.queue != queue);
@@ -580,9 +649,6 @@ fn step(doing: &str, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{doing}: {error}"))
 }
 
-/// Why video work isn't run in a space whose video buffer is in doubt.
-const VIDEO_STOPPED: &str = "an earlier video run here was sent and never seen to end, so the buffer its \
-                             commands are in is not written again";
 /// Why a command buffer a guest placed isn't sent to the video ring.
 const NOT_A_COPY: &str = "the video ring is only given the daemon's copy of a guest's commands";
 
@@ -595,12 +661,6 @@ fn only_copies_for_the_video_ring(ip_type: u32, ibs: &[Ib]) -> io::Result<()> {
         return Err(io::Error::other(NOT_A_COPY));
     }
     Ok(())
-}
-
-/// Whether a run that was sent may still be on the card: when it ended any way but with the kernel
-/// saying it retired, which it also says of a run it reset.
-fn may_still_be_on_the_card(waited: &io::Result<Ran>) -> bool {
-    !matches!(waited, Ok(Ran::Retired))
 }
 
 #[cfg(test)]
@@ -622,10 +682,12 @@ mod tests {
             faults: fault::Watch::default(),
             fence_ibs: None,
             video_ib: None,
-            video_in_doubt: false,
-            video_refusal_said: false,
+            video_runs: VideoRuns::default(),
             on_card: VecDeque::new(),
             retired: Vec::new(),
+            video_retired: Vec::new(),
+            video_last_retired: None,
+            video_wake_failed: false,
             shares: HashMap::new(),
             clock_khz: 100_000,
         }
@@ -657,7 +719,8 @@ mod tests {
             |ibs: &[Ib]| only_copies_for_the_video_ring(HW_IP_VCN_ENC, ibs).unwrap_err().to_string();
         assert_eq!(refused(&[GUESTS]), NOT_A_COPY);
         assert_eq!(refused(&[COPY, GUESTS]), NOT_A_COPY, "one guest buffer among copies");
-        let past_the_end = Ib { address: video_ib::ADDRESS + video_ib::BYTES as u64 - 4, bytes: 8 };
+        let end = video_ib::ADDRESS + (video_ib::SLOTS * video_ib::BYTES) as u64;
+        let past_the_end = Ib { address: end - 4, bytes: 8 };
         assert_eq!(refused(&[past_the_end]), NOT_A_COPY);
         assert!(only_copies_for_the_video_ring(HW_IP_VCN_ENC, &[COPY, COPY]).is_ok());
         // The other engines run a guest's buffers where they lie, as before.
@@ -667,42 +730,49 @@ mod tests {
     }
 
     #[test]
-    fn neither_way_of_sending_work_gives_the_video_ring_a_guests_buffer() {
+    fn no_way_of_sending_work_gives_the_video_ring_a_guests_buffer() {
         let mut space = space_without_a_card();
         let waited = space.run(HW_IP_VCN_ENC, Some(1), &[GUESTS], Patience::RUN);
         assert_eq!(waited.unwrap_err().to_string(), NOT_A_COPY);
         let fence = GuestFence { queue: 1, address: 0x1000, value: 1 };
         let sent = space.send(HW_IP_VCN_ENC, &[GUESTS, COPY], 0, fence);
         assert_eq!(sent.unwrap_err().to_string(), NOT_A_COPY);
-        // Refused before the kernel was asked anything, so nothing here is in doubt.
-        assert!(!space.video_stopped());
+        let sent = space.send_video(0, &[COPY, GUESTS], 1, Some(fence), None, Instant::now());
+        assert_eq!(sent.unwrap_err().to_string(), NOT_A_COPY);
+        // Refused before the kernel was asked anything, so nothing is on the card.
+        assert!(!space.video_on_card());
     }
 
     #[test]
-    fn a_run_is_over_only_when_the_kernel_says_it_retired() {
-        assert!(!may_still_be_on_the_card(&Ok(Ran::Retired)));
-        assert!(may_still_be_on_the_card(&Ok(Ran::Hung)));
-        assert!(may_still_be_on_the_card(&Err(io::Error::other("arming the eventfd"))));
+    fn a_space_that_faulted_before_sends_nothing_and_says_the_fault_was_earlier() {
+        use crate::info::HW_IP_DMA;
+        let earlier = Fault { address: 0x1000, status: 0xf4_3a51 };
+        let mut space = space_without_a_card();
+        space.faults = fault::Watch::having_found(earlier);
+        // The file has no card behind it, so a run that got as far as the kernel would fail.
+        let ran = space.run(HW_IP_DMA, Some(1), &[GUESTS], Patience::RUN).unwrap();
+        assert_eq!(ran, Ran::Stopped(earlier));
+        // Video runs aren't waited for: one is refused as not sent, with the earlier fault.
+        let sent = space.send_video(0, &[COPY], 1, None, None, Instant::now());
+        assert_eq!(
+            sent.unwrap_err().to_string(),
+            "work here reached 0x1000 earlier, where nothing is mapped (fault status 0xf43a51), so nothing \
+             more is sent"
+        );
+        assert!(!space.video_on_card());
     }
 
     #[test]
-    fn no_video_work_is_run_once_a_video_run_was_never_seen_to_end() {
+    fn video_commands_are_sent_only_from_a_buffer_that_was_made() {
         let mut copied = Copied::default();
         copied.place(8, 256).unwrap().copy_from_slice(&[0x8, 0x1]);
         let mut space = space_without_a_card();
-        // Nothing was sent yet: the run fails making its buffer, and the space isn't stopped by that.
-        let failed = space.run_video(0x1000, 1, &copied, Patience::RUN).unwrap_err().to_string();
+        let failed = space.place_video(0x1000, &copied).unwrap_err().to_string();
         assert!(failed.starts_with("making the buffer for video commands: "), "{failed}");
-        assert!(!space.video_stopped());
-
-        space.video_in_doubt = true;
-        assert!(space.video_stopped());
-        let refused = space.run_video(0x1000, 1, &copied, Patience::RUN).unwrap_err().to_string();
-        assert_eq!(refused, VIDEO_STOPPED);
-        assert!(space.video_ib.is_none(), "nothing was made or written");
-        assert!(space.first_video_refusal(), "said the first time");
-        assert!(!space.first_video_refusal() && !space.first_video_refusal(), "and not again");
-        assert!(space.video_stopped());
+        let sent = space.send_video(0, &copied.runs_in(0), 1, None, None, Instant::now());
+        assert_eq!(sent.unwrap_err().to_string(), "no buffer for video commands was made here");
+        assert!(!space.video_on_card());
+        assert!(space.take_retired_video(Instant::now()).is_empty());
     }
 
     #[test]

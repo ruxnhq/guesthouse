@@ -10,8 +10,10 @@
 //! like any other work.
 //!
 //! Each address space has a buffer of its own for the copy, as it has for its fence writers, so
-//! one guest process's commands are never mapped where another's work could read them. A run is
-//! waited for before the next is written, so one buffer is enough.
+//! one guest process's commands are never mapped where another's work could read them. Video runs
+//! aren't waited for, so the buffer has [`SLOTS`] places of [`BYTES`] each, one for each run that
+//! can be on the card at once. A run's place is written again only once the kernel says that run
+//! has retired, as the card reads the commands for as long as it is on it.
 
 use crate::device::Mapping;
 use crate::memory::{self, CpuAccess, DOMAIN_GTT, GemHandle, MapFlags, MemoryType};
@@ -23,19 +25,31 @@ use std::io;
 /// Where the buffer sits in a space: in the gap between the core's two ranges, where the guest can
 /// never place anything, after the copy commands' buffer and before the fence writers.
 pub const ADDRESS: u64 = 0x1_0008_0000;
-/// Room for one submission's commands. A guest's driver has sent 4 KiB at most.
+/// Room for one submission's commands: one place in the buffer. A guest's driver has sent 4 KiB
+/// at most.
 pub const BYTES: usize = 0x1_0000;
+/// How many video runs of one space can be on the card at once, each in a place of its own. An
+/// encoder keeps a frame or two ahead.
+pub const SLOTS: usize = 8;
+/// The whole buffer.
+const ALL_BYTES: usize = SLOTS * BYTES;
 
 const _: () = {
     assert!(copy_ib::ADDRESS + copy_ib::BYTES as u64 <= ADDRESS);
-    assert!(ADDRESS + BYTES as u64 <= fence_ib::ADDRESS);
+    assert!(ADDRESS + ALL_BYTES as u64 <= fence_ib::ADDRESS);
 };
 
 /// Whether a command buffer lies inside the daemon's buffer in a space, where a guest can place
 /// nothing. What the video ring is given must.
 pub fn holds(ib: &Ib) -> bool {
     let end = ib.address.checked_add(u64::from(ib.bytes));
-    ib.address >= ADDRESS && end.is_some_and(|end| end <= ADDRESS + BYTES as u64)
+    ib.address >= ADDRESS && end.is_some_and(|end| end <= ADDRESS + ALL_BYTES as u64)
+}
+
+/// Where a place in the buffer starts, counted from the buffer's start.
+fn slot_start(slot: usize) -> usize {
+    debug_assert!(slot < SLOTS, "no such place");
+    slot * BYTES
 }
 
 /// Why a command buffer can't be copied, for the log.
@@ -82,9 +96,17 @@ impl Copied {
         &self.words
     }
 
-    /// The command buffers as the card is to run them: where each is in a space, and its length.
+    /// The command buffers as they are laid out in the buffer's first place: where each is in a
+    /// space, and its length.
+    #[cfg(test)]
     pub fn runs(&self) -> &[Ib] {
         &self.runs
+    }
+
+    /// The command buffers as the card is to run them from place `slot`.
+    pub fn runs_in(&self, slot: usize) -> Vec<Ib> {
+        let shift = slot_start(slot) as u64;
+        self.runs.iter().map(|run| Ib { address: run.address + shift, bytes: run.bytes }).collect()
     }
 
     /// Each command buffer's dwords, in order.
@@ -106,9 +128,9 @@ pub struct VideoIb {
 
 impl VideoIb {
     /// Makes the buffer and maps it at [`ADDRESS`]. The card only reads it, and uncached, as the
-    /// CPU writes it again for each run.
+    /// CPU writes its places again for later runs.
     pub fn make(file: &File, alignment: u64) -> io::Result<Self> {
-        let size = (BYTES as u64).next_multiple_of(alignment.max(1));
+        let size = (ALL_BYTES as u64).next_multiple_of(alignment.max(1));
         let handle = memory::create(file, size, alignment, DOMAIN_GTT, CpuAccess::Required)?;
         let flags =
             MapFlags { readable: true, writable: false, executable: true, memory_type: MemoryType::Uncached };
@@ -128,10 +150,10 @@ impl VideoIb {
         self.handle
     }
 
-    /// Writes a submission's commands at the buffer's start. They fit, as [`Copied::place`] takes
-    /// no more than [`BYTES`].
-    pub fn write(&mut self, copied: &Copied) {
-        self.view.write_dwords(copied.words());
+    /// Writes a submission's commands into place `slot`, which no run on the card may be reading.
+    /// They fit, as [`Copied::place`] takes no more than [`BYTES`].
+    pub fn write(&mut self, slot: usize, copied: &Copied) {
+        self.view.write_dwords_at(slot_start(slot), copied.words());
     }
 }
 
@@ -205,7 +227,7 @@ mod tests {
         placed(&mut copied, &[1; 3]);
         copied.place(BYTES as u32 - 256, START).unwrap();
         assert!(copied.runs().iter().all(holds), "every run a copy is laid out as");
-        let end = ADDRESS + BYTES as u64;
+        let end = ADDRESS + ALL_BYTES as u64;
         assert!(holds(&Ib { address: end - 4, bytes: 4 }));
         for outside in [
             Ib { address: ADDRESS - 4, bytes: 8 },
@@ -216,6 +238,21 @@ mod tests {
         ] {
             assert!(!holds(&outside), "{outside:?}");
         }
+    }
+
+    #[test]
+    fn each_place_lies_inside_the_buffer_and_a_copy_is_run_from_the_place_it_was_written_to() {
+        let mut copied = Copied::default();
+        placed(&mut copied, &[1; 3]);
+        placed(&mut copied, &[2; 2]);
+        assert_eq!(copied.runs_in(0), copied.runs());
+        let last = copied.runs_in(SLOTS - 1);
+        let base = ADDRESS + ((SLOTS - 1) * BYTES) as u64;
+        assert_eq!(last, [Ib { address: base, bytes: 12 }, Ib { address: base + 256, bytes: 8 }]);
+        assert!(last.iter().all(holds));
+        // A full place in the last slot still ends inside the buffer, and one byte past it doesn't.
+        assert!(holds(&Ib { address: base, bytes: BYTES as u32 }));
+        assert!(!holds(&Ib { address: base, bytes: BYTES as u32 + 4 }));
     }
 
     #[test]

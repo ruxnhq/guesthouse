@@ -61,6 +61,14 @@ let
   version = "0.7.5";
   # One folder for everything the app finds by where its own program is, as it does with the guest files.
   home = "$out/lib/guesthouse";
+  # The macOS part, which other installs fetch the first time a Mac is made. Its programs are built for
+  # a system with /lib64's loader, which NixOS hasn't, and even with nix-ld they can't run in the jail.
+  # So it comes with the package, patched like the rest, in the program folder where the app looks
+  # first. Its number and hash are app-core's macos_part.rs.
+  macosPart = fetchurl {
+    url = "https://github.com/ruxnhq/guesthouse/releases/download/macos-part-1/guesthouse-macos-part-1-x86_64.tar.xz";
+    hash = "sha256-V4cQ5mL8dVsxBcw4AN411uroEs3XFmJKwCutMimBqLw=";
+  };
 in
 stdenvNoCC.mkDerivation {
   pname = "guesthouse";
@@ -97,6 +105,16 @@ stdenvNoCC.mkDerivation {
   # QEMU loads EGL when a machine starts, rather than when it is linked.
   runtimeDependencies = [ libglvnd ];
 
+  # The macOS part's QEMU has SDL linked in, and SDL's notes name libraries it may load. autoPatchelf
+  # looks for those too, but a Mac's screen goes through D-Bus and never loads them.
+  autoPatchelfIgnoreMissingDeps = [
+    "libGLES_CM.so.1"
+    "libXtst.so.6"
+    "libXss.so.1"
+    "libdecor-0.so.0"
+    "libsteam_api.so"
+  ];
+
   dontConfigure = true;
   dontBuild = true;
   dontStrip = true;
@@ -124,6 +142,8 @@ stdenvNoCC.mkDerivation {
       --replace-fail 'Exec=guesthouse' "Exec=$out/bin/guesthouse"
 
     cp -r . ${home}
+    mkdir ${home}/macos
+    tar -xJf ${macosPart} -C ${home}/macos --strip-components=1
 
     runHook postInstall
   '';
@@ -133,13 +153,15 @@ stdenvNoCC.mkDerivation {
   postFixup = ''
     host_files=$(find ${home} -maxdepth 1 -type f -perm -u+x \( -name 'guesthouse*' -o -name intel-probe \))
     qemu=${home}/qemu/build
+    macos=${home}/macos
 
     # Apart, as autoPatchelf also takes libraries from the files it patches, and the app mustn't get
     # QEMU's glib in place of the one GTK is built against.
     autoPatchelf $host_files
     autoPatchelf $qemu
+    autoPatchelf $macos/qemu $macos/reims-util
     # The bridge helper runs setuid root, so it keeps to libraries in the store.
-    addDriverRunpath $host_files $(find $qemu -type f ! -name qemu-bridge-helper)
+    addDriverRunpath $host_files $(find $qemu -type f ! -name qemu-bridge-helper) $macos/qemu/bin/qemu-system-x86_64
 
     makeWrapper ${home}/guesthouse $out/bin/guesthouse \
       "''${gappsWrapperArgs[@]}" \

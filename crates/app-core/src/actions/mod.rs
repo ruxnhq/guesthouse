@@ -35,7 +35,8 @@ use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
 use guest_files::{
-    place_driver_files, place_nvapi_wrapper, place_profile_store, place_system_files, write_device_key,
+    place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store, place_system_files,
+    write_device_key,
 };
 use identity::set_up_identity;
 use identity_restart::restart_after_switch;
@@ -323,6 +324,7 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
         }
         Some(GpuMaker::Amd) => {
             bring_amd_driver_up_to_date(task)?;
+            place_amd_runtime(task)?;
             register_amd_package(task)
         }
         // Intel's support is new, so there is no earlier layout of its driver to bring up to date. The

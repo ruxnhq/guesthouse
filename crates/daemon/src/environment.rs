@@ -28,6 +28,13 @@ pub fn within_the_cards(asked: Option<u64>, card: Option<u64>) -> Option<u64> {
     }
 }
 
+/// Whether the guest keeps a locked allocation's CPU view until the allocation goes, from
+/// `GUESTHOUSE_UNMAP_AT_UNLOCK`. Only `1` turns it off, so the guest takes the view away at each
+/// last unlock as it did before.
+pub fn keep_cpu_views(value: Option<&str>) -> bool {
+    value != Some("1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +61,13 @@ mod tests {
         assert_eq!(video_cap(Some("0G")), None);
         assert_eq!(video_cap(Some("G")), None);
         assert_eq!(video_cap(Some("8G")), Some(8 << 30));
+    }
+
+    #[test]
+    fn cpu_views_are_kept_unless_the_switch_is_one() {
+        assert!(keep_cpu_views(None));
+        assert!(keep_cpu_views(Some("0")));
+        assert!(keep_cpu_views(Some("yes")));
+        assert!(!keep_cpu_views(Some("1")));
     }
 }

@@ -10,7 +10,9 @@ use crate::agent::guest_script;
 use crate::failure::Result;
 use crate::gpu_identity::INTEL_RENDER;
 use crate::log::write_log;
+use crate::setup::amd_system_files::runtime_file_list;
 use crate::setup::guest_driver::INTEL_STORE_FOLDER;
+use crate::setup::guest_driver::guest_driver;
 use crate::setup::guest_files::guest_file_list;
 use crate::setup::intel::intel_driver_folder;
 use crate::setup::intel_system_list::read_system_list;
@@ -187,6 +189,21 @@ pub(super) fn place_nvapi_wrapper(task: &mut Task) -> Result<()> {
         task.error = "The NVAPI wrapper did not reach System32, so DLSS may not find the card.".to_owned();
     }
     Ok(())
+}
+
+/// What AMD's INF puts in System32 and SysWOW64 for the media runtime, which programs load by name:
+/// ffmpeg's AMF encoders, RustDesk and OBS. It goes in whether or not the video switch is on, as it
+/// does on a PC with the driver installed. The list is read from the driver's INF, so a newer driver
+/// is followed. A guest that has the files is left alone.
+pub(super) fn place_amd_runtime(task: &mut Task) -> Result<()> {
+    let Ok(driver) = guest_driver(task.context, &task.machine) else { return Ok(()) };
+    match runtime_file_list(&driver.folder) {
+        Ok(list) => place_listed_files(task, &list, Some(driver.store_folder)),
+        Err(why) => {
+            write_log(task.context, &format!("driver files: AMD's media runtime: {why}"))?;
+            Ok(())
+        }
+    }
 }
 
 /// What Intel's INF puts in the system folders, from the list unpacked with its driver: the loaders

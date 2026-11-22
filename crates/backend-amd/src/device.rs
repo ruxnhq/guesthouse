@@ -122,8 +122,13 @@ impl Mapping {
 
     /// Fills the start of the mapping with dwords, for writing an IB.
     pub fn write_dwords(&mut self, dwords: &[u32]) {
+        self.write_dwords_at(0, dwords);
+    }
+
+    /// Writes dwords one after another from `offset` bytes into the mapping.
+    pub fn write_dwords_at(&mut self, offset: usize, dwords: &[u32]) {
         for (index, &word) in dwords.iter().enumerate() {
-            self.write_u32(index * 4, word);
+            self.write_u32(offset + index * 4, word);
         }
     }
 }

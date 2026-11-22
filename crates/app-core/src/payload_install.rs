@@ -130,8 +130,13 @@ fn reason(said: &str) -> String {
     said.lines().rev().find_map(|line| line.strip_prefix(SCRIPT_PREFIX)).unwrap_or(last).to_owned()
 }
 
-fn run_script(payload: &Path, app: u32, dry_run: bool) -> Result<Output> {
+/// `keep_out` names variables the script mustn't have, such as those that point the installer at the
+/// AppImage's own GTK.
+fn run_script(payload: &Path, app: u32, dry_run: bool, keep_out: &[&str]) -> Result<Output> {
     let mut script = Command::new("sh");
+    for variable in keep_out {
+        script.env_remove(variable);
+    }
     script
         .arg(payload.join(INSTALL_SCRIPT))
         .arg(format!("{PAYLOAD_OPTION}{}", payload.display()))
@@ -149,8 +154,8 @@ fn all_it_said(output: &Output) -> String {
 
 /// What installing the release in `payload` would do, with the app as process `app`. It checks this PC
 /// and copies the release once, so it takes a few seconds and is for a thread.
-pub fn plan(payload: &Path, app: u32) -> Result<Plan> {
-    let output = run_script(payload, app, true)?;
+pub fn plan(payload: &Path, app: u32, keep_out: &[&str]) -> Result<Plan> {
+    let output = run_script(payload, app, true, keep_out)?;
     if !output.status.success() {
         return Err(Failure::new(reason(&all_it_said(&output))));
     }
@@ -159,8 +164,8 @@ pub fn plan(payload: &Path, app: u32) -> Result<Plan> {
 
 /// Installs the release in `payload`. If root is needed, pkexec asks for the password in a window.
 /// Everything the script said comes back, for the log. This takes a minute, and is for a thread.
-pub fn install(payload: &Path, app: u32) -> Result<String> {
-    let output = run_script(payload, app, false)?;
+pub fn install(payload: &Path, app: u32, keep_out: &[&str]) -> Result<String> {
+    let output = run_script(payload, app, false, keep_out)?;
     let said = all_it_said(&output);
     if output.status.success() { Ok(said) } else { Err(Failure::new(reason(&said))) }
 }

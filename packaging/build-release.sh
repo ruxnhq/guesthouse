@@ -10,7 +10,8 @@
 #   bundled   guesthouse-VERSION-bundled-source.tar, the source of those libraries and blobs
 #   app       the app, the daemon and their helpers
 #   payload   guesthouse-VERSION-x86_64.tar.xz
-#   appimage  guesthouse-VERSION-x86_64.AppImage, the payload in one file that installs itself
+#   installer-libs  GTK and libadwaita for the AppImage's install window, on a PC that has neither yet
+#   appimage  guesthouse-installer-VERSION.AppImage, the payload in one file that installs itself
 #   source    guesthouse-VERSION-source.tar.xz, and SHA256SUMS
 #
 # check-driver isn't one of these: it only looks at what --display-driver names, and builds nothing.
@@ -70,6 +71,16 @@ APPIMAGE_RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a
 APPIMAGE_RUNTIME_SOURCES="type2-runtime-$APPIMAGE_RUNTIME_TAG.tar.gz https://github.com/AppImage/type2-runtime/archive/refs/tags/$APPIMAGE_RUNTIME_TAG.tar.gz 4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95
 fuse-3.15.0.tar.xz https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
 squashfuse-0.5.2.tar.gz https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3"
+# Where the install window gets GTK and libadwaita on a PC that has neither yet, a KDE desktop say:
+# Ubuntu 24.04's, the oldest the app takes, for the build without HDR. Only the AppImage carries them.
+# The install adds the PC's own, and the installed app uses those.
+INSTALLER_LIBS=installer-libs
+PIXBUF_FOLDER=/usr/lib/$ARCH-linux-gnu/gdk-pixbuf-2.0
+# The SVG one draws the icons. Whichever of the others this gdk-pixbuf doesn't have built in go too.
+PIXBUF_LOADERS='libpixbufloader-svg.so libpixbufloader-png.so libpixbufloader-jpeg.so'
+# The loaders' list names each by its path, and AppRun puts the real one in, as the AppImage's folder
+# isn't the same twice.
+INSTALLER_LIBS_MARK=@INSTALLER_LIBS@
 
 # These stay the host's. The C library can't be mixed, and PipeWire's client must match its server.
 # OpenGL is the host's too: GBM and EGL are Mesa's, which has to match the host's kernel driver, and
@@ -359,7 +370,10 @@ download_source() { # folder, package=version
 # the bundle holds exactly these.
 fetch_library_sources() {
     kept=$(mktemp)
-    awk '$3 != "" && $4 == "source" { print $5 "=" $6 }' "$OUT/stage/LIBRARIES.txt" | sort -u |
+    lists=$OUT/stage/LIBRARIES.txt
+    [ ! -f "$OUT/$INSTALLER_LIBS/LIBRARIES.txt" ] || lists="$lists $OUT/$INSTALLER_LIBS/LIBRARIES.txt"
+    # shellcheck disable=SC2086 # one or two paths, with no spaces
+    awk '$3 != "" && $4 == "source" { print $5 "=" $6 }' $lists | sort -u |
         while read -r wanted; do
             name=${wanted%%=*}
             version=${wanted#*=}
@@ -416,8 +430,8 @@ write_sources_note() {
     cat <<EOF
 The source of everything in a Guesthouse release that isn't mine and isn't in its source bundle.
 
-libraries/  Ubuntu 24.04's source packages for the libraries in qemu/build/lib, at the exact versions
-            they were built from: each .dsc with its original source and Ubuntu's changes. debian/rules
+libraries/  Ubuntu 24.04's source packages for the libraries in qemu/build/lib, and for the GTK and
+            libadwaita the AppImage's install window can use, at the exact versions they were built from: each .dsc with its original source and Ubuntu's changes. debian/rules
             in each is how it was built. To unpack one: dpkg-source -x NAME_VERSION.dsc
 
 virglrenderer/  Upstream's $VIRGL_TAG, unmodified, which libvirglrenderer.so.1 and virgl_render_server
@@ -612,17 +626,56 @@ stage_payload() {
     say "the payload is $OUT/guesthouse-$version-$ARCH.tar.xz"
 }
 
+# Ubuntu's libraries, from this image, under their sonames, with what the app and the loaders need.
+stage_installer_libs() {
+    command -v apt-get >/dev/null 2>&1 || die "this stage runs in the image from Containerfile.qemu."
+    program=$OUT/stage/guesthouse-no-hdr
+    [ -f "$program" ] || die "the install window is the app, so the app stage comes first."
+    folder=$OUT/$INSTALLER_LIBS
+    [ ! -d "$folder" ] || rm -rf "${folder:?}"
+    # gio-modules stays empty, so GIO loads none of the PC's, which were built for another GLib.
+    mkdir -p "$folder/lib" "$folder/loaders" "$folder/gio-modules"
+    loaders=""
+    for loader in $PIXBUF_LOADERS; do
+        [ ! -f "$PIXBUF_FOLDER/2.10.0/loaders/$loader" ] || loaders="$loaders $PIXBUF_FOLDER/2.10.0/loaders/$loader"
+    done
+    list=$folder/LIBRARIES.txt
+    {
+        printf '%s\n' "# What the AppImage's install window uses on a PC with no GTK or libadwaita yet. They aren't mine,"
+        printf '%s\n' "# and come with their licences. Their source is in guesthouse-VERSION-bundled-source.tar."
+        printf '%s\n' "#" "# Library, package, its version, and the source package it was built from:"
+    } >"$list"
+    # shellcheck disable=SC2086 # paths with no spaces
+    for needs in "$program" $loaders; do
+        bundled_closure "$needs"
+    done | sort -u | while read -r name path; do
+        cp -L "$path" "$folder/lib/$name"
+        chmod u+w "$folder/lib/$name"
+        printf '%s %s\n' "$name" "$(library_package "$path" || echo unknown)" >>"$list"
+    done
+    for loader in $loaders; do
+        cp "$loader" "$folder/loaders/"
+        printf '%s %s\n' "${loader##*/}" "$(library_package "$loader" || echo unknown)" >>"$list"
+    done
+    "$PIXBUF_FOLDER/gdk-pixbuf-query-loaders" "$folder"/loaders/*.so | sed "s|$folder|$INSTALLER_LIBS_MARK|g" \
+        >"$folder/loaders.cache"
+    say "the install window's GTK is in $folder"
+}
+
 # The payload's stage in one file that installs itself: the AppImage runtime, then the folder squashed.
 # packaging/appimage/AppRun.sh says what it does when it's opened.
 stage_appimage() {
     [ -f "$OUT/stage/RELEASE" ] || die "the AppImage carries the payload's stage, so the payload stage comes first."
     command -v mksquashfs >/dev/null 2>&1 || die "this stage needs mksquashfs, from squashfs-tools."
-    name=guesthouse-$(release_version)-$ARCH.AppImage
+    [ -f "$OUT/$INSTALLER_LIBS/loaders.cache" ] ||
+        die "the AppImage carries the install window's GTK, so the installer-libs stage comes first."
+    name=guesthouse-installer-$(release_version).AppImage
     fetch_kept "runtime-x86_64-$APPIMAGE_RUNTIME_TAG" "$APPIMAGE_RUNTIME_URL" "$APPIMAGE_RUNTIME_SHA256"
     folder=$OUT/Guesthouse.AppDir
     [ ! -d "$folder" ] || rm -rf "${folder:?}"
     mkdir -p "$folder"
     cp -R "$OUT/stage" "$folder/payload"
+    cp -R "$OUT/$INSTALLER_LIBS" "$folder/$INSTALLER_LIBS"
     cp "$REPO/packaging/appimage/AppRun.sh" "$folder/AppRun"
     chmod 755 "$folder/AppRun"
     # The desktop file and the icon at the top are what tools that list AppImages show.
@@ -662,7 +715,7 @@ stage_source() {
     rm -rf "${bundle:?}"
     bundled=guesthouse-$version-bundled-source.tar
     [ -f "$OUT/$bundled" ] || bundled=""
-    appimage=guesthouse-$version-$ARCH.AppImage
+    appimage=guesthouse-installer-$version.AppImage
     [ -f "$OUT/$appimage" ] || appimage=""
     # The payload and the source come first, as install.sh's hashes are read from the first two lines.
     # shellcheck disable=SC2086 # each empty, or one name with no spaces
@@ -679,6 +732,7 @@ run_stage() {
         bundled) stage_bundled ;;
         app) stage_app ;;
         payload) stage_payload ;;
+        installer-libs) stage_installer_libs ;;
         appimage) stage_appimage ;;
         source) stage_source ;;
         check-driver) check_display_driver ;;
@@ -696,7 +750,7 @@ main() {
         DISPLAY_DRIVER=$2
         shift 2
     fi
-    [ $# -gt 0 ] || set -- qemu app payload appimage source
+    [ $# -gt 0 ] || set -- qemu app installer-libs payload appimage source
     refuse_uncommitted
     mkdir -p "$OUT"
     for stage in "$@"; do

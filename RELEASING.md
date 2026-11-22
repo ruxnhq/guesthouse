@@ -40,7 +40,7 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    git push origin vVERSION
    gh release create vVERSION --title VERSION --notes-file NOTES \
      BUILD_FOLDER/guesthouse-VERSION-x86_64.tar.xz \
-     BUILD_FOLDER/guesthouse-VERSION-x86_64.AppImage \
+     BUILD_FOLDER/guesthouse-installer-VERSION.AppImage \
      BUILD_FOLDER/guesthouse-VERSION-source.tar.xz \
      BUILD_FOLDER/guesthouse-VERSION-bundled-source.tar \
      BUILD_FOLDER/SHA256SUMS

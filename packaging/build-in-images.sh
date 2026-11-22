@@ -63,7 +63,7 @@ in_image() {
 
 image_for() {
     case $1 in
-        qemu | bundled) printf '%s' "$QEMU_IMAGE" ;;
+        qemu | bundled | installer-libs) printf '%s' "$QEMU_IMAGE" ;;
         *) printf '%s' "$APP_IMAGE" ;;
     esac
 }
@@ -105,7 +105,8 @@ main() {
         DISPLAY_DRIVER=$(CDPATH='' cd -- "$2" && pwd)
         shift 2
     fi
-    [ $# -gt 0 ] || set -- qemu bundled app payload appimage source
+    # The bundled source has the install window's libraries' too, so it comes after them.
+    [ $# -gt 0 ] || set -- qemu app installer-libs bundled payload appimage source
     refuse_a_release_with_no_driver "$@"
     find_engine
     QEMU_IMAGE=$(make_image qemu Containerfile.qemu)

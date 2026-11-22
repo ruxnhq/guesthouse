@@ -4,13 +4,15 @@
 # after any install. It can't run from in here: this folder goes away when the AppImage stops, and a VM's
 # QEMU has to outlive the app.
 #
-#   Guesthouse.AppImage                 installs or updates when this release is newer than what's
+#   guesthouse-installer-VERSION.AppImage
+#                                       installs or updates when this release is newer than what's
 #                                       there, then opens the app. From a terminal it installs in it.
 #                                       Otherwise the app's own window shows the plan and asks, and a
 #                                       window asks for root's password if a part needs it
-#   Guesthouse.AppImage install [--dry-run]
+#   guesthouse-installer-VERSION.AppImage install [--dry-run]
 #                                       the install on its own, in this terminal
-#   Guesthouse.AppImage uninstall       uninstall.sh of what's installed
+#   guesthouse-installer-VERSION.AppImage uninstall
+#                                       uninstall.sh of what's installed
 #
 # Afterwards the app is in the desktop's apps, and the AppImage isn't needed. The app updates itself.
 set -eu
@@ -58,15 +60,33 @@ install_here() {
     sh "$payload/install.sh" "--payload=$payload" "$@"
 }
 
+# On a PC with no GTK or libadwaita yet, the window takes the AppImage's own, which are Ubuntu 24.04's.
+# GIO and GTK are kept from the PC's own modules, which were built for other versions of them. The
+# installer keeps all of this from what it starts, as the install adds the PC's own GTK.
+with_bundled_gtk() {
+    libs=$here/installer-libs
+    loaders=$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/guesthouse-loaders.XXXXXX")
+    sed "s|@INSTALLER_LIBS@|$libs|g" "$libs/loaders.cache" >"$loaders"
+    result=0
+    LD_LIBRARY_PATH=$libs/lib GDK_PIXBUF_MODULE_FILE=$loaders GIO_MODULE_DIR=$libs/gio-modules GTK_IM_MODULE=simple \
+        GUESTHOUSE_BUNDLED_GTK=1 GUESTHOUSE_INSTALL_FROM=$payload "$payload/guesthouse-no-hdr" || result=$?
+    rm -f "$loaders"
+    return "$result"
+}
+
 # The app from inside the AppImage, as the installer: GUESTHOUSE_INSTALL_FROM tells it so. The build
-# with HDR needs GTK 4.16, so the other one is tried when it can't load. With neither, there's no GTK or
-# libadwaita here yet, and a terminal install adds them.
+# with HDR needs GTK 4.16, so the other one is tried when it can't load, and then the AppImage's own
+# GTK. If even that can't load, a terminal install is what's left.
 open_installer() {
     for program in guesthouse guesthouse-no-hdr; do
         status=0
         GUESTHOUSE_INSTALL_FROM=$payload "$payload/$program" || status=$?
         [ "$status" -eq "$CANT_LOAD" ] || break
     done
+    if [ "$status" -eq "$CANT_LOAD" ] && [ -f "$here/installer-libs/loaders.cache" ]; then
+        status=0
+        with_bundled_gtk || status=$?
+    fi
     case $status in
         "$CANT_LOAD" | "$IN_A_TERMINAL") open_terminal "$self" install-then-open ;;
         *) exit "$status" ;;

@@ -21,6 +21,12 @@ use std::sync::Arc;
 pub const VARIABLE: &str = "GUESTHOUSE_INSTALL_FROM";
 /// What the window exits with when someone would rather install in a terminal. AppRun opens one.
 pub const IN_A_TERMINAL: u8 = 75;
+/// Set by AppRun when the window runs on the AppImage's own GTK, as the PC has none yet.
+const BUNDLED_GTK_VARIABLE: &str = "GUESTHOUSE_BUNDLED_GTK";
+/// What AppRun sets for the AppImage's own GTK. Nothing the window starts may have them: install.sh
+/// runs the PC's own programs, and the installed app the PC's own GTK.
+const BUNDLED_GTK_ONLY: [&str; 5] =
+    ["LD_LIBRARY_PATH", "GDK_PIXBUF_MODULE_FILE", "GIO_MODULE_DIR", "GTK_IM_MODULE", BUNDLED_GTK_VARIABLE];
 /// The installed app finds its folder by this, as the launcher sets it.
 const PROGRAM_VARIABLE: &str = "GUESTHOUSE_PROGRAM";
 const APP_PROGRAM: &str = "guesthouse";
@@ -48,6 +54,8 @@ struct Installer {
     context: Arc<Context>,
     payload: Rc<PathBuf>,
     terminal_wanted: Rc<Cell<bool>>,
+    /// What the window's children mustn't have.
+    keep_out: &'static [&'static str],
 }
 
 fn spinner_page(title: &str, words: &str) -> gtk::Box {
@@ -145,6 +153,16 @@ fn plan_page(plan: &Plan) -> gtk::ScrolledWindow {
     }
     column.append(&places);
     column.append(&root_group(plan));
+    let afterwards = group("Afterwards");
+    afterwards.add(
+        &adw::ActionRow::builder()
+            .title("This installer isn't needed any more")
+            .subtitle(
+                "Guesthouse will be in your apps, and it updates itself from there. You can delete this file.",
+            )
+            .build(),
+    );
+    column.append(&afterwards);
     if !plan.pc.is_empty() {
         let pc = group("This PC");
         let expander = adw::ExpanderRow::builder().title("What was checked").build();
@@ -244,6 +262,7 @@ impl Installer {
             context,
             payload: Rc::new(payload),
             terminal_wanted,
+            keep_out: if std::env::var_os(BUNDLED_GTK_VARIABLE).is_some() { &BUNDLED_GTK_ONLY } else { &[] },
         };
         let installing = this.clone();
         install.connect_clicked(move |_| installing.run_install());
@@ -269,12 +288,12 @@ impl Installer {
 
     fn check(&self) {
         self.show(CHECKING);
-        let payload = self.payload.clone();
-        let asking = payload.to_path_buf();
+        let asking = self.payload.to_path_buf();
+        let keep_out = self.keep_out;
         let this = self.clone();
         in_background(
             &self.context,
-            move || plan(&asking, std::process::id()),
+            move || plan(&asking, std::process::id(), keep_out),
             move |found| match found {
                 Ok(plan) => {
                     this.plan_page.set_child(Some(&plan_page(&plan)));
@@ -289,12 +308,13 @@ impl Installer {
         self.show(INSTALLING);
         self.window.set_deletable(false);
         let payload = self.payload.to_path_buf();
+        let keep_out = self.keep_out;
         let context = self.context.clone();
         let this = self.clone();
         in_background(
             &self.context,
             move || {
-                let said = install(&payload, std::process::id());
+                let said = install(&payload, std::process::id(), keep_out);
                 let words = match &said {
                     Ok(said) => said.clone(),
                     Err(failure) => failure.0.clone(),
@@ -316,7 +336,11 @@ impl Installer {
     fn start_installed_app(&self) {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         let folder = installed_program(&home);
-        let started = Command::new(folder.join(APP_PROGRAM))
+        let mut app = Command::new(folder.join(APP_PROGRAM));
+        for variable in self.keep_out {
+            app.env_remove(variable);
+        }
+        let started = app
             .env(PROGRAM_VARIABLE, &folder)
             .env_remove(VARIABLE)
             .stdin(Stdio::null())

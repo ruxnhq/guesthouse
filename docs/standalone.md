@@ -64,7 +64,7 @@ The environment of the daemon, besides the two files:
 
 The printed list is about 90 words. In groups:
 
-- **The guest needs these.** `q35` with `smm=on` and the secure-boot flash drives, the Hyper-V CPU flags, the clock words (`-rtc`, `kvm-pit`), the VGA and its memory size, which the firmware picks the screen mode from, the disk on AHCI as the first boot device, and every GPU word: the VMBus devices, the two sockets, the two memory backends and `-machine memory-backend=ram0`. Keep the devices in the printed order. Windows was installed with them in those places, and moving them makes it see new hardware.
+- **The guest needs these.** `q35` with `smm=on` and the secure-boot flash drives, the Hyper-V CPU flags, the clock words (`-rtc`, `kvm-pit`), the VGA and its memory size, which the firmware picks the screen mode from, the disk as the first boot device (on NVMe for a machine made or moved there, on AHCI for one still on SATA), and every GPU word: the VMBus devices, the two sockets, the two memory backends and `-machine memory-backend=ram0`. Keep the devices in the printed order. Windows was installed with them in those places, and moving them makes it see new hardware.
 - **These are yours.** `-name`, `-smp`, the paths of the disk and the firmware, the network (`-nic` and the port forward to the agent), the sound, the serial log, the debug log, the TPM, and the relative USB mouse. `-m` and the RAM backend's size are yours too, if they agree with `GUESTHOUSE_RAM` and with each other.
 - **Only the app uses these.** `-display dbus,p2p=yes` and the four `-qmp` sockets are how the app's viewer and its controls reach QEMU. Without the app you can drop them. Keep one `-qmp` of your own to talk to QEMU.
 
@@ -135,6 +135,7 @@ What's missing from it, and what I'm unsure of:
 
 - `mmio-base` and `iomem-base` are where the window sits in the guest's address space: `0x10000000000` on a CPU that addresses more than 40 bits, and lower on one that addresses 40 or fewer, such as 39 bits, where it is `0x4000000000`. The daemon works it out the same way, so copy the number `guesthouse-vm command` prints for your PC.
 - It has no VGA, no TPM, no network and no USB. Take them from the printed list, in order. Windows was installed with them.
+- The disk above is for a machine still on SATA. A machine on NVMe needs its disk as QEMU's `nvme` device, as the printed words have it. I'd put those two words, its `-drive` and `-device`, in the `qemu:commandline` block rather than make it a libvirt disk.
 - libvirt makes a RAM object of its own for the machine, and I don't know if `-machine memory-backend=ram0` reliably wins over it. If it doesn't, the guest's RAM isn't the file, and the GPU won't work.
 - libvirt can add QEMU's own `-sandbox`. I haven't tried the devices under it.
 - The sockets and the memory files have to be there before the domain starts, so the daemon is started first, outside libvirt, as above. A hook that starts it is yours to write.

@@ -116,6 +116,8 @@ pub struct VmPlan {
     pub ram: String,
     pub screen: String,
     pub disk: String,
+    /// The disk is on an NVMe controller, not the SATA one.
+    pub nvme: bool,
     pub vars: String,
     /// The folder of the machine's virtual TPM.
     pub tpm: Option<PathBuf>,
@@ -191,6 +193,7 @@ impl VmPlan {
             ram: format!("{}G", machine.ram_gib),
             screen: machine.basic_screen().to_owned(),
             disk: machine.disk.clone(),
+            nvme: machine.nvme,
             vars: machine.vars.clone(),
             tpm: machine.tpm.then(|| machine.tpm_folder(context)),
             pin: None,

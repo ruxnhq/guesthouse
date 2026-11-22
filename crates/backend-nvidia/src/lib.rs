@@ -36,6 +36,7 @@ pub mod staging;
 mod standard;
 pub mod startup;
 mod tiling;
+pub mod wakes;
 
 use answers::adapter::{AdapterAnswers, Inputs};
 use answers::nodes::{ENGINE_VIDEO_ENCODE, Node, node_list};
@@ -380,6 +381,10 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         Ok(backend)
     }
 
+    fn wake_descriptor(&self) -> Option<std::os::fd::RawFd> {
+        self.copier.as_ref().and_then(|copier| copier.channel.signal).map(|(_, _, fd)| fd)
+    }
+
     fn facts(&self) -> &AdapterFacts {
         &self.facts
     }
@@ -637,6 +642,17 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn poll_staging_copy(&mut self, host: &mut dyn HostServices, now: Instant) -> Option<Status> {
         self.poll_copy(host, now)
+    }
+
+    fn wait_staging_copy(&mut self, host: &mut dyn HostServices) -> Status {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.poll_copy(host, Instant::now()) {
+                return status;
+            }
+            // Asked each time, as a retry brings a new surface with the new channel.
+            crate::channel::copy::pause(self.wake_descriptor(), started);
+        }
     }
 
     fn start_slot_copy(&mut self, host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {

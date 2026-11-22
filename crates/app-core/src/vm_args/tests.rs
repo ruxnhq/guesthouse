@@ -206,6 +206,22 @@ fn passt_has_its_own_addresses_and_the_private_link() {
 }
 
 #[test]
+fn the_disk_is_on_nvme_only_for_a_machine_on_it_and_the_cds_stay_on_sata() {
+    let (_scratch, on_nvme) = plan(&Machine { nvme: true, ..windows() }, Boot::Gpu);
+    assert!(on_nvme.nvme, "the plan has it from the machine");
+    let (_scratch, sata) = plan(&windows(), Boot::Gpu);
+    // The same plan but for the disk, as two plans have their own folders.
+    let nvme = VmPlan { nvme: true, ..sata.clone() };
+    let (sata, nvme) = (sata.qemu_arguments(), nvme.qemu_arguments());
+    assert!(has(&sata, "ide-hd,bus=ahci.0,drive=hd0,bootindex=1"));
+    assert!(has(&nvme, "nvme,serial=guesthouse,drive=hd0,bootindex=1"));
+    assert!(!nvme.iter().any(|word| word.starts_with("ide-hd")));
+    assert!(has(&nvme, "ahci,id=ahci") && has(&nvme, "ide-cd,bus=ahci.2,drive=cd1"));
+    let changed: Vec<_> = sata.iter().zip(&nvme).filter(|(old, new)| old != new).collect();
+    assert_eq!(changed.len(), 1, "nothing else moves: {changed:?}");
+}
+
+#[test]
 fn a_tpm_brings_its_firmware_and_hides_nested_virtualization() {
     let machine = Machine { tpm: true, ..windows() };
     let (_scratch, plan) = plan(&machine, Boot::Gpu);

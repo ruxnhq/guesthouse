@@ -80,7 +80,9 @@ fn copy_side(
 /// The copy channel, and where it lives.
 #[derive(Debug)]
 pub struct Copier {
-    channel: CopyChannel,
+    /// The surface whose waiters the copy's releases wake, if one was made.
+    pub(crate) wakes: Option<crate::wakes::Wakes>,
+    pub(crate) channel: CopyChannel,
     space: SpaceId,
     area: u64,
     /// True while a frame's copy is under way.
@@ -116,7 +118,12 @@ impl Copier {
 }
 
 impl<R: Rm> NvidiaBackend<R> {
-    fn make_copy_channel(&mut self, area: u64, space: SpaceId) -> Result<CopyChannel, RmError> {
+    fn make_copy_channel(
+        &mut self,
+        area: u64,
+        space: SpaceId,
+        host: &mut dyn HostServices,
+    ) -> Result<(CopyChannel, Option<crate::wakes::Wakes>), RmError> {
         let place = ChannelPlace {
             ring_address: area,
             ring_entries: RING_ENTRIES,
@@ -128,8 +135,38 @@ impl<R: Rm> NvidiaBackend<R> {
         };
         let generation = self.generation;
         let sizes = self.host_branch;
-        Channel::new(&mut self.device, generation, sizes, address_space, place, Engine::Copy)
-            .map(CopyChannel::new)
+        let mut channel =
+            Channel::new(&mut self.device, generation, sizes, address_space, place, Engine::Copy)
+                .map(CopyChannel::new)?;
+        // The surface's address comes from the same allocator as the channel's, beside it.
+        let mut wakes = None;
+        if std::env::var("GUESTHOUSE_WAKES").ok().as_deref() != Some("0") {
+            let fd = self.device.rm.wake_fd();
+            let parent = self.device.subdevice;
+            if let (Some(fd), Ok(at)) = (fd, host.take_gpu_addresses(4096, CHANNEL_ADDRESS_ALIGN)) {
+                match crate::wakes::Wakes::new(&mut self.device, address_space, at, parent) {
+                    Ok(mut made) => match made.bind(&mut self.device, channel.channel.handle(), true) {
+                        Ok(()) => {
+                            channel.signal = Some((made.slot_address(0), made.surface, fd));
+                            wakes = Some(made);
+                        }
+                        Err(error) => {
+                            // A surface nothing is bound to never raises the interrupt, so its
+                            // waiters would only ever time out on the backstop. Closed, and the
+                            // copies take the polling they always had.
+                            log::warn!(
+                                "the copy channel is not bound to the surface, so its copies are polled: {error}"
+                            );
+                            let _ = made.close(&mut self.device);
+                        }
+                    },
+                    Err(error) => {
+                        log::warn!("no semaphore surface for the copies, so they are polled: {error}")
+                    }
+                }
+            }
+        }
+        Ok((channel, wakes))
     }
 
     /// The copy channel, made the first time something needs it.
@@ -137,9 +174,16 @@ impl<R: Rm> NvidiaBackend<R> {
         if self.copier.is_none() {
             let size = AREA_SIZE as u64 + COPY_AREA_EXTRA;
             let area = host.take_gpu_addresses(size, CHANNEL_ADDRESS_ALIGN)?;
-            let channel = self.make_copy_channel(area, space).map_err(memory_error)?;
-            self.copier =
-                Some(Copier { channel, space, area, running: false, retried: false, kinds_said: Vec::new() });
+            let (channel, wakes) = self.make_copy_channel(area, space, host).map_err(memory_error)?;
+            self.copier = Some(Copier {
+                wakes,
+                channel,
+                space,
+                area,
+                running: false,
+                retried: false,
+                kinds_said: Vec::new(),
+            });
         }
         Ok(self.copier.as_mut().expect("made just above"))
     }
@@ -281,22 +325,35 @@ impl<R: Rm> NvidiaBackend<R> {
     }
 
     /// Replaces a dead channel, and runs its last batch again on the new one.
-    fn retry_copy(&mut self) -> Result<(), RmError> {
+    fn retry_copy(&mut self, host: &mut dyn HostServices) -> Result<(), RmError> {
         let mut copier = self.copier.take().expect("a copy is running");
         let mut words = std::mem::take(&mut copier.channel.last_words);
+        // The surface's unbinds name the channel, so they go while it still lives. Its page stays
+        // mapped until the channel is closed, as a channel that timed out can still end its batch
+        // late with a write to the slot, and that write must not land on an unmapped address.
+        let mut old = copier.wakes.take();
+        if let Some(old) = old.as_mut() {
+            old.unbind(&mut self.device);
+        }
         if let Some(space) = self.spaces.get(&copier.space)
             && let Err(error) = copier.channel.channel.close(&mut self.device, space)
         {
             log::warn!("closing the old copy channel: {error}");
         }
-        let mut channel = self.make_copy_channel(copier.area, copier.space)?;
+        if let Some(mut old) = old
+            && let Err(error) = old.close(&mut self.device)
+        {
+            log::warn!("closing the old surface: {error}");
+        }
+        let (mut channel, wakes) = self.make_copy_channel(copier.area, copier.space, host)?;
+        copier.wakes = wakes;
         channel.renumber(&mut words);
         channel.start(&mut self.device, words);
         self.copier = Some(Copier { channel, retried: true, running: true, ..copier });
         Ok(())
     }
 
-    pub(crate) fn poll_copy(&mut self, _host: &mut dyn HostServices, now: Instant) -> Option<Status> {
+    pub(crate) fn poll_copy(&mut self, host: &mut dyn HostServices, now: Instant) -> Option<Status> {
         let copier = self.copier.as_mut()?;
         if copier.channel.is_finished() {
             copier.running = false;
@@ -312,7 +369,7 @@ impl<R: Rm> NvidiaBackend<R> {
             return Some(Status::UNSUCCESSFUL);
         }
         log::warn!("the copy channel stopped answering, so it is being replaced");
-        match self.retry_copy() {
+        match self.retry_copy(host) {
             Ok(()) => {
                 let channel = &self.copier.as_ref().expect("made just above").channel;
                 log::warn!("the copy runs again on a new channel: {}", channel.state());
@@ -645,12 +702,15 @@ mod tests {
 
     const AREA: u64 = 0x800_0000;
 
-    /// Nothing but a place for the copy channel, as a move asks for no more of the host.
-    struct AreaOnly;
+    /// Places for the copy channel and whatever it needs, handed out one after another as the host
+    /// does, as a copy asks for no more of the host.
+    struct AreaOnly(u64);
 
     impl HostServices for AreaOnly {
-        fn take_gpu_addresses(&mut self, _: u64, _: u64) -> Result<u64, BackendError> {
-            Ok(AREA)
+        fn take_gpu_addresses(&mut self, size: u64, _: u64) -> Result<u64, BackendError> {
+            let at = self.0;
+            self.0 += size.max(0x100_0000);
+            Ok(at)
         }
         fn read_at_gpu_address(&self, _: SpaceId, _: u64, _: &mut [u8]) -> Option<usize> {
             None
@@ -692,8 +752,56 @@ mod tests {
         let space = backend.create_address_space(&[range]).unwrap();
         let (from, _) = backend.allocate_video_memory(0x1000, guesthouse_backend::MemoryKind::PLAIN).unwrap();
         let (to, _) = backend.allocate_video_memory(0x1000, guesthouse_backend::MemoryKind::PLAIN).unwrap();
-        let moved = backend.preserve_contents(&mut AreaOnly, space, from, to, 0x1000);
+        let moved = backend.preserve_contents(&mut AreaOnly(AREA), space, from, to, 0x1000);
         assert!(moved.is_err());
         assert_eq!(backend.device().rm.memory_at(window), None);
+    }
+
+    #[test]
+    fn a_surface_that_will_not_bind_leaves_the_copies_polled() {
+        use crate::rm::classes::{SURFACE_BIND_CHANNEL, SURFACE_REGISTER_WAITER};
+        use crate::rm::fake::Call;
+        use guesthouse_backend::Backend;
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.refuse_control = Some(SURFACE_BIND_CHANNEL);
+        let mut backend = crate::fake_guest::fake_backend(rm);
+        let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
+        let space = backend.create_address_space(&[range]).unwrap();
+        let copy = SlotCopy { own_space: space, ..slot_copy(None) };
+        assert!(matches!(backend.start_frame_copy(&mut AreaOnly(AREA), &copy), StagingStart::Running));
+        // No waiter is armed for a copy that is only polled, and the surface and its memory were
+        // taken back rather than left half-made.
+        let calls = &backend.device().rm.calls;
+        assert!(!calls.iter().any(|call| matches!(
+            call,
+            Call::Control { command, .. } if *command == SURFACE_REGISTER_WAITER
+        )));
+        assert!(calls.iter().any(|call| matches!(call, Call::Free { .. })));
+    }
+
+    #[test]
+    fn a_bound_surface_arms_a_waiter_for_each_batch() {
+        use crate::rm::STATUS_OK;
+        use crate::rm::classes::{SURFACE_BIND_CHANNEL, SURFACE_REGISTER_WAITER};
+        use crate::rm::fake::Call;
+        use guesthouse_backend::Backend;
+        let mut rm = FakeRm::new();
+        rm.wake = Some(0);
+        rm.answer(SURFACE_BIND_CHANNEL, |_| STATUS_OK);
+        let mut backend = crate::fake_guest::fake_backend(rm);
+        let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
+        let space = backend.create_address_space(&[range]).unwrap();
+        let copy = SlotCopy { own_space: space, ..slot_copy(None) };
+        let mut host = AreaOnly(AREA);
+        assert!(matches!(backend.start_frame_copy(&mut host, &copy), StagingStart::Running));
+        let calls = &backend.device().rm.calls;
+        assert!(calls.iter().any(|call| matches!(
+            call,
+            Call::Control { command, .. } if *command == SURFACE_REGISTER_WAITER
+        )));
+        // The session's blocking wait takes the backend's own, which sleeps on the surface.
+        backend.copier.as_ref().expect("a copy runs").channel.pretend_finished();
+        assert_eq!(backend.wait_staging_copy(&mut host), guesthouse_messages::Status::SUCCESS);
     }
 }

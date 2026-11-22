@@ -47,6 +47,8 @@ pub mod stand_in {
         pub plans: Mutex<Vec<VmPlan>>,
         pub stop_answer: Mutex<Option<Result<Stopped>>>,
         pub start_failure: Mutex<Option<Failure>>,
+        /// The failure of every start with the disk on NVMe, as from a Windows that can't boot there.
+        pub nvme_failure: Mutex<Option<Failure>>,
     }
 
     impl RecordingHost {
@@ -63,7 +65,8 @@ pub mod stand_in {
         fn start(&self, plan: &VmPlan, _machine: &Machine) -> Result<()> {
             self.note(format!("start {}", if plan.is_gpu() { "gpu" } else { "plain" }));
             self.plans.lock().unwrap().push(plan.clone());
-            self.start_failure.lock().unwrap().clone().map_or(Ok(()), Err)
+            let nvme_failure = self.nvme_failure.lock().unwrap().clone().filter(|_| plan.nvme);
+            nvme_failure.or_else(|| self.start_failure.lock().unwrap().clone()).map_or(Ok(()), Err)
         }
 
         fn stop(&self, _machine: &Machine, seconds: u64) -> Result<Stopped> {

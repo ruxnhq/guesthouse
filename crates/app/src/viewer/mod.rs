@@ -43,11 +43,13 @@ use guesthouse_app_core::host_sensors::sensors_file;
 use guesthouse_app_core::library::save_thumbnail;
 use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::screen_gpu::memory_frames;
+use guesthouse_app_core::settings::{Fields, read_prefs};
 use guesthouse_app_core::tasks::{State, Status, slot_of};
 use monitors::Monitors;
 use overlay::OverlayChoice;
 use pill::Pill;
 use screen::Screen;
+use serde_json::Value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -60,6 +62,13 @@ pub const FULLSCREEN_KEYS: &str = "Ctrl+Alt+Return";
 /// One key: it captures the mouse, and pressed again it lets go.
 pub const CAPTURE_KEYS: &str = "Ctrl+Alt+M";
 pub const OVERLAY_KEYS: &str = "Ctrl+Alt+P";
+/// The preference that keeps the desktop's shortcuts from a screen that only has the focus. They go
+/// to the guest with the focus unless it says so.
+pub const SHORTCUTS_ON_FOCUS: &str = "shortcuts_on_focus";
+
+pub fn shortcuts_on_focus(prefs: &Fields) -> bool {
+    prefs.get(SHORTCUTS_ON_FOCUS) != Some(&Value::Bool(false))
+}
 /// Pixels at the top of the screen that bring the header back in fullscreen.
 const TOP_EDGE: f64 = 2.0;
 /// The same in a window, where nothing stops the pointer at the edge.
@@ -167,11 +176,13 @@ impl ScreenPage {
         };
         // What the screen does with the frames, for a report. A log that can't be written is no
         // reason to stop showing them.
+        let asking = context.clone();
         let log = move |text: &str| {
             let _ = write_log(&context, text);
         };
         let screen =
             Screen::new(self.run_folder(), route, self.memory_frames(), overlay, direct, on_capture, log);
+        screen.ask_shortcuts_on_focus(move || shortcuts_on_focus(&read_prefs(&asking)));
         self.0.toolbar.set_content(Some(screen.widget()));
         *self.0.screen.borrow_mut() = Some(screen);
     }
@@ -568,6 +579,9 @@ impl ScreenPage {
             _ if screen.capture_asked() => "Move the pointer into the window to capture it".to_owned(),
             _ if screen.shortcuts_inhibited() => {
                 "Keys go to the guest. Another window takes them back".to_owned()
+            }
+            _ if screen.has_keyboard() => {
+                format!("Typing goes to the guest. {CAPTURE_KEYS} sends it the desktop's shortcuts too")
             }
             _ => "Click the screen to send it keys".to_owned(),
         };

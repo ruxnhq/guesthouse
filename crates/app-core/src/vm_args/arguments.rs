@@ -26,6 +26,11 @@ const BYTES_PER_PIXEL: u64 = 4;
 /// The relative mouse beside the tablet, which capturing the mouse moves.
 pub(super) const RELATIVE_MOUSE: &str = "usb-mouse,bus=xhci.0";
 pub(super) const MONITOR_SOCKETS: [&str; 4] = ["qmp.sock", "watch.sock", "input.sock", DISPLAY_SOCKET];
+/// The disk where it was before NVMe, the first port of the SATA controller, which still has the CDs.
+const SATA_DISK: &str = "ide-hd,bus=ahci.0,drive=hd0,bootindex=1";
+/// QEMU's NVMe controller needs a serial number. Each machine has its own controller, so one for all
+/// is enough, and it never changes under a guest.
+const NVME_DISK: &str = "nvme,serial=guesthouse,drive=hd0,bootindex=1";
 
 impl VmPlan {
     /// The firmware only offers modes that fit the VGA memory, and with Windows' highestmode boot
@@ -122,7 +127,7 @@ impl VmPlan {
                 qemu_value(&self.disk)
             ),
             "-device",
-            "ide-hd,bus=ahci.0,drive=hd0,bootindex=1",
+            if self.nvme { NVME_DISK } else { SATA_DISK },
         ]));
         arguments
     }

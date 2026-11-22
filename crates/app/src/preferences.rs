@@ -1,10 +1,11 @@
-//! What the app itself can be told, as opposed to a machine: its colours, and whether a login
-//! starts it.
+//! What the app itself can be told, as opposed to a machine: its colours, whether a login starts it,
+//! and where the desktop's shortcuts go from a machine's screen.
 
 use crate::login;
 use crate::notify;
 use crate::rows::choice_row;
 use crate::theme;
+use crate::viewer::{self, CAPTURE_KEYS};
 use crate::window::{TRAY, Window};
 use adw::prelude::*;
 use guesthouse_app_core::settings::read_prefs;
@@ -100,10 +101,27 @@ pub fn show(window: &Window) {
     let background = adw::PreferencesGroup::builder().title("In the Background").build();
     background.add(&in_tray);
     background.add(&notifications);
+    let shortcuts = adw::SwitchRow::builder()
+        .title("Send the desktop's shortcuts to the guest")
+        .subtitle(format!(
+            "Keys such as Alt+Tab and Super, whenever a machine's screen has the keyboard. Turned off, your \
+             desktop keeps them, as a window manager run by its shortcuts, such as Hyprland or Sway, needs. \
+             Typing still goes to the guest, and {CAPTURE_KEYS} hands it the shortcuts with the mouse until \
+             it's pressed again."
+        ))
+        .active(viewer::shortcuts_on_focus(&prefs))
+        .build();
+    let remembering = window.clone();
+    shortcuts.connect_active_notify(move |row| {
+        remembering.remember(json!({ viewer::SHORTCUTS_ON_FOCUS: row.is_active() }))
+    });
+    let screens = adw::PreferencesGroup::builder().title("Machines' Screens").build();
+    screens.add(&shortcuts);
     let page = adw::PreferencesPage::new();
     page.add(&look);
     page.add(&starting);
     page.add(&background);
+    page.add(&screens);
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&page));

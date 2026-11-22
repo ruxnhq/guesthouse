@@ -37,6 +37,8 @@ Godot's test scenes in Direct3D 12 run at about 850 fps for the light one and ab
 
 Direct3D 11 in a window had the same copy, because Windows only spares it for programs it counts as games. A machine's **Faster programs in a window** setting, which is on unless you turn it off, tells Windows to treat every program outside the Windows folder that way. My test window went from about 1,150 frames a second to 4,300 with it, and windowed Superposition stopped copying. It goes by folder, one entry for each folder at the top of a drive, so a program in a folder made since the machine last started waits for the next start. A program you gave its own "Optimizations for windowed games" choice in Windows' graphics settings keeps the copy. Turn the setting off if a program's window flickers or stays blank, and Windows gets back exactly what it had.
 
+**Copies wait on the card's interrupt.** On NVIDIA, the daemon's own copies, such as each frame for the viewer, used to keep a CPU core spinning until they ended. Now they spin for 200 µs and then sleep until the card's interrupt says the copy is done. A tester with an RTX 5090 found games and video smoother with it, and in a game far fewer submissions had to wait for room, 0.5% against 3.9%. I haven't measured it on my own card yet. If copies seem slow or a machine stutters, set `GUESTHOUSE_WAKES=0` in the environment the app or `guesthouse-vm` starts the machine from, and the copies spin as before. If the driver can't set it up, the daemon goes back to spinning by itself and says so in its log.
+
 **Is the picture right?** I don't judge that by eye. These tests compare exact values, and the Vulkan and OpenGL ones check the final screen pixel by pixel:
 
 | Test | Wrong |

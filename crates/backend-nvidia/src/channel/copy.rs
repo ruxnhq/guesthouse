@@ -7,8 +7,10 @@
 use super::{COPY_SUBCHANNEL, Channel, l2_invalidate_words};
 use crate::pushbuffer::{increasing, ring_entry};
 use crate::rm::Rm;
+use crate::rm::classes::SURFACE_REGISTER_WAITER;
 use crate::rm::device::Device;
 use crate::tiling::{BLOCK_LIMIT, origin_fits};
+use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
 /// Ring entries, at the start of the area.
@@ -46,6 +48,12 @@ const LAUNCH_BLOCK_TO_BLOCK_LINES: u32 = 0x20E;
 const LAUNCH_PITCH_ONE_LINE: u32 = 0x18E;
 /// Flushed, with nothing to transfer, ending in a one-word semaphore.
 pub(crate) const LAUNCH_SEMAPHORE_ONLY: u32 = 0xC;
+/// The same, as a four-word semaphore with a timestamp and a non-blocking interrupt: the release
+/// that wakes a surface's waiters. Only this kind raises the interrupt.
+pub(crate) const LAUNCH_SIGNAL_INTR: u32 = 0x14 | 0x40;
+/// How long to go on spinning before the wait sleeps on the interrupt, matching the daemon's own
+/// fence window.
+const SPIN_LIMIT: Duration = Duration::from_micros(200);
 const BLOCK_HEIGHT_SHIFT: u32 = 4;
 const ORIGIN_Y_SHIFT: u32 = 16;
 /// Blocks are one GOB wide and deep, and GOBs have eight rows.
@@ -126,12 +134,16 @@ pub struct CopyChannel {
     started: Option<Instant>,
     /// The last batch, to run again on a new channel if this one dies.
     pub last_words: Vec<u32>,
+    /// A semaphore surface's slot to signal at the end of a batch, with the surface and the
+    /// descriptor its waiters post to. `None` until a surface is bound, and then each batch ends
+    /// by writing the slot in the way that raises the interrupt, and arms a waiter for it.
+    pub signal: Option<(u64, u32, RawFd)>,
 }
 
 impl CopyChannel {
     pub fn new(channel: Channel) -> Self {
         channel.area().store_u64(0, channel.prelude_entry());
-        Self { channel, put: 1, sequence: 0, started: None, last_words: Vec::new() }
+        Self { channel, put: 1, sequence: 0, started: None, last_words: Vec::new(), signal: None }
     }
 
     /// The methods every copy shares: where from and to, and the semaphore that marks the end.
@@ -220,7 +232,31 @@ impl CopyChannel {
     }
 
     /// Sends a batch to the GPU.
-    pub fn start<R: Rm>(&mut self, device: &mut Device<R>, words: Vec<u32>) {
+    pub fn start<R: Rm>(&mut self, device: &mut Device<R>, mut words: Vec<u32>) {
+        // The batch is kept as it was built, without the wake words: a retry on a new channel
+        // replays what is kept, and the old surface's slot died with the channel it was bound to.
+        self.last_words = words.clone();
+        if let Some((slot, surface, fd)) = self.signal {
+            // The count the batch will write. It wraps with the sequence, as overflow checks stay
+            // on in release builds.
+            let wake = self.sequence.wrapping_add(1);
+            // A waiter for the sequence this batch will write, armed before the batch runs so the
+            // interrupt cannot beat the arm. A refused arm leaves the poll to time out, which is
+            // what the backstop is for.
+            let mut arm = [0; 32];
+            arm[8..16].copy_from_slice(&u64::from(wake).to_le_bytes());
+            arm[24..28].copy_from_slice(&(fd as u32).to_le_bytes());
+            let _ = device.rm.control(surface, SURFACE_REGISTER_WAITER, &mut arm);
+            words.extend([
+                increasing(COPY_SUBCHANNEL, METHOD_SET_SEMAPHORE, 4),
+                (slot >> 32) as u32,
+                slot as u32,
+                wake,
+                0,
+                increasing(COPY_SUBCHANNEL, METHOD_LAUNCH, 1),
+                LAUNCH_SIGNAL_INTR,
+            ]);
+        }
         let area = self.channel.area();
         area.store_words(PUSH, &words);
         let entry = ring_entry(self.channel.area_address() + PUSH as u64, words.len() as u32);
@@ -228,7 +264,6 @@ impl CopyChannel {
         self.put = (self.put + 1) % RING_ENTRIES;
         self.channel.advance(device, self.put);
         self.started = Some(Instant::now());
-        self.last_words = words;
     }
 
     /// Does what the engine's semaphore would, as a fake has no engine.
@@ -268,15 +303,30 @@ impl CopyChannel {
         words[SEQUENCE_WORD - 1] = done as u32;
     }
 
-    /// Spins until the copy ends. Only for what can't go on without it, and only for a moment.
+    /// Waits until the copy ends: a spin for what is nearly done, then a sleep on the interrupt,
+    /// with the poll's timeout as the backstop. Only for what can't go on without it.
     pub fn wait(&self) -> bool {
+        let started = Instant::now();
         while !self.is_finished() {
             if self.has_timed_out(Instant::now()) {
                 return false;
             }
-            std::hint::spin_loop();
+            pause(self.signal.map(|(_, _, fd)| fd), started);
         }
         true
+    }
+}
+
+/// One step of a wait for a copy that began at `started`: a spin while it may be nearly done, then
+/// a sleep of up to a millisecond on the interrupt descriptor, if there is one.
+pub(crate) fn pause(wake: Option<RawFd>, started: Instant) {
+    match wake {
+        Some(fd) if started.elapsed() >= SPIN_LIMIT => {
+            let mut fds = [libc::pollfd { fd, events: libc::POLLIN | libc::POLLPRI, revents: 0 }];
+            // SAFETY: the poll writes only into the one structure.
+            unsafe { libc::poll(fds.as_mut_ptr(), 1, 1) };
+        }
+        _ => std::hint::spin_loop(),
     }
 }
 
@@ -403,5 +453,18 @@ mod tests {
         copier.start(&mut device, words);
         assert!(!copier.has_timed_out(Instant::now()));
         assert!(copier.has_timed_out(Instant::now() + COPY_TIMEOUT + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn the_kept_batch_carries_no_wake_words() {
+        let (mut device, mut copier) = copier();
+        copier.signal = Some((0x3000_0000, 0x10, 0));
+        let words = copier.bytes(0x1000, 0x2000, 64);
+        let plain = words.len();
+        copier.start(&mut device, words);
+        // A retry replays the kept batch on a new channel with a new surface, so what is kept
+        // must end where the batch itself ends and not at the old surface's slot.
+        assert_eq!(copier.last_words.len(), plain);
+        assert_eq!(*copier.last_words.last().unwrap(), LAUNCH_PITCH_ONE_LINE);
     }
 }

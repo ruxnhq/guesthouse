@@ -249,6 +249,12 @@ pub struct Machine {
     /// can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub disk_folder: String,
+    /// The disk is on an NVMe controller rather than the emulated SATA one every machine had before.
+    /// Windows has its own driver for it, and it's faster. A new Windows machine is made on it, and an
+    /// older one moves once Windows has been readied for it. Left out of the file when off, so an
+    /// older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub nvme: bool,
 }
 
 impl Machine {
@@ -295,6 +301,7 @@ impl Machine {
             window_speed_off: false,
             file_drop_off: false,
             disk_folder: String::new(),
+            nvme: false,
         }
     }
 
@@ -518,8 +525,31 @@ impl Machine {
         found
     }
 
-    /// Replaces the file in one step, so a crash can't leave half of it.
+    /// Replaces the file in one step, so a crash can't leave half of it. Which controller the disk is
+    /// on is kept as the file has it: only a start moves the disk, with [`Machine::save_disk_place`],
+    /// and the app holds its own copy of each machine from when it opened, which a setting changed
+    /// there saves.
     pub fn save(&self, context: &Context) -> Result<()> {
+        let mut saving = self.clone();
+        if let Some(nvme) = self.saved_nvme(context) {
+            saving.nvme = nvme;
+        }
+        saving.write(context)
+    }
+
+    /// Saves the machine with its disk on the controller this copy says.
+    pub fn save_disk_place(&self, context: &Context) -> Result<()> {
+        self.write(context)
+    }
+
+    /// Whether the saved file has the disk on NVMe, or nothing if there's no file to say.
+    fn saved_nvme(&self, context: &Context) -> Option<bool> {
+        let text = fs::read_to_string(self.folder(context).join(MACHINE_FILE)).ok()?;
+        let saved: serde_json::Value = serde_json::from_str(&text).ok()?;
+        Some(saved.get("nvme").and_then(serde_json::Value::as_bool).unwrap_or(false))
+    }
+
+    fn write(&self, context: &Context) -> Result<()> {
         if let Some(problem) =
             self.problems(crate::settings::max_vram_gib_for(context, self)).into_iter().next()
         {
@@ -730,6 +760,15 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_on_sata_is_one_an_older_build_can_read() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("nvme"), "{text}");
+        assert!(!serde_json::from_str::<Machine>(&text).unwrap().nvme);
+        let on_nvme = serde_json::to_string(&Machine { nvme: true, ..sample() }).unwrap();
+        assert!(serde_json::from_str::<Machine>(&on_nvme).unwrap().nvme);
+    }
+
+    #[test]
     fn programs_in_a_window_are_sped_up_unless_turned_off() {
         let text = serde_json::to_string(&sample()).unwrap();
         assert!(!text.contains("window_speed"), "an older build can't read this: {text}");
@@ -814,6 +853,31 @@ mod tests {
         machine.save(&context).unwrap();
         assert_eq!(load(&context, "sample").unwrap(), machine);
         assert!(!machine.folder(&context).join("machine.json.new").exists());
+    }
+
+    #[test]
+    fn a_save_from_an_older_copy_keeps_the_disk_where_a_start_put_it() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let mut older = sample();
+        older.save(&context).unwrap();
+        Machine { nvme: true, ..older.clone() }.save_disk_place(&context).unwrap();
+        older.overlay = !older.overlay;
+        older.save(&context).unwrap();
+        let saved = load(&context, "sample").unwrap();
+        assert!(saved.nvme, "the app's copy from before the move doesn't put the disk back on SATA");
+        assert_eq!(saved.overlay, older.overlay, "what it changed is saved");
+        Machine { nvme: false, ..saved }.save_disk_place(&context).unwrap();
+        Machine { nvme: true, ..older }.save(&context).unwrap();
+        assert!(!load(&context, "sample").unwrap().nvme, "nor on NVMe");
+    }
+
+    #[test]
+    fn a_new_machine_is_saved_with_its_disk_where_it_says() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        Machine { nvme: true, ..sample() }.save(&context).unwrap();
+        assert!(load(&context, "sample").unwrap().nvme);
     }
 
     #[test]

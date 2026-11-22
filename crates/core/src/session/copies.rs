@@ -182,14 +182,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         status
     }
 
-    /// Spins until the copy under way ends. The backend gives up on a dead channel by itself.
+    /// Waits until the copy under way ends, as the backend waits. The backend gives up on a dead
+    /// channel by itself.
     pub(super) fn wait_for_copy(&mut self) -> Status {
-        loop {
-            if let Some(status) = self.backend.poll_staging_copy(&mut services!(self), Instant::now()) {
-                return status;
-            }
-            std::hint::spin_loop();
-        }
+        self.backend.wait_staging_copy(&mut services!(self))
     }
 
     /// The copy into the frame ring comes only after a staging copy that went well.

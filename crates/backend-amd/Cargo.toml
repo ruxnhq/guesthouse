@@ -27,5 +27,11 @@ path = "src/bin/amd_probe.rs"
 name = "amd-adapter-check"
 path = "src/bin/amd_adapter_check.rs"
 
+[[bin]]
+# Stand-in clients on the DMA engine: how amdgpu's scheduler shares the card between heavy jobs,
+# as a guest sends, and light ones, as a small app sends. Needs a real AMD render node.
+name = "amd-share"
+path = "src/bin/amd_share.rs"
+
 [lints]
 workspace = true

@@ -67,6 +67,10 @@ pub trait FrameSource {
     fn newest_slot(&mut self) -> Option<SlotFrame> {
         None
     }
+    /// Takes in what has come while nothing is drawn, so that frames passed over go back to the
+    /// producer at once, and keeps the newest for later. A source with nothing to give back has
+    /// nothing to do.
+    fn keep_up(&mut self) {}
     /// Whether frames can still come. One that has gone is dropped, and looked for again.
     fn alive(&self) -> bool;
     /// How often the source has heard each kind of call, by name, for the page checks.

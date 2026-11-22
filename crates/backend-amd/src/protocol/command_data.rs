@@ -15,7 +15,8 @@ const RECORD_COUNT: usize = 0x04;
 /// record be a [`CHECKSUM`] only on a condition it reads from its own state, not from the
 /// submission, so that rule isn't checked here.
 const LAST_CLIENT: u32 = 10;
-/// With no records and nothing past the header, this client id marks an empty submission.
+/// With no records and nothing past the header, this client id marks an empty submission. A client
+/// in range may send no records as well, on the terms of [`check`].
 const EMPTY_SUBMISSION_CLIENT: u32 = 0xAA;
 
 // A record, by offset from its start.
@@ -184,8 +185,17 @@ pub fn command_buffers(data: &[u8]) -> Vec<CommandBuffer> {
     buffers
 }
 
-/// Checks a submission's private data as the kernel driver would.
-pub fn check(data: &[u8]) -> Result<Submission, Refused> {
+/// Checks a submission's private data as the kernel driver would. `dma_buffer` is the GPU address of
+/// the DMA buffer the submission message names, or zero for none or when it isn't known.
+///
+/// A submission with no records is taken from any client in range when it names no DMA buffer and
+/// has nothing past its header, as amdkmdag.sys 32.0.32015.12012 takes it (its check at 0x140347cf0,
+/// called from the virtual-address submit path with the private data, the user-mode part's size and
+/// DmaBufferVirtualAddress): a zero count fails only with a DMA buffer, and the records then have to
+/// end exactly where the private data does. AMD's Vulkan driver sends these, client 9, for a
+/// vkQueueSubmit with no command buffers and for an acquire that signals only a fence. Nothing runs;
+/// the fence is completed as for any work that doesn't reach the GPU.
+pub fn check(data: &[u8], dma_buffer: u64) -> Result<Submission, Refused> {
     let header = |at: usize| dword(data, at).ok_or(Refused("the header is cut short"));
     let client = header(CLIENT)?;
     let count = header(RECORD_COUNT)?;
@@ -196,7 +206,13 @@ pub fn check(data: &[u8]) -> Result<Submission, Refused> {
         return Err(Refused("the client id is out of range"));
     }
     if count == 0 {
-        return Err(Refused("there are no records"));
+        if dma_buffer != 0 {
+            return Err(Refused("there are no records for the DMA buffer it names"));
+        }
+        if data.len() != HEADER_SIZE {
+            return Err(Refused("there are no records, and bytes past the header"));
+        }
+        return Ok(Submission { client, opcodes: Vec::new() });
     }
     let mut opcodes = Vec::new();
     let mut at = HEADER_SIZE;
@@ -277,7 +293,7 @@ mod tests {
     }
 
     fn refused(data: &[u8]) -> &'static str {
-        check(data).unwrap_err().0
+        check(data, 0).unwrap_err().0
     }
 
     fn sized_dma_buffer(address: u64, bytes: u32) -> Vec<u8> {
@@ -312,14 +328,14 @@ mod tests {
     fn a_usual_submission_is_taken() {
         let records =
             [checksum(), dma_buffer(0x1_0000), record(INDIRECT_BUFFER, 0x40), record(WDDM2_INFO, 0x48)];
-        let submission = check(&submission(1, &records)).unwrap();
+        let submission = check(&submission(1, &records), 0).unwrap();
         assert_eq!(submission.opcodes, [CHECKSUM, DMA_BUFFER, INDIRECT_BUFFER, WDDM2_INFO]);
     }
 
     #[test]
     fn a_version_0_checksum_is_checked_over_the_records_it_covers() {
         let data = summed(2, &[dma_buffer(0x1_0000), record(INDIRECT_BUFFER, 0x40)]);
-        assert!(check(&data).is_ok());
+        assert!(check(&data, 0).is_ok());
         let mut changed = data.clone();
         let last = changed.len() - 4;
         changed[last] ^= 1;
@@ -337,7 +353,7 @@ mod tests {
         assert_eq!(refused(&zero), "the checksum is zero");
         let mut gathered = summed(2, &[dma_buffer(0x1_0000)]);
         put_dword(&mut gathered, HEADER_SIZE + CHECKSUM_VERSION, 1);
-        assert!(check(&gathered).is_ok());
+        assert!(check(&gathered, 0).is_ok());
         put_dword(&mut gathered, HEADER_SIZE + CHECKSUM_VALUE, 0);
         assert_eq!(refused(&gathered), "the checksum is zero");
     }
@@ -357,14 +373,14 @@ mod tests {
         put_dword(&mut past, HEADER_SIZE + CHECKSUM_VALUE, sum);
         let tail = past.len() - 1;
         past[tail] ^= 1;
-        assert!(check(&past).is_ok());
+        assert!(check(&past, 0).is_ok());
     }
 
     #[test]
     fn the_checksum_version_is_bounded_by_what_the_adapter_block_publishes() {
         let mut newest = checksum();
         put_dword(&mut newest, CHECKSUM_VERSION, SUBMISSION_CHECKSUM_VERSION);
-        assert!(check(&submission(1, &[newest.clone()])).is_ok());
+        assert!(check(&submission(1, &[newest.clone()]), 0).is_ok());
         put_dword(&mut newest, CHECKSUM_VERSION, SUBMISSION_CHECKSUM_VERSION + 1);
         assert_eq!(refused(&submission(1, &[newest])), "the checksum version is unknown");
     }
@@ -372,7 +388,7 @@ mod tests {
     #[test]
     fn a_mapping_update_takes_twenty_bytes_a_mapping() {
         assert_eq!(mapping_update(2).len(), 0x34 + 2 * 20);
-        assert!(check(&submission(1, &[mapping_update(2)])).is_ok());
+        assert!(check(&submission(1, &[mapping_update(2)]), 0).is_ok());
         // Four bytes a mapping, as one earlier reading had it, is refused.
         let mut narrow = record(MAPPING_UPDATE, 0x34 + 2 * 4);
         put_dword(&mut narrow, MAPPING_UPDATE_INNER, MAPPING_UPDATE_INNER_SIZE);
@@ -390,15 +406,30 @@ mod tests {
             record(TRACKING, TRACKING_LENGTH),
             record(UNCHECKED, 0x18),
         ];
-        assert!(check(&submission(10, &records)).is_ok());
+        assert!(check(&submission(10, &records), 0).is_ok());
     }
 
     #[test]
     fn the_empty_marker_is_taken_only_alone() {
-        assert!(check(&submission(EMPTY_SUBMISSION_CLIENT, &[])).unwrap().opcodes.is_empty());
+        assert!(check(&submission(EMPTY_SUBMISSION_CLIENT, &[]), 0).unwrap().opcodes.is_empty());
         let mut padded = submission(EMPTY_SUBMISSION_CLIENT, &[]);
         padded.extend_from_slice(&[0; 4]);
         assert_eq!(refused(&padded), "the client id is out of range");
+    }
+
+    #[test]
+    fn a_client_may_send_no_records_when_it_names_no_dma_buffer() {
+        // AMD's Vulkan driver, client 9: an empty vkQueueSubmit, or an acquire with only a fence.
+        for client in [1, 9, 10] {
+            assert!(check(&submission(client, &[]), 0).unwrap().opcodes.is_empty());
+        }
+        assert_eq!(
+            check(&submission(9, &[]), 0x4_0000_0000).unwrap_err().0,
+            "there are no records for the DMA buffer it names"
+        );
+        let mut padded = submission(9, &[]);
+        padded.extend_from_slice(&[0; 4]);
+        assert_eq!(refused(&padded), "there are no records, and bytes past the header");
     }
 
     #[test]
@@ -406,7 +437,7 @@ mod tests {
         assert_eq!(refused(&[1, 0, 0]), "the header is cut short");
         assert_eq!(refused(&submission(0, &[checksum()])), "the client id is out of range");
         assert_eq!(refused(&submission(11, &[checksum()])), "the client id is out of range");
-        assert_eq!(refused(&submission(1, &[])), "there are no records");
+        assert_eq!(refused(&submission(11, &[])), "the client id is out of range");
     }
 
     #[test]
@@ -433,7 +464,7 @@ mod tests {
     #[test]
     fn record_fields_are_checked() {
         assert_eq!(refused(&submission(1, &[dma_buffer(0)])), "a DMA buffer has no address");
-        assert!(check(&submission(1, &[dma_buffer(1 << 40)])).is_ok());
+        assert!(check(&submission(1, &[dma_buffer(1 << 40)]), 0).is_ok());
         let mut version = checksum();
         put_dword(&mut version, CHECKSUM_VERSION, 2);
         assert_eq!(refused(&submission(1, &[version])), "the checksum version is unknown");

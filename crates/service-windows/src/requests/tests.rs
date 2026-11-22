@@ -307,3 +307,61 @@ fn a_machine_is_ended_only_while_it_runs_and_has_a_screen_only_once_its_guest_sa
     ask(service, Request::Stop { name: "win".into() });
     wait_for(service, "win", State::Stopped);
 }
+
+fn change(service: &Arc<Service<Pretend>>, settings: MachineSettings) -> Vec<Answer> {
+    ask(service, Request::Change { name: "WIN".into(), settings })
+}
+
+#[test]
+fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
+    let setup = setup("change", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    let machine = &status(service)[0];
+    assert_eq!((machine.chosen_card.clone(), machine.nvapi_wrapper), (Card::Default, true));
+    let wanted = MachineSettings {
+        memory_mb: 16384,
+        processors: 1,
+        card: Card::Named("Radeon Graphics".into()),
+        nvapi_wrapper: false,
+    };
+    assert_eq!(change(service, wanted.clone()), [Answer::Ok]);
+    let machine = &status(service)[0];
+    assert_eq!((machine.memory_mb, machine.card.as_deref()), (16384, Some("Radeon Graphics")));
+    assert_eq!((machine.chosen_card.clone(), machine.nvapi_wrapper), (wanted.card.clone(), false));
+    let kept = service.machines().store.load();
+    assert_eq!((kept[0].1.memory_mb, kept[0].1.nvapi_wrapper), (16384, false));
+
+    assert_eq!(ask(service, Request::Start { name: "win".into() }), [Answer::Ok]);
+    wait_for(service, "win", State::Running);
+    let booted = service.work.booted.lock().unwrap()[0].clone();
+    assert_eq!((booted.memory_mb, booted.nvapi_wrapper), (16384, false));
+    assert_eq!(booted.gpu, GpuChoice::Matching("Radeon Graphics".into()));
+    let refused = change(service, MachineSettings { nvapi_wrapper: true, ..wanted.clone() });
+    assert!(matches!(refused.as_slice(), [Answer::Refused { reason }] if reason.contains("while it's off")));
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn a_change_is_kept_to_the_services_rules() {
+    let setup = setup("change-rules", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    let fine = MachineSettings { memory_mb: 8192, processors: 1, card: Card::None, nvapi_wrapper: true };
+    for (wrong, words) in [
+        (MachineSettings { memory_mb: 1024, ..fine.clone() }, "MB of memory"),
+        (MachineSettings { processors: 0, ..fine.clone() }, "processors"),
+        (MachineSettings { card: Card::Named("Voodoo".into()), ..fine.clone() }, "no card called Voodoo"),
+    ] {
+        let said = change(service, wrong);
+        assert!(
+            matches!(said.as_slice(), [Answer::Refused { reason }] if reason.contains(words)),
+            "{said:?}"
+        );
+    }
+    let nobody = ask(service, Request::Change { name: "nope".into(), settings: fine.clone() });
+    assert!(matches!(nobody.as_slice(), [Answer::Refused { .. }]));
+    assert_eq!(change(service, fine), [Answer::Ok]);
+    assert_eq!(status(service)[0].card, None);
+}

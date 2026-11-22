@@ -149,7 +149,7 @@ fn fill(
     write(&windows_root, guest::SETUP_COMPLETE_PATH, guest::SETUP_COMPLETE)?;
     write(&windows_root, guest::REPORT_PATH, guest::REPORT)?;
     if let Some(folder) = driver {
-        copy_into(folder, &windows_root, sink)?;
+        copy_into(folder, &windows_root, true, sink)?;
     }
 
     Record { guest: Guest::Windows, ..Record::default() }.save(disk_path)?;

@@ -21,6 +21,13 @@ pub struct Settings {
     /// The address the guest last reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// Whether an NVIDIA guest gets the NVAPI wrapper. Older machines have it, as it was on for all.
+    #[serde(default = "on")]
+    pub nvapi_wrapper: bool,
+}
+
+fn on() -> bool {
+    true
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +135,7 @@ mod tests {
     }
 
     fn settings() -> Settings {
-        Settings { memory_mb: 8192, processors: 4, card: Card::Default, address: None }
+        Settings { memory_mb: 8192, processors: 4, card: Card::Default, address: None, nvapi_wrapper: true }
     }
 
     #[test]

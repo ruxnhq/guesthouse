@@ -39,6 +39,7 @@ options:
   --no-gpu                 No card, and no driver copy.
   --no-network             No network card.
   --no-tpm                 No TPM.
+  --no-nvapi-wrapper       boot: NVIDIA's own NVAPI in System32, not Guesthouse's wrapper.
   --for-minutes N          boot: asks the guest to shut down after N minutes, and stops it
                            three minutes later if it hasn't.
   --until-report           boot: asks the guest to shut down once it has said what it sees of its
@@ -63,6 +64,7 @@ pub struct Options {
     pub no_gpu: bool,
     pub network: bool,
     pub tpm: bool,
+    pub nvapi_wrapper: bool,
     pub jail: bool,
     pub for_minutes: Option<u64>,
     pub until_report: bool,
@@ -92,6 +94,7 @@ impl Default for Options {
             no_gpu: false,
             network: true,
             tpm: true,
+            nvapi_wrapper: true,
             jail: true,
             for_minutes: None,
             until_report: false,
@@ -137,6 +140,7 @@ impl Options {
             // The console is the service's, for the app; from the command line there's the serial
             // port and the report.
             console_access: Vec::new(),
+            nvapi_wrapper: self.nvapi_wrapper,
         }
     }
 }
@@ -167,6 +171,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--no-gpu" => options.no_gpu = true,
             "--no-network" => options.network = false,
             "--no-tpm" => options.tpm = false,
+            "--no-nvapi-wrapper" => options.nvapi_wrapper = false,
             "--no-jail" => options.jail = false,
             "--for-minutes" => options.for_minutes = Some(number(&flag, &value()?)?),
             "--until-report" => options.until_report = true,

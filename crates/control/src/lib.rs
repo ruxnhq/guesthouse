@@ -45,6 +45,19 @@ pub enum Request {
     Account { name: String },
     /// A machine's recent events, then each new one, until the app closes the pipe.
     Watch { name: String },
+    /// Changes what a machine that isn't running is given at each boot.
+    Change { name: String, settings: MachineSettings },
+}
+
+/// What a machine is given at each boot, which can be changed while it's off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineSettings {
+    pub memory_mb: u64,
+    pub processors: u32,
+    pub card: Card,
+    /// Whether an NVIDIA guest gets Guesthouse's NVAPI wrapper, which DLSS needs, in place of
+    /// NVIDIA's NVAPI. Some games' anti-cheat refuses it, as it isn't signed.
+    pub nvapi_wrapper: bool,
 }
 
 /// What a new machine is made from and given.
@@ -122,6 +135,13 @@ pub struct Machine {
     pub processors: u32,
     /// The card it's given, by name, if any.
     pub card: Option<String>,
+    /// The card as its settings say: the default, one by name, or none. A service from before
+    /// settings could be changed doesn't say, and gives the default.
+    #[serde(default)]
+    pub chosen_card: Card,
+    /// Whether an NVIDIA guest gets the NVAPI wrapper, which is on unless turned off.
+    #[serde(default = "on")]
+    pub nvapi_wrapper: bool,
     /// The address the guest last reported, for Remote Desktop or SSH.
     pub address: Option<String>,
 }
@@ -141,6 +161,10 @@ pub struct CardInfo {
     pub memory_mb: Option<u64>,
     /// Whether it's the card a machine gets when none is named.
     pub default: bool,
+}
+
+fn on() -> bool {
+    true
 }
 
 /// Reads one line of JSON, at most `REQUEST_LIMIT` long, as a `T`.
@@ -216,6 +240,19 @@ mod tests {
         };
         let value = serde_json::to_value(Request::Create { machine: new }).unwrap();
         assert_eq!(value["machine"]["card"], json!({"card": "named", "name": "NVIDIA GeForce RTX 5090"}));
+    }
+
+    #[test]
+    fn a_change_carries_the_settings_and_an_older_status_reads_with_defaults() {
+        let settings =
+            MachineSettings { memory_mb: 16384, processors: 8, card: Card::Default, nvapi_wrapper: false };
+        let value = serde_json::to_value(Request::Change { name: "win".into(), settings }).unwrap();
+        assert_eq!(value["ask"], json!("change"));
+        assert_eq!(value["settings"]["nvapi_wrapper"], json!(false));
+        let older = json!({"name": "win", "system": "windows", "state": "stopped", "set_up": true,
+            "memory_mb": 8192, "processors": 4, "card": null, "address": null});
+        let machine: Machine = serde_json::from_value(older).unwrap();
+        assert_eq!((machine.chosen_card, machine.nvapi_wrapper), (Card::Default, true));
     }
 
     #[test]

@@ -140,7 +140,13 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let store = Store::new(root);
         store.make("win").unwrap();
-        let settings = Settings { memory_mb: 8192, processors: 4, card: Card::Default, address: None };
+        let settings = Settings {
+            memory_mb: 8192,
+            processors: 4,
+            card: Card::Default,
+            address: None,
+            nvapi_wrapper: true,
+        };
         store.save("win", &settings).unwrap();
         Machines::new(store)
     }

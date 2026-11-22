@@ -89,7 +89,7 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
         record.save(&disk)?;
     }
     match record.guest {
-        Guest::Windows => refresh_windows_disk(&disk, card.as_ref(), sink.as_ref())?,
+        Guest::Windows => refresh_windows_disk(&disk, card.as_ref(), settings.nvapi_wrapper, sink.as_ref())?,
         Guest::Linux => {
             linux::refresh_disk(&files_disk(&disk), card.as_ref(), sink.as_ref())?;
             if !record.installed {

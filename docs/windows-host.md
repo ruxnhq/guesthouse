@@ -62,7 +62,7 @@ cargo build --release -p guesthouse-hcs-boot
 
 Ctrl+C asks the guest to shut down, and a second Ctrl+C stops it at once. `--for-minutes N` does the same by itself after N minutes. The machine stops too if the program does, as HCS stops a machine when its last handle closes.
 
-Without `--gpu`, a guest gets the card with the most memory of its own, which on a PC with an integrated card too is the discrete one, NVIDIA, AMD or Intel. `--gpu TEXT` picks the card whose name holds TEXT, and `--no-gpu` boots with none. `--memory-mb`, `--cpus`, `--no-network` and `--no-tpm` do what they say.
+Without `--gpu`, a guest gets the card with the most memory of its own, which on a PC with an integrated card too is the discrete one, NVIDIA, AMD or Intel. `--gpu TEXT` picks the card whose name holds TEXT, and `--no-gpu` boots with none. `--memory-mb`, `--cpus`, `--no-network` and `--no-tpm` do what they say. `--no-nvapi-wrapper` boots an NVIDIA guest with NVIDIA's own NVAPI in System32 rather than Guesthouse's wrapper, for a game whose anti-cheat refuses the wrapper.
 
 ### A Windows guest
 

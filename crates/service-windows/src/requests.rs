@@ -5,7 +5,9 @@
 
 use crate::machines::{Entry, Machines};
 use crate::store::{Settings, Store, usable_name};
-use guesthouse_control::{Answer, Card, CardInfo, Event, Machine, NewMachine, Request, State, System};
+use guesthouse_control::{
+    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, Request, State, System,
+};
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::machine::Guest;
 use guesthouse_host_windows::record::Record;
@@ -96,6 +98,7 @@ impl<W: Work> Service<W> {
             Request::Delete { name } => self.delete(&name),
             Request::Account { name } => self.account(&name),
             Request::Watch { name } => return self.watch(&name, connection),
+            Request::Change { name, settings } => self.change(&name, settings),
         };
         let _ = connection.send(&answer);
     }
@@ -160,6 +163,8 @@ impl<W: Work> Service<W> {
                         Card::Named(name) => Some(name.clone()),
                         Card::None => None,
                     },
+                    chosen_card: entry.settings.card.clone(),
+                    nvapi_wrapper: entry.settings.nvapi_wrapper,
                     address: entry.settings.address.clone(),
                 }
             })
@@ -167,9 +172,52 @@ impl<W: Work> Service<W> {
         Answer::Status { version: env!("CARGO_PKG_VERSION").into(), machines, cards }
     }
 
+    /// Why a machine can't be given `memory_mb` and `processors`, if it can't.
+    fn size_refusal(memory_mb: u64, processors: u32) -> Option<String> {
+        let most = thread::available_parallelism().map_or(1, |count| count.get() as u32);
+        if !(MEMORY_MB.0..=MEMORY_MB.1).contains(&memory_mb) {
+            return Some(format!("A machine has {} to {} MB of memory.", MEMORY_MB.0, MEMORY_MB.1));
+        }
+        (!(1..=most).contains(&processors))
+            .then(|| format!("A machine has 1 to {most} processors, as many as this PC has."))
+    }
+
+    /// Changes what a machine is given at each boot, while it isn't running, and keeps it.
+    fn change(&self, asked: &str, wanted: MachineSettings) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(reason) = Self::size_refusal(wanted.memory_mb, wanted.processors) {
+            return Answer::Refused { reason };
+        }
+        if let Card::Named(card) = &wanted.card
+            && !self.cards().iter().any(|known| &known.name == card)
+        {
+            return Answer::Refused { reason: format!("This PC has no card called {card} to share.") };
+        }
+        let mut entries = self.machines.lock();
+        let entry = entries.get_mut(&name).expect("found just now");
+        if !entry.idle() {
+            return Answer::Refused {
+                reason: format!("{name} is {}. Its settings change while it's off.", words(entry.state)),
+            };
+        }
+        let settings = Settings {
+            memory_mb: wanted.memory_mb,
+            processors: wanted.processors,
+            card: wanted.card,
+            nvapi_wrapper: wanted.nvapi_wrapper,
+            ..entry.settings.clone()
+        };
+        match self.machines.store.save(&name, &settings) {
+            Ok(()) => {
+                entry.settings = settings;
+                Answer::Ok
+            }
+            Err(reason) => Answer::Refused { reason },
+        }
+    }
+
     /// Why `machine` can't be made, if it can't.
     fn refusal(&self, machine: &NewMachine, connection: &mut dyn Connection) -> Option<String> {
-        let processors = thread::available_parallelism().map_or(1, |count| count.get() as u32);
         if !usable_name(&machine.name) {
             return Some(
                 "A machine's name is up to 40 letters, digits, - and _, and not one Windows keeps for a device."
@@ -179,11 +227,8 @@ impl<W: Work> Service<W> {
         if self.machines.find(&machine.name).is_some() || self.machines.store.folder(&machine.name).exists() {
             return Some(format!("There is a machine called {} already.", machine.name));
         }
-        if !(MEMORY_MB.0..=MEMORY_MB.1).contains(&machine.memory_mb) {
-            return Some(format!("A machine has {} to {} MB of memory.", MEMORY_MB.0, MEMORY_MB.1));
-        }
-        if !(1..=processors).contains(&machine.processors) {
-            return Some(format!("A machine has 1 to {processors} processors, as many as this PC has."));
+        if let Some(reason) = Self::size_refusal(machine.memory_mb, machine.processors) {
+            return Some(reason);
         }
         if !(SIZE_GB.0..=SIZE_GB.1).contains(&machine.size_gb) {
             return Some(format!("A machine's disk is {} to {} GB.", SIZE_GB.0, SIZE_GB.1));
@@ -224,6 +269,7 @@ impl<W: Work> Service<W> {
             processors: machine.processors,
             card: machine.card.clone(),
             address: None,
+            nvapi_wrapper: true,
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Preparing));
         let (_, events) = self.machines.watch(&name).expect("the machine was just added");
@@ -309,6 +355,7 @@ impl<W: Work> Service<W> {
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
             console_access: self.work.console_access(),
+            nvapi_wrapper: entry_settings.nvapi_wrapper,
             ..BootSettings::new(&vm_id(&name), disk)
         };
         let service = Arc::clone(self);

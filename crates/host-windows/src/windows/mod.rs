@@ -114,8 +114,14 @@ pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
 
 /// Brings a Windows guest's disk up to date before it boots, which no machine may have open then:
 /// the card's driver, the guest's report, which also listens for the host asking it to shut down,
-/// and the guest's screen when there's a remoteman installer to give it.
-fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Result<(), String> {
+/// and the guest's screen when there's a remoteman installer to give it. `nvapi_wrapper` is whether
+/// the guest has the NVAPI wrapper or NVIDIA's own NVAPI.
+fn refresh_windows_disk(
+    disk: &Path,
+    card: Option<&Card>,
+    nvapi_wrapper: bool,
+    sink: &dyn Sink,
+) -> Result<(), String> {
     let setup = screen_setup();
     if card.is_none() && setup.is_none() {
         return Ok(());
@@ -133,7 +139,7 @@ fn refresh_windows_disk(disk: &Path, card: Option<&Card>, sink: &dyn Sink) -> Re
                 card.name
             )
         })?;
-        copy_into(folder, &windows.root, sink)?;
+        copy_into(folder, &windows.root, nvapi_wrapper, sink)?;
     }
     // Written again at every boot, as guests made before it changed have an older one.
     let report = windows.root.join(crate::guest::REPORT_PATH);
@@ -206,15 +212,17 @@ fn nvapi_wrapper() -> Option<PathBuf> {
     file.is_file().then_some(file)
 }
 
-fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> {
+/// With `nvapi_wrapper` off, NVIDIA's NVAPI goes where the wrapper was, as the placer replaces a
+/// file of its own that isn't the driver's.
+fn copy_into(folder: &Path, root: &Path, nvapi_wrapper: bool, sink: &dyn Sink) -> Result<(), String> {
     let copied = copy_driver(folder, root).map_err(|error| error.to_string())?;
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
     sink.note(format!("Driver {name}: {} files copied, {} already there.", copied.copied, copied.kept));
     // The files the driver installs outside the driver store, such as its Vulkan and OpenCL loaders
     // and its maker's media libraries. Not having them leaves the card working for Direct3D but
     // not for programs that load those, so a failure is told and the boot goes on.
-    let nvapi_wrapper = nvapi_wrapper();
-    match guesthouse_hcs::driver_files::place(folder, root, nvapi_wrapper.as_deref()) {
+    let wrapper = if nvapi_wrapper { self::nvapi_wrapper() } else { None };
+    match guesthouse_hcs::driver_files::place(folder, root, wrapper.as_deref()) {
         Ok(placed) => {
             sink.note(format!(
                 "Driver {name}'s files outside the driver store: {} copied, {} already there.",

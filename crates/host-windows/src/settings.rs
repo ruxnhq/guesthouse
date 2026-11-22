@@ -52,6 +52,14 @@ pub struct BootSettings {
     /// on the machine's console pipe. With nobody, it has none.
     #[serde(default)]
     pub console_access: Vec<String>,
+    /// Whether an NVIDIA guest gets Guesthouse's NVAPI wrapper in System32 in place of NVIDIA's NVAPI.
+    /// DLSS needs it; some games' anti-cheat refuses it, as it isn't signed. Off, NVIDIA's goes back.
+    #[serde(default = "on")]
+    pub nvapi_wrapper: bool,
+}
+
+fn on() -> bool {
+    true
 }
 
 impl PrepareSettings {
@@ -81,6 +89,7 @@ impl BootSettings {
             for_minutes: None,
             until_report: false,
             console_access: Vec::new(),
+            nvapi_wrapper: true,
         }
     }
 }

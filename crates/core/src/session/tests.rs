@@ -687,6 +687,18 @@ mod allocations {
     }
 
     #[test]
+    fn a_cap_refusal_says_why_in_the_log() {
+        // Marathon's on a 4 GiB cap: 30 MiB more, with nearly all of it in use.
+        let warning = super::allocation::cap_warning(4 << 30, (4 << 30) - (16 << 20), 30 << 20);
+        assert_eq!(
+            warning,
+            "the machine's video memory cap of 4096 MiB refused 30 MiB more, with 4080 MiB in use. \
+             The program that asked will likely fail. Raise the cap or set it to automatic in the \
+             machine's settings"
+        );
+    }
+
+    #[test]
     fn private_data_the_vendor_refuses_fails_the_whole_call() {
         let mut session = session();
         session.backend_mut().refuse_private_data = true;

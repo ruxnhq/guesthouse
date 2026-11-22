@@ -93,16 +93,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         Ok(())
     }
 
-    /// Guest memory does not count: it is not on the card.
-    fn over_video_cap(&self, cap: u64, wanted: u64) -> bool {
-        let used = self
-            .allocations
-            .values()
-            .filter(|allocation| {
-                allocation.memory.is_some() && allocation.guest_address.is_none() && allocation.view.is_none()
-            })
-            .map(|allocation| allocation.size);
-        used.fold(wanted, u64::saturating_add) > cap
+    /// The video memory the guest's allocations hold. Guest memory does not count: it is not on
+    /// the card.
+    fn video_in_use(&self) -> u64 {
+        let on_card = self.allocations.values().filter(|allocation| {
+            allocation.memory.is_some() && allocation.guest_address.is_none() && allocation.view.is_none()
+        });
+        on_card.map(|allocation| allocation.size).fold(0, u64::saturating_add)
     }
 
     /// Whether memory the guest is yet to list would be more than it has. Each page waiting for its
@@ -121,7 +118,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let wanted = shapes.iter().map(|shape| shape.size).fold(0, u64::saturating_add);
         let too_large = shapes.iter().any(|shape| shape.size > ADDRESSES_END);
-        let over_cap = self.config.limits.video_cap.is_some_and(|cap| self.over_video_cap(cap, wanted));
+        let over_cap = self.config.limits.video_cap.is_some_and(|cap| {
+            let used = self.video_in_use();
+            let over = used.saturating_add(wanted) > cap;
+            if over {
+                log::warn!("{}", cap_warning(cap, used, wanted));
+            }
+            over
+        });
         (too_large || over_cap).then_some(Status::NO_VIDEO_MEMORY)
     }
 
@@ -464,4 +468,19 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.allocations.get_mut(&request.allocation).expect("found above").memory = Some(memory);
         Ok(())
     }
+}
+
+/// What the log says when the machine's video memory cap refuses an allocation. The guest's
+/// driver usually gives the device up straight after, and a game then crashes in its own code,
+/// so this line is what says why.
+pub(super) fn cap_warning(cap: u64, used: u64, wanted: u64) -> String {
+    const MIB: u64 = 1 << 20;
+    format!(
+        "the machine's video memory cap of {} MiB refused {} MiB more, with {} MiB in use. \
+         The program that asked will likely fail. Raise the cap or set it to automatic in the \
+         machine's settings",
+        cap / MIB,
+        wanted.div_ceil(MIB),
+        used.div_ceil(MIB)
+    )
 }

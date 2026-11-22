@@ -35,6 +35,7 @@ They're in `crates/`, listed here from the bottom up. Each depends only on crate
 | `frame-socket` | The messages that bring frames and the cursor to a viewer, on their own so a producer can use them as they are. |
 | `daemon` | Slots, shared memory, sockets, the viewer's socket, and the main loop. |
 | `replay` | Replays a recording and compares every reply. |
+| `nvapi-shim` | `nvapi64.dll` for a Windows guest on an NVIDIA card. It goes in System32 in place of NVIDIA's and hands NVIDIA's every call, answering only the two that NVIDIA's refuses on a paravirtualized card, so NGX, and with it DLSS, finds the card. Built for Windows only; on Linux only its tests build. Off with `HKLM\SOFTWARE\Guesthouse` `NvapiShimOff` = 1 in the guest, and `NvapiShimLog` = 1 logs what it does to `guesthouse-nvapi-shim.log` in the caller's temporary folder. |
 | `app-core` | The desktop app's work with no UI: machines, tasks, setup, a VM's start, `guesthouse-task`, `guesthouse-share` and `guesthouse-vm`. |
 | `app` | The desktop app's GTK 4 and libadwaita pages. |
 | `hcs` | A Windows host's Host Compute System: the machine document as types, and the calls into `computecore.dll`, `computenetwork.dll` and `virtdisk.dll` that run a VM with only Virtual Machine Platform on. It stands apart from the rest, and only its document builds off Windows. `host-windows` makes and runs Windows and Ubuntu guests with GPU-PV through it, telling what happens through an event sink, and `tools/hcs-boot` is that from the command line, as in [docs/windows-host.md](docs/windows-host.md). |

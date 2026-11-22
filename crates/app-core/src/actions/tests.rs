@@ -1,6 +1,7 @@
 use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::gpu_check::gpu_found;
-use super::guest_files::{place_driver_files, place_profile_store};
+use super::guest_files::{place_driver_files, place_nvapi_wrapper, place_profile_store};
+use super::guest_upload::stand_in::FilesGuest;
 use super::window_speed::apply_window_speed;
 use super::*;
 use crate::agent::stand_in::ScriptedAgent;
@@ -553,6 +554,73 @@ fn a_file_that_fails_is_said_and_the_start_goes_on() {
     let mut task = placing_task(&context, &host);
     place_driver_files(&mut task).unwrap();
     assert!(task.error.contains("did not reach Windows"));
+}
+
+/// The list a request sent the guest.
+fn sent_list(script: &str) -> String {
+    let data = script.split("FromBase64String('").nth(1).unwrap().split('\'').next().unwrap();
+    String::from_utf8(crate::text::base64_decode(data).unwrap()).unwrap()
+}
+
+#[test]
+fn with_the_wrapper_nvidias_nvapi_is_left_out_of_the_list() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    with_driver_files(&scratch, &context);
+    let inf = crate::setup::guest_files::stand_in::FILES_INF.replace("one.dll", "nvapi64.dll");
+    fs::write(crate::settings::driver_folder(&context).join("nv_dispi.inf"), inf).unwrap();
+    let agent = Arc::new(ScriptedAgent::answering(&["", "missing 0\r\n", "", "missing 0\r\n"]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    place_driver_files(&mut placing_task(&context, &host)).unwrap();
+    let nvidias = "System32\tnvapi64.dll\tnvapi64.dll\n";
+    assert!(sent_list(&agent.requests.lock().unwrap()[0].2).contains(nvidias), "no wrapper here yet");
+    scratch.write("program/guest/nvapi64.dll", "wrapper");
+    place_driver_files(&mut placing_task(&context, &host)).unwrap();
+    let list = sent_list(&agent.requests.lock().unwrap()[2].2);
+    assert!(!list.contains(nvidias) && list.contains("two.dll"));
+}
+
+#[test]
+fn the_wrapper_goes_to_system32_when_the_guest_lacks_this_copy() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/nvapi64.dll", "wrapper");
+    let guest = Arc::new(FilesGuest::default());
+    *guest.other_answer.lock().unwrap() = "nvapi needed\r\nnvapi placed\r\n".into();
+    context.agent = guest.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    place_nvapi_wrapper(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    assert_eq!(guest.files.lock().unwrap().get(r"C:\gpupv\nvapi64.dll").unwrap(), b"wrapper");
+    let requests = guest.requests.lock().unwrap();
+    assert!(requests[0].contains("Get-FileHash"), "it asks first");
+    assert!(requests.last().unwrap().contains("Copy-Item"));
+}
+
+#[test]
+fn a_guest_with_this_copy_of_the_wrapper_gets_nothing_sent() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/nvapi64.dll", "wrapper");
+    let guest = Arc::new(FilesGuest::default());
+    *guest.other_answer.lock().unwrap() = "nvapi kept\r\n".into();
+    context.agent = guest.clone();
+    let host = RecordingHost::default();
+    place_nvapi_wrapper(&mut placing_task(&context, &host)).unwrap();
+    assert_eq!(guest.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn with_no_wrapper_in_the_program_the_guest_is_not_asked_about_it() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let guest = Arc::new(FilesGuest::default());
+    context.agent = guest.clone();
+    let host = RecordingHost::default();
+    place_nvapi_wrapper(&mut placing_task(&context, &host)).unwrap();
+    assert!(guest.requests.lock().unwrap().is_empty());
 }
 
 #[test]

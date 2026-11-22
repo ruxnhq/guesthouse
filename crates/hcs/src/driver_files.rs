@@ -17,6 +17,11 @@ use std::path::{Path, PathBuf};
 /// The list of files Guesthouse put in a guest, from the root of its volume.
 pub const PLACED_LIST: &str = r"Guesthouse\driver-files.txt";
 
+/// Where NVIDIA's driver puts its NVAPI. Guesthouse's wrapper goes there in its place, when there is
+/// one: NVIDIA's refuses the call DLSS needs on a paravirtualized card, and the wrapper loads it from
+/// the driver's folder and answers that call.
+const NVAPI_TARGET: &str = r"Windows\System32\nvapi64.dll";
+
 /// A file of the driver's folder, and where in a guest it goes, from the root of its volume.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
@@ -180,7 +185,8 @@ pub fn placements(driver_folder: &Path) -> Result<Vec<Placement>> {
 
 /// Puts the files of `driver_folder` that its driver installs outside the driver store in the
 /// Windows volume at `guest_root`, where the driver puts them, leaving the guest's own files alone.
-pub fn place(driver_folder: &Path, guest_root: &Path) -> Result<Placed> {
+/// `nvapi_wrapper` is the NVAPI wrapper's file, which goes where NVIDIA's NVAPI would.
+pub fn place(driver_folder: &Path, guest_root: &Path, nvapi_wrapper: Option<&Path>) -> Result<Placed> {
     let list = guest_root.join(PLACED_LIST);
     let mut ours: BTreeSet<String> = fs::read_to_string(&list)
         .unwrap_or_default()
@@ -190,7 +196,12 @@ pub fn place(driver_folder: &Path, guest_root: &Path) -> Result<Placed> {
         .collect();
     let mut placed = Placed::default();
     let fail = |what: &Path, error| Error::io(format!("Placing {}", what.display()), error);
-    for placement in placements(driver_folder)? {
+    for mut placement in placements(driver_folder)? {
+        if let Some(wrapper) = nvapi_wrapper
+            && placement.target.to_string_lossy().eq_ignore_ascii_case(NVAPI_TARGET)
+        {
+            placement.source = wrapper.to_owned();
+        }
         let target = guest_root.join(&placement.target);
         let key = placement.target.to_string_lossy().to_ascii_lowercase();
         if target.exists() {
@@ -308,7 +319,7 @@ tool.exe
         fs::create_dir_all(guest.join(r"Windows\SysWOW64")).unwrap();
         fs::write(guest.join(r"Windows\SysWOW64\vcruntime140.dll"), b"windows' own runtime").unwrap();
 
-        let placed = place(&folder, &guest).unwrap();
+        let placed = place(&folder, &guest, None).unwrap();
         assert_eq!(placed.copied, 1);
         assert_eq!(placed.left, [PathBuf::from(r"Windows\SysWOW64\vcruntime140.dll")]);
         assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader one");
@@ -317,10 +328,37 @@ tool.exe
             b"windows' own runtime"
         );
 
-        assert_eq!(place(&folder, &guest).unwrap().kept, 1);
+        assert_eq!(place(&folder, &guest, None).unwrap().kept, 1);
         fs::write(folder.join("sub").join("loader-64.dll"), b"loader two").unwrap();
-        assert_eq!(place(&folder, &guest).unwrap().copied, 1, "a newer driver's file replaces ours");
+        assert_eq!(place(&folder, &guest, None).unwrap().copied, 1, "a newer driver's file replaces ours");
         assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader two");
+
+        let _ = fs::remove_dir_all(host);
+        let _ = fs::remove_dir_all(guest);
+    }
+
+    #[test]
+    fn the_nvapi_wrapper_goes_where_nvidias_nvapi_would() {
+        let host = scratch("host-nvapi");
+        let folder = host.join("nv_dispi.inf_amd64_0123456789abcdef");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("nv_dispi.inf"),
+            "[DestinationDirs]\nA = 11\nB = 10,SysWOW64\n[A]\nnvapi64.dll\n[B]\nnvapi.dll\n",
+        )
+        .unwrap();
+        fs::write(folder.join("nvapi64.dll"), b"nvidia's 64").unwrap();
+        fs::write(folder.join("nvapi.dll"), b"nvidia's 32").unwrap();
+        let wrapper = host.join("nvapi64-wrapper.dll");
+        fs::write(&wrapper, b"wrapper").unwrap();
+        let guest = scratch("guest-nvapi");
+
+        assert_eq!(place(&folder, &guest, None).unwrap().copied, 2);
+        assert_eq!(fs::read(guest.join(NVAPI_TARGET)).unwrap(), b"nvidia's 64");
+        assert_eq!(place(&folder, &guest, Some(&wrapper)).unwrap().copied, 1, "ours, so it's replaced");
+        assert_eq!(fs::read(guest.join(NVAPI_TARGET)).unwrap(), b"wrapper");
+        assert_eq!(fs::read(guest.join(r"Windows\SysWOW64\nvapi.dll")).unwrap(), b"nvidia's 32");
+        assert_eq!(place(&folder, &guest, Some(&wrapper)).unwrap().kept, 2);
 
         let _ = fs::remove_dir_all(host);
         let _ = fs::remove_dir_all(guest);

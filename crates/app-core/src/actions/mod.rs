@@ -33,7 +33,9 @@ pub use desktop::{apply_share, boots, rebooted};
 use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
-use guest_files::{place_driver_files, place_profile_store, place_system_files, write_device_key};
+use guest_files::{
+    place_driver_files, place_nvapi_wrapper, place_profile_store, place_system_files, write_device_key,
+};
 use identity::set_up_identity;
 use identity_restart::restart_after_switch;
 use identity_switch::{new_vm_needed, stop_for_new_identity};
@@ -305,6 +307,7 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
     match task.machine.windows_maker() {
         Some(GpuMaker::Nvidia) => {
             place_driver_files(task)?;
+            place_nvapi_wrapper(task)?;
             place_profile_store(task)
         }
         Some(GpuMaker::Amd) => {

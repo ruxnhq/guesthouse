@@ -489,6 +489,12 @@ copy_guest_files() {
     [ ! -d "$REPO/linux" ] || cp -R "$REPO/linux" "$OUT/stage/"
 }
 
+# The NVAPI wrapper a Windows guest gets in System32, so DLSS finds a paravirtualized card. It goes
+# beside the guest's scripts, where the app takes it from.
+stage_nvapi_shim() {
+    "$REPO/tools/nvapi-shim.sh" "$OUT/stage/guest/nvapi64.dll" || die "The NVAPI wrapper didn't build."
+}
+
 # A build that isn't really one would only show up in a guest, much later.
 check_display_driver() {
     for name in $DRIVER_BUILT; do
@@ -562,6 +568,7 @@ pack_stage() {
 stage_payload() {
     version=$(release_version)
     copy_guest_files
+    stage_nvapi_shim
     copy_display_driver
     fetch_openssh
     cp "$REPO/install.sh" "$REPO/uninstall.sh" "$REPO/LICENSE" "$REPO/THIRD-PARTY.md" "$OUT/stage/"

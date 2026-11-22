@@ -5,7 +5,7 @@
 use super::Task;
 use super::desktop::{GUEST_FOLDER, put_guest_file};
 use super::driver_store::HOST_DRIVER_STORE;
-use super::guest_upload::quoted;
+use super::guest_upload::{put_big_file, quoted};
 use crate::agent::guest_script;
 use crate::failure::Result;
 use crate::gpu_identity::INTEL_RENDER;
@@ -15,6 +15,7 @@ use crate::setup::guest_files::guest_file_list;
 use crate::setup::intel::{SYSTEM_LIST, intel_driver_folder};
 use crate::text::base64_encode;
 use guesthouse_backend_intel::protocol::record::{DEVICE_KEY, DEVICE_KEY_VALUES};
+use sha2::{Digest, Sha256};
 use std::fs;
 
 const SCRIPT_NAME: &str = "nv-files.ps1";
@@ -34,6 +35,15 @@ const DISPLAY_CLASS_KEYS: &str = r"HKLM:\SYSTEM\CurrentControlSet\Control\Class\
 const LEVEL_ZERO_VALUE: &str = "LevelZeroDriverPath";
 const LEVEL_ZERO_DRIVER: &str = "ze_intel_gpu64.dll";
 /// Where Windows keeps what a 32-bit program sees as SOFTWARE.
+/// Guesthouse's NVAPI wrapper, from the program's guest folder. It goes in System32 under NVIDIA's
+/// name, in place of NVIDIA's copy, and loads NVIDIA's from the driver's folder. Without it NVIDIA's
+/// NVAPI refuses the call DLSS needs on a paravirtualized card.
+const NVAPI_WRAPPER: &str = "nvapi64.dll";
+const NVAPI_FOLDER: &str = "System32";
+const NVAPI_SECONDS: u64 = 30;
+const NVAPI_KEPT: &str = "nvapi kept";
+const NVAPI_NEEDED: &str = "nvapi needed";
+const NVAPI_PLACED: &str = "nvapi placed";
 const SOFTWARE_32: (&str, &str) = (r"SOFTWARE\", r"SOFTWARE\WOW6432Node\");
 const NO_SCRIPT: &str = "Windows lacks some of the driver's files, so a program that looks for them may crash. \
                          This install has no script to place them.";
@@ -100,7 +110,82 @@ pub(super) fn place_driver_files(task: &mut Task) -> Result<()> {
             return Ok(());
         }
     };
+    // With the wrapper to put there, NVIDIA's copy would only replace it. Without it, NVIDIA's goes
+    // in as before, so the guest has NVAPI either way.
+    let list = if task.context.paths.guest_files().join(NVAPI_WRAPPER).is_file() {
+        without_nvapi(&list)
+    } else {
+        list
+    };
     place_listed_files(task, &list, None)
+}
+
+/// The list without NVIDIA's System32 nvapi64.dll. The 32-bit one in SysWOW64 stays NVIDIA's, as DLSS
+/// is 64-bit only.
+fn without_nvapi(list: &str) -> String {
+    let is_nvapi = |line: &str| {
+        let mut fields = line.split('\t');
+        let folder = fields.next().unwrap_or("");
+        let target = fields.nth(1).unwrap_or("").trim();
+        folder.eq_ignore_ascii_case(NVAPI_FOLDER) && target.eq_ignore_ascii_case(NVAPI_WRAPPER)
+    };
+    list.lines().filter(|line| !is_nvapi(line)).map(|line| format!("{line}\n")).collect()
+}
+
+fn nvapi_check_script(hash: &str) -> String {
+    format!(
+        "$t = Join-Path $env:windir '{NVAPI_FOLDER}\\{NVAPI_WRAPPER}'; \
+         if ((Test-Path -LiteralPath $t) -and (Get-FileHash -LiteralPath $t -Algorithm SHA256).Hash -eq '{hash}') \
+         {{ '{NVAPI_KEPT}' }} else {{ '{NVAPI_NEEDED}' }}"
+    )
+}
+
+/// Moves whatever is there aside first, as a program that has it loaded keeps Windows from writing
+/// over it but not from renaming it. Copies moved aside earlier go once nothing has them loaded.
+fn nvapi_place_script(staged: &str) -> String {
+    format!(
+        "$t = Join-Path $env:windir '{NVAPI_FOLDER}\\{NVAPI_WRAPPER}'; \
+         try {{ Get-ChildItem -LiteralPath (Split-Path $t) -Filter '{NVAPI_WRAPPER}.*.old' -ErrorAction SilentlyContinue | \
+         Remove-Item -Force -ErrorAction SilentlyContinue; \
+         if (Test-Path -LiteralPath $t) {{ Move-Item -LiteralPath $t -Destination \"$t.$([DateTime]::UtcNow.Ticks).old\" -Force -ErrorAction Stop }}; \
+         Copy-Item -LiteralPath {} -Destination $t -Force -ErrorAction Stop; '{NVAPI_PLACED}' }} \
+         catch {{ \"{FAILED_MARK} nvapi: $($_.Exception.Message)\" }}",
+        quoted(staged)
+    )
+}
+
+/// Puts the NVAPI wrapper in System32, unless the guest has this program's copy already.
+pub(super) fn place_nvapi_wrapper(task: &mut Task) -> Result<()> {
+    let local = task.context.paths.guest_files().join(NVAPI_WRAPPER);
+    let Ok(bytes) = fs::read(&local) else {
+        write_log(task.context, "nvapi wrapper: this program folder has none, so NVIDIA's stays")?;
+        return Ok(());
+    };
+    let hash: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02X}")).collect();
+    let said = task.ask_guest(&nvapi_check_script(&hash), NVAPI_SECONDS);
+    if said.contains(NVAPI_KEPT) {
+        return Ok(());
+    }
+    if !said.contains(NVAPI_NEEDED) {
+        write_log(
+            task.context,
+            &format!("nvapi wrapper: the guest didn't say what it has: {}", said.trim()),
+        )?;
+        return Ok(());
+    }
+    task.step("Placing the NVAPI wrapper");
+    let staged = guest_path(NVAPI_WRAPPER);
+    if !put_big_file(task, &local, &staged)? {
+        write_log(task.context, "nvapi wrapper: it didn't reach the guest")?;
+        task.error = "The NVAPI wrapper did not reach Windows, so DLSS may not find the card.".to_owned();
+        return Ok(());
+    }
+    let said = task.ask_guest(&nvapi_place_script(&staged), NVAPI_SECONDS);
+    write_log(task.context, &format!("nvapi wrapper: {}", said.trim()))?;
+    if !said.contains(NVAPI_PLACED) {
+        task.error = "The NVAPI wrapper did not reach System32, so DLSS may not find the card.".to_owned();
+    }
+    Ok(())
 }
 
 /// What Intel's INF puts in the system folders, from the list unpacked with its driver: the loaders
@@ -190,6 +275,21 @@ fn place_listed_files(task: &mut Task, list: &str, store: Option<&str>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nvidias_system32_nvapi_is_left_out_and_the_32_bit_one_stays() {
+        let list = "System32\tnvapi64.dll\tnvapi64.dll\nSysWOW64\tnvapi.dll\tnvapi.dll\nSystem32\tnvml.dll\tnvml.dll\n";
+        assert_eq!(without_nvapi(list), "SysWOW64\tnvapi.dll\tnvapi.dll\nSystem32\tnvml.dll\tnvml.dll\n");
+    }
+
+    #[test]
+    fn the_place_script_moves_the_old_copy_aside_before_copying() {
+        let script = nvapi_place_script(r"C:\gpupv\nvapi64.dll");
+        let (moved, copied) = (script.find("Move-Item").unwrap(), script.find("Copy-Item").unwrap());
+        assert!(moved < copied);
+        assert!(script.contains(r"'System32\nvapi64.dll'"));
+        assert!(script.contains(r"-LiteralPath 'C:\gpupv\nvapi64.dll'"));
+    }
 
     #[test]
     fn the_device_key_script_makes_the_key_and_writes_each_value_as_text() {

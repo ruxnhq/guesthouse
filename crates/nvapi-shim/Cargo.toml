@@ -1,0 +1,26 @@
+[package]
+name = "guesthouse-nvapi-shim"
+description = "A Windows guest's nvapi64.dll: it hands every call to NVIDIA's own, and answers the two that NVIDIA's refuses on a paravirtualized card, so DLSS finds the card."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Built for Windows it is nvapi64.dll, the name programs load NVAPI by. Elsewhere it builds only so
+# its tests run.
+[lib]
+name = "nvapi64"
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+]
+
+[lints]
+workspace = true

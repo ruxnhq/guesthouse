@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 
 /// How long Windows may take to show the volumes of a disk it has just attached.
 const VOLUMES_SECONDS: u64 = 15;
+/// The NVAPI wrapper a Windows guest on an NVIDIA card gets, from the program's folder.
+const NVAPI_WRAPPER: &str = r"guest\nvapi64.dll";
 
 /// The machine `settings` asks for, on this disk, with this record and network card.
 pub fn machine(
@@ -197,6 +199,13 @@ fn give_screen(
     Ok(())
 }
 
+/// The NVAPI wrapper for NVIDIA guests, in the program's guest folder. Not beside the program, where
+/// it would be what the program itself loads for NVAPI.
+fn nvapi_wrapper() -> Option<PathBuf> {
+    let file = std::env::current_exe().ok()?.parent()?.join(NVAPI_WRAPPER);
+    file.is_file().then_some(file)
+}
+
 fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> {
     let copied = copy_driver(folder, root).map_err(|error| error.to_string())?;
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
@@ -204,7 +213,8 @@ fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> 
     // The files the driver installs outside the driver store, such as its Vulkan and OpenCL loaders
     // and its maker's media libraries. Not having them leaves the card working for Direct3D but
     // not for programs that load those, so a failure is told and the boot goes on.
-    match guesthouse_hcs::driver_files::place(folder, root) {
+    let nvapi_wrapper = nvapi_wrapper();
+    match guesthouse_hcs::driver_files::place(folder, root, nvapi_wrapper.as_deref()) {
         Ok(placed) => {
             sink.note(format!(
                 "Driver {name}'s files outside the driver store: {} copied, {} already there.",

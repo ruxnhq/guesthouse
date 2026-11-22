@@ -23,8 +23,9 @@
 #      guesthouse-hcs-boot.exe, setup.ps1 (windows\installer), LICENSE, THIRD-PARTY.md (with the
 #      remoteman files this installer carries added at its end), GPL-3.0.txt (the GPL 3 that
 #      FFmpeg's LGPL 3 builds on), app\ (the app and the Windows App Runtime beside it),
-#      screen\remoteman-host-setup.exe (as it is: the service runs it in each Windows guest), and
-#      viewer\ (the viewer's zip unpacked, remoteman.exe in it: the app starts that);
+#      screen\remoteman-host-setup.exe (as it is: the service runs it in each Windows guest),
+#      viewer\ (the viewer's zip unpacked, remoteman.exe in it: the app starts that), and
+#      guest\nvapi64.dll (the NVAPI wrapper the service gives a guest on an NVIDIA card);
 # 5. builds the installer (crates\installer-windows) and packs the Windows App Runtime its pages
 #    need and the payload into it (guesthouse-setup --pack): the runtime is the same as the
 #    app's and is carried once. It's the out folder's guesthouse-setup-VERSION.exe (VERSION is
@@ -187,7 +188,8 @@ try {
         if ($NoScreen) { Write-Output 'No screen: -NoScreen was given.' } else { $pin = Read-Pin }
 
         Invoke-Native 'the build' {
-            cargo build --release --locked -p guesthouse-service -p guesthouse-host-windows -p guesthouse-hcs-boot
+            cargo build --release --locked -p guesthouse-service -p guesthouse-host-windows -p guesthouse-hcs-boot `
+                -p guesthouse-nvapi-shim
         }
         $appFolder = ''
         if ($NoApp) {
@@ -221,6 +223,8 @@ try {
             Copy-Item (Join-Path $release $exe) $Payload
         }
         Copy-Item (Join-Path $root 'windows\installer\setup.ps1'), (Join-Path $root 'LICENSE'), (Join-Path $root 'THIRD-PARTY.md') $Payload
+        New-Item -ItemType Directory -Force (Join-Path $Payload 'guest') | Out-Null
+        Copy-Item (Join-Path $release 'nvapi64.dll') (Join-Path $Payload 'guest')
         if ($appFolder) { Copy-Item -Recurse $appFolder (Join-Path $Payload 'app') }
         if ($pin) {
             Copy-Item (Join-Path $root 'windows\installer\GPL-3.0.txt') $Payload

@@ -20,6 +20,8 @@ pub const LOGICAL_GPU_DATA_V1: u32 = 0x1_0238;
 pub const NVIDIA: u32 = 0x10DE;
 /// D3DKMT_ADAPTERTYPE's Paravirtualized bit, which the guest's kernel sets on a GPU-PV adapter.
 pub const ADAPTER_TYPE_PARAVIRTUALIZED: u32 = 1 << 7;
+/// D3DKMT_ADAPTERTYPE's DisplaySupported bit.
+pub const ADAPTER_TYPE_DISPLAY: u32 = 1 << 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -50,19 +52,39 @@ pub struct Adapter {
 }
 
 impl Adapter {
+    fn has(&self, bit: u32) -> bool {
+        self.adapter_type.is_some_and(|kind| kind & bit != 0)
+    }
+
     fn is_paravirtualized_nvidia(&self) -> bool {
-        self.adapter_type.is_some_and(|kind| kind & ADAPTER_TYPE_PARAVIRTUALIZED != 0)
+        self.has(ADAPTER_TYPE_PARAVIRTUALIZED) && self.vendor == Some(NVIDIA)
+    }
+
+    /// The card as the adapter that shows the guest's screen, which the guest's kernel lists beside
+    /// the paravirtualized one when the card says it can drive a display.
+    fn is_nvidia_display(&self) -> bool {
+        self.has(ADAPTER_TYPE_DISPLAY)
+            && !self.has(ADAPTER_TYPE_PARAVIRTUALIZED)
             && self.vendor == Some(NVIDIA)
     }
 }
 
-/// The guest's NVIDIA adapter, the test NVIDIA's NVAPI uses to go into its GPU-PV mode. With none
-/// there is nothing to fix, and with several the wrapper can't tell which card a handle is, so it
-/// fixes nothing.
-pub fn guest_adapter(adapters: &[Adapter]) -> Option<Luid> {
-    let mut found = adapters.iter().filter(|adapter| adapter.is_paravirtualized_nvidia());
+fn only<'a>(mut found: impl Iterator<Item = &'a Adapter>) -> Option<&'a Adapter> {
     let first = found.next()?;
-    found.next().is_none().then_some(first.luid)
+    found.next().is_none().then_some(first)
+}
+
+/// The LUID to give for the guest's card, or none when there is nothing to fix. NVIDIA's NVAPI goes
+/// into its GPU-PV mode on a paravirtualized NVIDIA adapter; with none there is nothing to fix, and
+/// with several the wrapper can't tell which card a handle is, so it fixes nothing.
+///
+/// The card can be two adapters: the paravirtualized one, and one that drives the guest's screen.
+/// DXGI lists the second first, by any preference, so it is the one a game makes its device on, and
+/// NGX matches the device's LUID against this one.
+pub fn guest_adapter(adapters: &[Adapter]) -> Option<Luid> {
+    let card = only(adapters.iter().filter(|adapter| adapter.is_paravirtualized_nvidia()))?;
+    let display = only(adapters.iter().filter(|adapter| adapter.is_nvidia_display()));
+    Some(display.unwrap_or(card).luid)
 }
 
 /// Whether a GetLogicalGpuInfo answer is one to fill in: NVIDIA's refused it, and the caller gave
@@ -209,6 +231,14 @@ mod tests {
         let basic = adapter(OTHER, 0x2, 0x1414);
         let card = adapter(GUEST, 0x83, NVIDIA);
         assert_eq!(guest_adapter(&[basic, card]), Some(GUEST));
+    }
+
+    #[test]
+    fn the_cards_display_adapter_is_the_one_a_game_gets() {
+        let display = adapter(OTHER, 0x10a, NVIDIA);
+        let card = adapter(GUEST, 0x181, NVIDIA);
+        let basic = adapter(Luid { low: 0x687c, high: 0 }, 0x105, 0x1414);
+        assert_eq!(guest_adapter(&[display, card, basic]), Some(OTHER));
     }
 
     #[test]

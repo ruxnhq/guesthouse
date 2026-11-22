@@ -1003,3 +1003,23 @@ fn a_restart_forgets_the_display_mode() {
     session.guest_reset();
     assert!(is_refused(&display_mode(&mut session)));
 }
+
+#[test]
+fn an_older_rings_buffer_with_the_same_stamp_loses_to_the_newest() {
+    let (mut session, older) = stamped(NAME.generation);
+    let mut newer = Vec::new();
+    for slot in 0..SLOTS {
+        let (_, handle) = allocate(&mut session, private(SLOT_BYTES));
+        map(&mut session, handle, 0, 0, 0);
+        let memory = session.allocations[&handle].memory.unwrap();
+        session
+            .backend
+            .memory_starts
+            .insert(memory, driver::stamp(Stamp { generation: NAME.generation, slot }));
+        newer.push(handle);
+    }
+    assert_eq!(register(&mut session, &ring(Look::SDR)).0, STATUS_OK);
+    let found: Vec<u32> =
+        session.frames.indirect.as_ref().unwrap().slots.iter().map(|slot| slot.allocation).collect();
+    assert_eq!(found, newer, "not the older ring's {older:?}");
+}

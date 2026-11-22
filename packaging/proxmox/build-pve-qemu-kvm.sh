@@ -126,6 +126,9 @@ inside() {
     trap hand_back EXIT
     export DEBIAN_FRONTEND=noninteractive
     export DEBFULLNAME="${DEBFULLNAME:-Local build}" DEBEMAIL="${DEBEMAIL:-local@build.invalid}"
+    # Behind some proxies apt's pipelined downloads come back mixed up, as "Hash Sum mismatch". One at a
+    # time costs a few seconds.
+    echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99no-pipelining
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends git build-essential devscripts equivs ca-certificates \
         curl lintian fakeroot meson ninja-build python3-venv >/dev/null
@@ -170,7 +173,7 @@ inside() {
     cp "pve-qemu-kvm_${version}_amd64.deb" "pve-qemu-kvm-dbgsym_${version}_amd64.deb" /build/
     cd /build
     dpkg-deb --fsys-tarfile "pve-qemu-kvm_${version}_amd64.deb" | tar -xO ./usr/bin/qemu-system-x86_64 |
-        grep -aq "$DEVICE_CHECK" || die "the package's QEMU has no $DEVICE_CHECK device."
+        grep -a "$DEVICE_CHECK" >/dev/null || die "the package's QEMU has no $DEVICE_CHECK device."
     sha256sum pve-qemu-kvm*.deb >SHA256SUMS
     cat SHA256SUMS
 }
@@ -202,7 +205,7 @@ main() {
     [ -z "$patches_only" ] || return 0
     [ $# -eq 1 ] || die "name what to build of pve-qemu.git, such as 11.1.3-4."
     find_engine
-    "$ENGINE" run --rm --security-opt label=disable -e "OWNER=$OWNER" -e DEBFULLNAME -e DEBEMAIL \
+    "$ENGINE" run --rm --security-opt label=disable -e "OWNER=$OWNER" -e DEBFULLNAME -e DEBEMAIL -e DEB_BUILD_OPTIONS \
         -v "$OUT:/build" -v "$REPO/packaging/proxmox:/script:ro" "$IMAGE" \
         sh /script/build-pve-qemu-kvm.sh --inside "$1" "$SUFFIX"
     say "the packages are in $OUT"

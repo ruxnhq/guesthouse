@@ -10,11 +10,11 @@ A tester has run this on one host since 20 November 2026. This page says what ra
 |---|---|
 | Host | Proxmox VE 9.2, Debian 13, kernel `7.0.14-29-pve` |
 | Card | Radeon 780M, `1002:15bf`, an integrated RDNA3 GPU |
-| QEMU | `pve-qemu-kvm 11.1.3-2+gpupv1`, and `TODO-11.1.3-4` |
-| Guesthouse | 0.7.0, and the guest was made with 0.6.2. Since 21 November one VM's daemon is a build of #271 on 0.7.1, which 0.7.5 has as its video switch |
+| QEMU | `pve-qemu-kvm 11.1.3-2+gpupv1`, and since 22 November `11.1.3-4+gpupv1` |
+| Guesthouse | 0.7.0, and the guest was made with 0.6.2. From 21 November one VM's daemon was a build of #271 on 0.7.1. Since 22 November both run 0.7.5's own daemon |
 | Guest | Windows 11 Pro, build 26300, with AMD's driver from Adrenalin 26.10.2 (32.0.32015.12012) |
 
-The six patches in that package are the `hw/hyperv` commits of `qemu/qemu-gpupv.patch` from 0.7.0. They're the same in 0.7.5. The first day ran on an earlier build with the same six patches, `11.1.3-2+virgl1+gpupv1`, which differed only in being built against virglrenderer 1.3.0 instead of Debian's 1.1.0. The table under [what ran](#what-ran) says which build each part ran on.
+The six patches in those packages are the `hw/hyperv` commits of `qemu/qemu-gpupv.patch` from 0.7.0. They're the same in 0.7.5. The first day ran on an earlier build with the same six patches, `11.1.3-2+virgl1+gpupv1`, which differed only in being built against virglrenderer 1.3.0 instead of Debian's 1.1.0. The table under [what ran](#what-ran) says which build each part ran on, where "both" means the two 11.1.3-2 builds. On `11.1.3-4+gpupv1` so far: both VMs started and stopped with `qm`, side by side, and its last row.
 
 ## Why its own pve-qemu-kvm
 
@@ -30,22 +30,22 @@ For a VM without `vmbus-bridge` the six commits change nothing that runs. In `vm
 packaging/proxmox/build-pve-qemu-kvm.sh 11.1.3-4
 ```
 
-The argument is what to build of `git.proxmox.com/git/pve-qemu.git`: a version, which is the commit Proxmox calls "bump version to 11.1.3-4", or a commit or a branch. The package gets Proxmox's version with `+gpupv1` after it, and `--suffix` names another. The script needs podman or docker and no root. It builds in a Debian 13 container, with the build's dependencies from Proxmox's `pve-no-subscription` repository, and checks Proxmox's archive key against the hash in the script. It takes about ten minutes, and leaves the package, its debug symbols and `SHA256SUMS` in `build/proxmox`.
+The argument is what to build of `git.proxmox.com/git/pve-qemu.git`: a version, which is the commit Proxmox calls "bump version to 11.1.3-4", or a commit or a branch. The package gets Proxmox's version with `+gpupv1` after it, and `--suffix` names another. The script needs podman or docker and no root. It builds in a Debian 13 container, with the build's dependencies from Proxmox's `pve-no-subscription` repository, and checks Proxmox's archive key against the hash in the script. It takes about ten minutes, and leaves the package, its debug symbols and `SHA256SUMS` in `build/proxmox`. On a PC with little RAM, `DEB_BUILD_OPTIONS=parallel=3` before the command limits the build to three jobs. With 7 GiB and eight jobs, the kernel killed a compiler for want of memory.
 
 It takes the patches from `qemu/qemu-gpupv.patch` in the same checkout: every commit that touches `hw/hyperv/` or `include/hw/hyperv/`. If one of those also touches anything but `hw/i386/acpi-build.c`, it stops, so a new commit is looked at before it goes into the package. `--patches-only` writes the patches to `build/proxmox/patches` and stops there.
 
-`11.1.3-2+gpupv1` was built with the same steps, by hand, before the script. The script has built `TODO-11.1.3-4`.
+`11.1.3-2+gpupv1` and the `11.1.3-4+gpupv1` that runs here were built with the same steps, by hand, before the script. The script has built `11.1.3-4+gpupv1` too, in 11 minutes with three jobs, and its package has the same files, version and dependencies as the one that runs.
 
 ## Installing it
 
 ```
-apt install ./pve-qemu-kvm_11.1.3-2+gpupv1_amd64.deb
+apt install ./pve-qemu-kvm_11.1.3-4+gpupv1_amd64.deb
 apt-mark hold pve-qemu-kvm
 ```
 
 It replaced one package, and added and removed nothing. VMs that are running keep the QEMU they started with until they're next started.
 
-The hold matters. `11.1.3-2+gpupv1` sorts above Proxmox's `11.1.3-2` and below its next release, so without the hold the next update puts Proxmox's package back, and every VM with GPU-PV words in its `args:` stops starting, as QEMU doesn't know the devices. Other VMs don't mind either package.
+The hold matters. `11.1.3-4+gpupv1` sorts above Proxmox's `11.1.3-4` and below its next release, so without the hold the next update puts Proxmox's package back, and every VM with GPU-PV words in its `args:` stops starting, as QEMU doesn't know the devices. Other VMs don't mind either package.
 
 With the hold, Proxmox's QEMU fixes, security fixes among them, don't reach the host until a build of the new release is installed. `apt list --upgradable` shows when one is waiting. Each new `pve-qemu-kvm` from Proxmox needs a new build before it's installed. A `qemu-server` that asks for a newer `pve-qemu-kvm` would be held back too.
 
@@ -106,8 +106,9 @@ Each VM has its own daemon, as [standalone](standalone.md) describes: started be
 | A USB licence dongle passed through | works in Windows | both |
 | #271's video, `GUESTHOUSE_AMD_VIDEO=1` with `_CLOSE=1` and `_REST=1500` | a RustDesk session encoded 3440x1440 with `hevc_amf` on the earlier build. On both, RustDesk's codec probe opened its six encoders at each start of the service | both |
 | Four guests on the card, below | | `+gpupv1` |
+| 0.7.5's own daemon, in both VMs | the GPU is working. With the video switches, RustDesk's probe opened its six encoders, and each was closed | `11.1.3-4+gpupv1` |
 
-GravityMark 1.89, Direct3D 12, 1920x1080, was 6599 in the imported VM and 6531 in the other one on the earlier build, and 6447 in the imported one on `+gpupv1`, beside the other VM. The same Windows under Guesthouse's own start was 6287 to 6553.
+GravityMark 1.89, Direct3D 12, 1920x1080, was 6599 in the imported VM and 6531 in the other one on the earlier build, 6447 in the imported one on `11.1.3-2+gpupv1`, beside the other VM, and 6468 there on `11.1.3-4+gpupv1` with 0.7.5's daemon. The same Windows under Guesthouse's own start was 6287 to 6553.
 
 Four guests shared the card at once, by three routes: the two Windows VMs on GPU-PV, a Debian VM on Proxmox's VirGL (`vga: virtio-gl`), and a container given `/dev/dri/renderD128`. Nothing failed and nothing reset.
 
@@ -124,7 +125,7 @@ From amdgpu's counts in fdinfo, the two Windows guests had 49 % and 47 % of the 
 - **Don't install `qemu-utils`.** Guesthouse's messages suggest it on Debian, and on Proxmox it removes `proxmox-ve`, `pve-manager`, `pve-qemu-kvm` and `qemu-server`. Proxmox's own packages have `qemu-img` already.
 - **Landlock is off in Proxmox's kernel.** Without it Guesthouse won't start a GPU machine of its own unless the machine is allowed to run unjailed, and the guest has to be made and started with Guesthouse first. The host here runs with `lsm=landlock,lockdown,yama,integrity,apparmor` on the kernel's line, which is Proxmox's list with Landlock first. A daemon on a host without it wasn't tried.
 - **Proxmox doesn't count the guest's RAM.** It's a file in `/dev/shm`, so Proxmox shows a VM using under 100 MiB, while the whole of its RAM is taken from the start. Leave room for it yourself, and in `/dev/shm`, which is half the RAM by default.
-- **The three RAM sizes go together.** `memory:`, the `size=` of the RAM backend and `GUESTHOUSE_RAM`. QEMU won't start when the first two differ.
+- **The three RAM sizes go together.** `memory:`, the `size=` of the RAM backend and `GUESTHOUSE_RAM`. The hookscript here refuses to start a VM when they differ, so what QEMU does then wasn't seen.
 - **A restore to another VM ID** keeps the old ID wherever `args:` has it, as in the memory files' names above.
 - **Four daemons at most** for one user at a time, one in each slot, and Guesthouse's own machines use the same slots.
 - **QEMU runs as root, without Guesthouse's jail.** That's how Proxmox runs every VM. The daemon is still jailed.
@@ -135,5 +136,6 @@ From amdgpu's counts in fdinfo, the two Windows guests had 49 % and 47 % of the 
 - NVIDIA and Intel cards, and AMD cards other than the 780M.
 - Live migration, HA and clusters, snapshots with or without RAM, suspend to disk, memory hotplug and the balloon.
 - Linux guests this way.
-- A release's own daemon from 0.7.1 on, and any `pve-qemu-kvm` other than the ones above.
+- A release's daemon between 0.7.1 and 0.7.4, and any `pve-qemu-kvm` other than the ones above.
+- A remote desktop session on 0.7.5's daemon with the video switches. Its codec probe ran, a session hasn't yet.
 - More than a few days' running.

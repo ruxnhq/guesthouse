@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use guesthouse_control::client::{self, Unreached};
-use guesthouse_control::{Answer, CardInfo, Machine, NewMachine, Request};
+use guesthouse_control::{Answer, CardInfo, Machine, MachineSettings, NewMachine, Request};
 use windows_reactor::ComponentCompletion;
 
 use crate::app::Message;
@@ -42,11 +42,14 @@ pub enum Job {
     Account(String),
     /// What remoteman's viewer needs to show a Windows guest's screen.
     Screen(String),
+    /// What a stopped machine is given at each boot from now on.
+    Change(String, MachineSettings),
 }
 
 impl Job {
     fn request(&self) -> Request {
         match self.clone() {
+            Job::Change(name, settings) => Request::Change { name, settings },
             Job::Start(name) => Request::Start { name },
             Job::Stop(name) => Request::Stop { name },
             Job::Delete(name) => Request::Delete { name },

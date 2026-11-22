@@ -12,7 +12,7 @@ use guesthouse_control::client::Unreached;
 use guesthouse_control::{Card, CardInfo, Machine, State, System};
 use windows_reactor::*;
 
-use crate::app::{self, Account, ConsoleState, DELETE_KEY, Kind, Line, Main, Message, NEW_TAG, Page};
+use crate::app::{self, Account, ConsoleState, DELETE_KEY, Draft, Kind, Line, Main, Message, NEW_TAG, Page};
 
 /// The app's icon, the same as the GTK app's, for where it's shown large.
 const LOGO_SVG: &[u8] =
@@ -66,6 +66,9 @@ mod glyph {
     pub const SCREEN: &str = "\u{E7F4}";
     pub const CONSOLE: &str = "\u{E7F8}";
     pub const CLOSE: &str = "\u{E711}";
+    pub const SAVE: &str = "\u{E74E}";
+    pub const UNDO: &str = "\u{E7A7}";
+    pub const GAME: &str = "\u{E7FC}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -256,7 +259,9 @@ fn machine_page(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
     let mut sections = vec![header(machine, context)];
     sections.push(group("Status", status_rows(machine)));
     sections.push(group("Connect", connect_rows(main, machine, context)));
-    sections.push(group("Details", details_rows(machine)));
+    if let Some(draft) = main.draft.as_ref().filter(|draft| draft.machine == machine.name) {
+        sections.push(settings_section(main, machine, draft, context));
+    }
     sections.push(log_section(main, context));
     page(sections)
 }
@@ -452,14 +457,129 @@ fn console_row(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> V
     )
 }
 
-fn details_rows(machine: &Machine) -> Vec<View> {
-    let card = machine.card.as_deref().unwrap_or("None");
-    vec![
-        row(system_glyph(machine.system), "System", &[], Some(value(system_words(machine.system)))),
-        row(glyph::MEMORY, "Memory", &[], Some(value(&memory_words(machine.memory_mb)))),
-        row(glyph::PROCESSOR, "Processors", &[], Some(value(&machine.processors.to_string()))),
-        row(glyph::CARD, "Card", &["Shared with the guest from its second boot on."], Some(value(card))),
-    ]
+/// What the machine is given at each boot, which can be changed while it's off: the same controls
+/// as the new machine's form, then Save and Undo.
+fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &ViewContext<Main>) -> View {
+    let stopped = machine.state == State::Stopped;
+    let open = stopped && !draft.saving;
+    let mut rows = vec![
+        row(
+            glyph::MEMORY,
+            "Memory (MB)",
+            &["Taken from this PC while the machine runs."],
+            Some(number_box(
+                "Memory (MB)",
+                draft.memory_mb,
+                1024.0,
+                open,
+                context.callback(Message::SetMemory),
+            )),
+        ),
+        row(
+            glyph::PROCESSOR,
+            "Processors",
+            &[],
+            Some(number_box(
+                "Processors",
+                draft.processors,
+                1.0,
+                open,
+                context.callback(Message::SetProcessors),
+            )),
+        ),
+        row(
+            glyph::CARD,
+            "Card",
+            &[CARD_NOTE],
+            Some(card_box(
+                main,
+                &main.settings_cards(),
+                &draft.card,
+                open,
+                context.callback(Message::SetCard),
+            )),
+        ),
+    ];
+    if app::offers_dlss(machine.system, &draft.card, main.cards()) {
+        let switch = ToggleSwitch::new()
+            .is_on(draft.nvapi_wrapper)
+            .is_enabled(open)
+            .automation_name("DLSS")
+            .on_toggled(context.callback(Message::SetDlss));
+        rows.push(row(glyph::GAME, "DLSS", &[DLSS_NOTE], Some(switch.into())));
+    }
+
+    let changed = draft.changed(machine);
+    let save = button("Save", glyph::SAVE, context.message(Message::SaveSettings), true)
+        .is_enabled(open && changed && draft.settings().is_some());
+    let undo = button("Undo", glyph::UNDO, context.message(Message::UndoSettings), false)
+        .is_enabled(open && (changed || draft.refused.is_some()));
+    let mut foot: Vec<View> = vec![save.into(), undo.into()];
+    let (words, bad) = match (&draft.refused, stopped) {
+        (Some(reason), _) => (Some(reason.as_str()), true),
+        (None, false) => (Some("Its settings change while it's off. Stop it first."), false),
+        (None, true) if draft.saving => (Some("Saving."), false),
+        (None, true) if changed && draft.settings().is_none() => {
+            (Some("Give it memory and processors first."), false)
+        }
+        (None, true) if changed => (Some("They take effect when it next starts."), false),
+        (None, true) => (None, false),
+    };
+    if let Some(words) = words {
+        let line = caption(words).vertical_alignment(VerticalAlignment::Center);
+        foot.push(if bad { line.foreground(ThemeBrush::SystemCritical).into() } else { line.into() });
+    }
+    let foot = StackPanel::new().orientation(Orientation::Horizontal).spacing(12.0).children(foot);
+    StackPanel::new().spacing(HEADING_GAP).children((group("Settings", rows), foot)).into()
+}
+
+/// What a card is to the guest, under the card's list.
+const CARD_NOTE: &str = "The card the guest shares with this PC. Default is whichever has the most memory of its own \
+                         when it boots.";
+
+/// The DLSS switch's note, in the Linux app's words.
+const DLSS_NOTE: &str = "NVIDIA's NVAPI won't tell DLSS which card it's on in a virtual machine, so Guesthouse puts \
+                         its own NVAPI in Windows' place for it. It isn't signed, and some games' anti-cheat refuses \
+                         to start with it. Turn this off for those games, and NVIDIA's goes back. Takes effect when \
+                         the machine starts.";
+
+/// A box for a whole number, as memory and processors are given.
+fn number_box(
+    name: &str,
+    value: Option<f64>,
+    step: f64,
+    enabled: bool,
+    changed: Callback<Option<f64>>,
+) -> View {
+    NumberBox::new()
+        .value(value)
+        .minimum(1.0)
+        .small_change(step)
+        .spin_button_placement_mode(NumberBoxSpinButtonPlacementMode::Inline)
+        .is_enabled(enabled)
+        .width(180.0)
+        .automation_name(name)
+        .on_value_changed(changed)
+        .into()
+}
+
+/// The list of cards, with `chosen` selected.
+fn card_box(
+    main: &Main,
+    choices: &[Card],
+    chosen: &Card,
+    enabled: bool,
+    changed: Callback<Option<usize>>,
+) -> View {
+    let names: Vec<String> = choices.iter().map(|card| card_words(card, main.cards())).collect();
+    ComboBox::new()
+        .items_source(names)
+        .selected_index(choices.iter().position(|card| card == chosen))
+        .is_enabled(enabled)
+        .width(360.0)
+        .automation_name("Card")
+        .on_selection_changed(changed)
+        .into()
 }
 
 fn log_section(main: &Main, context: &ViewContext<Main>) -> View {
@@ -550,16 +670,7 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
     sections.push(group("Machine", vec![name_row, image_row]));
 
     let number = |name: &str, value: Option<f64>, step: f64, changed: Callback<Option<f64>>| -> View {
-        NumberBox::new()
-            .value(value)
-            .minimum(1.0)
-            .small_change(step)
-            .spin_button_placement_mode(NumberBoxSpinButtonPlacementMode::Inline)
-            .is_enabled(!busy)
-            .width(180.0)
-            .automation_name(name)
-            .on_value_changed(changed)
-            .into()
+        number_box(name, value, step, !busy, changed)
     };
     sections.push(group(
         "Size",
@@ -585,24 +696,8 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
         ],
     ));
 
-    let choices = main.card_choices();
-    let names: Vec<String> = choices.iter().map(|card| card_words(card, main.cards())).collect();
-    let cards = ComboBox::new()
-        .items_source(names)
-        .selected_index(choices.iter().position(|card| *card == form.card))
-        .is_enabled(!busy)
-        .width(360.0)
-        .automation_name("Card")
-        .on_selection_changed(context.callback(Message::Card));
-    sections.push(group(
-        "Graphics",
-        vec![row(
-            glyph::CARD,
-            "Card",
-            &["The card the guest shares with this PC. Default is whichever has the most memory of its own when it boots."],
-            Some(cards.into()),
-        )],
-    ));
+    let cards = card_box(main, &main.card_choices(), &form.card, !busy, context.callback(Message::Card));
+    sections.push(group("Graphics", vec![row(glyph::CARD, "Card", &[CARD_NOTE], Some(cards))]));
 
     let ready = form.machine().is_some() && !busy;
     let mut foot: Vec<View> =
@@ -921,11 +1016,6 @@ fn copy_row(glyph: &str, heading: &str, text: &str, context: &ViewContext<Main>)
         .is_text_selection_enabled(true)
         .text_wrapping(TextWrapping::Wrap);
     row_with(glyph, heading, text, Some(copy.into()))
-}
-
-/// A row's value on its right, which can't be changed here.
-fn value(text: &str) -> View {
-    TextBlock::new().text(text).foreground(ThemeBrush::SecondaryText).into()
 }
 
 /// Lines of a log, newest at the foot, which the view keeps in sight as lines come.

@@ -13,7 +13,9 @@ use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use guesthouse_control::client::Unreached;
-use guesthouse_control::{Answer, Card, CardInfo, Event, Machine, NewMachine, State, valid_name};
+use guesthouse_control::{
+    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, State, System, valid_name,
+};
 use windows_reactor::*;
 
 use crate::bridge::{self, Ended, Job, Seen, Watch, Window};
@@ -193,6 +195,81 @@ impl Form {
     }
 }
 
+/// What a machine is given at each boot, as its settings say now.
+pub fn settings_of(machine: &Machine) -> MachineSettings {
+    MachineSettings {
+        memory_mb: machine.memory_mb,
+        processors: machine.processors,
+        card: machine.chosen_card.clone(),
+        nvapi_wrapper: machine.nvapi_wrapper,
+    }
+}
+
+/// The selected machine's settings as the person is changing them, before they're saved. It follows
+/// the service while nothing has been changed, and goes back to what's saved once the machine starts,
+/// as they can only be changed while it's off.
+#[derive(Clone, PartialEq)]
+pub struct Draft {
+    pub machine: String,
+    pub memory_mb: Option<f64>,
+    pub processors: Option<f64>,
+    pub card: Card,
+    pub nvapi_wrapper: bool,
+    /// Asked for, and not answered yet.
+    pub saving: bool,
+    /// Why the service said no, until they're changed again.
+    pub refused: Option<String>,
+}
+
+impl Draft {
+    fn of(machine: &Machine) -> Draft {
+        Draft {
+            machine: machine.name.clone(),
+            memory_mb: Some(machine.memory_mb as f64),
+            processors: Some(machine.processors as f64),
+            card: machine.chosen_card.clone(),
+            nvapi_wrapper: machine.nvapi_wrapper,
+            saving: false,
+            refused: None,
+        }
+    }
+
+    /// The settings to ask for, once each number is one. Whether they suit this PC is the
+    /// service's to say, as it is for a new machine.
+    pub fn settings(&self) -> Option<MachineSettings> {
+        let whole =
+            |value: Option<f64>| value.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.round() as u64);
+        Some(MachineSettings {
+            memory_mb: whole(self.memory_mb)?,
+            processors: u32::try_from(whole(self.processors)?).ok()?,
+            card: self.card.clone(),
+            nvapi_wrapper: self.nvapi_wrapper,
+        })
+    }
+
+    /// Whether the person has changed something from what `machine`'s settings say.
+    pub fn changed(&self, machine: &Machine) -> bool {
+        self.settings() != Some(settings_of(machine))
+    }
+}
+
+/// Whether a card is NVIDIA's, by the name Windows gives it. The default is the card that's the
+/// default now, and none is no one's.
+pub fn nvidia(card: &Card, cards: &[CardInfo]) -> bool {
+    let name = match card {
+        Card::Default => cards.iter().find(|card| card.default).map(|card| card.name.as_str()),
+        Card::Named(name) => Some(name.as_str()),
+        Card::None => None,
+    };
+    name.is_some_and(|name| name.to_ascii_lowercase().contains("nvidia"))
+}
+
+/// Whether a machine's settings offer the DLSS switch: a Windows guest with an NVIDIA card, as the
+/// wrapper is NVAPI's, which only NVIDIA's Windows driver has.
+pub fn offers_dlss(system: System, card: &Card, cards: &[CardInfo]) -> bool {
+    system == System::Windows && nvidia(card, cards)
+}
+
 /// A new machine being made, or made: its events, and how it ended once it has.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Making {
@@ -220,6 +297,8 @@ pub struct Main {
     /// The machine whose Delete is being asked about.
     pub deleting: Option<String>,
     pub form: Form,
+    /// The selected machine's settings, as the person is changing them.
+    pub draft: Option<Draft>,
     pub making: Option<Making>,
     /// The console's window, while one is open. There's one at a time.
     pub console: Option<OpenConsole>,
@@ -281,6 +360,14 @@ pub enum Message {
     /// A card was chosen, by its place in the list: Default, each card, then None.
     Card(Option<usize>),
     Create,
+    /// The selected machine's settings, as the person changes them.
+    SetMemory(Option<f64>),
+    SetProcessors(Option<f64>),
+    /// By its place in `Main::settings_cards`.
+    SetCard(Option<usize>),
+    SetDlss(bool),
+    SaveSettings,
+    UndoSettings,
     NewsClosed,
 }
 
@@ -316,6 +403,70 @@ impl Main {
         std::iter::once(Card::Default).chain(named).chain(std::iter::once(Card::None)).collect()
     }
 
+    /// The cards a machine's settings offer: the form's, and the one it has by name if that card
+    /// has gone from this PC, so the list can still say what it has.
+    pub fn settings_cards(&self) -> Vec<Card> {
+        let mut choices = self.card_choices();
+        if let Some(draft) = &self.draft
+            && !choices.contains(&draft.card)
+        {
+            choices.insert(choices.len() - 1, draft.card.clone());
+        }
+        choices
+    }
+
+    /// Starts the selected machine's draft afresh from what the service says, unless the person
+    /// has changed something while it's stopped.
+    fn follow_draft(&mut self) {
+        let Some(machine) = self.machine() else {
+            self.draft = None;
+            return;
+        };
+        let keep = self.draft.as_ref().is_some_and(|draft| {
+            draft.machine == machine.name
+                && machine.state == State::Stopped
+                && (draft.saving || draft.refused.is_some() || draft.changed(machine))
+        });
+        if !keep {
+            self.draft = Some(Draft::of(machine));
+        }
+    }
+
+    /// Changes the draft, which clears the service's last no.
+    fn edit(&mut self, change: impl FnOnce(&mut Draft)) {
+        if let Some(draft) = &mut self.draft
+            && !draft.saving
+        {
+            change(draft);
+            draft.refused = None;
+        }
+    }
+
+    fn save_settings(&mut self) {
+        let Some(machine) = self.machine() else { return };
+        if machine.state != State::Stopped {
+            return;
+        }
+        let Some(draft) = self.draft.as_mut().filter(|draft| !draft.saving) else { return };
+        let Some(settings) = draft.settings() else { return };
+        if !self.live {
+            // A preview keeps them itself, as there's no service to.
+            let name = draft.machine.clone();
+            if let Ok(status) = &mut self.seen
+                && let Some(machine) = status.machines.iter_mut().find(|machine| machine.name == name)
+            {
+                machine.memory_mb = settings.memory_mb;
+                machine.processors = settings.processors;
+                machine.chosen_card = settings.card;
+                machine.nvapi_wrapper = settings.nvapi_wrapper;
+            }
+            self.follow_draft();
+            return;
+        }
+        draft.saving = true;
+        self.ask(|name| Job::Change(name, settings));
+    }
+
     fn tell(&mut self, text: impl Into<String>, bad: bool) {
         self.news = Some(News { text: text.into(), bad });
     }
@@ -337,6 +488,8 @@ impl Main {
         self.rewatch = false;
         self.log.clear();
         self.account = None;
+        self.draft = None;
+        self.follow_draft();
         if let Some(name) = self.selected.clone().filter(|_| self.live) {
             self.watch_id += 1;
             self.watch = Some(bridge::watch(self.watch_id, name, self.window.clone()));
@@ -355,10 +508,24 @@ impl Main {
             Some(_) => {}
             None => self.select(names.first().cloned()),
         }
+        self.follow_draft();
     }
 
     fn answered(&mut self, job: Job, answer: Result<Answer, Unreached>) {
+        if let Job::Change(name, _) = &job
+            && let Some(draft) = self.draft.as_mut().filter(|draft| &draft.machine == name)
+        {
+            draft.saving = false;
+            // A no is shown beside the settings it's about, where it's seen.
+            if let Ok(Answer::Refused { reason }) = &answer {
+                draft.refused = Some(reason.clone());
+                return;
+            }
+        }
         match (job, answer) {
+            (Job::Change(name, _), Ok(Answer::Ok)) => {
+                self.tell(format!("{name}'s settings are saved, for when it next starts."), false)
+            }
             (Job::Account(machine), Ok(Answer::Account { user, password })) => {
                 if self.selected.as_deref() == Some(machine.as_str()) {
                     self.account = Some(Account { machine, user, password });
@@ -389,6 +556,7 @@ impl Main {
             // Sooner than the next answer to Status, so the buttons follow at once.
             machine.state = *state;
         }
+        self.follow_draft();
         self.end_stopped_console();
         push(&mut self.log, Line::of(event));
     }
@@ -529,6 +697,7 @@ impl Component for Main {
             news: None,
             deleting: None,
             form: Form::default(),
+            draft: None,
             making: None,
             console: None,
             console_id: 0,
@@ -635,11 +804,93 @@ impl Component for Main {
             }
             Message::Card(None) => {}
             Message::Create => self.create(),
+            Message::SetMemory(value) => self.edit(|draft| draft.memory_mb = value),
+            Message::SetProcessors(value) => self.edit(|draft| draft.processors = value),
+            Message::SetCard(Some(index)) => {
+                if let Some(card) = self.settings_cards().get(index).cloned() {
+                    self.edit(|draft| draft.card = card);
+                }
+            }
+            Message::SetCard(None) => {}
+            Message::SetDlss(on) => self.edit(|draft| draft.nvapi_wrapper = on),
+            Message::SaveSettings => self.save_settings(),
+            Message::UndoSettings => {
+                self.draft = None;
+                self.follow_draft();
+            }
             Message::NewsClosed => self.news = None,
         }
     }
 
     fn view(&self, _: &Start, context: &mut ViewContext<Self>) -> View {
         crate::window::view(self, context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn machine() -> Machine {
+        Machine {
+            name: "win".to_owned(),
+            system: System::Windows,
+            state: State::Stopped,
+            set_up: true,
+            memory_mb: 8192,
+            processors: 4,
+            card: Some("NVIDIA GeForce RTX 5090".to_owned()),
+            chosen_card: Card::Default,
+            nvapi_wrapper: true,
+            address: None,
+        }
+    }
+
+    fn cards() -> Vec<CardInfo> {
+        vec![
+            CardInfo { name: "NVIDIA GeForce RTX 5090".to_owned(), memory_mb: Some(32607), default: true },
+            CardInfo { name: "AMD Radeon RX 7900 XTX".to_owned(), memory_mb: Some(24560), default: false },
+        ]
+    }
+
+    #[test]
+    fn a_fresh_draft_is_unchanged_and_asks_for_what_the_machine_has() {
+        let machine = machine();
+        let draft = Draft::of(&machine);
+        assert!(!draft.changed(&machine));
+        assert_eq!(draft.settings(), Some(settings_of(&machine)));
+    }
+
+    #[test]
+    fn a_draft_with_a_number_missing_asks_for_nothing_and_counts_as_changed() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        draft.processors = None;
+        assert_eq!(draft.settings(), None);
+        assert!(draft.changed(&machine));
+        draft.processors = Some(0.0);
+        assert_eq!(draft.settings(), None);
+    }
+
+    #[test]
+    fn turning_dlss_off_is_a_change() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        draft.nvapi_wrapper = false;
+        assert!(draft.changed(&machine));
+        assert!(!draft.settings().unwrap().nvapi_wrapper);
+    }
+
+    #[test]
+    fn dlss_is_offered_for_a_windows_guest_with_an_nvidia_card_only() {
+        let cards = cards();
+        let named = |name: &str| Card::Named(name.to_owned());
+        assert!(offers_dlss(System::Windows, &Card::Default, &cards));
+        assert!(offers_dlss(System::Windows, &named("NVIDIA GeForce RTX 5090"), &cards));
+        assert!(!offers_dlss(System::Windows, &named("AMD Radeon RX 7900 XTX"), &cards));
+        assert!(!offers_dlss(System::Windows, &Card::None, &cards));
+        assert!(!offers_dlss(System::Linux, &Card::Default, &cards));
+        // With no card the default, the default is no one's.
+        assert!(!offers_dlss(System::Windows, &Card::Default, &cards[1..]));
     }
 }

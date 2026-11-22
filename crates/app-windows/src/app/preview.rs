@@ -8,7 +8,8 @@
 //! ```
 //!
 //! The states are `running`, `linux`, `starting`, `empty`, `away`, `refused`, `new`, `making`,
-//! `failed` and `delete`. Nothing is sent to the service, whatever is pressed.
+//! `failed`, `delete`, `settings` (a stopped machine's settings being changed) and `settings-refused`
+//! (the service said no to them). Nothing is sent to the service, whatever is pressed.
 
 use guesthouse_control::client::Unreached;
 use guesthouse_control::{Card, CardInfo, Machine, State, System};
@@ -79,6 +80,18 @@ pub fn stage(main: &mut Main) {
                 ended,
             });
         }
+        "settings" | "settings-refused" => {
+            show(main, "win11", State::Stopped);
+            if let Some(draft) = &mut main.draft {
+                draft.memory_mb = Some(24576.0);
+                draft.nvapi_wrapper = false;
+                if state == "settings-refused" {
+                    draft.processors = Some(64.0);
+                    draft.refused =
+                        Some("A machine has 1 to 32 processors, as many as this PC has.".to_owned());
+                }
+            }
+        }
         "delete" => {
             show(main, "ubuntu", State::Stopped);
             main.deleting = Some("ubuntu".to_owned());
@@ -111,6 +124,7 @@ fn show(main: &mut Main, name: &str, state: State) {
     }
     main.page = Page::Machine;
     main.selected = Some(name.to_owned());
+    main.follow_draft();
 }
 
 fn status() -> Status {
@@ -122,6 +136,8 @@ fn status() -> Status {
         memory_mb: 16384,
         processors: 8,
         card: card.map(str::to_owned),
+        chosen_card: card.map_or(Card::None, |card| Card::Named(card.to_owned())),
+        nvapi_wrapper: true,
         address: address.map(str::to_owned),
     };
     let card = |name: &str, memory_mb, default| CardInfo { name: name.to_owned(), memory_mb, default };

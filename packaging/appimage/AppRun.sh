@@ -61,15 +61,16 @@ install_here() {
 }
 
 # On a PC with no GTK or libadwaita yet, the window takes the AppImage's own, which are Ubuntu 24.04's.
-# GIO and GTK are kept from the PC's own modules, which were built for other versions of them. The
-# installer keeps all of this from what it starts, as the install adds the PC's own GTK.
+# GIO and GTK are kept from the PC's own modules, which were built for other versions of them, and it
+# draws without OpenGL, as the PC's OpenGL may lack what this GTK looks for, and the window doesn't need
+# it. The installer keeps all of this from what it starts, as the install adds the PC's own GTK.
 with_bundled_gtk() {
     libs=$here/installer-libs
     loaders=$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/guesthouse-loaders.XXXXXX")
     sed "s|@INSTALLER_LIBS@|$libs|g" "$libs/loaders.cache" >"$loaders"
     result=0
     LD_LIBRARY_PATH=$libs/lib GDK_PIXBUF_MODULE_FILE=$loaders GIO_MODULE_DIR=$libs/gio-modules GTK_IM_MODULE=simple \
-        GUESTHOUSE_BUNDLED_GTK=1 GUESTHOUSE_INSTALL_FROM=$payload "$payload/guesthouse-no-hdr" || result=$?
+        GSK_RENDERER=cairo GUESTHOUSE_BUNDLED_GTK=1 GUESTHOUSE_INSTALL_FROM=$payload "$payload/guesthouse-no-hdr" || result=$?
     rm -f "$loaders"
     return "$result"
 }

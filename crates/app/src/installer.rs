@@ -25,8 +25,14 @@ pub const IN_A_TERMINAL: u8 = 75;
 const BUNDLED_GTK_VARIABLE: &str = "GUESTHOUSE_BUNDLED_GTK";
 /// What AppRun sets for the AppImage's own GTK. Nothing the window starts may have them: install.sh
 /// runs the PC's own programs, and the installed app the PC's own GTK.
-const BUNDLED_GTK_ONLY: [&str; 5] =
-    ["LD_LIBRARY_PATH", "GDK_PIXBUF_MODULE_FILE", "GIO_MODULE_DIR", "GTK_IM_MODULE", BUNDLED_GTK_VARIABLE];
+const BUNDLED_GTK_ONLY: [&str; 6] = [
+    "LD_LIBRARY_PATH",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GIO_MODULE_DIR",
+    "GTK_IM_MODULE",
+    "GSK_RENDERER",
+    BUNDLED_GTK_VARIABLE,
+];
 /// The installed app finds its folder by this, as the launcher sets it.
 const PROGRAM_VARIABLE: &str = "GUESTHOUSE_PROGRAM";
 const APP_PROGRAM: &str = "guesthouse";

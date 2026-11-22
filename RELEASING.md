@@ -34,12 +34,13 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    tests/install/real-in-containers.sh BUILD_FOLDER
    ```
 
-6. **Upload it.** Push the tag, then make the release with these four files, and no others. Nothing points at it yet, so a mistake here costs nothing.
+6. **Upload it.** Push the tag, then make the release with these five files, and no others. Nothing points at it yet, so a mistake here costs nothing.
 
    ```sh
    git push origin vVERSION
    gh release create vVERSION --title VERSION --notes-file NOTES \
      BUILD_FOLDER/guesthouse-VERSION-x86_64.tar.xz \
+     BUILD_FOLDER/guesthouse-VERSION-x86_64.AppImage \
      BUILD_FOLDER/guesthouse-VERSION-source.tar.xz \
      BUILD_FOLDER/guesthouse-VERSION-bundled-source.tar \
      BUILD_FOLDER/SHA256SUMS

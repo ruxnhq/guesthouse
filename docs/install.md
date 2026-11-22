@@ -30,6 +30,14 @@ What `install.sh` does, in order:
 
 It never installs or changes a GPU driver, kernel arguments or services. On an immutable distro it adds no packages and prints what to layer, but the bridge helper still goes in, as `/usr/local` is writable there. If bridged networking says the helper is missing or can't run as root, run the installer again: it puts it back, even when the version is the same.
 
+## The AppImage
+
+Each release also has `guesthouse-VERSION-x86_64.AppImage`, for anyone who'd rather download one file than pipe a script. It isn't a second kind of install. It carries the same release, and `install.sh` from inside it, which does every step above except the download, and puts the release in the same place. So the app, its updates and `uninstall.sh` are the same whichever way it came. It needs no FUSE library.
+
+Opened from the file manager, it opens a terminal for the install, as the plan has to be shown and agreed to there, and `sudo` asks there too. Then it starts the app, and the terminal closes. Once this release or a newer one is installed, opening it again only starts the app, so it can be deleted after the first time. `Guesthouse.AppImage install --dry-run` shows the plan and stops, and `Guesthouse.AppImage uninstall` runs the installed `uninstall.sh`.
+
+The app doesn't run from inside the AppImage. Its folder goes away when the AppImage stops, and a VM's QEMU has to keep running after the app closes. Check the AppImage against `SHA256SUMS` on the release, as nothing else checks it.
+
 A word on the checksum. It proves the download is the release the script names, and that's all. It can't protect you from the script, which is why you should read it.
 
 To update, run the script again, or `~/.local/lib/guesthouse/current/install.sh --update`. It says what will change and refuses while one of its VMs is running. VMs of another copy of Guesthouse, like a build of the repo, don't count. The old version stays until the new one is in place, so a failed update leaves you with what you had. Your machines, disks and settings aren't touched. `--check-update` says if there's a newer release and changes nothing. If your driver has moved to another branch, it tells you what that means. GPU machines won't start until the branches match, and plain VMs still run.

@@ -105,6 +105,16 @@ stdenvNoCC.mkDerivation {
   # QEMU loads EGL when a machine starts, rather than when it is linked.
   runtimeDependencies = [ libglvnd ];
 
+  # The macOS part's QEMU has SDL linked in, and SDL's notes name libraries it may load. autoPatchelf
+  # looks for those too, but a Mac's screen goes through D-Bus and never loads them.
+  autoPatchelfIgnoreMissingDeps = [
+    "libGLES_CM.so.1"
+    "libXtst.so.6"
+    "libXss.so.1"
+    "libdecor-0.so.0"
+    "libsteam_api.so"
+  ];
+
   dontConfigure = true;
   dontBuild = true;
   dontStrip = true;

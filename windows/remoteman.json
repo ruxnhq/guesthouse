@@ -1,12 +1,12 @@
 {
-  "version": "0.1.1",
+  "version": "0.1.2",
   "base": "https://files.ruxn.com/p/remoteman/",
   "host_setup": {
-    "file": "remoteman-host-setup-0.1.1.exe",
-    "sha256": "08013eb1f32bdbda205bc1c68e7bfe5a086c070f1832ebf426d8e48d6fbdea66"
+    "file": "remoteman-host-setup-0.1.2.exe",
+    "sha256": "4dc5d1b8712210aed9451782788ce021c8eed17cb63c3a4c2cfdfc87b857e2eb"
   },
   "viewer_zip": {
-    "file": "remoteman-viewer-windows-0.1.1.zip",
-    "sha256": "b5a3997ff3dea464754f276eec3295d830705fc8e5e170173e7af3d833632df9"
+    "file": "remoteman-viewer-windows-0.1.2.zip",
+    "sha256": "14094847f723dd6977b150aa976c5985e4822ae428f189ea9f7d6690a7d9fc75"
   }
 }

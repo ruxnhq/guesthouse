@@ -100,13 +100,13 @@ Send-Line "screen: remoteman's service is $($status.Status), command $((Get-Item
 # Why it stopped, if it did, as Windows saw it: the service manager's word, and any crash of the
 # host's program since this start.
 $since = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = $since } -ErrorAction SilentlyContinue |
+foreach ($entry in Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = $since } -ErrorAction SilentlyContinue |
     Where-Object { $_.Message -like '*remoteman*' } | Select-Object -First 5) {
-    Send-Line "screen: service manager: $(($event.Message -replace '\s+', ' '))"
+    Send-Line "screen: service manager: $(($entry.Message -replace '\s+', ' '))"
 }
-foreach ($event in Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $since } -ErrorAction SilentlyContinue |
+foreach ($entry in Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $since } -ErrorAction SilentlyContinue |
     Where-Object { $_.Message -like '*remoteman*' } | Select-Object -First 3) {
-    $text = $event.Message -replace '\s+', ' '
+    $text = $entry.Message -replace '\s+', ' '
     Send-Line "screen: crash: $($text.Substring(0, [Math]::Min(400, $text.Length)))"
 }
 
@@ -117,8 +117,8 @@ $rule = 'Guesthouse screen'
 if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
     New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7791 -Profile Any | Out-Null
 }
-foreach ($profile in Get-NetConnectionProfile -ErrorAction SilentlyContinue) {
-    Send-Line "screen: network $($profile.InterfaceAlias) is $($profile.NetworkCategory)"
+foreach ($network in Get-NetConnectionProfile -ErrorAction SilentlyContinue) {
+    Send-Line "screen: network $($network.InterfaceAlias) is $($network.NetworkCategory)"
 }
 foreach ($found in Get-NetFirewallRule -DisplayName 'remoteman host', $rule -ErrorAction SilentlyContinue) {
     $ports = $found | Get-NetFirewallPortFilter

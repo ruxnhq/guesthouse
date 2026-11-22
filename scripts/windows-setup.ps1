@@ -98,7 +98,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
     $path = Join-Path $cache $Entry.file
     if (Test-Path -LiteralPath $path) {
         if ((Get-Sha256 $path) -eq $want) {
-            Write-Host "remoteman: $($Entry.file) from the cache, $cache."
+            Write-Information "remoteman: $($Entry.file) from the cache, $cache." -InformationAction Continue
             return $path
         }
         Write-Warning "The cached $path isn't what windows\remoteman.json pins; downloading it again."
@@ -106,7 +106,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
     }
     $url = $Pin.base.TrimEnd('/') + '/' + $Entry.file
     $part = "$path.part"
-    Write-Host "remoteman: downloading $url"
+    Write-Information "remoteman: downloading $url" -InformationAction Continue
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $ProgressPreference = 'SilentlyContinue'

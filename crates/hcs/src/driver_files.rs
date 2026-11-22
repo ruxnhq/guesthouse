@@ -1,0 +1,343 @@
+//! The files a card's driver puts outside the driver store, which a Windows guest needs as well.
+//! GPU-PV lends the guest the driver's own folder in the host's driver store, but a driver also
+//! installs files elsewhere: loaders a program finds by name, such as Vulkan's and OpenCL's, its
+//! maker's media and compute libraries in System32 and SysWOW64, and on NVIDIA's the files Linux
+//! guests and the driver's settings use. They're named in the driver's install file, the INF in its
+//! folder, by where each group of files goes and which file of the folder each one is.
+//!
+//! A guest's own copy of a file is never replaced: one Guesthouse didn't put there is left as it
+//! is. The files Guesthouse put there are listed in the guest, so a newer driver's can replace
+//! them.
+
+use crate::error::{Error, Result};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// The list of files Guesthouse put in a guest, from the root of its volume.
+pub const PLACED_LIST: &str = r"Guesthouse\driver-files.txt";
+
+/// A file of the driver's folder, and where in a guest it goes, from the root of its volume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placement {
+    pub source: PathBuf,
+    pub target: PathBuf,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Placed {
+    pub copied: usize,
+    /// Already there, the same as the driver's.
+    pub kept: usize,
+    /// The guest's own, left as they are.
+    pub left: Vec<PathBuf>,
+}
+
+/// The folder a destination directory number of an INF stands for, from the root of a Windows
+/// volume: 10 is Windows, 11 System32, 12 its drivers folder, 16425 SysWOW64. 13, the driver
+/// store, isn't one: those files are in the folder the guest is lent.
+fn folder_of(dirid: u32) -> Option<&'static str> {
+    match dirid {
+        10 => Some("Windows"),
+        11 => Some(r"Windows\System32"),
+        12 => Some(r"Windows\System32\drivers"),
+        16425 => Some(r"Windows\SysWOW64"),
+        _ => None,
+    }
+}
+
+/// An INF's text: UTF-16 when it starts with that byte order mark, as many drivers' are, else UTF-8
+/// or what of it reads.
+fn text_of(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// A line without its comment: everything from a `;` that isn't inside quotes.
+fn without_comment(line: &str) -> &str {
+    let mut quoted = false;
+    for (at, c) in line.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => return &line[..at],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Each section of an INF, by its name in lower case, with its lines.
+fn sections(text: &str) -> Vec<(String, Vec<String>)> {
+    let mut all: Vec<(String, Vec<String>)> = Vec::new();
+    for line in text.lines() {
+        let line = without_comment(line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+            all.push((name.trim().to_ascii_lowercase(), Vec::new()));
+        } else if let Some((_, lines)) = all.last_mut() {
+            lines.push(line.to_owned());
+        }
+    }
+    all
+}
+
+/// The lines of every section of this name, as an INF may repeat one.
+fn lines_of<'a>(all: &'a [(String, Vec<String>)], name: &str) -> Vec<&'a String> {
+    all.iter().filter(|(section, _)| section == name).flat_map(|(_, lines)| lines).collect()
+}
+
+fn unquoted(field: &str) -> &str {
+    field.trim().trim_matches('"').trim()
+}
+
+/// Where the files an INF sends outside the driver store go, in a guest, from the root of its
+/// volume, with the name each has in the driver's folder. A file whose name or place is written
+/// with a string the INF defines elsewhere isn't followed.
+pub fn outside_files(inf: &str) -> Vec<(PathBuf, String)> {
+    let all = sections(inf);
+    let mut found = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in lines_of(&all, "destinationdirs") {
+        let Some((section, place)) = line.split_once('=') else { continue };
+        let section = unquoted(section).to_ascii_lowercase();
+        if section == "defaultdestdir" {
+            continue;
+        }
+        let mut place = place.split(',');
+        let Some(folder) = place.next().and_then(|id| unquoted(id).parse().ok()).and_then(folder_of) else {
+            continue;
+        };
+        let mut folder = PathBuf::from(folder);
+        if let Some(sub) = place.next().map(unquoted).filter(|sub| !sub.is_empty()) {
+            if sub.contains('%') || sub.contains("..") {
+                continue;
+            }
+            folder.push(sub);
+        }
+        for entry in lines_of(&all, &section) {
+            let mut fields = entry.split(',');
+            let target = unquoted(fields.next().unwrap_or(""));
+            let source = fields.next().map(unquoted).filter(|source| !source.is_empty()).unwrap_or(target);
+            let plain = |name: &str| {
+                !name.is_empty() && !name.contains(['%', '\\', '/', ':']) && !name.contains("..")
+            };
+            if !plain(target) || !plain(source) {
+                continue;
+            }
+            let goes = folder.join(target);
+            if seen.insert(goes.to_string_lossy().to_ascii_lowercase()) {
+                found.push((goes, source.to_owned()));
+            }
+        }
+    }
+    found
+}
+
+/// The driver folder's install file: the folder is named for it, `NAME.inf_amd64_HASH`.
+fn inf_in(driver_folder: &Path) -> Option<PathBuf> {
+    let name = driver_folder.file_name()?.to_str()?;
+    let at = name.to_ascii_lowercase().find(".inf_")?;
+    let inf = driver_folder.join(&name[..at + 4]);
+    inf.is_file().then_some(inf)
+}
+
+/// Finds a file of the driver's folder by name, in the folder or below it, whatever its case.
+fn find_in(folder: &Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![folder.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).ok()?.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => stack.push(path),
+                Ok(kind)
+                    if kind.is_file() && entry.file_name().to_string_lossy().eq_ignore_ascii_case(name) =>
+                {
+                    return Some(path);
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// What of `driver_folder`'s install file goes outside the driver store, as files of the folder and
+/// where each goes in a guest. Files the folder doesn't have are left out.
+pub fn placements(driver_folder: &Path) -> Result<Vec<Placement>> {
+    let Some(inf) = inf_in(driver_folder) else { return Ok(Vec::new()) };
+    let bytes = fs::read(&inf).map_err(|error| Error::io(format!("Reading {}", inf.display()), error))?;
+    Ok(outside_files(&text_of(&bytes))
+        .into_iter()
+        .filter_map(|(target, source)| Some(Placement { source: find_in(driver_folder, &source)?, target }))
+        .collect())
+}
+
+/// Puts the files of `driver_folder` that its driver installs outside the driver store in the
+/// Windows volume at `guest_root`, where the driver puts them, leaving the guest's own files alone.
+pub fn place(driver_folder: &Path, guest_root: &Path) -> Result<Placed> {
+    let list = guest_root.join(PLACED_LIST);
+    let mut ours: BTreeSet<String> = fs::read_to_string(&list)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| line.trim().to_ascii_lowercase())
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut placed = Placed::default();
+    let fail = |what: &Path, error| Error::io(format!("Placing {}", what.display()), error);
+    for placement in placements(driver_folder)? {
+        let target = guest_root.join(&placement.target);
+        let key = placement.target.to_string_lossy().to_ascii_lowercase();
+        if target.exists() {
+            if !ours.contains(&key) {
+                placed.left.push(placement.target);
+                continue;
+            }
+            let (source, there) = (fs::read(&placement.source), fs::read(&target));
+            if let (Ok(source), Ok(there)) = (source, there)
+                && source == there
+            {
+                placed.kept += 1;
+                continue;
+            }
+        }
+        if let Some(folder) = target.parent() {
+            fs::create_dir_all(folder).map_err(|error| fail(folder, error))?;
+        }
+        fs::copy(&placement.source, &target).map_err(|error| fail(&target, error))?;
+        ours.insert(key);
+        placed.copied += 1;
+    }
+    if placed.copied > 0 {
+        if let Some(folder) = list.parent() {
+            fs::create_dir_all(folder).map_err(|error| fail(folder, error))?;
+        }
+        let text: String = ours.iter().map(|line| format!("{line}\r\n")).collect();
+        fs::write(&list, text).map_err(|error| fail(&list, error))?;
+    }
+    Ok(placed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parts of Intel's Arc driver's install file, as a tester's showed them.
+    const INTEL: &str = "\
+[Version]
+Signature = \"$WINDOWS NT$\"
+[DestinationDirs]
+DefaultDestDir = 13
+MSVCP140_VCRUNTIME140_Wow = 10,SysWOW64
+Vulkan.CopyRT = 11
+OpenCL_Gpu.Copy64_Ext = 11 ; the loader
+MSDK_w10rs1.copy64 = 11
+Kept.Here = 13
+Elsewhere = 16422
+[MSVCP140_VCRUNTIME140_Wow]
+msvcp140.dll,msvcp140_32.dll,,0x00004020
+[Vulkan.CopyRT]
+vulkan-1.dll,    vulkan-1-64.dll,,    0x00004020
+vulkaninfo.exe,    vulkaninfo-64.exe,,    0x00004020
+[OpenCL_Gpu.Copy64_Ext]
+OpenCL.dll,Intel_OpenCL_ICD64.dll,,0x00004020
+[MSDK_w10rs1.copy64]
+mfxplugin64_hw.dll,,,%COPYFLAG4000%
+%NAME%.dll
+[Kept.Here]
+igd12umd64.dll
+[Elsewhere]
+tool.exe
+";
+
+    #[test]
+    fn the_files_outside_the_driver_store_and_their_places() {
+        let found = outside_files(INTEL);
+        let found: Vec<(String, &str)> = found
+            .iter()
+            .map(|(target, source)| (target.to_string_lossy().into_owned(), source.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (r"Windows\SysWOW64\msvcp140.dll".to_owned(), "msvcp140_32.dll"),
+                (r"Windows\System32\vulkan-1.dll".to_owned(), "vulkan-1-64.dll"),
+                (r"Windows\System32\vulkaninfo.exe".to_owned(), "vulkaninfo-64.exe"),
+                (r"Windows\System32\OpenCL.dll".to_owned(), "Intel_OpenCL_ICD64.dll"),
+                (r"Windows\System32\mfxplugin64_hw.dll".to_owned(), "mfxplugin64_hw.dll"),
+            ]
+        );
+    }
+
+    #[test]
+    fn utf16_install_files_read_too() {
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(
+            "[DestinationDirs]\r\nA = 11\r\n[A]\r\nx.dll\r\n".encode_utf16().flat_map(u16::to_le_bytes),
+        );
+        let found = outside_files(&text_of(&bytes));
+        assert_eq!(found, [(PathBuf::from(r"Windows\System32\x.dll"), "x.dll".to_owned())]);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("guesthouse-driver-files-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_guests_own_file_is_left_and_ours_are_updated() {
+        let host = scratch("host");
+        let folder = host.join("card.inf_amd64_0123456789abcdef");
+        fs::create_dir_all(folder.join("sub")).unwrap();
+        fs::write(
+            folder.join("card.inf"),
+            "[DestinationDirs]\nA = 11\nB = 10,SysWOW64\n[A]\nloader.dll,loader-64.dll\n[B]\nvcruntime140.dll,vc32.dll\n",
+        )
+        .unwrap();
+        fs::write(folder.join("sub").join("loader-64.dll"), b"loader one").unwrap();
+        fs::write(folder.join("vc32.dll"), b"driver's runtime").unwrap();
+        let guest = scratch("guest");
+        fs::create_dir_all(guest.join(r"Windows\SysWOW64")).unwrap();
+        fs::write(guest.join(r"Windows\SysWOW64\vcruntime140.dll"), b"windows' own runtime").unwrap();
+
+        let placed = place(&folder, &guest).unwrap();
+        assert_eq!(placed.copied, 1);
+        assert_eq!(placed.left, [PathBuf::from(r"Windows\SysWOW64\vcruntime140.dll")]);
+        assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader one");
+        assert_eq!(
+            fs::read(guest.join(r"Windows\SysWOW64\vcruntime140.dll")).unwrap(),
+            b"windows' own runtime"
+        );
+
+        assert_eq!(place(&folder, &guest).unwrap().kept, 1);
+        fs::write(folder.join("sub").join("loader-64.dll"), b"loader two").unwrap();
+        assert_eq!(place(&folder, &guest).unwrap().copied, 1, "a newer driver's file replaces ours");
+        assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader two");
+
+        let _ = fs::remove_dir_all(host);
+        let _ = fs::remove_dir_all(guest);
+    }
+
+    /// What this PC's own cards' drivers would place, printed: `cargo test -p guesthouse-hcs
+    /// placements_of_this_pcs_cards -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn placements_of_this_pcs_cards() {
+        for card in crate::gpu::cards().unwrap() {
+            let Some(folder) = card.driver_folder else { continue };
+            let found = placements(&folder).unwrap();
+            println!("{}: {} files from {}", card.name, found.len(), folder.display());
+            for placement in found {
+                println!("  {} <- {}", placement.target.display(), placement.source.display());
+            }
+        }
+    }
+}

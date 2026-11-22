@@ -20,6 +20,8 @@ pub mod schema;
 #[cfg(windows)]
 pub mod disk;
 #[cfg(windows)]
+pub mod driver_files;
+#[cfg(windows)]
 pub mod drivers;
 #[cfg(windows)]
 mod error;

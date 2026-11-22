@@ -201,6 +201,24 @@ fn copy_into(folder: &Path, root: &Path, sink: &dyn Sink) -> Result<(), String> 
     let copied = copy_driver(folder, root).map_err(|error| error.to_string())?;
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
     sink.note(format!("Driver {name}: {} files copied, {} already there.", copied.copied, copied.kept));
+    // The files the driver installs outside the driver store, such as its Vulkan and OpenCL loaders
+    // and its maker's media libraries. Not having them leaves the card working for Direct3D but
+    // not for programs that load those, so a failure is told and the boot goes on.
+    match guesthouse_hcs::driver_files::place(folder, root) {
+        Ok(placed) => {
+            sink.note(format!(
+                "Driver {name}'s files outside the driver store: {} copied, {} already there.",
+                placed.copied, placed.kept
+            ));
+            if !placed.left.is_empty() {
+                let left: Vec<String> = placed.left.iter().map(|path| path.display().to_string()).collect();
+                sink.note(format!("The guest's own copies were kept: {}.", left.join(", ")));
+            }
+        }
+        Err(error) => {
+            sink.problem(format!("Driver {name}'s files outside the driver store weren't placed: {error}"))
+        }
+    }
     Ok(())
 }
 

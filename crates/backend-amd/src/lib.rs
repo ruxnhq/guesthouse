@@ -154,6 +154,8 @@ pub struct AmdBackend {
     /// How long freed GPU addresses rest before they are handed out again, if that was asked for.
     /// See [`video_close`].
     hold_freed: Option<Duration>,
+    /// Where each space's last encode session had its context buffer, for the log.
+    video_starts: video_close::Starts,
 }
 
 /// A run ready to send: its command buffers, the fence writer in `slot` last.
@@ -175,7 +177,7 @@ struct PreparedVideo {
     slot: usize,
     runs: Vec<Ib>,
     fence: GuestFence,
-    /// What its commands say of their session, when the daemon closes sessions or rests the engine.
+    /// What its commands say of their session, if they name one.
     seen: Option<video_close::Seen>,
     /// Whether the log has said it rests, as it is rung again and again meanwhile.
     rest_said: bool,
@@ -257,6 +259,7 @@ impl AmdBackend {
             video: None,
             video_close: None,
             hold_freed: None,
+            video_starts: video_close::Starts::default(),
         })
     }
 
@@ -504,8 +507,7 @@ impl AmdBackend {
                 return WorkStart::QueueFailed;
             }
         };
-        let seen =
-            self.video_close.as_ref().and_then(|_| video_close::Seen::of(work.queue, work.space, copied));
+        let seen = video_close::Seen::of(work.queue, work.space, copied);
         let fence = GuestFence { queue: work.queue, address: work.fence, value: work.fence_value };
         let prepared = PreparedVideo {
             space: work.space,
@@ -556,6 +558,16 @@ impl AmdBackend {
         match sent {
             Ok(()) => {
                 traffic::video_sent(named, &run.runs, &Ok(()));
+                if let Some(start) = run.seen.as_ref().and_then(|seen| self.video_starts.sent(seen)) {
+                    log::info!(
+                        "amd video session queue={queue:#x} session_info={:#x} context={:#x} context_before={} \
+                         same_context={}",
+                        start.session,
+                        start.context,
+                        start.before.map_or_else(|| "-".to_string(), |before| format!("{before:#x}")),
+                        if start.same_as_before() { "yes" } else { "no" },
+                    );
+                }
                 if let Some(watch) = &mut self.video_close {
                     watch.reached(run.seen, now);
                 }
@@ -636,8 +648,9 @@ impl AmdBackend {
         let wake = self.video_wake.as_ref().map(AsRawFd::as_raw_fd);
         let sent = space.vm.send_video(slot, &runs, queue, None, wake, now);
         log::info!(
-            "amd video close queue={queue:#x} session={:#x} task={} {}",
+            "amd video close queue={queue:#x} session_info={:#x} context={} task={} {}",
             session.address(),
+            session.context.map_or_else(|| "-".to_string(), |context| format!("{context:#x}")),
             session.task.wrapping_add(1),
             match &sent {
                 Ok(()) => "sent".to_string(),
@@ -1278,6 +1291,7 @@ impl Backend for AmdBackend {
         self.spaces.remove(&space);
         self.prepared.retain(|_, run| run.space != space);
         self.prepared_video.retain(|_, run| run.space != space);
+        self.video_starts.space_gone(space);
         if let Some(watch) = &mut self.video_close {
             watch.space_gone(space);
         }
@@ -1450,6 +1464,7 @@ impl Backend for AmdBackend {
             video.all_gone();
         }
         // The core closes no queue and no space of a guest that restarted.
+        self.video_starts.all_gone();
         if let Some(watch) = &mut self.video_close {
             watch.all_gone();
         }

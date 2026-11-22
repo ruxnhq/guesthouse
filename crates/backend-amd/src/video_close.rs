@@ -1,6 +1,7 @@
 //! Closing an encode session the guest leaves open in the card's firmware, and resting the video
 //! engine before a new one: two switches under [`crate::video`]'s, each off unless the daemon is
-//! started with it, and neither any use without that one. Without them nothing here is used.
+//! started with it, and neither any use without that one. Without them only [`Starts`] is used,
+//! which says in the log where each new encode session's context buffer is.
 //!
 //! They are a stopgap, kept apart so that it is one module to drop. AMD's driver in the guest sends
 //! no work at an encoder's end, where Mesa's sends one last command buffer that closes the session
@@ -39,6 +40,11 @@
 //! within the hold, so a run tells whether the reused address matters. It holds every range in
 //! every space, as the daemon doesn't know which buffers the video engine will be given. What it
 //! costs is addresses, not memory.
+//!
+//! On test-amd-video-1 with neither the close nor the rest, ten encode sessions in a row had their
+//! context buffer at one address, some 50 ms apart, and none faulted. So the reused address isn't
+//! enough for the fault, and the hold stays a switch. [`Starts`] logs, with or without the
+//! switches, whether a new session got the address of the one before it in its space.
 
 use crate::protocol::escape;
 use crate::video_ib::Copied;
@@ -205,6 +211,54 @@ impl Seen {
     }
 }
 
+/// Where a new encode session's context buffer is, against the session started before it in the
+/// same space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Start {
+    /// Where the session's buffer is.
+    pub session: u64,
+    /// Where its context buffer is.
+    pub context: u64,
+    /// Where the context buffer of the session started before it in the space was, if one was.
+    pub before: Option<u64>,
+}
+
+impl Start {
+    /// Whether the session got the context buffer address the one before it had.
+    pub fn same_as_before(&self) -> bool {
+        self.before == Some(self.context)
+    }
+}
+
+/// The context buffer of the last encode session started in each space. The daemon chooses that
+/// address, and whether a new session gets the one the session before it had freed is what the
+/// #245 faults were read against, so the log says it for each session, with or without the
+/// switches, rather than leaving it to be read out of command buffers.
+#[derive(Debug, Default)]
+pub struct Starts {
+    last: HashMap<SpaceId, u64>,
+}
+
+impl Starts {
+    /// Notes the session that commands sent to the engine start, if they start one and name its
+    /// context buffer, and says where that is against the one before.
+    pub fn sent(&mut self, seen: &Seen) -> Option<Start> {
+        let context = seen.session.context.filter(|_| seen.starts())?;
+        let before = self.last.insert(seen.space, context);
+        Some(Start { session: seen.session.address(), context, before })
+    }
+
+    /// Forgets a space that has closed.
+    pub fn space_gone(&mut self, space: SpaceId) {
+        self.last.remove(&space);
+    }
+
+    /// Forgets every space: the guest has restarted.
+    pub fn all_gone(&mut self) {
+        self.last.clear();
+    }
+}
+
 /// What the daemon keeps of the firmware's encode sessions, for the two switches.
 #[derive(Debug)]
 pub struct Watch {
@@ -359,6 +413,58 @@ mod tests {
             copied.place(size_of_val(*buffer) as u32, 256).unwrap().copy_from_slice(buffer);
         }
         copied
+    }
+
+    /// The first work of a session whose context buffer is at `context`.
+    fn work_with_context_at(context: u64) -> Vec<u32> {
+        let mut work = work();
+        let at = work.len() - 3;
+        work[at] = (context >> 32) as u32;
+        work[at + 1] = context as u32;
+        work
+    }
+
+    fn seen(space: SpaceId, commands: &[u32]) -> Seen {
+        Seen::of(QUEUE, space, &copied(&[commands])).unwrap()
+    }
+
+    #[test]
+    fn each_new_session_says_where_its_context_buffer_is_against_the_one_before() {
+        let mut starts = Starts::default();
+        let first = starts.sent(&seen(SPACE, &work())).unwrap();
+        assert_eq!(first, Start { session: 0x4_a20b_0000, context: 0x4_a1e0_0000, before: None });
+        assert!(!first.same_as_before());
+
+        let again = starts.sent(&seen(SPACE, &work())).unwrap();
+        assert_eq!(again.before, Some(0x4_a1e0_0000));
+        assert!(again.same_as_before());
+
+        let moved = starts.sent(&seen(SPACE, &work_with_context_at(0x4_a250_0000))).unwrap();
+        assert_eq!((moved.context, moved.before), (0x4_a250_0000, Some(0x4_a1e0_0000)));
+        assert!(!moved.same_as_before());
+    }
+
+    #[test]
+    fn only_work_that_starts_a_session_and_names_its_context_buffer_is_a_start() {
+        let mut starts = Starts::default();
+        assert_eq!(starts.sent(&seen(SPACE, &later_work())), None);
+        let mut no_context = work();
+        no_context.truncate(no_context.len() - 5);
+        assert_eq!(starts.sent(&seen(SPACE, &no_context)), None);
+        // Neither left anything to compare the next start with.
+        assert_eq!(starts.sent(&seen(SPACE, &work())).unwrap().before, None);
+    }
+
+    #[test]
+    fn each_space_is_compared_with_itself_and_forgotten_when_it_or_the_guest_goes() {
+        let other = SpaceId(4);
+        let mut starts = Starts::default();
+        starts.sent(&seen(SPACE, &work()));
+        assert_eq!(starts.sent(&seen(other, &work())).unwrap().before, None);
+        starts.space_gone(SPACE);
+        assert_eq!(starts.sent(&seen(SPACE, &work())).unwrap().before, None);
+        starts.all_gone();
+        assert_eq!(starts.sent(&seen(other, &work())).unwrap().before, None);
     }
 
     #[test]

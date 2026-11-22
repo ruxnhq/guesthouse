@@ -43,6 +43,14 @@ pub(super) struct Run {
     pub changes_before: u64,
 }
 
+impl Run {
+    /// Whether the host has something to write once it ends: a context's marks, or a fence the card
+    /// doesn't write. See [`super::wake`].
+    pub fn host_finishes(&self) -> bool {
+        self.marks.is_some() || !self.card_writes_fence
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Queue {
     pub space: SpaceId,
@@ -478,6 +486,12 @@ impl CardWork {
             let prepared = self.prepared.remove(&doorbell).expect("found above");
             let queue = self.queues.get_mut(&prepared.queue).expect("found above");
             queue.in_flight.extend(prepared.run);
+            // It ends with the last run before it, which is what to be woken for.
+            let last_run = queue.in_flight.iter().rev().map(|run| run.point).find(|&point| point != 0);
+            match (queue.ordinary, last_run) {
+                (Some((_, done)), Some(point)) => self.wake_at(done, point),
+                _ => self.look_soon(),
+            }
             return Ok(Doorbell::Rung);
         };
         // A ring's VM signals nothing, so its binds are waited for here rather than by xe.
@@ -505,9 +519,14 @@ impl CardWork {
                 let changes_before = self.spaces.get(&space).map_or(0, |held| held.changes_made);
                 if let Some(queue) = self.queues.get_mut(&prepared.queue) {
                     let stamped = |run: Run| Run { sent: Some(Instant::now()), changes_before, ..run };
+                    let wake = prepared.run.filter(Run::host_finishes).zip(queue.ordinary);
                     if let Some(run) = prepared.run {
                         queue.in_flight.push_back(stamped(run));
                     }
+                    if let Some((run, (_, done))) = wake {
+                        self.wake_at(done, run.point);
+                    }
+                    let queue = self.queues.get_mut(&prepared.queue).expect("found above");
                     if let Some(run) = prepared.ring_run {
                         queue.ring_run = Some(stamped(run));
                         queue.ring_banned_seen = false;
@@ -546,6 +565,9 @@ impl CardWork {
     /// Looks at runs on the card for ones xe ended early: it stands in at the fence of each, and a
     /// queue xe banned takes its whole process's work with it.
     pub fn poll(&mut self, host: &mut dyn HostServices, now: Instant) {
+        if self.needs_polling() {
+            self.finish_ended_runs(host, now);
+        }
         self.write_left_marks(host);
         if self
             .last_look
@@ -561,7 +583,7 @@ impl CardWork {
         }
     }
 
-    fn look_at_runs(&mut self, host: &mut dyn HostServices, id: u32, now: Instant) {
+    pub(super) fn look_at_runs(&mut self, host: &mut dyn HostServices, id: u32, now: Instant) {
         let Some(queue) = self.queues.get_mut(&id) else { return };
         let Some((xe_queue, done)) = queue.ordinary else { return };
         let space = queue.space;

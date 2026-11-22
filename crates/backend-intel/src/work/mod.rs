@@ -23,6 +23,7 @@ mod session_tests;
 mod spaces;
 #[cfg(test)]
 pub(crate) mod testing;
+mod wake;
 
 use crate::card::CardFacts;
 use crate::stage::Stage;
@@ -65,6 +66,8 @@ pub struct CardWork {
     blits: blits::Blits,
     /// First locks' moves into the guest's pages.
     moves: moves::Moves,
+    /// What wakes the daemon when a run the host finishes has ended.
+    wake: wake::Wake,
 }
 
 impl std::fmt::Debug for CardWork {
@@ -109,6 +112,7 @@ impl CardWork {
             last_look: None,
             blits: blits::Blits::new(card.main_gt().map_or(0, |gt| gt.ip.major)),
             moves: moves::Moves::default(),
+            wake: wake::Wake::default(),
         })
     }
 

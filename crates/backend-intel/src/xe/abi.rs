@@ -51,6 +51,8 @@ mod shared_command {
     pub const SYNCOBJ_CREATE: u64 = 0xbf;
     pub const SYNCOBJ_DESTROY: u64 = 0xc0;
     pub const SYNCOBJ_TIMELINE_WAIT: u64 = 0xca;
+    /// `DRM_IOCTL_SYNCOBJ_EVENTFD`, from Linux v6.6.
+    pub const SYNCOBJ_EVENTFD: u64 = 0xcf;
 }
 
 pub const GEM_CREATE_SIZE: usize = 56;
@@ -76,6 +78,8 @@ pub const PRIME_HANDLE_SIZE: usize = 12;
 pub const SYNCOBJ_CREATE_SIZE: usize = 8;
 pub const SYNCOBJ_DESTROY_SIZE: usize = 8;
 pub const SYNCOBJ_TIMELINE_WAIT_SIZE: usize = 48;
+/// `struct drm_syncobj_eventfd`: handle, flags, point, fd and padding.
+pub const SYNCOBJ_EVENTFD_SIZE: usize = 24;
 
 const fn xe(direction: Direction, command: u64, size: usize) -> u64 {
     number(direction, DRIVER_COMMANDS + command, size)
@@ -103,6 +107,8 @@ pub const SYNCOBJ_DESTROY: u64 =
     number(Direction::ReadWrite, shared_command::SYNCOBJ_DESTROY, SYNCOBJ_DESTROY_SIZE);
 pub const SYNCOBJ_TIMELINE_WAIT: u64 =
     number(Direction::ReadWrite, shared_command::SYNCOBJ_TIMELINE_WAIT, SYNCOBJ_TIMELINE_WAIT_SIZE);
+pub const SYNCOBJ_EVENTFD: u64 =
+    number(Direction::ReadWrite, shared_command::SYNCOBJ_EVENTFD, SYNCOBJ_EVENTFD_SIZE);
 
 /// `DRM_XE_VM_CREATE_FLAG_SCRATCH_PAGE`: unmapped addresses read zero and swallow writes.
 pub const VM_SCRATCH_PAGE: u32 = 1 << 0;
@@ -451,6 +457,22 @@ pub mod syncobj {
         request
     }
 
+    /// Has the kernel add one to an eventfd when a point is signalled, once, or at once if it
+    /// already is. A point nothing is attached to yet is waited for: with no flags the kernel
+    /// looks again each time the sync object takes a fence (`drm_syncobj_eventfd_ioctl` in
+    /// `drm_syncobj.c`).
+    pub fn eventfd(handle: u32, point: u64, fd: i32) -> [u8; SYNCOBJ_EVENTFD_SIZE] {
+        const FLAGS: usize = 4;
+        const POINT: usize = 8;
+        const FD: usize = 16;
+        let mut request = [0; SYNCOBJ_EVENTFD_SIZE];
+        put_dword(&mut request, HANDLE, handle);
+        put_dword(&mut request, FLAGS, 0);
+        put_qword(&mut request, POINT, point);
+        put_dword(&mut request, FD, fd as u32);
+        request
+    }
+
     /// A wait for one point. `handle` and `point` are the addresses of the two values, and
     /// `until` is a time on the monotonic clock in nanoseconds, with zero for a look that
     /// doesn't wait.
@@ -639,6 +661,7 @@ mod tests {
         assert_eq!(SYNCOBJ_CREATE, 0xC008_64BF);
         assert_eq!(SYNCOBJ_DESTROY, 0xC008_64C0);
         assert_eq!(SYNCOBJ_TIMELINE_WAIT, 0xC030_64CA);
+        assert_eq!(SYNCOBJ_EVENTFD, 0xC018_64CF);
     }
 
     /// The flag values the same C program printed.

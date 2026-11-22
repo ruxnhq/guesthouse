@@ -38,6 +38,7 @@ pub enum Call {
     CreateSyncobj,
     DestroySyncobj(u32),
     PointReached { syncobj: u32, point: u64 },
+    NotifyAt { syncobj: u32, point: u64 },
     EngineCycles(EngineInstance),
     NamesFaults,
     VmFaults(u32),
@@ -61,6 +62,7 @@ impl Call {
             Self::CreateSyncobj => "create_syncobj",
             Self::DestroySyncobj(_) => "destroy_syncobj",
             Self::PointReached { .. } => "point_reached",
+            Self::NotifyAt { .. } => "notify_at",
             Self::EngineCycles(_) => "engine_cycles",
             Self::NamesFaults => "names_faults",
             Self::VmFaults(_) => "vm_faults",
@@ -232,6 +234,8 @@ struct State {
     cpu_caching: HashMap<u32, u16>,
     queues: HashMap<u32, Queue>,
     timelines: HashMap<u32, Timeline>,
+    /// Eventfds to add one to when a timeline reaches a point: the timeline, the point, the fd.
+    notify: Vec<(u32, u64, i32)>,
     fail_at: HashMap<usize, i32>,
     fail_named: HashMap<&'static str, i32>,
     hold_runs: bool,
@@ -555,6 +559,21 @@ impl State {
                 timeline.reached = timeline.reached.max(point);
             }
         }
+        self.notify_reached();
+    }
+
+    /// Adds one to each eventfd whose point has been reached, once, as the kernel does.
+    fn notify_reached(&mut self) {
+        let timelines = &self.timelines;
+        self.notify.retain(|&(timeline, point, fd)| {
+            let reached = timelines.get(&timeline).is_some_and(|timeline| timeline.reached >= point);
+            if reached {
+                let one = 1u64.to_ne_bytes();
+                // SAFETY: eight bytes from a live array, to a descriptor the caller keeps open.
+                unsafe { libc::write(fd, one.as_ptr().cast(), one.len()) };
+            }
+            !reached
+        });
     }
 
     /// The kernel's own checks of an exec's or a bind's syncs, in a VM made with `vm_flags`.
@@ -965,6 +984,15 @@ impl Xe for FakeXe {
         Ok(timeline.reached >= point)
     }
 
+    fn notify_at(&mut self, syncobj: u32, point: u64, eventfd: std::os::fd::RawFd) -> io::Result<()> {
+        let mut state = self.state();
+        state.enter(Call::NotifyAt { syncobj, point })?;
+        state.timelines.get(&syncobj).ok_or_else(|| errno(libc::ENOENT))?;
+        state.notify.push((syncobj, point, eventfd));
+        state.notify_reached();
+        Ok(())
+    }
+
     fn engine_cycles(&mut self, engine: EngineInstance) -> io::Result<EngineCycles> {
         let mut state = self.state();
         state.enter(Call::EngineCycles(engine))?;
@@ -1043,6 +1071,7 @@ impl State {
                 timeline.reached = timeline.reached.max(point);
             }
         }
+        self.notify_reached();
     }
 }
 

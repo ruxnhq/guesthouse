@@ -58,6 +58,7 @@ public static class Screen {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool EnumDisplayDevices(string display, int number, ref Display found, int flags);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int ChangeDisplaySettingsEx(string display, ref Mode mode, IntPtr window, uint flags, IntPtr parameter);
   const int Current = -1, Attached = 1, WidthHeightRate = 0x80000 | 0x100000 | 0x400000;
+  const uint UpdateRegistry = 1;
   const string Ours = "RDPUDD Chained DD";
   static Mode Empty() { Mode mode = new Mode(); mode.Size = (short)Marshal.SizeOf(typeof(Mode)); return mode; }
   // The driver's display, if it is the one Windows shows on.
@@ -79,12 +80,14 @@ public static class Screen {
     Mode mode = Empty();
     return EnumDisplaySettings(display, Current, ref mode) && mode.Width == width && mode.Height == height && mode.Rate == rate;
   }
-  // Not saved: the size is the window's, and the machine's own setting is what a start goes back to.
+  // Saved as the display's mode. A fullscreen program that changed the mode puts back the saved one
+  // when it leaves, and an unsaved size left the guest at the machine's setting, not the window's.
+  // A start still ends at the machine's own setting, as apply-display.ps1 saves that in turn.
   public static int Set(string display, int width, int height, int rate) {
     Mode mode = Empty();
     EnumDisplaySettings(display, Current, ref mode);
     mode.Width = width; mode.Height = height; mode.Rate = rate; mode.Fields = WidthHeightRate;
-    return ChangeDisplaySettingsEx(display, ref mode, IntPtr.Zero, 0, IntPtr.Zero);
+    return ChangeDisplaySettingsEx(display, ref mode, IntPtr.Zero, UpdateRegistry, IntPtr.Zero);
   }
 }
 '@

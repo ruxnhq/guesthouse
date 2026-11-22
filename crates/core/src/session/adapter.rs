@@ -8,8 +8,9 @@ use guesthouse_backend::{
 };
 use guesthouse_messages::adapter::{
     ASYNC_MESSAGES, AdapterQuery, CapsQuery, DRIVER_MODEL_NUMBER, DisplayMode, FLIP_QUEUE_ANSWER_SIZE,
-    IdentityAnswer, SetIoSpace, adapter_identity, description_answer, driver_caps, flip_queue,
-    guest_adapter_id, node_description, node_of, open_adapter, physical_adapter_ids, segment_sizes,
+    IdentityAnswer, KEEP_CPU_VIEWS, SetIoSpace, adapter_identity, description_answer, driver_caps,
+    flip_queue, guest_adapter_id, node_description, node_of, open_adapter, physical_adapter_ids,
+    segment_sizes,
 };
 use guesthouse_messages::address::{
     ReservationRequest, available_for_reservation, memory_answer, memory_group,
@@ -66,7 +67,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             description: &facts.name,
             vendor: facts.card.vendor,
             device: facts.card.device,
-            flags: if self.config.async_messages { ASYNC_MESSAGES } else { 0 },
+            flags: if self.config.async_messages { ASYNC_MESSAGES } else { 0 }
+                | if self.config.keep_cpu_views { KEEP_CPU_VIEWS } else { 0 },
         };
         adapter_identity(&answer, out);
     }

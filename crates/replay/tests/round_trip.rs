@@ -31,6 +31,7 @@ fn settings() -> Vec<(&'static str, String)> {
         ("video_budget", (6u64 << 30).to_string()),
         ("guest_ram", (16u64 << 30).to_string()),
         ("async_messages", "0".into()),
+        ("keep_cpu_views", "1".into()),
         ("window_size", WINDOW_SIZE.to_string()),
     ]
 }

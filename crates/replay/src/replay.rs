@@ -84,6 +84,8 @@ fn build_session(recording: &Recording<'_>) -> Result<ReplaySession, BadRecordin
     let config = Config {
         limits,
         async_messages: recording.number("async_messages")? != 0,
+        // Recordings made before the setting existed ran with the guest unmapping at each unlock.
+        keep_cpu_views: recording.setting("keep_cpu_views").is_ok_and(|value| value != "0"),
         // A replay has no GPU to wait for, and its fences move only when the recording says.
         frame_wait: Duration::ZERO,
         copy_order: CopyOrder::Blocking,

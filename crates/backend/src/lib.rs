@@ -196,6 +196,13 @@ pub trait Backend: Sized {
         &[]
     }
 
+    /// How long a range of GPU addresses the host chose rests, once its mapping is gone, before it
+    /// is handed out again. `None`, the default, hands it out again at once. An experiment's switch:
+    /// a vendor's firmware may hold on to an address after the memory there went.
+    fn hold_freed_gpu_addresses(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// The guest has restarted, with its bus reset. Most of what a backend holds goes with its
     /// messages, so this is only for what has to follow the guest's own start.
     fn guest_restarted(&mut self) {}
@@ -277,7 +284,8 @@ pub trait Backend: Sized {
     /// submission is a call that can fail says so here: nothing then runs, the core stands in for the
     /// GPU at the queue's fence, and the queue stops as if [`WorkStart::QueueFailed`] had come back.
     /// A call that is only refused for now answers [`Doorbell::NotYet`], and the core rings again
-    /// soon, holding the queue's later work behind it.
+    /// soon, holding the queue's later work behind it. A backend that knows the work mustn't run
+    /// before some time answers [`Doorbell::NotBefore`], and the core rings again then.
     fn ring_doorbell(&mut self, queue: u32, doorbell: u64) -> Result<Doorbell, BackendError>;
 
     /// Looks at work the GPU was given, while the core waits for queues to reach their fences. For a

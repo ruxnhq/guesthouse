@@ -58,10 +58,12 @@ Two more switches are a stopgap for that reset. Each is off unless set, and does
 
 A tester ran it on a Radeon 780M with driver 32.0.32015.12012 in the guest:
 
-- HEVC decode through Direct3D 11, and the frames match the software decoder's. H.264 through Direct3D 11 crashes in AMD's driver inside the guest.
+- HEVC decode through Direct3D 11, and the frames match the software decoder's. H.264 through Direct3D 11 crashed in AMD's driver inside the guest. AMD's driver reads the stream through a pointer after it has unlocked the buffer, and Windows in the guest used to take that pointer away at the unlock. The daemon now has Windows keep it until the buffer is freed. That hasn't run on a 780M yet. `GUESTHOUSE_UNMAP_AT_UNLOCK=1` brings back the old behaviour, for any card.
 - `hevc_amf`, `h264_amf` and `av1_amf` encode 1080p, about 2 ms a frame.
 - Each frame holds up the guest's other GPU work while the card decodes or encodes it.
-- A program that looks for AMF in System32 finds it only once `amfrt64.dll` is copied there from the driver's folder.
+- A program that loads AMF by name found it only once `amfrt64.dll` was copied to System32 by hand. The app now does that, see below.
+
+Programs like ffmpeg's `h264_amf`, RustDesk and OBS load AMF by name, so the guest gets what AMD's installer puts there: `amfrt64.dll` in System32 and `amfrt32.dll` in SysWOW64. Each start copies them from the driver's folder in the guest if they're missing, and a newer driver is followed because the names come from its INF. That doesn't depend on `GUESTHOUSE_AMD_VIDEO`, as it's what a PC with the driver installed has. Without the switch AMF finds no encoder and the program falls back to the CPU, same as before.
 
 Earlier test builds of the same work also ran AV1 decode, and sessions of a minute and more in 1440p and 4K.
 

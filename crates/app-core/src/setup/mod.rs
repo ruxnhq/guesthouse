@@ -10,6 +10,7 @@ pub mod amd;
 pub mod amd_driver;
 pub mod amd_guest_folder;
 pub mod amd_package;
+pub mod amd_system_files;
 pub mod cards;
 pub mod checks;
 pub mod driver;

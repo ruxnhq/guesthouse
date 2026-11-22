@@ -241,6 +241,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     pub(crate) fn close_queue(&mut self, handle: u32) {
         let closed = self.queues.remove(&handle);
+        self.rings_not_before.remove(&handle);
         for step in self.gates.remove(&handle).unwrap_or_default() {
             if let GateStep::Wait { signals, id, .. } = step {
                 self.leave_wait(id, &signals, false);

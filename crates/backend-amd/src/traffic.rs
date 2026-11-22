@@ -10,8 +10,8 @@
 //! this backend gives has a `registry` line with its name.
 //!
 //! Work for the video ring has its `submit` line like any other, then a dump of each command
-//! buffer as the daemon copied it, and once it has been waited for a `video` line that says how it
-//! ended. There are a few dozen of those a second at most, and the commands are what a person
+//! buffer as the daemon copied it, a `video` line when it is sent or refused, and another when the
+//! kernel is seen to have retired it, with how long that took. There are a few dozen of those a second at most, and the commands are what a person
 //! needs when the card's video engine didn't take them. An escape of a video session has a
 //! `session` line with what the books made of it, ahead of its `escape` line, which shows what was
 //! sent.
@@ -24,12 +24,11 @@ use crate::protocol::context::{self, Context};
 use crate::protocol::escape::{self, Answered, Count, Framing};
 use crate::protocol::hw_queue;
 use crate::protocol::video_escape::{Asked, Change};
-use crate::space_vm::Ran;
 use crate::submit::Ib;
 use crate::video::Outcome;
 use crate::video_ib::Copied;
 use crate::watch::{Hex, HexNumber, Kept, OrDash, PREFIX, Spaced, bit, dump, dwords, watching};
-use guesthouse_backend::{RegistryName, RegistryValue, Status, VendorQuery, Work, WorkSource};
+use guesthouse_backend::{RegistryName, RegistryValue, SpaceId, Status, VendorQuery, Work, WorkSource};
 use guesthouse_messages::adapter::AdapterQuery;
 use std::fmt;
 use std::io;
@@ -360,49 +359,50 @@ pub fn video_commands(work: &Work<'_>, copied: &Copied) {
     }
 }
 
-/// Logs how a run on the video ring ended, after `took` of waiting for it.
-pub fn video_ran(work: &Work<'_>, copied: &Copied, took: Duration, ran: &io::Result<Ran>) {
-    log::debug!("{}", VideoLine { work, buffers: copied.runs(), took, ran });
+/// What a video run's lines name it by: its queue, the fence value the host writes when it has
+/// retired, or none for the daemon's own closing, and its space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoRun {
+    pub queue: u32,
+    pub fence_value: Option<u64>,
+    pub space: SpaceId,
 }
 
-/// A video run's line. The buffers are where the daemon's copies were run from, which is the same
-/// place for every run, so their lengths are what tells runs apart.
+/// Logs a video run that was sent, or why it wasn't. The buffers are where the daemon's copies
+/// are run from.
+pub fn video_sent(run: VideoRun, buffers: &[Ib], sent: &io::Result<()>) {
+    log::debug!("{}", VideoLine { run, buffers, sent });
+}
+
+/// Logs a video run the kernel was seen to have retired, `took` after it was sent.
+pub fn video_retired(queue: u32, fence_value: Option<u64>, took: Duration) {
+    log::debug!(
+        "{PREFIX} video queue={queue:#x} fence_value={} ran=retired took_us={}",
+        OrDash(fence_value),
+        took.as_micros()
+    );
+}
+
+/// A video run's line when it is sent.
 struct VideoLine<'a> {
-    work: &'a Work<'a>,
+    run: VideoRun,
     buffers: &'a [Ib],
-    took: Duration,
-    ran: &'a io::Result<Ran>,
+    sent: &'a io::Result<()>,
 }
 
 impl fmt::Display for VideoLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { work, buffers, took, ran } = self;
+        let Self { run, buffers, sent } = self;
         write!(
             f,
-            "{PREFIX} video queue={:#x} fence_value={} space={} buffers=[{}] took_us={} {}",
-            work.queue,
-            work.fence_value,
-            work.space.0,
+            "{PREFIX} video queue={:#x} fence_value={} space={} buffers=[{}] ",
+            run.queue,
+            OrDash(run.fence_value),
+            run.space.0,
             Spaced(buffers.iter().map(BufferText)),
-            took.as_micros(),
-            RanText(ran)
-        )
-    }
-}
-
-/// How a run that was waited for ended, as `ran=`, with where for one that faulted and why for one
-/// that wasn't run.
-pub struct RanText<'a>(pub &'a io::Result<Ran>);
-
-impl fmt::Display for RanText<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Ok(Ran::Retired) => f.write_str("ran=retired"),
-            Ok(Ran::Refused) => f.write_str("ran=refused"),
-            Ok(Ran::Hung) => f.write_str("ran=hung"),
-            Ok(Ran::Faulted(fault)) => {
-                write!(f, "ran=faulted address={:#x} status={:#x}", fault.address, fault.status)
-            }
+        )?;
+        match sent {
+            Ok(()) => f.write_str("ran=sent"),
             Err(error) => write!(f, "ran=not-run why=\"{error}\""),
         }
     }
@@ -974,44 +974,47 @@ mod tests {
         copied
     }
 
+    const RUN: VideoRun = VideoRun { queue: 0x4000_0010, fence_value: Some(12), space: SpaceId(3) };
+
     #[test]
-    fn a_video_run_says_how_it_ended_and_how_long_it_took() {
-        let data = submission_data();
-        let (work, copied) = (work_with(&data), copied_video_work());
-        let line = |ran: &io::Result<Ran>| {
-            VideoLine { work: &work, buffers: copied.runs(), took: Duration::from_micros(1900), ran }
-                .to_string()
+    fn a_video_run_says_where_it_was_sent_from_or_why_it_was_not() {
+        let copied = copied_video_work();
+        let line = |run: VideoRun, sent: &io::Result<()>| {
+            VideoLine { run, buffers: copied.runs(), sent }.to_string()
         };
         assert_eq!(
-            line(&Ok(Ran::Retired)),
+            line(RUN, &Ok(())),
             "amd video queue=0x40000010 fence_value=12 space=3 buffers=[0x100080000:0x8 0x100080100:0x4] \
-             took_us=1900 ran=retired"
+             ran=sent"
         );
-        assert!(line(&Ok(Ran::Refused)).ends_with(" ran=refused"));
-        assert!(line(&Ok(Ran::Hung)).ends_with(" ran=hung"));
-        let fault = crate::fault::Fault { address: 0x3000, status: 0x40_0c30 };
-        assert!(line(&Ok(Ran::Faulted(fault))).ends_with(" ran=faulted address=0x3000 status=0x400c30"));
         let error = Err(io::Error::other("its commands are too long"));
-        assert!(line(&error).ends_with(" ran=not-run why=\"its commands are too long\""));
+        assert!(line(RUN, &error).ends_with(" ran=not-run why=\"its commands are too long\""));
+        // The daemon's own closing writes no fence of the guest's.
+        let closing = VideoRun { fence_value: None, ..RUN };
+        assert!(line(closing, &Ok(())).starts_with("amd video queue=0x40000010 fence_value=- space=3 "));
     }
 
     #[test]
-    fn a_video_run_has_a_dump_for_each_buffer_and_a_line_and_nothing_with_debug_lines_off() {
+    fn a_video_run_has_a_dump_for_each_buffer_a_line_when_sent_and_one_when_retired() {
         let data = submission_data();
         let (work, copied) = (work_with(&data), copied_video_work());
-        let both = || {
+        let all = || {
             video_commands(&work, &copied);
-            video_ran(&work, &copied, Duration::ZERO, &Ok(Ran::Retired));
+            video_sent(RUN, copied.runs(), &Ok(()));
+            video_retired(RUN.queue, RUN.fence_value, Duration::from_micros(1900));
+            video_retired(RUN.queue, None, Duration::from_micros(300));
         };
-        both();
-        let lines = lines::logged(both);
+        all();
+        let lines = lines::logged(all);
         assert_eq!(
             lines::at(Level::Debug, &lines),
             [
                 "amd dump video queue=0x40000010 fence_value=12 buffer=0 length=8 bytes=1000000001000030",
                 "amd dump video queue=0x40000010 fence_value=12 buffer=1 length=4 bytes=ddccbbaa",
                 "amd video queue=0x40000010 fence_value=12 space=3 buffers=[0x100080000:0x8 0x100080100:0x4] \
-                 took_us=0 ran=retired",
+                 ran=sent",
+                "amd video queue=0x40000010 fence_value=12 ran=retired took_us=1900",
+                "amd video queue=0x40000010 fence_value=- ran=retired took_us=300",
             ]
         );
         assert!(lines::logged(|| {}).is_empty(), "a line from before was kept");

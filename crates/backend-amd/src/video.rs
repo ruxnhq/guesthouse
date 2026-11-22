@@ -17,8 +17,12 @@
 //! It is a switch because of what a mistake costs. Video work the firmware doesn't take can hang
 //! the video ring, amdgpu then resets it, and that reaches every program on the host that is using
 //! the card's video engine, not only this guest. So it is for a person to turn on, on a host where
-//! that is acceptable. Each run is also waited for on the daemon's message thread, a few
-//! milliseconds a frame, which holds up the guest's other GPU work for that long.
+//! that is acceptable.
+//!
+//! A run isn't waited for. Its doorbell sends it, and the host writes the queue's fence when the
+//! kernel says it has retired, as the video ring writes none of its own: see [`crate::video_runs`].
+//! So the daemon's message thread goes on serving the guest's graphics and everything else while
+//! video work is on the card.
 //!
 //! The books are a list of the sessions that are open, each with what it has booked on an engine.
 //! The guest's driver is told the sum booked on an engine and the most the chip takes, and decides
@@ -271,6 +275,39 @@ impl Sessions {
     }
 }
 
+/// How many contexts each guest process has on the video node. A process whose last one goes can
+/// run no more video work, so its sessions are over: see [`Sessions::process_gone`].
+#[derive(Debug, Default)]
+pub struct Contexts(HashMap<u32, u32>);
+
+impl Contexts {
+    /// A context on the video node was made for `process`.
+    pub fn made(&mut self, process: u32) {
+        *self.0.entry(process).or_default() += 1;
+    }
+
+    /// One of `process`'s contexts on the video node has gone. True when it was the last.
+    pub fn gone(&mut self, process: u32) -> bool {
+        let Some(count) = self.0.get_mut(&process) else { return false };
+        *count -= 1;
+        let last = *count == 0;
+        if last {
+            self.0.remove(&process);
+        }
+        last
+    }
+
+    /// The process has ended, and its contexts with it.
+    pub fn process_gone(&mut self, process: u32) {
+        self.0.remove(&process);
+    }
+
+    /// The guest has restarted.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +529,40 @@ mod tests {
         assert!(!ended(&mut sessions, killed[0]) && !ended(&mut sessions, killed[1]));
         assert!(ended(&mut sessions, kept), "another process's session is left open");
         sessions.process_gone(PROCESS);
+    }
+
+    #[test]
+    fn a_process_whose_last_video_context_goes_is_told_so_once() {
+        let mut contexts = Contexts::default();
+        contexts.made(PROCESS);
+        contexts.made(PROCESS);
+        contexts.made(OTHER_PROCESS);
+        assert!(!contexts.gone(PROCESS), "it has another");
+        assert!(contexts.gone(PROCESS));
+        assert!(!contexts.gone(PROCESS), "none was left to go");
+        contexts.process_gone(OTHER_PROCESS);
+        assert!(!contexts.gone(OTHER_PROCESS));
+        contexts.made(PROCESS);
+        contexts.clear();
+        assert!(!contexts.gone(PROCESS));
+    }
+
+    #[test]
+    fn a_process_that_drops_its_video_contexts_without_ending_its_sessions_leaves_nothing_booked() {
+        // What the backend does when a process's last context on the video node goes.
+        let mut sessions = Sessions::new(MOST);
+        let mut contexts = Contexts::default();
+        contexts.made(PROCESS);
+        let dropped = started(&mut sessions, PROCESS);
+        asked(&mut sessions, dropped, Change::Book(209_635)).unwrap();
+        let kept = started(&mut sessions, OTHER_PROCESS);
+        asked(&mut sessions, kept, Change::Book(100)).unwrap();
+        if contexts.gone(PROCESS) {
+            sessions.process_gone(PROCESS);
+        }
+        assert_eq!(asked(&mut sessions, 0, Change::Ask), Some((100, MOST)));
+        assert!(!ended(&mut sessions, dropped), "it was ended already");
+        assert!(ended(&mut sessions, kept));
     }
 
     #[test]

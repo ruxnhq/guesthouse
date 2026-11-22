@@ -90,8 +90,14 @@ pub enum Pending {
 }
 
 impl Pending {
-    fn is_urgent(&self) -> bool {
-        !matches!(self, Self::Watch { .. })
+    /// Whether it is checked again at once. A watch isn't, nor a queue's gate that `resting` says
+    /// waits for a doorbell's time to come.
+    fn is_urgent(&self, resting: &impl Fn(u32) -> bool) -> bool {
+        match self {
+            Self::Watch { .. } => false,
+            Self::Gate { queue } => !resting(*queue),
+            _ => true,
+        }
     }
 }
 
@@ -107,10 +113,14 @@ pub enum Waiting {
 }
 
 impl Waiting {
-    pub(crate) fn of<'a>(pending: impl Iterator<Item = &'a Pending>, copies_waiting: bool) -> Self {
+    pub(crate) fn of<'a>(
+        pending: impl Iterator<Item = &'a Pending>,
+        copies_waiting: bool,
+        resting: impl Fn(u32) -> bool,
+    ) -> Self {
         let mut found = if copies_waiting { Self::Urgent } else { Self::Nothing };
         for item in pending {
-            if item.is_urgent() {
+            if item.is_urgent(&resting) {
                 return Self::Urgent;
             }
             found = Self::Background;

@@ -33,15 +33,18 @@ fn has_extension(path: &Path, wanted: &str) -> bool {
     path.is_file() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
 }
 
+/// The display driver's INF, which sits beside the user-mode driver's folder `user_driver`.
+pub fn display_inf(user_driver: &Path) -> Option<PathBuf> {
+    let beside = user_driver.parent().and_then(|driver| fs::read_dir(driver).ok());
+    beside
+        .and_then(|entries| entries.flatten().map(|entry| entry.path()).find(|path| has_extension(path, INF)))
+}
+
 /// The display driver's INF and catalog for the user-mode driver's folder `user_driver`, or why
 /// Windows can't be given them.
 pub fn package_files(user_driver: &Path) -> Result<AmdPackageFiles, String> {
     let files_folder = file_name(user_driver);
-    let beside = user_driver.parent().and_then(|driver| fs::read_dir(driver).ok());
-    let inf = beside.and_then(|entries| {
-        entries.flatten().map(|entry| entry.path()).find(|path| has_extension(path, INF))
-    });
-    let Some(inf) = inf else {
+    let Some(inf) = display_inf(user_driver) else {
         return Err("AMD's driver was unpacked without its INF".to_owned());
     };
     let catalog = inf.with_extension(CATALOG);

@@ -132,6 +132,8 @@ fn serve_amd(
         }
         let rest = env::var(guesthouse_backend_amd::VIDEO_REST_VARIABLE).ok();
         backend.close_and_rest_video(on(guesthouse_backend_amd::VIDEO_CLOSE_VARIABLE), rest.as_deref());
+        let hold = env::var(guesthouse_backend_amd::VIDEO_HOLD_FREED_VARIABLE).ok();
+        backend.hold_freed_addresses(hold.as_deref());
     })
 }
 
@@ -192,7 +194,7 @@ fn serve_on_render_node<B: guesthouse_backend::Backend>(
     needs: guesthouse_daemon::jail::Needs,
     configure: impl FnOnce(&mut B),
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use guesthouse_core::{Config, MemoryLimits, Session};
+    use guesthouse_core::{MemoryLimits, Session};
     use guesthouse_daemon::environment::{guest_ram, video_cap, within_the_cards};
     use guesthouse_daemon::guest_memory::SharedMemory;
     use guesthouse_daemon::jail::{lock_calls, lock_files};
@@ -209,7 +211,7 @@ fn serve_on_render_node<B: guesthouse_backend::Backend>(
     configure(&mut backend);
     let cap = within_the_cards(video_cap(cap.as_deref()), backend.video_memory_cap());
     let limits = MemoryLimits::new(backend.facts(), cap, guest_ram(ram.as_deref()));
-    let config = Config::new(limits);
+    let config = session_config(limits);
     let mut session = Session::new(backend, memory, config);
     session.timings_mut().set_enabled(env::var_os("GUESTHOUSE_TIMING").is_some());
     let mut server = Server::bind(&run_folder, Router::new(session))?;
@@ -228,7 +230,7 @@ fn serve_nvidia(
     use guesthouse_backend::Backend;
     use guesthouse_backend_nvidia::NvidiaBackend;
     use guesthouse_backend_nvidia::rm::linux::LinuxRm;
-    use guesthouse_core::{Config, MemoryLimits, Session};
+    use guesthouse_core::{MemoryLimits, Session};
     use guesthouse_daemon::environment::{guest_ram, video_cap};
     use guesthouse_daemon::guest_memory::SharedMemory;
     use guesthouse_daemon::jail::{Needs, lock_calls, lock_files};
@@ -257,7 +259,7 @@ fn serve_nvidia(
     let shared = timeslice("GUESTHOUSE_SHARED_CONTEXT_TIMESLICE_US", shared.as_deref());
     backend.set_shared_context_timeslice(shared.unwrap_or(SHARED_CONTEXT_TIMESLICE_MICROS));
     let limits = MemoryLimits::new(backend.facts(), video_cap(cap.as_deref()), guest_ram(ram.as_deref()));
-    let config = Config::new(limits);
+    let config = session_config(limits);
     let mut session = Session::new(backend, memory, config);
     session.timings_mut().set_enabled(env::var_os("GUESTHOUSE_TIMING").is_some());
     if env::var_os("GUESTHOUSE_HELD_COPIES").is_some() {
@@ -275,6 +277,18 @@ fn serve_nvidia(
 #[cfg(feature = "nvidia")]
 const SHARED_CONTEXT_TIMESLICE_MICROS: u64 = 250;
 
+/// The session's settings: the defaults, and `GUESTHOUSE_UNMAP_AT_UNLOCK`.
+#[cfg(any(feature = "stand-in", feature = "nvidia", feature = "amd", feature = "intel"))]
+fn session_config(limits: guesthouse_core::MemoryLimits) -> guesthouse_core::Config {
+    use guesthouse_daemon::environment::keep_cpu_views;
+    let mut config = guesthouse_core::Config::new(limits);
+    config.keep_cpu_views = keep_cpu_views(env::var("GUESTHOUSE_UNMAP_AT_UNLOCK").ok().as_deref());
+    if !config.keep_cpu_views {
+        log::warn!("GUESTHOUSE_UNMAP_AT_UNLOCK is set: the guest takes a CPU view away at each last unlock");
+    }
+    config
+}
+
 /// A timeslice in microseconds, if the setting is there and makes sense.
 #[cfg(feature = "nvidia")]
 fn timeslice(name: &str, text: Option<&str>) -> Option<u64> {
@@ -290,7 +304,7 @@ fn timeslice(name: &str, text: Option<&str>) -> Option<u64> {
 fn serve(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     use guesthouse_backend::Backend;
     use guesthouse_backend_standin::{SparseMemory, StandIn};
-    use guesthouse_core::{Config, MemoryLimits, Session};
+    use guesthouse_core::{MemoryLimits, Session};
     use guesthouse_daemon::environment::{guest_ram, video_cap};
     use guesthouse_daemon::guest_memory::WINDOW_BASE;
     use guesthouse_daemon::handover::Part;
@@ -322,7 +336,7 @@ fn serve(slot: Slot, project: PathBuf) -> Result<(), Box<dyn std::error::Error>>
     let backend = StandIn::new();
     let limits = MemoryLimits::new(backend.facts(), video_cap(cap.as_deref()), guest_ram(ram.as_deref()));
     let memory = SparseMemory::new(WINDOW_BASE + WINDOW_SIZE);
-    let router = Router::new(Session::new(backend, memory, Config::new(limits)));
+    let router = Router::new(Session::new(backend, memory, session_config(limits)));
     log::warn!("serving {} with a stand-in GPU: this will not run a guest", run_folder.display());
     let mut server = Server::bind(&run_folder, router)?;
     lock_calls(locked)?;

@@ -67,6 +67,12 @@ impl Watch {
         self.found
     }
 
+    /// A watch that has already found `fault`, as one does after a run faulted.
+    #[cfg(test)]
+    pub fn having_found(fault: Fault) -> Self {
+        Self { found: Some(fault), cannot_ask: false }
+    }
+
     /// Takes what a look read.
     fn take(&mut self, read: io::Result<Option<Fault>>) {
         match read {

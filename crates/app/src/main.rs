@@ -1,7 +1,8 @@
 //! `guesthouse`: the desktop app.
 
-use guesthouse_app::gpu_reset;
+use guesthouse_app::{gpu_reset, installer};
 use std::env;
+use std::path::PathBuf;
 
 const GTK_DEBUG_VARIABLE: &str = "GDK_DEBUG";
 /// GTK hides Wayland's colour management from itself without this, and HDR needs it. It's a debug
@@ -28,6 +29,12 @@ fn main() -> gtk::glib::ExitCode {
     if let Some(flags) = debug_flags(env::var(GTK_DEBUG_VARIABLE).ok(), gtk) {
         // SAFETY: nothing else is running yet, and GTK reads this when it starts, which is after this.
         unsafe { env::set_var(GTK_DEBUG_VARIABLE, flags) };
+    }
+    // The AppImage's own run, which installs the release it carries and opens nothing else.
+    if let Some(payload) = env::var_os(installer::VARIABLE).map(PathBuf::from) {
+        // SAFETY: nothing else is running yet. Taken out so that nothing the installer starts gets it.
+        unsafe { env::remove_var(installer::VARIABLE) };
+        return installer::run(&payload);
     }
     let restart = env::var(gpu_reset::VARIABLE).ok().and_then(|note| gpu_reset::Restart::from_value(&note));
     // SAFETY: nothing else is running yet. Taken out so that nothing the app starts gets it.

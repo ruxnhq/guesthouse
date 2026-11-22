@@ -9,6 +9,7 @@ pub mod common;
 pub mod disk_place_row;
 pub mod driver_row;
 pub mod gpu_reset;
+pub mod installer;
 pub mod log_dialog;
 pub mod login;
 pub mod new_machine;

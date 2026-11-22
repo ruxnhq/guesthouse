@@ -5,8 +5,9 @@
 # QEMU has to outlive the app.
 #
 #   Guesthouse.AppImage                 installs or updates when this release is newer than what's
-#                                       there, in a terminal so the plan can be read and agreed to,
-#                                       then opens the app
+#                                       there, then opens the app. From a terminal it installs in it.
+#                                       Otherwise the app's own window shows the plan and asks, and a
+#                                       window asks for root's password if a part needs it
 #   Guesthouse.AppImage install [--dry-run]
 #                                       the install on its own, in this terminal
 #   Guesthouse.AppImage uninstall       uninstall.sh of what's installed
@@ -21,6 +22,10 @@ current=$installed/current
 # What the terminal is asked to run: the AppImage's own file, or this script when it's been extracted.
 self=${APPIMAGE:-$here/AppRun}
 TAB=$(printf '\t')
+# What the loader exits with when a program's libraries aren't there, or are too old for it.
+CANT_LOAD=127
+# What the installer window exits with when someone chose a terminal. installer.rs says the same.
+IN_A_TERMINAL=75
 
 say() {
     printf '%s\n' "$*"
@@ -53,9 +58,22 @@ install_here() {
     sh "$payload/install.sh" "--payload=$payload" "$@"
 }
 
-# From a double click there's no terminal, and install.sh needs one: it shows the plan and asks, and
-# sudo asks for the password there. A terminal opened for this closes when the app starts, and stays on
-# a failure until it's read.
+# The app from inside the AppImage, as the installer: GUESTHOUSE_INSTALL_FROM tells it so. The build
+# with HDR needs GTK 4.16, so the other one is tried when it can't load. With neither, there's no GTK or
+# libadwaita here yet, and a terminal install adds them.
+open_installer() {
+    for program in guesthouse guesthouse-no-hdr; do
+        status=0
+        GUESTHOUSE_INSTALL_FROM=$payload "$payload/$program" || status=$?
+        [ "$status" -eq "$CANT_LOAD" ] || break
+    done
+    case $status in
+        "$CANT_LOAD" | "$IN_A_TERMINAL") open_terminal "$self" install-then-open ;;
+        *) exit "$status" ;;
+    esac
+}
+
+# A terminal opened for this closes when the app starts, and stays on a failure until it's read.
 install_then_open() {
     if install_here; then
         open_app_apart
@@ -113,7 +131,7 @@ main() {
         install_here && open_app "$@"
         exit 1
     fi
-    open_terminal "$self" install-then-open
+    open_installer
 }
 
 main "$@"

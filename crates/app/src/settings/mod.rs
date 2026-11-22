@@ -14,6 +14,7 @@ mod jail;
 mod linux_gpu;
 mod macos;
 mod network;
+mod nvapi_wrapper;
 mod remote_access;
 mod remove;
 mod sharing;
@@ -177,6 +178,7 @@ struct Parts {
     _token: token::Token,
     _account: account::Account,
     _gpu_preview: gpu_preview::GpuPreview,
+    _nvapi_wrapper: nvapi_wrapper::NvapiWrapper,
     _jail: jail::Jail,
     linux_gpu: linux_gpu::LinuxGpu,
     macos: macos::Macos,
@@ -209,6 +211,7 @@ impl SettingsDialog {
             hardware,
             _starting: starting::Starting::new(&shared, &pages.general),
             windows_card: windows_card::WindowsCard::new(&shared, &pages.general, cap),
+            _nvapi_wrapper: nvapi_wrapper::NvapiWrapper::new(&shared, &pages.general),
             _gpu_preview: gpu_preview::GpuPreview::new(&shared, &pages.general),
             linux_gpu: linux_gpu::LinuxGpu::new(&shared, &pages.general),
             macos: macos::Macos::new(&shared, &pages.general),

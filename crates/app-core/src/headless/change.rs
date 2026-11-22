@@ -6,6 +6,7 @@ use super::run_task;
 use crate::context::Context;
 use crate::display::{forget_note, read_state};
 use crate::failure::{Failure, Result};
+use crate::gpu_maker::GpuMaker;
 use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
 use crate::network::{Forward, Mode, Protocol, read_port};
@@ -19,7 +20,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 14] = [
+const SETTINGS: [&str; 15] = [
     "cores",
     "ram",
     "vram",
@@ -31,6 +32,7 @@ const SETTINGS: [&str; 14] = [
     "sound",
     "share",
     "window-speed",
+    "dlss",
     "start-unjailed",
     "remote-desktop",
     "ssh",
@@ -54,6 +56,13 @@ fn only_for_windows(machine: &Machine, key: &str) -> Result<()> {
     match machine.kind {
         Kind::Windows => Ok(()),
         _ => Err(Failure(format!("{key} is only for a Windows machine with GPU-PV."))),
+    }
+}
+
+fn only_for_nvidia(machine: &Machine, key: &str) -> Result<()> {
+    match machine.windows_maker() {
+        Some(GpuMaker::Nvidia) => Ok(()),
+        _ => Err(Failure(format!("{key} is only for a Windows machine on an NVIDIA card."))),
     }
 }
 
@@ -144,6 +153,10 @@ pub(super) fn set(
         "window-speed" => {
             only_for_windows(&machine, key)?;
             machine.window_speed_off = !on_or_off(key, value)?;
+        }
+        "dlss" => {
+            only_for_nvidia(&machine, key)?;
+            machine.nvapi_wrapper_off = !on_or_off(key, value)?;
         }
         "start-unjailed" => {
             must_be_off(context, &machine)?;
@@ -269,6 +282,9 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
+        if machine.windows_maker() == Some(GpuMaker::Nvidia) {
+            line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
+        }
         let access = read_access(context, machine);
         for service in Service::ALL {
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;

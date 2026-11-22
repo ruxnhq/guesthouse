@@ -58,6 +58,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `vram` | the video memory cap in GiB, 0 for none | Windows |
 | `sound` | on or off | Windows |
 | `window-speed` | on or off: whether programs in a window are shown without a copy of every frame | Windows |
+| `dlss` | on or off: whether Guesthouse's NVAPI wrapper, which DLSS needs, is in System32 in place of NVIDIA's. Off for a game whose anti-cheat refuses the unsigned wrapper | Windows on an NVIDIA card |
 | `start-unjailed` | on or off: on lets a machine with a GPU start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |
@@ -68,7 +69,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `remote-desktop` | on or off | Windows |
 | `ssh` | on or off | Windows |
 
-These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
+These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
 

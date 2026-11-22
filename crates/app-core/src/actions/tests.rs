@@ -613,6 +613,56 @@ fn a_guest_with_this_copy_of_the_wrapper_gets_nothing_sent() {
 }
 
 #[test]
+fn with_the_wrapper_turned_off_nvidias_nvapi_stays_in_the_list() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    with_driver_files(&scratch, &context);
+    let inf = crate::setup::guest_files::stand_in::FILES_INF.replace("one.dll", "nvapi64.dll");
+    fs::write(crate::settings::driver_folder(&context).join("nv_dispi.inf"), inf).unwrap();
+    scratch.write("program/guest/nvapi64.dll", "wrapper");
+    let agent = Arc::new(ScriptedAgent::answering(&["", "missing 0\r\n"]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    task.machine.nvapi_wrapper_off = true;
+    place_driver_files(&mut task).unwrap();
+    assert!(sent_list(&agent.requests.lock().unwrap()[0].2).contains("System32\tnvapi64.dll\tnvapi64.dll\n"));
+}
+
+#[test]
+fn with_the_wrapper_turned_off_nvidias_goes_back_and_nothing_is_sent() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/nvapi64.dll", "wrapper");
+    let guest = Arc::new(FilesGuest::default());
+    *guest.other_answer.lock().unwrap() = "nvapi restored\r\n".into();
+    context.agent = guest.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    task.machine.nvapi_wrapper_off = true;
+    place_nvapi_wrapper(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    assert!(guest.files.lock().unwrap().is_empty(), "the wrapper isn't sent");
+    let requests = guest.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].contains("HostDriverStore") && requests[0].contains("Copy-Item"));
+}
+
+#[test]
+fn nvidias_nvapi_that_does_not_go_back_is_said() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let guest = Arc::new(FilesGuest::default());
+    *guest.other_answer.lock().unwrap() = "FAILED nvapi: in use\r\n".into();
+    context.agent = guest.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    task.machine.nvapi_wrapper_off = true;
+    place_nvapi_wrapper(&mut task).unwrap();
+    assert!(task.error.contains("NVAPI wrapper may still be there"));
+}
+
+#[test]
 fn with_no_wrapper_in_the_program_the_guest_is_not_asked_about_it() {
     let scratch = Scratch::new();
     let mut context = plain_task_context(&scratch);

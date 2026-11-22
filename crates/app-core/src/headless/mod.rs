@@ -50,7 +50,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, sound, share,
-                             window-speed, start-unjailed, remote-desktop, ssh
+                             window-speed, dlss, start-unjailed, remote-desktop, ssh
   forward MACHINE add|remove tcp|udp HOST GUEST
                              a port on this PC that reaches a port in the guest
 

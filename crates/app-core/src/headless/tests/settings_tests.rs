@@ -150,6 +150,22 @@ fn window_speed_is_on_until_set_off_and_only_a_windows_machine_has_it() {
 }
 
 #[test]
+fn dlss_is_on_until_set_off_and_only_an_nvidia_windows_machine_has_it() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    make(&context, "win", "Win", Kind::Windows);
+    assert!(said(&context, "show win").0.contains("dlss      on\n"));
+    assert_eq!(said(&context, "set win dlss off"), ("dlss is now off.\n".to_owned(), Ok(())));
+    assert!(said(&context, "show win").0.contains("dlss      off\n"));
+    assert!(!crate::machine::load(&context, "win").unwrap().nvapi_wrapper());
+    assert_eq!(said(&context, "set win dlss on").1, Ok(()));
+    assert!(crate::machine::load(&context, "win").unwrap().nvapi_wrapper());
+    assert!(refused(&context, "set work dlss off").contains("only for a Windows machine on an NVIDIA card"));
+    assert!(!said(&context, "show work").0.contains("dlss"));
+}
+
+#[test]
 fn show_lists_what_the_kind_of_machine_has() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);

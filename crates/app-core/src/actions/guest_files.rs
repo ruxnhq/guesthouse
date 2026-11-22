@@ -11,8 +11,8 @@ use crate::failure::Result;
 use crate::gpu_identity::INTEL_RENDER;
 use crate::log::write_log;
 use crate::setup::amd_system_files::runtime_file_list;
-use crate::setup::guest_driver::INTEL_STORE_FOLDER;
 use crate::setup::guest_driver::guest_driver;
+use crate::setup::guest_driver::{INTEL_STORE_FOLDER, NVIDIA_STORE_FOLDER};
 use crate::setup::guest_files::guest_file_list;
 use crate::setup::intel::intel_driver_folder;
 use crate::setup::intel_system_list::read_system_list;
@@ -47,6 +47,8 @@ const NVAPI_SECONDS: u64 = 30;
 const NVAPI_KEPT: &str = "nvapi kept";
 const NVAPI_NEEDED: &str = "nvapi needed";
 const NVAPI_PLACED: &str = "nvapi placed";
+const NVAPI_RESTORED: &str = "nvapi restored";
+const NVAPI_NO_SOURCE: &str = "nvapi no source";
 const SOFTWARE_32: (&str, &str) = (r"SOFTWARE\", r"SOFTWARE\WOW6432Node\");
 const NO_SCRIPT: &str = "Windows lacks some of the driver's files, so a program that looks for them may crash. \
                          This install has no script to place them.";
@@ -113,13 +115,14 @@ pub(super) fn place_driver_files(task: &mut Task) -> Result<()> {
             return Ok(());
         }
     };
-    // With the wrapper to put there, NVIDIA's copy would only replace it. Without it, NVIDIA's goes
-    // in as before, so the guest has NVAPI either way.
-    let list = if task.context.paths.guest_files().join(NVAPI_WRAPPER).is_file() {
-        without_nvapi(&list)
-    } else {
-        list
-    };
+    // With the wrapper to put there, NVIDIA's copy would only replace it. Without it, or with it
+    // turned off, NVIDIA's goes in as before, so the guest has NVAPI either way.
+    let list =
+        if task.machine.nvapi_wrapper() && task.context.paths.guest_files().join(NVAPI_WRAPPER).is_file() {
+            without_nvapi(&list)
+        } else {
+            list
+        };
     place_listed_files(task, &list, None)
 }
 
@@ -157,8 +160,42 @@ fn nvapi_place_script(staged: &str) -> String {
     )
 }
 
-/// Puts the NVAPI wrapper in System32, unless the guest has this program's copy already.
+/// Puts NVIDIA's NVAPI back in System32 when what is there isn't it, as the wrapper is when the
+/// user has just turned it off. Moved aside first, as in the place script.
+fn nvapi_restore_script() -> String {
+    format!(
+        "$t = Join-Path $env:windir '{NVAPI_FOLDER}\\{NVAPI_WRAPPER}'; \
+         $s = '{HOST_DRIVER_STORE}\\{NVIDIA_STORE_FOLDER}\\{NVAPI_WRAPPER}'; \
+         if (-not (Test-Path -LiteralPath $s)) {{ '{NVAPI_NO_SOURCE}' }} \
+         elseif ((Test-Path -LiteralPath $t) -and (Get-FileHash -LiteralPath $t).Hash -eq (Get-FileHash -LiteralPath $s).Hash) {{ '{NVAPI_KEPT}' }} \
+         else {{ try {{ Get-ChildItem -LiteralPath (Split-Path $t) -Filter '{NVAPI_WRAPPER}.*.old' -ErrorAction SilentlyContinue | \
+         Remove-Item -Force -ErrorAction SilentlyContinue; \
+         if (Test-Path -LiteralPath $t) {{ Move-Item -LiteralPath $t -Destination \"$t.$([DateTime]::UtcNow.Ticks).old\" -Force -ErrorAction Stop }}; \
+         Copy-Item -LiteralPath $s -Destination $t -Force -ErrorAction Stop; '{NVAPI_RESTORED}' }} \
+         catch {{ \"{FAILED_MARK} nvapi: $($_.Exception.Message)\" }} }}"
+    )
+}
+
+/// With the wrapper turned off, NVIDIA's NVAPI goes back where the wrapper was.
+fn restore_nvidias_nvapi(task: &mut Task) -> Result<()> {
+    let said = task.ask_guest(&nvapi_restore_script(), NVAPI_SECONDS);
+    if said.contains(NVAPI_KEPT) {
+        return Ok(());
+    }
+    write_log(task.context, &format!("nvapi wrapper off: {}", said.trim()))?;
+    if !said.contains(NVAPI_RESTORED) && !said.contains(NVAPI_NO_SOURCE) {
+        task.error =
+            "NVIDIA's NVAPI did not go back in System32, so the NVAPI wrapper may still be there.".to_owned();
+    }
+    Ok(())
+}
+
+/// Puts the NVAPI wrapper in System32, unless the guest has this program's copy already or the user
+/// turned it off, when NVIDIA's goes back instead.
 pub(super) fn place_nvapi_wrapper(task: &mut Task) -> Result<()> {
+    if !task.machine.nvapi_wrapper() {
+        return restore_nvidias_nvapi(task);
+    }
     let local = task.context.paths.guest_files().join(NVAPI_WRAPPER);
     let Ok(bytes) = fs::read(&local) else {
         write_log(task.context, "nvapi wrapper: this program folder has none, so NVIDIA's stays")?;
@@ -297,6 +334,18 @@ mod tests {
     fn nvidias_system32_nvapi_is_left_out_and_the_32_bit_one_stays() {
         let list = "System32\tnvapi64.dll\tnvapi64.dll\nSysWOW64\tnvapi.dll\tnvapi.dll\nSystem32\tnvml.dll\tnvml.dll\n";
         assert_eq!(without_nvapi(list), "SysWOW64\tnvapi.dll\tnvapi.dll\nSystem32\tnvml.dll\tnvml.dll\n");
+    }
+
+    #[test]
+    fn the_restore_script_takes_nvidias_from_the_driver_store_and_moves_the_wrapper_aside() {
+        let script = nvapi_restore_script();
+        let (moved, copied) = (script.find("Move-Item").unwrap(), script.find("Copy-Item").unwrap());
+        assert!(moved < copied);
+        assert!(
+            script.contains(r"HostDriverStore\FileRepository\nv_dispi.inf_amd64_gpupv\nvapi64.dll'"),
+            "{script}"
+        );
+        assert!(script.contains(r"'System32\nvapi64.dll'"));
     }
 
     #[test]

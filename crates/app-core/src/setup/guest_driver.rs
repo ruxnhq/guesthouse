@@ -22,7 +22,7 @@ pub struct GuestDriver {
 }
 
 const NVIDIA_DISC_FOLDER: &str = "nvidia";
-const NVIDIA_STORE_FOLDER: &str = "nv_dispi.inf_amd64_gpupv";
+pub(crate) const NVIDIA_STORE_FOLDER: &str = "nv_dispi.inf_amd64_gpupv";
 const AMD_DISC_FOLDER: &str = "amd";
 const AMD_STORE_FOLDER: &str = "amdxc.inf_amd64_gpupv";
 const INTEL_DISC_FOLDER: &str = "intel";

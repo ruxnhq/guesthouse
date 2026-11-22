@@ -8,6 +8,9 @@
 //! A start, a restart in the guest and a change to the display's settings end with the guest at the
 //! size in the machine's settings. Nothing is sent while such a task runs, and the window's size is
 //! sent again once it's over.
+//!
+//! While an app in the guest is fullscreen, the guest's helper leaves the screen alone and the size
+//! waits: a game whose resolution changes under it can close.
 
 use super::screen::Screen;
 use gtk::glib;
@@ -30,6 +33,9 @@ const BETWEEN_LOOKS: Duration = Duration::from_millis(250);
 /// How many looks in a row find the same size before it's sent: half a second of a still window.
 const STILL_LOOKS: u32 = 2;
 const BETWEEN_STARTS: Duration = Duration::from_secs(5);
+/// How often a size a fullscreen app holds back is asked for again. The helper only looks, and
+/// doesn't touch the screen while the app is there.
+const BETWEEN_HELD_ASKS: Duration = Duration::from_secs(3);
 /// Windows' desktop is hard to use below this, and its own settings offer nothing smaller.
 const SMALLEST: Size = (800, 600);
 const LARGEST: Size = (7680, 4320);
@@ -83,10 +89,13 @@ impl Watch {
     }
 }
 
-/// A guest that restarted has lost its helper, so one that doesn't answer is started again.
+/// A guest that restarted has lost its helper, so one that doesn't answer is started again. A size
+/// a fullscreen app held back is asked for again until the app lets go, or a newer size comes.
 fn run(context: &Context, machine: &Machine, slot: Option<Slot>, modes: &DriverModes, wake: &Receiver<Size>) {
     let mut started = false;
     let mut wanted: Option<Size> = None;
+    // What the log last said, so a size that waits, or a helper that stays away, is one line.
+    let mut said: Option<Said> = None;
     while let Some(size) = wanted.or_else(|| wake.recv().ok()) {
         // Only the newest matters.
         let (width, height) = wake.try_iter().last().unwrap_or(size);
@@ -99,25 +108,59 @@ fn run(context: &Context, machine: &Machine, slot: Option<Slot>, modes: &DriverM
             false => Sized::NoHelper,
         };
         wanted = None;
-        match outcome {
-            Sized::Set => {}
+        let say = |what: Said, said: &mut Option<Said>, text: String| {
+            if *said != Some(what) {
+                let _ = write_log(context, &text);
+            }
+            *said = Some(what);
+        };
+        let wait = match outcome {
+            // Every time, as the same size set again is what a size sent twice looks like.
+            Sized::Set => {
+                let _ = write_log(context, &format!("window size: {width}x{height} set"));
+                said = Some(Said::Set);
+                continue;
+            }
             // Windows on its basic display, or a size it won't take. The next size may do better.
             Sized::Not(why) => {
-                let _ = write_log(context, &format!("window size: {width}x{height} not set: {why}"));
+                say(
+                    Said::Not((width, height)),
+                    &mut said,
+                    format!("window size: {width}x{height} not set: {why}"),
+                );
+                continue;
+            }
+            Sized::Held => {
+                let text = format!("window size: {width}x{height} waits, as an app in Windows is fullscreen");
+                say(Said::Held((width, height)), &mut said, text);
+                BETWEEN_HELD_ASKS
             }
             Sized::NoHelper => {
+                let text =
+                    "window size: the helper in Windows didn't answer, so it's started again".to_owned();
+                say(Said::NoHelper, &mut said, text);
                 started = false;
-                match wake.recv_timeout(BETWEEN_STARTS) {
-                    Ok(newer) => wanted = Some(newer),
-                    Err(RecvTimeoutError::Timeout) => wanted = Some((width, height)),
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
+                BETWEEN_STARTS
             }
+        };
+        match wake.recv_timeout(wait) {
+            Ok(newer) => wanted = Some(newer),
+            Err(RecvTimeoutError::Timeout) => wanted = Some((width, height)),
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
     if started {
         stop_guest_window_size(context, machine, slot);
     }
+}
+
+/// The kinds of line the log has had, each for its size.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Said {
+    Set,
+    Not(Size),
+    Held(Size),
+    NoHelper,
 }
 
 pub struct WindowSize {

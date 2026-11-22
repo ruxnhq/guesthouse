@@ -342,6 +342,11 @@ impl ScreenPage {
     fn on_fullscreened(&self) {
         let parts = &self.0;
         let fullscreen = parts.window.widget().is_fullscreen();
+        // With Match the window on, each change resizes Windows' screen, so a report needs to see them.
+        let _ = write_log(
+            &parts.window.context(),
+            if fullscreen { "viewer: fullscreen" } else { "viewer: out of fullscreen" },
+        );
         self.call_header(false);
         let tooltip = if fullscreen {
             format!("Leave Fullscreen ({FULLSCREEN_KEYS})")

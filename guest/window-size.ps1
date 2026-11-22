@@ -3,6 +3,8 @@
 # A request is a width, a height, a rate and the driver's list of modes. A size the driver's monitor
 # doesn't list is added to those, which makes the driver show Windows the monitor again, and then
 # Windows is switched to it. Both need this session, and the first needs an administrator.
+# While an app has the screen in fullscreen, the screen is left alone: a game whose resolution
+# changes under it can close, so the size waits until the app leaves fullscreen.
 $source = @'
 using System; using System.Runtime.InteropServices; using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -31,6 +33,16 @@ public static class DriverControl {
       }
       return "sent";
     }
+  }
+}
+public static class Session {
+  // QUNS_BUSY and QUNS_RUNNING_D3D_FULL_SCREEN in shellapi.h: what Windows itself goes by to hold
+  // back notifications while an app is fullscreen, borderless or exclusive.
+  const int Busy = 2, Direct3DFullscreen = 3;
+  [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+  public static bool AppFullscreen() {
+    int state;
+    return SHQueryUserNotificationState(out state) == 0 && (state == Busy || state == Direct3DFullscreen);
   }
 }
 public static class Screen {
@@ -86,6 +98,7 @@ function Size-Screen([int]$width, [int]$height, [int]$rate, [string]$modes) {
     $display = [Screen]::Find()
     if (-not $display) { return 'no driver display' }
     if ([Screen]::Is($display, $width, $height, $rate)) { return "set ${width}x$height" }
+    if ([Session]::AppFullscreen()) { return 'held by a fullscreen app' }
     if (-not [Screen]::Lists($display, $width, $height, $rate)) {
         $mode = "${width}x${height}x$rate"
         $extra = @($script:before, $mode) | Where-Object { $_ -and $modes -notmatch "(^|,)$_(,|$)" } | Select-Object -Unique

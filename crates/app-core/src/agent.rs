@@ -29,6 +29,8 @@ const WINDOW_SIZE_START_SECONDS: u64 = 20;
 const WINDOW_SIZE_SECONDS: u64 = 12;
 /// What the helper says, before the size, when Windows has taken it.
 const SIZE_SET: &str = "set";
+/// What the helper says when an app in the guest is fullscreen, and the screen was left alone.
+const SIZE_HELD: &str = "held";
 /// The first start on a machine also opens the helper's port in Windows' firewall.
 const FILES_START_SECONDS: u64 = 30;
 
@@ -196,6 +198,9 @@ pub fn stop_guest_window_size(context: &Context, machine: &Machine, slot: Option
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sized {
     Set,
+    /// An app in the guest has the screen in fullscreen, so its size was left alone. Changing it
+    /// under a game can close the game.
+    Held,
     /// The helper's own words: no display of the driver's, or Windows refusing the mode.
     Not(String),
     /// The helper didn't answer.
@@ -218,6 +223,7 @@ pub fn size_guest_screen(
     let said = said.trim();
     Ok(match said.split_whitespace().next() {
         Some(SIZE_SET) => Sized::Set,
+        Some(SIZE_HELD) => Sized::Held,
         Some(_) => Sized::Not(said.to_owned()),
         // It took the request and said nothing, which is what it does with one it can't read.
         None => Sized::NoHelper,
@@ -425,6 +431,32 @@ mod tests {
     fn no_listener_is_an_empty_answer() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         assert_eq!(TcpAgent.ask(port, "token", "up", 1), "");
+    }
+
+    #[test]
+    fn a_size_a_fullscreen_app_holds_back_is_told_apart() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        scratch.write("program/guest/window-size-ask.ps1", "ask it");
+        let agent = Arc::new(ScriptedAgent::answering(&[
+            "answer set 1920x1080\r\n",
+            "answer held by a fullscreen app\r\n",
+            "answer no driver display\r\n",
+            "answer \r\n",
+            "",
+        ]));
+        context.agent = agent.clone();
+        let vm = machine(&context, "vm");
+        make_token(&context, &vm).unwrap();
+        let modes = DriverModes::default();
+        let size = || size_guest_screen(&context, &vm, (1920, 1080, 144), &modes, None).unwrap();
+        assert_eq!(size(), Sized::Set);
+        assert_eq!(size(), Sized::Held, "a fullscreen app has the screen");
+        assert_eq!(size(), Sized::Not("no driver display".into()));
+        assert_eq!(size(), Sized::NoHelper, "a request it couldn't read");
+        assert_eq!(size(), Sized::NoHelper, "no answer at all");
+        let requests = agent.requests.lock().unwrap();
+        assert!(requests[0].2.starts_with("$request = '1920 1080 144 '\n"), "{}", requests[0].2);
     }
 
     #[test]

@@ -30,6 +30,16 @@ What `install.sh` does, in order:
 
 It never installs or changes a GPU driver, kernel arguments or services. On an immutable distro it adds no packages and prints what to layer, but the bridge helper still goes in, as `/usr/local` is writable there. If bridged networking says the helper is missing or can't run as root, run the installer again: it puts it back, even when the version is the same.
 
+## The AppImage
+
+Each release also has `guesthouse-installer-VERSION.AppImage`, for anyone who'd rather download one file than pipe a script. It isn't a second kind of install. It carries the same release, and `install.sh` from inside it, which does every step above except the download, and puts the release in the same place. So the app, its updates and `uninstall.sh` are the same whichever way it came. It needs no FUSE library.
+
+Opened from the file manager, it shows Guesthouse's own install window. That's the same plan the script prints, as a page: what goes where, what needs root and why, the exact command, and what it found on this PC. Install runs it, a window asks for your password if a part needs root, and then the app starts. On a PC with no GTK or libadwaita yet, a KDE desktop for one, the window uses the copies the AppImage carries, and the install adds the PC's own for the app. It installs in a terminal instead only when even those can't load, or when you pick Use a Terminal.
+
+Started from a terminal, it installs in that terminal. Once this release or a newer one is installed, opening it again only starts the app, so it can be deleted after the first time. Updates come from the app, as for any install. `guesthouse-installer-VERSION.AppImage install --dry-run` shows the plan and stops, and `guesthouse-installer-VERSION.AppImage uninstall` runs the installed `uninstall.sh`.
+
+The app doesn't run from inside the AppImage. Its folder goes away when the AppImage stops, and a VM's QEMU has to keep running after the app closes. Check the AppImage against `SHA256SUMS` on the release, as nothing else checks it.
+
 A word on the checksum. It proves the download is the release the script names, and that's all. It can't protect you from the script, which is why you should read it.
 
 To update, run the script again, or `~/.local/lib/guesthouse/current/install.sh --update`. It says what will change and refuses while one of its VMs is running. VMs of another copy of Guesthouse, like a build of the repo, don't count. The old version stays until the new one is in place, so a failed update leaves you with what you had. Your machines, disks and settings aren't touched. `--check-update` says if there's a newer release and changes nothing. If your driver has moved to another branch, it tells you what that means. GPU machines won't start until the branches match, and plain VMs still run.

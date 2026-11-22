@@ -70,16 +70,18 @@ pub fn application(
         // Started again while it runs: that's someone asking for the window.
         window.present();
     });
-    application.connect_startup(move |_| {
-        // So the icon shows before anything has installed it.
-        if write_icons(&icons).is_ok()
-            && let Some(display) = gtk::gdk::Display::default()
-        {
-            gtk::IconTheme::for_display(&display).add_search_path(&icons);
-        }
-        gtk::Window::set_default_icon_name(APP_ID);
-    });
+    application.connect_startup(move |_| use_built_in_icons(&icons));
     application
+}
+
+/// So the icon shows before anything has installed it: written to `icons`, and looked for there.
+pub fn use_built_in_icons(icons: &Path) {
+    if write_icons(icons).is_ok()
+        && let Some(display) = gtk::gdk::Display::default()
+    {
+        gtk::IconTheme::for_display(&display).add_search_path(icons);
+    }
+    gtk::Window::set_default_icon_name(APP_ID);
 }
 
 /// `restart` is the note of a process that lost the GPU and started this one over.

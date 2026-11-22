@@ -2,5 +2,5 @@
 # ones than this. GTK is what the build needs to be recent, and its programs load the host's anyway.
 FROM registry.fedoraproject.org/fedora:44
 RUN dnf -y install gcc git xz findutils which binutils pkgconf-pkg-config rust cargo gtk4-devel \
-      libadwaita-devel curl \
+      libadwaita-devel curl squashfs-tools \
     && dnf clean all

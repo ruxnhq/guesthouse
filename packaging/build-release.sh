@@ -10,6 +10,8 @@
 #   bundled   guesthouse-VERSION-bundled-source.tar, the source of those libraries and blobs
 #   app       the app, the daemon and their helpers
 #   payload   guesthouse-VERSION-x86_64.tar.xz
+#   installer-libs  GTK and libadwaita for the AppImage's install window, on a PC that has neither yet
+#   appimage  guesthouse-installer-VERSION.AppImage, the payload in one file that installs itself
 #   source    guesthouse-VERSION-source.tar.xz, and SHA256SUMS
 #
 # check-driver isn't one of these: it only looks at what --display-driver names, and builds nothing.
@@ -58,6 +60,27 @@ OPENSSH_URL=${OPENSSH_URL:-https://github.com/PowerShell/Win32-OpenSSH/releases/
 OPENSSH_SHA256=788d8643464a01eb63640a2fd746f9ed23d106b5a901a35f88dc8cd40e446ac9
 # Where the app looks for it in the program folder, in app-core's paths.rs.
 OPENSSH_FILE=openssh/OpenSSH-Win64.msi
+
+# What an AppImage starts with: the AppImage project's runtime, which mounts the squashed folder behind it
+# with no FUSE library needed on the host. It's MIT, with libfuse (LGPL), squashfuse and zstd linked in,
+# so the bundled source carries the runtime's source at its tag and theirs at the versions it builds with.
+APPIMAGE_RUNTIME_TAG=20251108
+APPIMAGE_RUNTIME_URL=https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_TAG/runtime-x86_64
+APPIMAGE_RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+# Each: file name, URL, sha256. libfuse's hash is the one the runtime's own build checks.
+APPIMAGE_RUNTIME_SOURCES="type2-runtime-$APPIMAGE_RUNTIME_TAG.tar.gz https://github.com/AppImage/type2-runtime/archive/refs/tags/$APPIMAGE_RUNTIME_TAG.tar.gz 4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95
+fuse-3.15.0.tar.xz https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
+squashfuse-0.5.2.tar.gz https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3"
+# Where the install window gets GTK and libadwaita on a PC that has neither yet, a KDE desktop say:
+# Ubuntu 24.04's, the oldest the app takes, for the build without HDR. Only the AppImage carries them.
+# The install adds the PC's own, and the installed app uses those.
+INSTALLER_LIBS=installer-libs
+PIXBUF_FOLDER=/usr/lib/$ARCH-linux-gnu/gdk-pixbuf-2.0
+# The SVG one draws the icons. Whichever of the others this gdk-pixbuf doesn't have built in go too.
+PIXBUF_LOADERS='libpixbufloader-svg.so libpixbufloader-png.so libpixbufloader-jpeg.so'
+# The loaders' list names each by its path, and AppRun puts the real one in, as the AppImage's folder
+# isn't the same twice.
+INSTALLER_LIBS_MARK=@INSTALLER_LIBS@
 
 # These stay the host's. The C library can't be mixed, and PipeWire's client must match its server.
 # OpenGL is the host's too: GBM and EGL are Mesa's, which has to match the host's kernel driver, and
@@ -347,7 +370,10 @@ download_source() { # folder, package=version
 # the bundle holds exactly these.
 fetch_library_sources() {
     kept=$(mktemp)
-    awk '$3 != "" && $4 == "source" { print $5 "=" $6 }' "$OUT/stage/LIBRARIES.txt" | sort -u |
+    lists=$OUT/stage/LIBRARIES.txt
+    [ ! -f "$OUT/$INSTALLER_LIBS/LIBRARIES.txt" ] || lists="$lists $OUT/$INSTALLER_LIBS/LIBRARIES.txt"
+    # shellcheck disable=SC2086 # one or two paths, with no spaces
+    awk '$3 != "" && $4 == "source" { print $5 "=" $6 }' $lists | sort -u |
         while read -r wanted; do
             name=${wanted%%=*}
             version=${wanted#*=}
@@ -376,6 +402,24 @@ stage_library_sources() {
     fetch_library_sources "$OUT/bundled-source/libraries"
 }
 
+# Kept beside the build and used again while its hash is right, like OpenSSH.
+fetch_kept() { # file name, URL, sha256
+    kept=$OUT/downloads/$1
+    has_sha256 "$kept" "$3" && return 0
+    mkdir -p "$OUT/downloads"
+    rm -f "$kept"
+    curl -fsSL -o "$kept.part" "$2" || die "couldn't download $2"
+    mv "$kept.part" "$kept"
+    has_sha256 "$kept" "$3" || die "$2 isn't the file it should be."
+}
+
+fetch_appimage_runtime_source() {
+    printf '%s\n' "$APPIMAGE_RUNTIME_SOURCES" | while read -r file url sha256; do
+        fetch_kept "$file" "$url" "$sha256"
+        cp "$OUT/downloads/$file" "$1/"
+    done
+}
+
 fetch_firmware_source() {
     curl -fsSL -o "$1/qemu-${QEMU_TAG#v}.tar.xz" "$QEMU_RELEASE_URL"
     [ "$(sha256sum "$1/qemu-${QEMU_TAG#v}.tar.xz" | cut -d ' ' -f 1)" = "$QEMU_RELEASE_SHA256" ] ||
@@ -386,12 +430,18 @@ write_sources_note() {
     cat <<EOF
 The source of everything in a Guesthouse release that isn't mine and isn't in its source bundle.
 
-libraries/  Ubuntu 24.04's source packages for the libraries in qemu/build/lib, at the exact versions
-            they were built from: each .dsc with its original source and Ubuntu's changes. debian/rules
+libraries/  Ubuntu 24.04's source packages for the libraries in qemu/build/lib, and for the GTK and
+            libadwaita the AppImage's install window can use, at the exact versions they were built from: each .dsc with its original source and Ubuntu's changes. debian/rules
             in each is how it was built. To unpack one: dpkg-source -x NAME_VERSION.dsc
 
 virglrenderer/  Upstream's $VIRGL_TAG, unmodified, which libvirglrenderer.so.1 and virgl_render_server
             in qemu/build are built from, with the options in recipes/build-release.sh.
+
+appimage-runtime/  The source of the runtime at the front of the AppImage: the AppImage project's
+            type2-runtime at its tag $APPIMAGE_RUNTIME_TAG, unmodified, and the libfuse and squashfuse
+            releases its scripts/common/install-dependencies.sh builds it with. libfuse gets the patch
+            in the runtime's patches/libfuse. zstd, zlib, mimalloc and musl are Alpine 3.21's, as its
+            scripts/docker/Dockerfile says.
 
 firmware/   QEMU's own release of $QEMU_TAG, unmodified. Its pc-bios/ holds the firmware in qemu/pc-bios,
             and roms/ the source of it, with the recipes in roms/Makefile.
@@ -413,9 +463,10 @@ stage_bundled() {
     bundle=$OUT/bundled-source
     # The libraries' sources stay, as fetch_library_sources checks each one and reuses what's right.
     [ ! -d "$bundle" ] || find "$bundle" -mindepth 1 -maxdepth 1 ! -name libraries -exec rm -rf {} +
-    mkdir -p "$bundle/libraries" "$bundle/firmware" "$bundle/recipes"
+    mkdir -p "$bundle/libraries" "$bundle/firmware" "$bundle/appimage-runtime" "$bundle/recipes"
     fetch_library_sources "$bundle/libraries"
     fetch_firmware_source "$bundle/firmware"
+    fetch_appimage_runtime_source "$bundle/appimage-runtime"
     fetch_virgl
     mkdir -p "$bundle/virglrenderer"
     tar -C "$VIRGL_TREE" --exclude=.git -cf - . | tar -C "$bundle/virglrenderer" -xf -
@@ -575,6 +626,70 @@ stage_payload() {
     say "the payload is $OUT/guesthouse-$version-$ARCH.tar.xz"
 }
 
+# Ubuntu's libraries, from this image, under their sonames, with what the app and the loaders need.
+stage_installer_libs() {
+    command -v apt-get >/dev/null 2>&1 || die "this stage runs in the image from Containerfile.qemu."
+    program=$OUT/stage/guesthouse-no-hdr
+    [ -f "$program" ] || die "the install window is the app, so the app stage comes first."
+    folder=$OUT/$INSTALLER_LIBS
+    [ ! -d "$folder" ] || rm -rf "${folder:?}"
+    # gio-modules stays empty, so GIO loads none of the PC's, which were built for another GLib.
+    mkdir -p "$folder/lib" "$folder/loaders" "$folder/gio-modules"
+    loaders=""
+    for loader in $PIXBUF_LOADERS; do
+        [ ! -f "$PIXBUF_FOLDER/2.10.0/loaders/$loader" ] || loaders="$loaders $PIXBUF_FOLDER/2.10.0/loaders/$loader"
+    done
+    list=$folder/LIBRARIES.txt
+    {
+        printf '%s\n' "# What the AppImage's install window uses on a PC with no GTK or libadwaita yet. They aren't mine,"
+        printf '%s\n' "# and come with their licences. Their source is in guesthouse-VERSION-bundled-source.tar."
+        printf '%s\n' "#" "# Library, package, its version, and the source package it was built from:"
+    } >"$list"
+    # shellcheck disable=SC2086 # paths with no spaces
+    for needs in "$program" $loaders; do
+        bundled_closure "$needs"
+    done | sort -u | while read -r name path; do
+        cp -L "$path" "$folder/lib/$name"
+        chmod u+w "$folder/lib/$name"
+        printf '%s %s\n' "$name" "$(library_package "$path" || echo unknown)" >>"$list"
+    done
+    for loader in $loaders; do
+        cp "$loader" "$folder/loaders/"
+        printf '%s %s\n' "${loader##*/}" "$(library_package "$loader" || echo unknown)" >>"$list"
+    done
+    "$PIXBUF_FOLDER/gdk-pixbuf-query-loaders" "$folder"/loaders/*.so | sed "s|$folder|$INSTALLER_LIBS_MARK|g" \
+        >"$folder/loaders.cache"
+    say "the install window's GTK is in $folder"
+}
+
+# The payload's stage in one file that installs itself: the AppImage runtime, then the folder squashed.
+# packaging/appimage/AppRun.sh says what it does when it's opened.
+stage_appimage() {
+    [ -f "$OUT/stage/RELEASE" ] || die "the AppImage carries the payload's stage, so the payload stage comes first."
+    command -v mksquashfs >/dev/null 2>&1 || die "this stage needs mksquashfs, from squashfs-tools."
+    [ -f "$OUT/$INSTALLER_LIBS/loaders.cache" ] ||
+        die "the AppImage carries the install window's GTK, so the installer-libs stage comes first."
+    name=guesthouse-installer-$(release_version).AppImage
+    fetch_kept "runtime-x86_64-$APPIMAGE_RUNTIME_TAG" "$APPIMAGE_RUNTIME_URL" "$APPIMAGE_RUNTIME_SHA256"
+    folder=$OUT/Guesthouse.AppDir
+    [ ! -d "$folder" ] || rm -rf "${folder:?}"
+    mkdir -p "$folder"
+    cp -R "$OUT/stage" "$folder/payload"
+    cp -R "$OUT/$INSTALLER_LIBS" "$folder/$INSTALLER_LIBS"
+    cp "$REPO/packaging/appimage/AppRun.sh" "$folder/AppRun"
+    chmod 755 "$folder/AppRun"
+    # The desktop file and the icon at the top are what tools that list AppImages show.
+    cp "$REPO/crates/app/data/$APP_ID.desktop" "$folder/"
+    cp "$REPO/crates/app/data/icons/hicolor/scalable/apps/$APP_ID.svg" "$folder/"
+    ln -s "$APP_ID.svg" "$folder/.DirIcon"
+    rm -f "$OUT/$name" "$OUT/$name.squashfs"
+    mksquashfs "$folder" "$OUT/$name.squashfs" -root-owned -noappend -comp zstd -quiet -no-progress
+    cat "$OUT/downloads/runtime-x86_64-$APPIMAGE_RUNTIME_TAG" "$OUT/$name.squashfs" >"$OUT/$name"
+    chmod 755 "$OUT/$name"
+    rm -rf "$OUT/$name.squashfs" "${folder:?}"
+    say "the AppImage is $OUT/$name"
+}
+
 # Everything the GPL asks for in one file: this repo with the patch and these scripts, QEMU's whole tree
 # with its subprojects, and the Rust crates, so that nothing depends on anywhere else staying as it is.
 stage_source() {
@@ -600,8 +715,11 @@ stage_source() {
     rm -rf "${bundle:?}"
     bundled=guesthouse-$version-bundled-source.tar
     [ -f "$OUT/$bundled" ] || bundled=""
-    # shellcheck disable=SC2086 # empty, or one name with no spaces
-    (cd "$OUT" && sha256sum "guesthouse-$version-$ARCH.tar.xz" "$name.tar.xz" $bundled >SHA256SUMS)
+    appimage=guesthouse-installer-$version.AppImage
+    [ -f "$OUT/$appimage" ] || appimage=""
+    # The payload and the source come first, as install.sh's hashes are read from the first two lines.
+    # shellcheck disable=SC2086 # each empty, or one name with no spaces
+    (cd "$OUT" && sha256sum "guesthouse-$version-$ARCH.tar.xz" "$name.tar.xz" $bundled $appimage >SHA256SUMS)
     say "the source is $OUT/$name.tar.xz"
     say "for RELEASE_VERSION, PAYLOAD_SHA256 and SOURCE_SHA256 in install.sh:"
     say "$version"
@@ -614,6 +732,8 @@ run_stage() {
         bundled) stage_bundled ;;
         app) stage_app ;;
         payload) stage_payload ;;
+        installer-libs) stage_installer_libs ;;
+        appimage) stage_appimage ;;
         source) stage_source ;;
         check-driver) check_display_driver ;;
         library-sources) stage_library_sources ;;
@@ -630,7 +750,7 @@ main() {
         DISPLAY_DRIVER=$2
         shift 2
     fi
-    [ $# -gt 0 ] || set -- qemu app payload source
+    [ $# -gt 0 ] || set -- qemu app installer-libs payload appimage source
     refuse_uncommitted
     mkdir -p "$OUT"
     for stage in "$@"; do

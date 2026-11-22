@@ -61,6 +61,7 @@ DRY_RUN=no
 UPDATE=no
 CHECK_UPDATE=no
 FROM_SOURCE=no
+PAYLOAD_DIR=""
 # The app's own process, when the app runs this: it's the one thing from this install that may be running.
 FROM_APP=""
 
@@ -103,6 +104,7 @@ updates to that one.
                   password is asked for in a window
   --dry-run       Check everything, download and verify, show the plan, and stop
   --from-source   Build the release's source on this PC, and install that
+  --payload=DIR   Install the release unpacked in DIR, such as the AppImage's own, with no download
   --help          Show this
 EOF
 }
@@ -114,6 +116,7 @@ parse_arguments() {
             --update) UPDATE=yes ;;
             --check-update) CHECK_UPDATE=yes ;;
             --from-source) FROM_SOURCE=yes ;;
+            --payload=*) PAYLOAD_DIR=${argument#--payload=} ;;
             --from-app=*) FROM_APP=${argument#--from-app=} ;;
             --help)
                 usage
@@ -403,15 +406,33 @@ build_from_source() {
     mv "$STAGING/built/guesthouse-$RELEASE_VERSION-$ARCH.tar.xz" "$STAGING/"
 }
 
+# The AppImage carries a release already unpacked, and the copy of this script inside it installs that
+# one. There's nothing to download, and no hash to check it against: the AppImage is what was downloaded.
+use_payload_folder() {
+    [ -n "$PAYLOAD_DIR" ] || return 0
+    [ "$UPDATE" = no ] && [ "$CHECK_UPDATE" = no ] && [ "$FROM_SOURCE" = no ] ||
+        die "--payload installs the release it names, so it can't go with --update, --check-update or --from-source."
+    PAYLOAD_DIR=$(CDPATH='' cd -- "$PAYLOAD_DIR" 2>/dev/null && pwd) || die "there's no folder called $PAYLOAD_DIR."
+    [ -f "$PAYLOAD_DIR/RELEASE" ] || die "$PAYLOAD_DIR has no RELEASE file, so it's not a Guesthouse release."
+    RELEASE_VERSION=$(sed -n 's/^version=//p' "$PAYLOAD_DIR/RELEASE" | head -n 1)
+    is_version "$RELEASE_VERSION" || die "$PAYLOAD_DIR/RELEASE names no version."
+}
+
 get_payload() {
     payload=guesthouse-$RELEASE_VERSION-$ARCH.tar.xz
-    if [ "$FROM_SOURCE" = yes ]; then
-        build_from_source
-    else
-        download_verified "$payload" "$PAYLOAD_SHA256"
-    fi
-    tar -xJf "$STAGING/$payload" -C "$STAGING" --no-same-owner || die "$payload wouldn't unpack."
     TREE=$STAGING/guesthouse-$RELEASE_VERSION-$ARCH
+    if [ -n "$PAYLOAD_DIR" ]; then
+        # A copy, as the AppImage's folder is read-only, and gone once it stops.
+        payload=$PAYLOAD_DIR
+        cp -R "$PAYLOAD_DIR" "$TREE" && chmod -R u+w "$TREE" || die "couldn't copy $PAYLOAD_DIR."
+    else
+        if [ "$FROM_SOURCE" = yes ]; then
+            build_from_source
+        else
+            download_verified "$payload" "$PAYLOAD_SHA256"
+        fi
+        tar -xJf "$STAGING/$payload" -C "$STAGING" --no-same-owner || die "$payload wouldn't unpack."
+    fi
     [ -f "$TREE/RELEASE" ] || die "$payload has no RELEASE file, so it's not a Guesthouse release."
     [ "$(release_field version)" = "$RELEASE_VERSION" ] ||
         die "$payload says it's version $(release_field version), not $RELEASE_VERSION."
@@ -783,6 +804,7 @@ print_root_plan() {
     elif [ "$IMMUTABLE" = no ] || [ -z "$PACKAGES" ]; then
         say "Nothing here needs root."
     fi
+    [ -z "$PACKAGES" ] || [ "$IMMUTABLE" = yes ] || say "That adds the packages Guesthouse needs: $PACKAGES"
     [ "$HELPER_PLACED" = no ] ||
         say "That puts QEMU's bridge helper in $BRIDGE_HELPER_FOLDER, setuid root, for bridged networking."
     [ "$SWTPM_RULE_ADDED" = no ] ||
@@ -817,8 +839,11 @@ run_root_work() {
 
 # The app has no terminal for sudo to ask in, so pkexec asks in a window. It shows the command too.
 run_root_work_in_a_window() {
-    command -v pkexec >/dev/null 2>&1 ||
+    if ! command -v pkexec >/dev/null 2>&1; then
+        [ -z "$PAYLOAD_DIR" ] ||
+            die "this needs root, and there's no pkexec to ask for it in a window. Install in a terminal instead."
         die "this update needs root, and there's no pkexec to ask for it in a window. Run install.sh --update in a terminal."
+    fi
     pkexec sh -c "$ROOT_COMMAND" </dev/null || die "root's part didn't run, so I'm stopping. Nothing of Guesthouse's was changed."
     [ "$IMMUTABLE" = yes ] || PACKAGES_ADDED=$PACKAGES
 }
@@ -1161,6 +1186,7 @@ stop_if_nothing_changes() {
 
 main() {
     parse_arguments "$@"
+    use_payload_folder
     refuse_root
     check_home
     set_paths

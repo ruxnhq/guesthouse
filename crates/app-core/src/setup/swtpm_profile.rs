@@ -1,6 +1,7 @@
 //! Ubuntu's swtpm comes with an AppArmor profile. It lets swtpm write in home folders and /tmp, but not
-//! in /run/user, where the run folder is, so the virtual TPM can't make its log or its socket and a
-//! Windows machine can't start. install.sh adds the rule for the run folder. This finds what's still
+//! in /run/user, where the run folder is, so the virtual TPM can't make its log or its socket. It also
+//! takes the data channel QEMU hands it only from libvirt's QEMU, and a jailed QEMU runs as Ubuntu's
+//! `bwrap` and `unpriv_bwrap`. Either way a Windows machine can't start. install.sh adds both rules. This finds what's still
 //! missing: on an install from before that, or with the machines moved out of the home folders.
 
 use super::checks::{Check, CheckState, existing_parent};
@@ -12,6 +13,8 @@ use std::path::{Path, PathBuf};
 const PROFILE: &str = "usr.bin.swtpm";
 /// The rule install.sh adds. Every user's run folder is under it.
 pub const RUN_FOLDER_RULE: &str = "owner /run/user/[0-9]*/guesthouse/** rwk,";
+/// The rule for the socket pair QEMU hands swtpm with `CMD_SET_DATAFD`, whatever QEMU runs as.
+pub const SOCKET_RULE: &str = "unix (send, receive) type=stream addr=none,";
 /// The folders the profile already lets swtpm write in, as their owner, besides the home folders.
 const ALLOWED: [&str; 3] = ["/root", "/tmp", "/var/tmp"];
 
@@ -42,6 +45,9 @@ pub fn missing_rules(context: &Context) -> Vec<String> {
         if !present.contains(&rule.as_str()) && !rules.contains(&rule) {
             rules.push(rule);
         }
+    }
+    if !present.contains(&SOCKET_RULE) {
+        rules.push(SOCKET_RULE.to_owned());
     }
     rules
 }
@@ -129,16 +135,17 @@ mod tests {
     }
 
     #[test]
-    fn the_run_folder_needs_the_rule_install_sh_adds() {
+    fn the_run_folder_and_the_jail_need_the_rules_install_sh_adds() {
         let scratch = Scratch::new();
         let context = ubuntu(&scratch);
-        assert_eq!(missing_rules(&context), [RUN_FOLDER_RULE]);
+        assert_eq!(missing_rules(&context), [RUN_FOLDER_RULE, SOCKET_RULE]);
         let check = check_swtpm_profile(&context).unwrap();
         assert_eq!(check.state, CheckState::Warning);
         let local = local_file(&context).display().to_string();
         assert!(
             check.fix.contains(&format!(
-                "printf '%s\\n' 'owner /run/user/[0-9]*/guesthouse/** rwk,' | sudo tee -a {local}"
+                "printf '%s\\n' 'owner /run/user/[0-9]*/guesthouse/** rwk,' 'unix (send, receive) type=stream addr=none,' \
+                 | sudo tee -a {local}"
             )),
             "{}",
             check.fix
@@ -146,19 +153,27 @@ mod tests {
     }
 
     #[test]
-    fn with_the_rule_in_place_nothing_is_missing() {
+    fn with_the_rules_in_place_nothing_is_missing() {
         let scratch = Scratch::new();
         let context = ubuntu(&scratch);
-        fs::write(local_file(&context), format!("# Guesthouse\n{RUN_FOLDER_RULE}\n")).unwrap();
+        fs::write(local_file(&context), format!("# Guesthouse\n{RUN_FOLDER_RULE}\n{SOCKET_RULE}\n")).unwrap();
         assert!(missing_rules(&context).is_empty());
         assert!(check_swtpm_profile(&context).is_none());
+    }
+
+    #[test]
+    fn an_install_with_only_the_run_folder_rule_is_told_the_socket_rule() {
+        let scratch = Scratch::new();
+        let context = ubuntu(&scratch);
+        fs::write(local_file(&context), format!("{RUN_FOLDER_RULE}\n")).unwrap();
+        assert_eq!(missing_rules(&context), [SOCKET_RULE]);
     }
 
     #[test]
     fn machines_outside_the_home_folders_need_a_rule_of_their_own() {
         let scratch = Scratch::new();
         let mut context = ubuntu(&scratch);
-        fs::write(local_file(&context), format!("{RUN_FOLDER_RULE}\n")).unwrap();
+        fs::write(local_file(&context), format!("{RUN_FOLDER_RULE}\n{SOCKET_RULE}\n")).unwrap();
         context.paths.machines = "/nothing/here/vm store/machines".into();
         assert_eq!(missing_rules(&context), ["owner \"/nothing/here/vm store/machines/**\" rwk,"]);
         context.paths.machines = "/tmp/machines".into();
@@ -169,7 +184,7 @@ mod tests {
     fn a_link_into_the_home_folders_counts_where_it_leads() {
         let scratch = Scratch::new();
         let mut context = ubuntu(&scratch);
-        fs::write(local_file(&context), format!("{RUN_FOLDER_RULE}\n")).unwrap();
+        fs::write(local_file(&context), format!("{RUN_FOLDER_RULE}\n{SOCKET_RULE}\n")).unwrap();
         let store = scratch.path("store");
         fs::create_dir_all(&store).unwrap();
         let link = scratch.path("link");

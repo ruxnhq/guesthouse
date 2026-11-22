@@ -34,11 +34,13 @@ BRIDGE_HELPER_SOURCE=qemu/build/qemu-bridge-helper
 BRIDGE_HELPER_FOLDER=/usr/local/libexec/guesthouse
 BRIDGE_HELPER=$BRIDGE_HELPER_FOLDER/qemu-bridge-helper
 # Ubuntu's swtpm runs under an AppArmor profile that lets it write in your home folder and /tmp, but not
-# in /run/user, where a machine's run folder is, so a Windows machine's virtual TPM couldn't start. Root
-# adds this one rule to the profile's local file, which is there for additions like it.
+# in /run/user, where a machine's run folder is, and it takes the data channel QEMU hands it only from
+# libvirt's QEMU, not from one in the jail. So a Windows machine's virtual TPM couldn't start. Root adds
+# these two rules to the profile's local file, which is there for additions like them.
 SWTPM_PROFILE=/etc/apparmor.d/usr.bin.swtpm
 SWTPM_LOCAL=/etc/apparmor.d/local/usr.bin.swtpm
 SWTPM_RULE='owner /run/user/[0-9]*/guesthouse/** rwk,'
+SWTPM_SOCKET_RULE='unix (send, receive) type=stream addr=none,'
 SWTPM_COMMENT='# Guesthouse: the virtual TPM keeps its log and socket in the run folder.'
 SECURITY_MODULES=/sys/kernel/security/lsm
 # The first GTK the app with HDR loads on.
@@ -639,12 +641,16 @@ swtpm_rule_needed() {
     case " ${PACKAGES:-} " in
         *" swtpm "*) [ "$IMMUTABLE" = yes ] || return 0 ;;
     esac
-    [ -f "$SWTPM_PROFILE" ] && ! grep -qxF "$SWTPM_RULE" "$SWTPM_LOCAL" 2>/dev/null
+    [ -f "$SWTPM_PROFILE" ] || return 1
+    ! grep -qxF "$SWTPM_RULE" "$SWTPM_LOCAL" 2>/dev/null || ! grep -qxF "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" 2>/dev/null
 }
 
+# Each line goes in only if it isn't there, so an install that added the first rule gets the second.
 swtpm_rule_command() {
-    printf '{ [ ! -f "%s" ] || grep -qxF "%s" "%s" 2>/dev/null || { printf "%%s\\n" "%s" "%s" >>"%s" && apparmor_parser -r "%s"; }; }' \
-        "$SWTPM_PROFILE" "$SWTPM_RULE" "$SWTPM_LOCAL" "$SWTPM_COMMENT" "$SWTPM_RULE" "$SWTPM_LOCAL" "$SWTPM_PROFILE"
+    # shellcheck disable=SC2016 # $line is for root's shell
+    printf '{ [ ! -f "%s" ] || { grep -qxF "%s" "%s" 2>/dev/null && grep -qxF "%s" "%s" 2>/dev/null; } || { for line in "%s" "%s" "%s"; do grep -qxF "$line" "%s" 2>/dev/null || printf "%%s\\n" "$line" >>"%s" || exit 1; done && apparmor_parser -r "%s"; }; }' \
+        "$SWTPM_PROFILE" "$SWTPM_RULE" "$SWTPM_LOCAL" "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" \
+        "$SWTPM_COMMENT" "$SWTPM_RULE" "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_PROFILE"
 }
 
 # What root does, as one string, so what's shown is exactly what runs. An immutable system gets no
@@ -780,7 +786,7 @@ print_root_plan() {
     [ "$HELPER_PLACED" = no ] ||
         say "That puts QEMU's bridge helper in $BRIDGE_HELPER_FOLDER, setuid root, for bridged networking."
     [ "$SWTPM_RULE_ADDED" = no ] ||
-        say "It lets swtpm, the virtual TPM a Windows machine needs, write in your run folder under /run/user. Its AppArmor profile doesn't."
+        say "It lets swtpm, the virtual TPM a Windows machine needs, write in your run folder under /run/user and take the jailed QEMU's data channel. Its AppArmor profile doesn't."
     [ -z "$ROOT_COMMAND" ] || [ "$ADD_TO_KVM" = no ] ||
         say "You'd join the kvm group to open /dev/kvm, and that takes a new login."
 }

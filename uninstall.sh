@@ -17,6 +17,7 @@ BRIDGE_HELPER=$BRIDGE_HELPER_FOLDER/qemu-bridge-helper
 SWTPM_PROFILE=/etc/apparmor.d/usr.bin.swtpm
 SWTPM_LOCAL=/etc/apparmor.d/local/usr.bin.swtpm
 SWTPM_RULE='owner /run/user/[0-9]*/guesthouse/** rwk,'
+SWTPM_SOCKET_RULE='unix (send, receive) type=stream addr=none,'
 SWTPM_COMMENT='# Guesthouse: the virtual TPM keeps its log and socket in the run folder.'
 
 DRY_RUN=no
@@ -282,13 +283,13 @@ helper_command() {
 # goes all the same, as it's only there for Guesthouse, and install.sh puts it back.
 swtpm_rule_is_ours() {
     awk -F "$TAB" '$1 == "apparmor-rule" { found = 1 } END { exit !found }' "$MANIFEST" &&
-        grep -qxF "$SWTPM_RULE" "$SWTPM_LOCAL" 2>/dev/null
+        grep -qxF -e "$SWTPM_RULE" -e "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" 2>/dev/null
 }
 
 # The file is written over, not replaced, so it keeps its owner and mode.
 swtpm_rule_command() {
-    printf '{ { grep -vxF -e "%s" -e "%s" "%s" >"%s.new" || true; } && cat "%s.new" >"%s" && rm -f "%s.new" && { [ ! -f "%s" ] || apparmor_parser -r "%s"; }; }' \
-        "$SWTPM_RULE" "$SWTPM_COMMENT" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" \
+    printf '{ { grep -vxF -e "%s" -e "%s" -e "%s" "%s" >"%s.new" || true; } && cat "%s.new" >"%s" && rm -f "%s.new" && { [ ! -f "%s" ] || apparmor_parser -r "%s"; }; }' \
+        "$SWTPM_RULE" "$SWTPM_SOCKET_RULE" "$SWTPM_COMMENT" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" "$SWTPM_LOCAL" \
         "$SWTPM_PROFILE" "$SWTPM_PROFILE"
 }
 

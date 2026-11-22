@@ -3,7 +3,7 @@
 #include "..\Core\DriverState.h"
 #include "..\Logging\Logger.h"
 
-#include <atlbase.h>
+#include <wrl/client.h>
 #include <mutex>
 #include <shlwapi.h>
 #include <string>
@@ -20,7 +20,7 @@ bool UpdateXmlElementText(const wchar_t *targetElement, const wchar_t *replaceme
 	lock_guard<mutex> xmlLock(s_xmlWriteMutex);
 
 	const wstring settingsname = confpath + L"\\vdd_settings.xml";
-	CComPtr<IStream> pFileStream;
+	Microsoft::WRL::ComPtr<IStream> pFileStream;
 	HRESULT hr = SHCreateStreamOnFileEx(settingsname.c_str(), STGM_READWRITE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &pFileStream);
 	if (FAILED(hr))
 	{
@@ -28,21 +28,21 @@ bool UpdateXmlElementText(const wchar_t *targetElement, const wchar_t *replaceme
 		return false;
 	}
 
-	CComPtr<IXmlReader> pReader;
-	hr = CreateXmlReader(__uuidof(IXmlReader), reinterpret_cast<void **>(&pReader), nullptr);
+	Microsoft::WRL::ComPtr<IXmlReader> pReader;
+	hr = CreateXmlReader(__uuidof(IXmlReader), reinterpret_cast<void **>(pReader.GetAddressOf()), nullptr);
 	if (FAILED(hr))
 	{
 		VDD_LOG_ERROR("UpdatingXML: Failed to create XML reader.");
 		return false;
 	}
-	hr = pReader->SetInput(pFileStream);
+	hr = pReader->SetInput(pFileStream.Get());
 	if (FAILED(hr))
 	{
 		VDD_LOG_ERROR("UpdatingXML: Failed to set XML reader input.");
 		return false;
 	}
 
-	CComPtr<IStream> pOutFileStream;
+	Microsoft::WRL::ComPtr<IStream> pOutFileStream;
 	wstring tempFileName = settingsname + L".temp";
 	hr = SHCreateStreamOnFileEx(tempFileName.c_str(), STGM_CREATE | STGM_WRITE, FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &pOutFileStream);
 	if (FAILED(hr))
@@ -51,14 +51,14 @@ bool UpdateXmlElementText(const wchar_t *targetElement, const wchar_t *replaceme
 		return false;
 	}
 
-	CComPtr<IXmlWriter> pWriter;
-	hr = CreateXmlWriter(__uuidof(IXmlWriter), reinterpret_cast<void **>(&pWriter), nullptr);
+	Microsoft::WRL::ComPtr<IXmlWriter> pWriter;
+	hr = CreateXmlWriter(__uuidof(IXmlWriter), reinterpret_cast<void **>(pWriter.GetAddressOf()), nullptr);
 	if (FAILED(hr))
 	{
 		VDD_LOG_ERROR("UpdatingXML: Failed to create XML writer.");
 		return false;
 	}
-	hr = pWriter->SetOutput(pOutFileStream);
+	hr = pWriter->SetOutput(pOutFileStream.Get());
 	if (FAILED(hr))
 	{
 		VDD_LOG_ERROR("UpdatingXML: Failed to set XML writer output.");
@@ -134,10 +134,10 @@ bool UpdateXmlElementText(const wchar_t *targetElement, const wchar_t *replaceme
 		return false;
 	}
 
-	pFileStream.Release();
-	pOutFileStream.Release();
-	pWriter.Release();
-	pReader.Release();
+	pFileStream.Reset();
+	pOutFileStream.Reset();
+	pWriter.Reset();
+	pReader.Reset();
 
 	if (!MoveFileExW(tempFileName.c_str(), settingsname.c_str(), MOVEFILE_REPLACE_EXISTING))
 	{

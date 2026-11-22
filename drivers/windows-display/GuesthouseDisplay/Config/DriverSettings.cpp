@@ -5,7 +5,7 @@
 #include "..\Logging\Logger.h"
 #include "..\Util\RefreshRate.h"
 
-#include <atlbase.h>
+#include <wrl/client.h>
 #include <exception>
 #include <fstream>
 #include <mutex>
@@ -161,21 +161,21 @@ void loadSettings()
 	const wstring &filename = settingsname;
 	if (PathFileExistsW(filename.c_str()))
 	{
-		CComPtr<IStream> pStream;
-		CComPtr<IXmlReader> pReader;
+		Microsoft::WRL::ComPtr<IStream> pStream;
+		Microsoft::WRL::ComPtr<IXmlReader> pReader;
 		HRESULT hr = SHCreateStreamOnFileW(filename.c_str(), STGM_READ, &pStream);
 		if (FAILED(hr))
 		{
 			VDD_LOG_ERROR("Loading Settings: Failed to create file stream.");
 			return;
 		}
-		hr = CreateXmlReader(__uuidof(IXmlReader), (void **)&pReader, NULL);
+		hr = CreateXmlReader(__uuidof(IXmlReader), reinterpret_cast<void **>(pReader.GetAddressOf()), NULL);
 		if (FAILED(hr))
 		{
 			VDD_LOG_ERROR("Loading Settings: Failed to create XmlReader.");
 			return;
 		}
-		hr = pReader->SetInput(pStream);
+		hr = pReader->SetInput(pStream.Get());
 		if (FAILED(hr))
 		{
 			VDD_LOG_ERROR("Loading Settings: Failed to set input stream.");

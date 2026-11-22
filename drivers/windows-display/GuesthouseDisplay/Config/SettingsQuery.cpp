@@ -3,7 +3,7 @@
 #include "..\Core\DriverState.h"
 #include "..\Logging\Logger.h"
 
-#include <atlbase.h>
+#include <wrl/client.h>
 #include <exception>
 #include <map>
 #include <shlwapi.h>
@@ -111,7 +111,7 @@ bool TryReadXmlText(const wstring &xmlName, wstring &value)
 {
 	const wstring settingsname = confpath + L"\\vdd_settings.xml";
 
-	CComPtr<IStream> pFileStream;
+	Microsoft::WRL::ComPtr<IStream> pFileStream;
 	HRESULT hr = SHCreateStreamOnFileEx(settingsname.c_str(), STGM_READ, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &pFileStream);
 	if (FAILED(hr))
 	{
@@ -119,15 +119,15 @@ bool TryReadXmlText(const wstring &xmlName, wstring &value)
 		return false;
 	}
 
-	CComPtr<IXmlReader> pReader;
-	hr = CreateXmlReader(__uuidof(IXmlReader), reinterpret_cast<void **>(&pReader), nullptr);
+	Microsoft::WRL::ComPtr<IXmlReader> pReader;
+	hr = CreateXmlReader(__uuidof(IXmlReader), reinterpret_cast<void **>(pReader.GetAddressOf()), nullptr);
 	if (FAILED(hr))
 	{
 		LogQueries(VddLogLevel::Verbose, xmlName + L" - Failed to create XML reader.");
 		return false;
 	}
 
-	hr = pReader->SetInput(pFileStream);
+	hr = pReader->SetInput(pFileStream.Get());
 	if (FAILED(hr))
 	{
 		LogQueries(VddLogLevel::Verbose, xmlName + L" - Failed to set input for XML reader.");

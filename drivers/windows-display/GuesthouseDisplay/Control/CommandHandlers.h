@@ -11,7 +11,6 @@ void HandleCustomEdidCommand(wchar_t *param);
 void HandlePreventSpoofCommand(wchar_t *param);
 void HandleCeaOverrideCommand(wchar_t *param);
 void HandleEdidProfileCommand(wchar_t *param);
-void HandleVrrCommand(wchar_t *param);
 void HandleHardwareCursorCommand(wchar_t *param);
 void HandleD3DDeviceGpuCommand(wchar_t *param);
 void HandleIddCxVersionCommand(wchar_t *param);

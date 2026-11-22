@@ -131,15 +131,6 @@ void IndirectDeviceContext::InitAdapter()
 		adapterCapabilityNotes = "FP16 processing capability detected.";
 	}
 
-	if (vrrEnabled.load())
-	{
-		if (!adapterCapabilityNotes.empty())
-		{
-			adapterCapabilityNotes += " ";
-		}
-		adapterCapabilityNotes += "VRR setting enabled; adapter flag not advertised.";
-	}
-
 	if (numVirtualDisplays == 0 || numVirtualDisplays > 16)
 	{
 		VDD_LOG_WARNING_STREAM((adapterCapabilityNotes.empty() ? "" : adapterCapabilityNotes + " ")

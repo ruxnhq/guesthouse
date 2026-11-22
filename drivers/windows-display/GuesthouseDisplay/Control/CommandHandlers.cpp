@@ -174,11 +174,6 @@ void HandleEdidProfileCommand(wchar_t *param)
 	VDD_LOG_INFO("EDID profile updated; recreate monitors to take effect");
 }
 
-void HandleVrrCommand(wchar_t *param)
-{
-	ToggleSetting(param, L"Vrr", "VRR Enabled", "VRR Disabled");
-}
-
 void HandleHardwareCursorCommand(wchar_t *param)
 {
 	bool enabled = false;

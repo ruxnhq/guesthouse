@@ -21,7 +21,6 @@ void DispatchVddCommandBuffer(wchar_t *buffer)
 		{L"PREVENTSPOOF", 12, HandlePreventSpoofCommand},
 		{L"CEAOVERRIDE", 11, HandleCeaOverrideCommand},
 		{L"EDIDPROFILE", 11, HandleEdidProfileCommand},
-		{L"VRR", 3, HandleVrrCommand},
 		{L"HARDWARECURSOR", 14, HandleHardwareCursorCommand},
 		{L"D3DDEVICEGPU", 12, HandleD3DDeviceGpuCommand},
 		{L"IDDCXVERSION", 12, HandleIddCxVersionCommand},

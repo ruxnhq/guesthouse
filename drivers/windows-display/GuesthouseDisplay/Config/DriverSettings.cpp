@@ -117,9 +117,6 @@ void LoadDriverSettings()
 	// EDID profile: Auto -> resolved via host OS build number (issue #612).
 	ApplyEdidProfileSetting(GetStringSetting(L"EdidProfile"));
 
-	// VRR / FreeSync: behavioural change, default OFF until EDID FreeSync
-	// Range Block also lands (see ROADMAP P1).
-	vrrEnabled = EnabledQuery(L"VrrEnabled");
 	legacyNamedFrameChannel = EnabledQuery(L"LegacyNamedFrameChannel");
 
 	// Cursor

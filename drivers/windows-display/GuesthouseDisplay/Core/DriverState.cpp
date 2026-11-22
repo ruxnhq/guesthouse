@@ -25,11 +25,6 @@ std::atomic<bool> SDR10{false};
 std::atomic<bool> customEdid{false};
 std::atomic<bool> dolbyVision{false};
 
-// Variable Refresh Rate (FreeSync / G-Sync compatible) toggle. Keep the
-// setting for UI/IOCTL compatibility, but do not infer adapter capability
-// flags from it on the current IddCx0102 compatibility path. Some hosts
-// reject unknown or mismatched adapter flag bits during adapter init.
-std::atomic<bool> vrrEnabled{false};
 std::atomic<bool> hardwareCursor{false};
 std::atomic<bool> preventManufacturerSpoof{false};
 std::atomic<bool> edidCeaOverride{false};

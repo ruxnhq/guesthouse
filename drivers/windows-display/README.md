@@ -28,6 +28,17 @@ The hardware cursor is on in `vdd_settings.xml`. It goes to the viewer by the fr
 
 The frame channel for Sunshine is still here. It only starts copying frames once something asks about it. Its contract with Sunshine keeps zako-vdd's names, in `Common/Include/vdd_control_ioctl.h` and in the shared object names, because Sunshine looks for those. Nobody using this sees them.
 
+## Variable refresh
+
+Windows doesn't offer variable refresh (its own VRR switch, G-SYNC or FreeSync) on this display, and no driver like this one can make it. I looked into it for #206:
+
+- Windows learns that a monitor can vary its refresh from the kernel half of its display driver, in `DXGK_MONITORLINKINFO_CAPABILITIES.VariableRefresh`. For an indirect display that half is Microsoft's `IndirectKmd.sys`, not this driver.
+- All this driver can say about its monitor's link is `IDDCX_TARGET_CAPS`, which has two colour bits. `IddCx.dll` passes those two to the kernel and drops anything else, and no `iddcx.h` up to the 26100 WDK has a refresh flag.
+- The EDID doesn't help. The built-in one already says 48 to 240 Hz in its FreeSync and HDMI blocks, and with a range limits descriptor added as well, Windows still showed no VRR switch.
+- G-SYNC and FreeSync belong to the GPU's own display outputs. The guest's GPU only renders, and NVIDIA's driver lists no display at all in a guest.
+
+What a game does get: tearing presents are allowed, so it isn't held to the refresh rate, and each frame goes to the host when the game makes it. The viewer shows it as soon as it lands, so a host screen with variable refresh can follow the game. Set the machine's refresh rate to your monitor's highest, so that Windows passes frames on as often as it can.
+
 ## What's been tested
 
 On my PC, with an RTX 5090 and Windows 11 in a VM, in one or two runs of each:

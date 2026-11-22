@@ -12,7 +12,7 @@ use guesthouse_control::client::Unreached;
 use guesthouse_control::{Card, CardInfo, Machine, State, System};
 use windows_reactor::*;
 
-use crate::app::{self, Account, DELETE_KEY, Kind, Line, Main, Message, NEW_TAG, Page};
+use crate::app::{self, Account, ConsoleState, DELETE_KEY, Kind, Line, Main, Message, NEW_TAG, Page};
 
 /// The app's icon, the same as the GTK app's, for where it's shown large.
 const LOGO_SVG: &[u8] =
@@ -64,6 +64,8 @@ mod glyph {
     pub const WARNING: &str = "\u{E7BA}";
     pub const REFRESH: &str = "\u{E72C}";
     pub const SCREEN: &str = "\u{E7F4}";
+    pub const CONSOLE: &str = "\u{E7F8}";
+    pub const CLOSE: &str = "\u{E711}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -390,6 +392,7 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
             _ => rows.push(row(glyph::TERMINAL, "SSH", &[&where_words], None)),
         },
     }
+    rows.push(console_row(main, machine, context));
     match account {
         Some(Account { user, password, .. }) => {
             rows.push(copy_row(glyph::KEY, "User", user, context));
@@ -406,6 +409,47 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
         }
     }
     rows
+}
+
+/// The machine's console: its own screen, which shows from the firmware on, needing nothing of
+/// the guest, so it's there for setup and a boot that's stuck.
+fn console_row(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> View {
+    let about = "Its own screen from the moment it's on: the firmware, setup and the sign-in screen. \
+                 The keyboard and mouse go to the guest while its window has them.";
+    let open = main.console.as_ref().filter(|open| open.machine == machine.name);
+    let Some(open) = open else {
+        let on = matches!(machine.state, State::Starting | State::Running | State::Stopping);
+        let button =
+            button("Open console", glyph::CONSOLE, context.message(Message::Console), false).is_enabled(on);
+        return row(glyph::CONSOLE, "Console", &[about], Some(button.into()));
+    };
+    let (words, ended) = match &open.state {
+        ConsoleState::Waiting => ("Waiting for the machine's screen to be served.", false),
+        ConsoleState::Connecting => ("Connecting.", false),
+        ConsoleState::Connected => ("Open in its own window. Closing it leaves the machine running.", false),
+        ConsoleState::Ended(why) => (why.as_str(), true),
+    };
+    let mut buttons: Vec<View> = Vec::new();
+    if ended {
+        buttons.push(button("Reconnect", glyph::REFRESH, context.message(Message::Reconnect), true).into());
+    } else {
+        let show = button("Show", glyph::CONSOLE, context.message(Message::Console), false);
+        buttons.push(show.automation_name("Show the console").into());
+    }
+    buttons.push(
+        button("Close", glyph::CLOSE, context.message(Message::CloseConsole), false)
+            .automation_name("Close the console")
+            .into(),
+    );
+    let right = StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children(buttons);
+    let state =
+        caption(words).foreground(if ended { ThemeBrush::SystemCritical } else { ThemeBrush::SecondaryText });
+    row_with(
+        glyph::CONSOLE,
+        "Console",
+        StackPanel::new().children((caption(about), state)),
+        Some(right.into()),
+    )
 }
 
 fn details_rows(machine: &Machine) -> Vec<View> {

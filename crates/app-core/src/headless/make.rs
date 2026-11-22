@@ -12,7 +12,7 @@ use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use crate::host::{RamField, physical_cores};
 use crate::iso::Iso;
-use crate::library::{NewMachine, create, delete, folders_text, remove_entry};
+use crate::library::{NewMachine, create, delete, folders_text, refuse_before_its_driver, remove_entry};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
 use crate::macos_setup::{MACOS_SIZES, MACOS_TITLE, NewMac, create_macos, how_it_installs};
 use crate::remote_access::{Access, Service};
@@ -217,12 +217,6 @@ pub(super) fn new_machine(
     if options.intel_driver.is_some() && !matches!(card, Some((_, GpuMaker::Intel))) {
         return Err(Failure::new("--intel-driver is for a Windows machine on an Intel card."));
     }
-    if let (Some(installer), Some((pci, _))) = (options.amd_driver, &card) {
-        unpack_amd_driver(context, pci, installer, out)?;
-    }
-    if let (Some(installer), Some((pci, _))) = (options.intel_driver, &card) {
-        unpack_intel_driver(context, pci, installer, out)?;
-    }
     let sizes = sizes_for_disc(&disc);
     let field = if windows {
         RamField::for_gpu(context, context.slot, MIN_RAM_GIB.into(), sizes.ram)
@@ -246,11 +240,23 @@ pub(super) fn new_machine(
         password: String::new(),
         amd_gpu: card.as_ref().map(|(pci, _)| pci.clone()),
         disk_place: options.disk_folder.unwrap_or_default().to_owned(),
-        gpu_maker: card.map(|(_, maker)| maker),
+        gpu_maker: card.as_ref().map(|(_, maker)| *maker),
         access: access_for(windows, options)?,
     };
     if new.name.trim().is_empty() {
         return Err(Failure::new("The machine needs a name."));
+    }
+    if let Some((pci, _)) = &card
+        && (options.amd_driver.is_some() || options.intel_driver.is_some())
+    {
+        // Whatever else stops the machine is said before the driver is unpacked, not after.
+        refuse_before_its_driver(context, &new)?;
+        if let Some(installer) = options.amd_driver {
+            unpack_amd_driver(context, pci, installer, out)?;
+        }
+        if let Some(installer) = options.intel_driver {
+            unpack_intel_driver(context, pci, installer, out)?;
+        }
     }
     let machine = create(context, &new)?;
     writeln!(out, "Made {} in {}.", machine.name, machine.folder(context).display())?;

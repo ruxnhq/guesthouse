@@ -37,6 +37,7 @@ mod reset;
 mod run_wait;
 mod screen_copy;
 mod sdma_copy;
+mod share;
 mod space_vm;
 mod submit;
 mod traffic;
@@ -48,7 +49,9 @@ mod video_runs;
 mod watch;
 
 pub use device::{Device, Mapping};
-pub use fence_ib::{Writer as FenceWriter, words as fence_words, writer_for as fence_writer_for};
+pub use fence_ib::{
+    Stamp, Writer as FenceWriter, stamp_words, words as fence_words, writer_for as fence_writer_for,
+};
 pub use ib_dump::VARIABLE as IB_DUMP_VARIABLE;
 pub use info::{
     CardDetails, DeviceInfo, EngineSet, Firmware, HW_IP_DMA, HW_IP_GFX, read_device_info, read_gpu_clock,
@@ -58,6 +61,7 @@ pub use memory::{
     CpuAccess, DOMAIN_GTT, DOMAIN_VRAM, GemHandle, MapFlags, MemoryType, set_tiling as set_buffer_tiling,
     tiling as buffer_tiling,
 };
+pub use share::{RunTimes, Share};
 pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
 pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
@@ -1512,6 +1516,10 @@ impl Backend for AmdBackend {
         let writer = fence_ib::writer_for(node.ip_type, card.details.gfx_version.0)
             .filter(|_| space.vm.holds(work.fence_gpu_address, FENCE_BYTES));
         if let Some(writer) = writer {
+            // While others wait for the card, the space sends one run at a time and pauses between.
+            if !space.vm.may_send(node.ip_type) {
+                return WorkStart::Busy;
+            }
             // The card writes the fence itself when the run is through, so nothing waits here.
             let written =
                 space.vm.fence_writer(card.va_alignment, writer, work.fence_gpu_address, work.fence_value);

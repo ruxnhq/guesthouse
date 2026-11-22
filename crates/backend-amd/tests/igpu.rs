@@ -9,7 +9,8 @@
 use guesthouse_backend::Backend;
 use guesthouse_backend::{GpuRange, MapRequest, MemoryKind};
 use guesthouse_backend_amd::{
-    AmdBackend, Context, CpuAccess, DOMAIN_GTT, Device, HW_IP_DMA, HW_IP_GFX, MapFlags, MemoryType, Syncobj,
+    AmdBackend, Context, CpuAccess, DOMAIN_GTT, Device, HW_IP_DMA, HW_IP_GFX, Ib, MapFlags, MemoryType,
+    Stamp, Syncobj,
 };
 
 const MAGIC: u32 = 0x5EED_1234;
@@ -189,4 +190,88 @@ fn a_tiled_surface_buffer_keeps_its_swizzle_mode() {
     close_buffer(&device, handle);
     let config = device.info().details.gb_addr_config.unwrap_or(0);
     assert!(tiling::modifier(SW_64KB_R_X, gfx, config, Some(4)).is_some());
+}
+
+/// The clock notes a guest's run gets on each side, on each engine with a fence writer: both times
+/// are written, in order, in the clock amdgpu reports. Runs sent together by one client also land
+/// close together, well under the gap that `share` takes for someone else's work.
+#[test]
+fn each_engine_notes_its_clock_at_both_ends_of_a_run() {
+    const RUNS: usize = 32;
+    const HW_IP_COMPUTE: u32 = 1;
+    let Some(device) = card() else {
+        eprintln!("no AMD render node; skipping the clock proof");
+        return;
+    };
+    let info = device.info().clone();
+    let align = info.va_alignment.max(PAGE);
+    let rwx =
+        MapFlags { readable: true, writable: true, executable: true, memory_type: MemoryType::Uncached };
+    let ticks = |ticks: u64| (u128::from(ticks) * 1_000_000 / u128::from(info.counter_freq_khz)) as u64;
+    for (engine, ip_type) in [(0, HW_IP_GFX), (1, HW_IP_COMPUTE), (2, HW_IP_DMA)] {
+        let Some(writer) = guesthouse_backend_amd::fence_writer_for(ip_type, info.details.gfx_version.0)
+        else {
+            continue;
+        };
+        let make =
+            || guesthouse_backend_amd::create_buffer(&device, PAGE, align, DOMAIN_GTT, CpuAccess::Required);
+        let (ib, times) = (make().unwrap(), make().unwrap());
+        let ib_va = info.va_start + 0x900_000 + engine * 0x200_000;
+        let times_va = ib_va + 0x100_000;
+        guesthouse_backend_amd::map_buffer(&device, ib, ib_va, 0, PAGE, rwx).unwrap();
+        guesthouse_backend_amd::map_buffer(&device, times, times_va, 0, PAGE, rwx).unwrap();
+        let mut ib_cpu = device.map_cpu(ib, PAGE as usize).unwrap();
+        let mut times_cpu = device.map_cpu(times, PAGE as usize).unwrap();
+        times_cpu.write_dwords(&[0; RUNS * 4]);
+        for run in 0..RUNS {
+            for (half, stamp) in [(0, Stamp::Start), (1, Stamp::End)] {
+                let at = times_va + (run * 16 + half * 8) as u64;
+                let words = guesthouse_backend_amd::stamp_words(writer, stamp, at);
+                for (index, word) in words.iter().enumerate() {
+                    ib_cpu.write_u32((run * 2 + half) * 32 + index * 4, *word);
+                }
+            }
+        }
+        let context = Context::create(&device).unwrap();
+        let before = device.gpu_clock().unwrap();
+        let mut done = Vec::new();
+        for run in 0..RUNS {
+            let ibs = [0, 1].map(|half| Ib { address: ib_va + ((run * 2 + half) * 32) as u64, bytes: 32 });
+            let syncobj = Syncobj::create(&device).unwrap();
+            guesthouse_backend_amd::submit_all(&device, &context, ip_type, &ibs, &[ib, times], &syncobj)
+                .unwrap();
+            done.push(syncobj);
+        }
+        for syncobj in &done {
+            let event = syncobj.arm_eventfd(&device).unwrap();
+            assert!(guesthouse_backend_amd::wait_eventfd(&event, 2000).unwrap(), "did not complete");
+            syncobj.destroy(&device);
+        }
+        let after = device.gpu_clock().unwrap();
+        let read =
+            |at: usize| u64::from(times_cpu.read_u32(at)) | u64::from(times_cpu.read_u32(at + 4)) << 32;
+        let mut gaps = Vec::new();
+        let mut last_end = 0;
+        for run in 0..RUNS {
+            let (started, ended) = (ticks(read(run * 16)), ticks(read(run * 16 + 8)));
+            assert!(started > 0 && ended > 0, "engine family {ip_type}, run {run}: both times written");
+            assert!(
+                before <= started && started <= ended && ended <= after,
+                "engine family {ip_type}, run {run}: {before} {started} {ended} {after}"
+            );
+            if run > 0 {
+                gaps.push(started.saturating_sub(last_end));
+            }
+            last_end = ended;
+        }
+        gaps.sort_unstable();
+        let (middle, most) = (gaps[gaps.len() / 2], gaps[gaps.len() - 1]);
+        eprintln!("engine family {ip_type}: one client's runs {middle} ns apart, at most {most} ns");
+        assert!(most < 50_000, "engine family {ip_type}: runs sent together land {most} ns apart");
+        context.destroy(&device);
+        for (buffer, va) in [(ib, ib_va), (times, times_va)] {
+            guesthouse_backend_amd::unmap_buffer(&device, buffer, va, PAGE).unwrap();
+            guesthouse_backend_amd::close_buffer(&device, buffer);
+        }
+    }
 }

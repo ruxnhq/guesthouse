@@ -154,6 +154,22 @@ const ENGINE_ACTIVE_UNITS: usize = 0xD04;
 /// The units kept on all the time, laid out the same way. The GFX10 path reads them four engines in,
 /// at 0xD14, and is not given these: GFX10 parts keep to [`ACTIVE_UNITS`].
 const ENGINE_ALWAYS_ON_UNITS: usize = 0xD1C;
+/// Cache sizes in KiB, which the guest's PAL multiplies by 1024 into its chip properties
+/// (instCacheSizePerCu, scalarCacheSizePerCu, gl1cSizePerSa) on the GFX10/11 and GFX12 paths alike,
+/// with no flag: left zero, they overwrite PAL's own per-chip values with zero.
+const INST_CACHE_KB: usize = 0xD60;
+const SCALAR_CACHE_KB: usize = 0xD64;
+const GL1_CACHE_KB_PER_ARRAY: usize = 0xD68;
+/// Four dwords of active pixel packers, [`PACKERS_PER_ENGINE_SLOT`] bits to an engine, copied
+/// as they are into PAL's activePixelPackerMask, which it only reports up to its clients.
+const PIXEL_PACKER_MASK: usize = 0xD74;
+const PACKERS_PER_ENGINE_SLOT: u32 = 4;
+/// The last-level cache in MiB, which PAL shifts by 20 into mallSizeInBytes when its setting asks
+/// for the kernel's figure.
+const MALL_SIZE_MIB: usize = 0xD84;
+/// GB_ADDR_CONFIG's log of the chip's pixel packers.
+const NUM_PKRS_SHIFT: u32 = 8;
+const NUM_PKRS_MASK: u32 = 0b111;
 /// How many engines the per-engine arrays hold.
 const ENGINES_IN_ARRAYS: usize = 6;
 /// The first generation given the per-engine arrays. GFX10 parts run the RDNA1 and RDNA2 driver,
@@ -408,6 +424,36 @@ pub fn engine_unit_masks(bitmap: &[[u32; 4]; 4]) -> [u16; ENGINES_IN_ARRAYS * AR
     masks
 }
 
+/// The active pixel packers, by engine: the chip's packers from GB_ADDR_CONFIG shared out evenly to
+/// the engines that have any compute unit on, at most [`PACKERS_PER_ENGINE_SLOT`] each. Empty when
+/// the address config couldn't be read.
+pub fn pixel_packer_mask(details: &CardDetails) -> u128 {
+    let engines = details.shader_engines.min(ENGINES_IN_ARRAYS as u32);
+    let Some(config) = details.gb_addr_config.filter(|_| engines > 0) else { return 0 };
+    let packers = 1u32 << (config >> NUM_PKRS_SHIFT & NUM_PKRS_MASK);
+    let per_engine = (packers / engines).clamp(1, PACKERS_PER_ENGINE_SLOT);
+    let mut mask = 0u128;
+    for engine in 0..engines as usize {
+        let on = (0..ARRAYS_IN_BLOCK).any(|array| bitmap_units(&details.cu_bitmap, engine, array) != 0);
+        if on {
+            mask |= ((1u128 << per_engine) - 1) << (engine as u32 * PACKERS_PER_ENGINE_SLOT);
+        }
+    }
+    mask
+}
+
+/// What the kernel driver gives about the caches and the pixel packers, from amdgpu's INFO.
+fn fill_caches_and_packers(block: &mut [u8], details: &CardDetails) {
+    put_dword(block, INST_CACHE_KB, details.sqc_inst_cache_kb);
+    put_dword(block, SCALAR_CACHE_KB, details.sqc_data_cache_kb);
+    put_dword(block, GL1_CACHE_KB_PER_ARRAY, details.gl1c_cache_kb);
+    put_dword(block, MALL_SIZE_MIB, u32::try_from(details.mall_size.div_ceil(1 << 20)).unwrap_or(u32::MAX));
+    let mask = pixel_packer_mask(details);
+    for index in 0..4 {
+        put_dword(block, PIXEL_PACKER_MASK + index * 4, (mask >> (index * 32)) as u32);
+    }
+}
+
 fn put_masks(block: &mut [u8], at: usize, masks: &[u16]) {
     for (index, &mask) in masks.iter().enumerate() {
         put_word(block, at + index * 2, mask);
@@ -430,6 +476,7 @@ fn fill_graphics(block: &mut [u8], details: &CardDetails) {
         flags |= ENGINE_UNIT_MASKS_VALID;
         put_masks(block, ENGINE_ACTIVE_UNITS, &engine_unit_masks(&details.cu_bitmap));
         put_masks(block, ENGINE_ALWAYS_ON_UNITS, &engine_unit_masks(&details.always_on_cu_bitmap));
+        fill_caches_and_packers(block, details);
     }
     if gfx_major >= FIRST_GFX_WITH_WGPS && details.tile_steering_override != 0 {
         flags |= TILE_STEERING_VALID;
@@ -836,6 +883,47 @@ pub(crate) mod tests {
         let gfx10 = build(&small_card());
         assert_eq!(dword_at(&gfx10, GRAPHICS_FLAGS) & ENGINE_UNIT_MASKS_VALID, 0);
         assert!(gfx10[ENGINE_ACTIVE_UNITS..ENGINE_ALWAYS_ON_UNITS + 24].iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn a_gfx12_card_gets_its_cache_sizes_and_pixel_packers() {
+        let mut info = navi48();
+        info.details.sqc_inst_cache_kb = 32;
+        info.details.sqc_data_cache_kb = 16;
+        info.details.gl1c_cache_kb = 0;
+        info.details.mall_size = 64 << 20;
+        // Sixteen packers: NUM_PKRS 4.
+        info.details.gb_addr_config = Some(4 << NUM_PKRS_SHIFT | 0x2);
+        let block = build(&info);
+        assert_eq!(dword_at(&block, INST_CACHE_KB), 32);
+        assert_eq!(dword_at(&block, SCALAR_CACHE_KB), 16);
+        assert_eq!(dword_at(&block, GL1_CACHE_KB_PER_ARRAY), 0);
+        assert_eq!(dword_at(&block, MALL_SIZE_MIB), 64);
+        // Four packers in each of the four engines' slots, and nothing past them.
+        assert_eq!(dword_at(&block, PIXEL_PACKER_MASK), 0xFFFF);
+        for index in 1..4 {
+            assert_eq!(dword_at(&block, PIXEL_PACKER_MASK + index * 4), 0);
+        }
+        assert!(KeyFields::read(&block).unwrap().checksum_holds);
+    }
+
+    #[test]
+    fn an_engine_with_no_units_has_no_packers_and_an_unread_config_gives_none() {
+        let mut info = navi48();
+        info.details.gb_addr_config = Some(4 << NUM_PKRS_SHIFT);
+        info.details.cu_bitmap[2] = [0; 4];
+        assert_eq!(pixel_packer_mask(&info.details), 0xF0FF);
+        info.details.gb_addr_config = None;
+        assert_eq!(pixel_packer_mask(&info.details), 0);
+    }
+
+    #[test]
+    fn a_gfx10_card_is_given_no_cache_fields() {
+        let mut info = small_card();
+        info.details.sqc_inst_cache_kb = 32;
+        info.details.mall_size = 32 << 20;
+        let block = build(&info);
+        assert!(block[INST_CACHE_KB..MALL_SIZE_MIB + 4].iter().all(|&byte| byte == 0));
     }
 
     #[test]

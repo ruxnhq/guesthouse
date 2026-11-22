@@ -94,6 +94,10 @@ const DEV_GS_PRIM_BUFFER_DEPTH: usize = 260;
 const DEV_MAX_GS_WAVES: usize = 264;
 const DEV_CU_ALWAYS_ON_BITMAP: usize = 272;
 const DEV_TILE_STEERING_OVERRIDE: usize = 352;
+const DEV_SQC_DATA_CACHE_KB: usize = 392;
+const DEV_SQC_INST_CACHE_KB: usize = 396;
+const DEV_GL1C_CACHE_KB: usize = 400;
+const DEV_MALL_SIZE: usize = 408;
 const DEV_ENABLED_RB_MASK_HIGH: usize = 416;
 /// cu_bitmap and cu_ao_bitmap are four shader engines by four arrays of 32-bit masks.
 const BITMAP_SIDE: usize = 4;
@@ -184,6 +188,14 @@ pub struct CardDetails {
     pub gs_prim_buffer_depth: u32,
     pub max_gs_waves_per_vgt: u32,
     pub tile_steering_override: u32,
+    /// The scalar data cache of one SQC, in KiB. Zero on a kernel too old to say.
+    pub sqc_data_cache_kb: u32,
+    /// The instruction cache of one SQC, in KiB.
+    pub sqc_inst_cache_kb: u32,
+    /// The GL1 cache of one shader array, in KiB. Zero on parts without one, as Navi4x.
+    pub gl1c_cache_kb: u32,
+    /// The last-level cache (MALL, Infinity Cache), in bytes.
+    pub mall_size: u64,
     /// The graphics block's version, major and minor.
     pub gfx_version: (u32, u32),
     pub compute_rings: u32,
@@ -406,6 +418,10 @@ fn read_details(
         gs_prim_buffer_depth: get32(dev, DEV_GS_PRIM_BUFFER_DEPTH),
         max_gs_waves_per_vgt: get32(dev, DEV_MAX_GS_WAVES),
         tile_steering_override: get32(dev, DEV_TILE_STEERING_OVERRIDE),
+        sqc_data_cache_kb: get32(dev, DEV_SQC_DATA_CACHE_KB),
+        sqc_inst_cache_kb: get32(dev, DEV_SQC_INST_CACHE_KB),
+        gl1c_cache_kb: get32(dev, DEV_GL1C_CACHE_KB),
+        mall_size: get64(dev, DEV_MALL_SIZE),
         gfx_version: gfx.version,
         compute_rings: compute.rings.count_ones(),
         gb_addr_config: read_register(file, GB_ADDR_CONFIG_REGISTER),

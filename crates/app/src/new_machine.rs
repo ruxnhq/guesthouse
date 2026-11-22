@@ -48,7 +48,9 @@ const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
 const CARD_TITLE: &str = "Card";
-const MACOS_ROW_NOTE: &str = "Needs no ISO. Apple's installer is downloaded for it.";
+const MACOS_ROW_NOTE: &str = "Needs no ISO. Apple's installer is downloaded for it, and macOS \
+                              support the first time.";
+const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
 /// Said plainly until a guest on an AMD card has drawn with it.
 const AMD_NOT_FINISHED: &str = "starts on the AMD card. GPU-PV on AMD is not finished, so Windows may have no \
@@ -136,6 +138,10 @@ impl NewMachineDialog {
         iso_row.add_suffix(&choose);
         disc.add(&iso_row);
         let macos_row = adw::ActionRow::builder().title(MACOS_TITLE).subtitle(MACOS_ROW_NOTE).build();
+        let preview = gtk::Label::builder().label(PREVIEW).valign(gtk::Align::Center).build();
+        preview.add_css_class("dim-label");
+        preview.add_css_class("caption-heading");
+        macos_row.add_suffix(&preview);
         let use_macos = row_button("Use");
         macos_row.add_suffix(&use_macos);
         disc.add(&macos_row);

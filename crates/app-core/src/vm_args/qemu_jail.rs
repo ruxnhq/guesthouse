@@ -273,6 +273,7 @@ impl VmPlan {
             tap: self.tap(),
             unix_sockets: self.unix_sockets(),
             no_new_unix_sockets: self.passes_unix_sockets(),
+            reads_own_memory: self.macos_boot().is_some(),
             program: Vec::new(),
         };
         let launcher = jail.launcher.display().to_string();
@@ -285,6 +286,7 @@ impl VmPlan {
                     tap: jailing.tap.take(),
                     unix_sockets: Vec::new(),
                     no_new_unix_sockets: false,
+                    reads_own_memory: false,
                     program: Vec::new(),
                 };
                 words.push(launcher.clone());

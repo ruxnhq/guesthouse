@@ -1,6 +1,6 @@
 # macOS machines
 
-This is a preview, and it's only in test builds from the `macos-guest` branch. It isn't in a release.
+This is a preview. It's in the app from 0.7.5, marked Preview in New Machine. Nothing for macOS is downloaded until you make a macOS machine.
 
 A macOS machine gets its GPU from [reims-vgpu](https://github.com/steelbrain/reims-vgpu), which isn't mine. macOS draws with Metal, and the host runs that on Vulkan. It needs an NVIDIA or AMD card with its driver loaded, and `/dev/udmabuf`. I've only run it on an RTX 5090.
 

@@ -36,6 +36,7 @@ const OPEN_ONLY: &str = "--open-only";
 const UNIX_LISTEN: &str = "--unix-listen";
 const UNIX_CONNECT: &str = "--unix-connect";
 const NO_NEW_UNIX_SOCKETS: &str = "--no-new-unix-sockets";
+const READS_OWN_MEMORY: &str = "--reads-own-memory";
 
 /// A unix socket the launcher opens for the program, so the program needs to make none itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +74,8 @@ pub struct Launch {
     pub unix_sockets: Vec<UnixSocket>,
     /// Refuse the program any unix socket it would make, which leaves it the ones opened for it.
     pub no_new_unix_sockets: bool,
+    /// Let the program read its own memory with `process_vm_readv`, which a macOS guest's device needs.
+    pub reads_own_memory: bool,
     pub program: Vec<OsString>,
 }
 
@@ -109,6 +112,9 @@ impl Launch {
         if self.no_new_unix_sockets {
             words.push(NO_NEW_UNIX_SOCKETS.to_owned());
         }
+        if self.reads_own_memory {
+            words.push(READS_OWN_MEMORY.to_owned());
+        }
         words.push(END_OF_PLAN.to_owned());
         words
     }
@@ -120,6 +126,7 @@ impl Launch {
             tap: None,
             unix_sockets: Vec::new(),
             no_new_unix_sockets: false,
+            reads_own_memory: false,
             program: Vec::new(),
         };
         let mut words = arguments.into_iter();
@@ -146,6 +153,7 @@ impl Launch {
                     passt.words.push(word);
                 }
                 NO_NEW_UNIX_SOCKETS => launch.no_new_unix_sockets = true,
+                READS_OWN_MEMORY => launch.reads_own_memory = true,
                 UNIX_LISTEN | UNIX_CONNECT => {
                     let (path, fd) = (next(&name)?, next(&name)?);
                     let fd =
@@ -207,7 +215,7 @@ impl Launch {
 
     fn jail(&self, plan: &Plan) -> io::Result<()> {
         let applied = landlock::apply(plan)?;
-        let filter = filters::qemu(self.no_new_unix_sockets);
+        let filter = filters::qemu(self.no_new_unix_sockets, self.reads_own_memory);
         seccomp::install(&filter, Threads::This)?;
         let missing = applied.missing();
         let leaves_out = if missing.is_empty() {
@@ -241,6 +249,7 @@ mod tests {
             tap: Some(Tap { helper: "/usr/libexec/qemu-bridge-helper".into(), bridge: "br0".into(), fd: 3 }),
             unix_sockets: vec![UnixSocket { path: "/r/qmp.sock".into(), fd: 20, listen: true }],
             no_new_unix_sockets: true,
+            reads_own_memory: true,
             program: ["/usr/bin/qemu-system-x86_64", "-name", "gpupv", "--"].map(OsString::from).to_vec(),
         }
     }

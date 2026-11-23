@@ -9383,3 +9383,194 @@ index 68d413a..cc41fe4 100644
 -- 
 2.56.1
 
+From 41e21268184a5030c8110f38887809508d4c65ce Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 11:45:55 -0800
+Subject: [PATCH 34/34] hw/misc/nvfwd: let the guest read what the device
+ turned down
+
+A refused control comes back as a status inside a call that worked, so a
+program in the guest only says its own error, and calls.log is on the
+host. The device keeps the REFUSED and OVER lines it writes there, each
+kind once and at most 64 of them, and answers a new request, REFUSED,
+with them. It only ever writes that answer, so a guest can't make it grow
+or make the host log more.
+---
+ hw/misc/nvfwd/allow.c       | 14 ++++++++++++++
+ hw/misc/nvfwd/meson.build   |  1 +
+ hw/misc/nvfwd/nvfwd.c       |  3 +++
+ hw/misc/nvfwd/nvfwd.h       |  4 ++++
+ hw/misc/nvfwd/nvfwd_proto.h |  6 +++++-
+ hw/misc/nvfwd/refused.c     | 28 ++++++++++++++++++++++++++++
+ hw/misc/nvfwd/refused.h     | 23 +++++++++++++++++++++++
+ 7 files changed, 78 insertions(+), 1 deletion(-)
+ create mode 100644 hw/misc/nvfwd/refused.c
+ create mode 100644 hw/misc/nvfwd/refused.h
+
+diff --git a/hw/misc/nvfwd/allow.c b/hw/misc/nvfwd/allow.c
+index fe5ec5c..636c76f 100644
+--- a/hw/misc/nvfwd/allow.c
++++ b/hw/misc/nvfwd/allow.c
+@@ -84,6 +84,10 @@ void note_once(NvfwdState *s, const char *outcome, const char *what, uint64_t ke
+         s->seen_count++;
+         fprintf(s->log, "%s %s 0x%llx\n", outcome, what, (unsigned long long)value);
+         fflush(s->log);
++        /* Each kind once, as above, and a fixed number of them: a guest can't make this grow. */
++        if (!strcmp(outcome, "REFUSED") || !strcmp(outcome, "OVER")) {
++            refused_add(&s->refused, outcome, what, value);
++        }
+     }
+     qemu_mutex_unlock(&s->lock);
+ }
+@@ -105,3 +109,13 @@ bool allowed(NvfwdState *s, const char *what, int kind, uint64_t value)
+     note(s, what, kind, value, ok);
+     return ok;
+ }
++
++int refused_list(NvfwdState *s, char *to, uint32_t room)
++{
++    uint32_t used;
++
++    qemu_mutex_lock(&s->lock);
++    used = refused_text(&s->refused, to, room);
++    qemu_mutex_unlock(&s->lock);
++    return used;
++}
+diff --git a/hw/misc/nvfwd/meson.build b/hw/misc/nvfwd/meson.build
+index ce35da7..860ad36 100644
+--- a/hw/misc/nvfwd/meson.build
++++ b/hw/misc/nvfwd/meson.build
+@@ -11,6 +11,7 @@ nvfwd_ss = files(
+   'card.c',
+   'host_card.c',
+   'sensors.c',
++  'refused.c',
+   'allow.c',
+   'fds.c',
+   'forward.c',
+diff --git a/hw/misc/nvfwd/nvfwd.c b/hw/misc/nvfwd/nvfwd.c
+index 256d79f..1ac083b 100644
+--- a/hw/misc/nvfwd/nvfwd.c
++++ b/hw/misc/nvfwd/nvfwd.c
+@@ -84,6 +84,9 @@ static void handle(NvfwdState *s, uint32_t slot)
+     case NVFWD_OP_SHOW_FRAME:
+         do_show_frame(s, r);
+         break;
++    case NVFWD_OP_REFUSED: /* only written here, never read back, so the guest's copy is no matter */
++        r->ret = refused_list(s, (char *)base + NVFWD_HDR_SIZE, NVFWD_REFUSED_MAX * NVFWD_REFUSED_LINE);
++        break;
+     case NVFWD_OP_POLL: {
+         struct pollfd p = { .fd = host_fd(s, r->fdid), .events = r->a0 };
+         int rc = poll(&p, 1, 0);
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index e230825..302f4b1 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -19,6 +19,7 @@
+ #include "card.h"
+ #include "maps.h"
+ #include "nvfwd_proto.h"
++#include "refused.h"
+ #include "objects.h"
+ #include "sensors.h"
+ 
+@@ -83,6 +84,7 @@ struct NvfwdState {
+     uint64_t surf_modifier[NVFWD_SHOW_MAX_SURFACES];
+     AllowSet *seen; /* first-seen keys, for the list of forwarded calls */
+     uint32_t seen_count;
++    RefusedList refused; /* the REFUSED and OVER lines, for the guest to read */
+     Sensors *sensors;
+     Objects *objects;
+     Maps *maps;
+@@ -105,6 +107,8 @@ void allow_reload(NvfwdState *s);
+ void note_once(NvfwdState *s, const char *outcome, const char *what, uint64_t key, uint64_t value);
+ void note_local(NvfwdState *s, const char *what, int kind, uint64_t value);
+ bool allowed(NvfwdState *s, const char *what, int kind, uint64_t value);
++/* Writes the refused lines into `to`, which holds `room` bytes, and returns how many bytes that took. */
++int refused_list(NvfwdState *s, char *to, uint32_t room);
+ 
+ /* fds.c */
+ void throttle(NvfwdState *s);
+diff --git a/hw/misc/nvfwd/nvfwd_proto.h b/hw/misc/nvfwd/nvfwd_proto.h
+index 969db62..4b17f2c 100644
+--- a/hw/misc/nvfwd/nvfwd_proto.h
++++ b/hw/misc/nvfwd/nvfwd_proto.h
+@@ -15,7 +15,11 @@
+ #define NVFWD_MAGIC      0x6e766664u
+ 
+ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_OP_MUNMAP, NVFWD_OP_POLL,
+-       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE };
++       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE,
++       NVFWD_OP_REFUSED };
++/* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
++#define NVFWD_REFUSED_MAX 64u
++#define NVFWD_REFUSED_LINE 48u
+ /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
+ #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
+     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)
+diff --git a/hw/misc/nvfwd/refused.c b/hw/misc/nvfwd/refused.c
+new file mode 100644
+index 0000000..66dd600
+--- /dev/null
++++ b/hw/misc/nvfwd/refused.c
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* See refused.h. */
++#include "refused.h"
++
++#include <stdio.h>
++
++void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value)
++{
++    if (list->count < NVFWD_REFUSED_MAX) {
++        snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s %s 0x%llx", outcome, what,
++                 (unsigned long long)value);
++    }
++}
++
++uint32_t refused_text(const RefusedList *list, char *to, uint32_t room)
++{
++    uint32_t used = 0;
++
++    for (uint32_t i = 0; i < list->count && i < NVFWD_REFUSED_MAX; i++) {
++        int n = snprintf(to + used, room - used, "%s\n", list->line[i]);
++
++        if (n < 0 || (uint32_t)n >= room - used) {
++            break;
++        }
++        used += n;
++    }
++    return used;
++}
+diff --git a/hw/misc/nvfwd/refused.h b/hw/misc/nvfwd/refused.h
+new file mode 100644
+index 0000000..ad4fa66
+--- /dev/null
++++ b/hw/misc/nvfwd/refused.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * The kinds of call the device turned down, for the guest to read. Each kind comes here once, as
++ * calls.log has it, and the list stops at a fixed size, so a guest can't make it grow.
++ */
++#ifndef NVFWD_REFUSED_H
++#define NVFWD_REFUSED_H
++
++#include <stdint.h>
++#include "nvfwd_proto.h"
++
++typedef struct RefusedList {
++    char line[NVFWD_REFUSED_MAX][NVFWD_REFUSED_LINE];
++    uint32_t count;
++} RefusedList;
++
++/* Keeps "outcome what 0xvalue", cut to a line's size, while there's room. */
++void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value);
++
++/* Writes whole lines, each ending in a newline, into `room` bytes at most, and returns the bytes written. */
++uint32_t refused_text(const RefusedList *list, char *to, uint32_t room);
++
++#endif
+-- 
+2.56.1
+

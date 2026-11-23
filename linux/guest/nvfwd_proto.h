@@ -15,7 +15,11 @@
 #define NVFWD_MAGIC      0x6e766664u
 
 enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_OP_MUNMAP, NVFWD_OP_POLL,
-       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE };
+       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE,
+       NVFWD_OP_REFUSED };
+/* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
+#define NVFWD_REFUSED_MAX 64u
+#define NVFWD_REFUSED_LINE 48u
 /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
 #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)

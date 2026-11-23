@@ -88,7 +88,7 @@ check_driver_package() {
     command -v dpkg-query > /dev/null || return 0
     others=$(distro_driver_packages)
     if [ -n "$others" ]; then
-        warn "the distro's own NVIDIA libraries are installed beside the host's ($others): programs get the host's while the GPU is on, but OpenCL and the services they brought are of another version. sudo $installed/driver-package.sh --replace puts the host's in their place"
+        warn "the distro's own NVIDIA libraries are installed beside the host's ($others): programs get the host's while the GPU is on, but OpenCL goes through their ICD, and it and the services they brought are of another version. sudo $installed/driver-package.sh --replace puts the host's in their place"
     else
         check "dpkg counts the host's driver $1 as installed" test "$(installed_version "$driver_package")" = "$1"
     fi

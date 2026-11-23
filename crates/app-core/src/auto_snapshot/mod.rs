@@ -20,7 +20,6 @@ use crate::failure::Result;
 use crate::log::write_log;
 use crate::machine::{Kind, Machine};
 use crate::snapshots::{delete_tag, list_snapshots, make_snapshot};
-use jiff::ZonedDateTime;
 use risks::{Pending, Risk};
 
 /// Whether a Windows machine takes these snapshots until its user says otherwise. The one place to
@@ -42,16 +41,16 @@ pub struct AutoStart {
     pub note: String,
 }
 
-/// The name that says what the snapshot is before, and when.
-fn name_for(risks: &[&Pending], now: &ZonedDateTime) -> String {
+/// The name that says what the snapshot is before. When it was taken is the snapshot's own date, which
+/// the lists show, so the name does not say it too.
+fn name_for(risks: &[&Pending]) -> String {
     let mut kinds: Vec<Risk> = risks.iter().map(|pending| pending.risk).collect();
     kinds.dedup();
     let what = match kinds[..] {
         [one] => one.words(),
         _ => SEVERAL_CHANGES,
     };
-    let when = now.strftime("%-d %b, %H:%M");
-    format!("{NAME_START}{what}, {when}").chars().take(crate::snapshots::MAX_SNAPSHOT_NAME).collect()
+    format!("{NAME_START}{what}").chars().take(crate::snapshots::MAX_SNAPSHOT_NAME).collect()
 }
 
 /// Whether this machine's disk can hold the snapshot, as qcow2 does and nothing else does.
@@ -91,7 +90,7 @@ pub fn before_start(task: &mut Task) {
         return;
     }
     task.step(STEP);
-    let name = name_for(&due, &ZonedDateTime::now());
+    let name = name_for(&due);
     match make_snapshot(task, &name, true) {
         Ok(tag) => {
             let _ = delete_all_but(task.context, &task.machine, &tag);

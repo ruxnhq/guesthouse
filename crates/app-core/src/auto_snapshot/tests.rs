@@ -84,7 +84,7 @@ fn a_due_change_gets_one_snapshot_named_for_it_that_replaces_the_last_and_leaves
         (first, second),
         (&("Mine".to_owned(), false), &("Automatic: before the vendor ID, mine too".to_owned(), false))
     );
-    assert!(auto.1 && auto.0.starts_with("Automatic: before the vendor ID, "), "{auto:?}");
+    assert!(auto.1 && auto.0 == "Automatic: before the vendor ID", "{auto:?}");
     assert!(auto.0.chars().count() <= crate::snapshots::MAX_SNAPSHOT_NAME);
     let record = record::read(&context, &machine);
     assert_eq!(record.name, auto.0);
@@ -99,7 +99,7 @@ fn several_changes_are_named_as_changes() {
     restart_due(&context, &machine);
     start(&context, &machine, false);
     let [(name, true)] = &names(&context, &machine)[..] else { panic!() };
-    assert!(name.starts_with("Automatic: before changes, "), "{name}");
+    assert!(name == "Automatic: before changes", "{name}");
 }
 
 #[test]

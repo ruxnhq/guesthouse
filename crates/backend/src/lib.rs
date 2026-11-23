@@ -330,6 +330,23 @@ pub trait Backend: Sized {
     /// as the message thread serves every other guest thread meanwhile.
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart;
 
+    /// Copies a frame into a staging surface before the work that draws it has finished, when the
+    /// card itself can hold the copy until that work is done. `after` are the fences, with the
+    /// values they must reach, that the core would otherwise wait for on the message thread. The
+    /// copy is waited for at most `wait`; one still on the card then lands late.
+    ///
+    /// `None` means this backend can't, or the card hasn't been sent all of that work yet, and
+    /// nothing was done: the core waits for the fences and calls [`Backend::start_staging_copy`].
+    fn copy_staging_after(
+        &mut self,
+        _host: &mut dyn HostServices,
+        _copy: &StagingCopy,
+        _after: &[(u64, u64)],
+        _wait: Duration,
+    ) -> Option<Status> {
+        None
+    }
+
     /// Looks at a copy that [`StagingStart::Running`] said was under way. `None` means not yet.
     fn poll_staging_copy(&mut self, host: &mut dyn HostServices, now: Instant) -> Option<Status>;
 

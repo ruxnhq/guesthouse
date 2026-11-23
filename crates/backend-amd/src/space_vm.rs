@@ -22,7 +22,7 @@ use crate::video_runs::{Retired, VideoRuns};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{OwnedFd, RawFd};
 use std::time::Instant;
 
 /// Which buffers a space has taken in, and its mappings of them. Kept apart from the files so the
@@ -201,6 +201,17 @@ pub enum Ran {
     Faulted(Fault),
     /// Nothing was sent, as work here had already faulted in an earlier run. amdgpu keeps a space's
     /// last fault, so the fault is that earlier run's, not this one's.
+    Stopped(Fault),
+}
+
+/// How sending the daemon's own work that waits for other runs went.
+#[derive(Debug)]
+pub enum Sent {
+    /// It is on the card, and the kernel signals this when it retires.
+    OnCard(Syncobj),
+    /// amdgpu kept saying try again, so nothing was sent.
+    Refused,
+    /// Nothing was sent, as work here had already faulted.
     Stopped(Fault),
 }
 
@@ -401,6 +412,74 @@ impl SpaceVm {
         for (signal, run) in retired {
             signal.destroy(file);
             self.video_retired.push(run);
+        }
+    }
+
+    /// Sync files of the guest's runs on the card that write `fence`, if one of them takes it to
+    /// `value` or past it. Work that waits for all of them comes after the fence reaches the value.
+    /// `None` if no run sent here does, as when the run is still to be sent.
+    pub fn sync_files_reaching(&self, fence: u64, value: u64) -> io::Result<Option<Vec<OwnedFd>>> {
+        let writes = |run: &&OnCard| run.fence.is_some_and(|written| written.address == fence);
+        let reaches = |run: &OnCard| run.fence.is_some_and(|written| written.value >= value);
+        if !self.on_card.iter().filter(writes).any(reaches) {
+            return Ok(None);
+        }
+        let files = self.on_card.iter().filter(writes).map(|run| run.retired.export_sync_file(&self.file));
+        files.collect::<io::Result<Vec<_>>>().map(Some)
+    }
+
+    /// Sends the daemon's own command buffers, already mapped here, to run once every sync file in
+    /// `after` has signalled, and doesn't wait for them. Hand what it gives to [`Self::end_own`].
+    pub fn send_after(&mut self, ip_type: u32, ibs: &[Ib], after: &[OwnedFd]) -> io::Result<Sent> {
+        only_copies_for_the_video_ring(ip_type, ibs)?;
+        if let Some(fault) = self.faults.look(&self.file) {
+            return Ok(Sent::Stopped(fault));
+        }
+        let mut waits = Vec::with_capacity(after.len());
+        for sync_file in after {
+            match Syncobj::from_sync_file(&self.file, sync_file) {
+                Ok(wait) => waits.push(wait),
+                Err(error) => {
+                    waits.iter().for_each(|wait| wait.destroy(&self.file));
+                    return Err(step("taking in a run to wait for", error));
+                }
+            }
+        }
+        let sent = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error));
+        let submitted = sent.and_then(|signal| {
+            // As in `submit_and_wait`: any buffer mapped here may be used.
+            let buffers = self.books.handles();
+            let submitted = self.contexts.submit(&self.file, ip_type, None, |context| {
+                submit::submit_after(&self.file, context, ip_type, ibs, &buffers, &waits, &signal).map(|_| ())
+            });
+            match submitted {
+                Ok(()) => Ok(Sent::OnCard(signal)),
+                Err(error) => {
+                    signal.destroy(&self.file);
+                    match error.kind() {
+                        io::ErrorKind::WouldBlock => Ok(Sent::Refused),
+                        _ => Err(step("submitting", error)),
+                    }
+                }
+            }
+        });
+        // The kernel holds the fences a submission waits for, so the objects can go now.
+        waits.iter().for_each(|wait| wait.destroy(&self.file));
+        submitted
+    }
+
+    /// An eventfd that becomes readable once `signal`, from [`Self::send_after`], is signalled.
+    pub fn arm(&self, signal: &Syncobj) -> io::Result<OwnedFd> {
+        signal.arm_eventfd(&self.file).map_err(|error| step("arming the eventfd", error))
+    }
+
+    /// How the daemon's own run from [`Self::send_after`] ended, once it retired or was given up on.
+    pub fn end_own(&mut self, signal: Syncobj, retired: bool) -> Ran {
+        signal.destroy(&self.file);
+        match (retired, self.faults.look(&self.file)) {
+            (false, _) => Ran::Hung,
+            (true, Some(fault)) => Ran::Faulted(fault),
+            (true, None) => Ran::Retired,
         }
     }
 
@@ -674,6 +753,12 @@ mod tests {
 
     /// A space with no card behind its file: every call to the kernel on it fails, so a test sees
     /// what is refused before the kernel is asked.
+    #[test]
+    fn a_fence_no_run_here_writes_has_nothing_to_wait_on() {
+        let space = space_without_a_card();
+        assert!(space.sync_files_reaching(0x1000, 1).unwrap().is_none());
+    }
+
     fn space_without_a_card() -> SpaceVm {
         SpaceVm {
             file: File::open("/dev/null").unwrap(),

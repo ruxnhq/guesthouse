@@ -29,6 +29,7 @@ const CTX_REQUEST_SIZE: usize = 16;
 
 // Chunk ids.
 const CHUNK_ID_IB: u32 = 0x01;
+const CHUNK_ID_SYNCOBJ_IN: u32 = 0x04;
 const CHUNK_ID_SYNCOBJ_OUT: u32 = 0x05;
 const CHUNK_ID_BO_HANDLES: u32 = 0x06;
 
@@ -71,6 +72,15 @@ const SYNCOBJ_REQUEST_SIZE: usize = 8;
 const WAIT_HANDLES: usize = 0;
 const WAIT_COUNT: usize = 16;
 const WAIT_REQUEST_SIZE: usize = 32;
+
+// drm_syncobj_handle, 16 bytes: handle, flags, fd (s32), pad. With the sync file flag the fd is a
+// sync file holding the object's fence, which any open of any device can take in.
+const HANDLE_HANDLE: usize = 0;
+const HANDLE_FLAGS: usize = 4;
+const HANDLE_FD: usize = 8;
+const HANDLE_REQUEST_SIZE: usize = 16;
+const EXPORT_SYNC_FILE: u32 = 1;
+const IMPORT_SYNC_FILE: u32 = 1;
 
 // drm_syncobj_eventfd, 24 bytes: handle, flags, point (u64), fd (s32), pad.
 const EVENTFD_HANDLE: usize = 0;
@@ -156,6 +166,35 @@ impl Syncobj {
         ioctl::drm_ioctl(file, call::syncobj_eventfd(), &mut request)
     }
 
+    /// A sync file of the fence it holds now, which a submission on another open can wait for.
+    pub fn export_sync_file(&self, file: &impl AsRawFd) -> io::Result<OwnedFd> {
+        let mut request = [0u8; HANDLE_REQUEST_SIZE];
+        put32(&mut request, HANDLE_HANDLE, self.handle);
+        put32(&mut request, HANDLE_FLAGS, EXPORT_SYNC_FILE);
+        put32(&mut request, HANDLE_FD, u32::MAX);
+        ioctl::drm_ioctl(file, call::syncobj_handle_to_fd(), &mut request)?;
+        let raw = ioctl::get32(&request, HANDLE_FD) as RawFd;
+        if raw < 0 {
+            return Err(io::Error::other("the kernel gave no sync file"));
+        }
+        // SAFETY: the kernel made the descriptor for this call, and nothing else owns it.
+        Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+    }
+
+    /// A new sync object on `file` holding the fence of a sync file.
+    pub fn from_sync_file(file: &impl AsRawFd, sync_file: &impl AsRawFd) -> io::Result<Self> {
+        let made = Self::create(file)?;
+        let mut request = [0u8; HANDLE_REQUEST_SIZE];
+        put32(&mut request, HANDLE_HANDLE, made.handle);
+        put32(&mut request, HANDLE_FLAGS, IMPORT_SYNC_FILE);
+        put32(&mut request, HANDLE_FD, sync_file.as_raw_fd() as u32);
+        if let Err(error) = ioctl::drm_ioctl(file, call::syncobj_fd_to_handle(), &mut request) {
+            made.destroy(file);
+            return Err(error);
+        }
+        Ok(made)
+    }
+
     /// Whether the kernel has signalled it, without waiting. A submission must have named it.
     pub fn signalled(&self, file: &impl AsRawFd) -> io::Result<bool> {
         let handles = [self.handle];
@@ -230,6 +269,20 @@ pub fn submit_all(
     buffers: &[GemHandle],
     signal: &Syncobj,
 ) -> io::Result<u64> {
+    submit_after(file, context, ip_type, ibs, buffers, &[], signal)
+}
+
+/// As [`submit_all`], with the IBs held on the card until every sync object in `after`, on `file`,
+/// has been signalled.
+pub fn submit_after(
+    file: &impl AsRawFd,
+    context: &Context,
+    ip_type: u32,
+    ibs: &[Ib],
+    buffers: &[GemHandle],
+    after: &[Syncobj],
+    signal: &Syncobj,
+) -> io::Result<u64> {
     let mut ib_chunks = vec![[0u8; IB_CHUNK_SIZE]; ibs.len()];
     for (chunk, ib) in ib_chunks.iter_mut().zip(ibs) {
         put64(chunk, IB_VA_START, ib.address);
@@ -252,6 +305,13 @@ pub fn submit_all(
         write_chunk(slot, CHUNK_ID_IB, IB_CHUNK_SIZE / 4, ib_chunk.as_ptr() as u64);
     }
     write_chunk(&mut chunks[ibs.len()], CHUNK_ID_SYNCOBJ_OUT, 1, sem_chunk.as_ptr() as u64);
+    // drm_amdgpu_cs_chunk_sem is one u32 handle per object.
+    let waits: Vec<u32> = after.iter().map(Syncobj::handle).collect();
+    if !waits.is_empty() {
+        let mut slot = [0u8; CHUNK_SIZE];
+        write_chunk(&mut slot, CHUNK_ID_SYNCOBJ_IN, waits.len(), waits.as_ptr() as u64);
+        chunks.push(slot);
+    }
     if !buffers.is_empty() {
         let mut slot = [0u8; CHUNK_SIZE];
         write_chunk(&mut slot, CHUNK_ID_BO_HANDLES, BO_LIST_SIZE / 4, bo_list.as_ptr() as u64);

@@ -34,6 +34,8 @@ const DRM_PRIME_HANDLE_TO_FD: u64 = 0x2D;
 const DRM_PRIME_FD_TO_HANDLE: u64 = 0x2E;
 const DRM_SYNCOBJ_CREATE: u64 = 0xBF;
 const DRM_SYNCOBJ_DESTROY: u64 = 0xC0;
+const DRM_SYNCOBJ_HANDLE_TO_FD: u64 = 0xC1;
+const DRM_SYNCOBJ_FD_TO_HANDLE: u64 = 0xC2;
 const DRM_SYNCOBJ_WAIT: u64 = 0xC3;
 const DRM_SYNCOBJ_EVENTFD: u64 = 0xCF;
 
@@ -93,6 +95,12 @@ pub mod call {
     }
     pub fn syncobj_destroy() -> u64 {
         number(IOCTL_READ_WRITE, DRM_SYNCOBJ_DESTROY, 8)
+    }
+    pub fn syncobj_handle_to_fd() -> u64 {
+        number(IOCTL_READ_WRITE, DRM_SYNCOBJ_HANDLE_TO_FD, 16)
+    }
+    pub fn syncobj_fd_to_handle() -> u64 {
+        number(IOCTL_READ_WRITE, DRM_SYNCOBJ_FD_TO_HANDLE, 16)
     }
     pub fn syncobj_wait() -> u64 {
         number(IOCTL_READ_WRITE, DRM_SYNCOBJ_WAIT, 32)
@@ -203,6 +211,8 @@ fn what(ioctl: u64) -> String {
         (call::prime_fd_to_handle(), "a buffer import"),
         (call::syncobj_create(), "a new sync object"),
         (call::syncobj_destroy(), "a sync object's close"),
+        (call::syncobj_handle_to_fd(), "a sync object's export"),
+        (call::syncobj_fd_to_handle(), "a sync object's import"),
         (call::syncobj_wait(), "a look at a sync object"),
         (call::syncobj_eventfd(), "a sync object's eventfd"),
     ];

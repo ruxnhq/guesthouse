@@ -164,3 +164,18 @@ fn lean_is_for_windows_and_a_recipe_without_it_is_kept_as_before() {
         Recipe::parse("name = \"S\"\ndescription = \"D.\"\nguest = \"ubuntu\"\nlean = true\n").unwrap_err();
     assert!(said.0.contains("lean is for a Windows recipe"), "{}", said.0);
 }
+
+#[test]
+fn the_recipes_that_come_with_the_app_are_recipes() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes");
+    let read = |name: &str| Recipe::parse(&std::fs::read_to_string(folder.join(name)).unwrap()).unwrap();
+    let games = read("windows-games.toml");
+    assert!(games.lean);
+    assert_eq!(games.scan_exclusions, [r"C:\Program Files (x86)\Steam\steamapps"]);
+    let clean = read("windows-clean-box.toml");
+    assert!(
+        !clean.lean && clean.scan_exclusions.is_empty(),
+        "the box for trying things is Windows as it ships"
+    );
+    read("ubuntu-cuda.toml");
+}

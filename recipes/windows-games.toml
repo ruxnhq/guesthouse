@@ -4,6 +4,9 @@ guest = "windows"
 # Without the apps Windows adds for every account. It keeps the Store, winget and every Xbox part, which
 # games need. docs/recipes.md lists all it does.
 lean = true
+# Where Steam keeps its games. Defender's scanning leaves it out only if the person making the machine
+# turns that on, and it is off unless they do.
+scan_exclusions = ['C:\Program Files (x86)\Steam\steamapps']
 
 [settings]
 cores = 8

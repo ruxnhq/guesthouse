@@ -617,6 +617,24 @@ mod allocations {
         assert_eq!(standard::StandardRecord::parse(&record).unwrap().pitch, 512);
     }
 
+    /// The guest locks as much of the program's memory as the answer says, and the memory ends
+    /// where the heap does.
+    #[test]
+    fn a_heap_of_guest_memory_is_made_at_its_own_size() {
+        let mut session = session();
+        let mut describe = message(Command::DescribeStandardAllocation, 0x40);
+        set_u32(&mut describe, 0x18, 4);
+        set_u32(&mut describe, 0x1C, 32);
+        set_u32(&mut describe, 0x28, 0x20_0000);
+        set_u32(&mut describe, 0x2C, 1);
+        set_u32(&mut describe, 0x34, 7);
+        let answer = send(&mut session, &describe);
+        let record = answer[36..68].to_vec();
+        let reply = send(&mut session, &create_message(0x20, &[record]));
+        assert_eq!(status_of(&reply), SUCCESS);
+        assert_eq!(u64_at(&reply, 0x20), Ok(0x20_0000));
+    }
+
     #[test]
     fn a_vendors_data_for_a_standard_surface_is_known_when_handed_back() {
         let mut session = session();

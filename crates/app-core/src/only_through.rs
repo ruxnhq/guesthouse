@@ -77,6 +77,14 @@ pub fn link_dns(resolvectl_output: &str) -> Option<String> {
     })
 }
 
+/// The first IPv4 address `nmcli -g IP4.DNS device show LINK` prints, as in `10.64.0.1 | 10.64.0.2`.
+/// NetworkManager without systemd-resolved (Arch's default) keeps a link's servers only there.
+pub fn network_manager_dns(nmcli_output: &str) -> Option<String> {
+    nmcli_output
+        .split(|c: char| c == '|' || c.is_whitespace())
+        .find_map(|word| word.parse::<Ipv4Addr>().ok().map(|found| found.to_string()))
+}
+
 /// The first IPv4 nameserver of a `resolv.conf` that isn't an address of this PC, as `local` says.
 pub fn resolv_conf_dns(text: &str, local: impl Fn(&str) -> bool) -> Option<String> {
     text.lines().find_map(|line| {
@@ -92,8 +100,8 @@ fn is_of_this_pc(address: &str) -> bool {
     UdpSocket::bind((address, 0)).is_ok()
 }
 
-/// The DNS server the guest's names go to: the one typed, else the link's own, else the host's own
-/// that isn't on this PC. Never a public default.
+/// The DNS server the guest's names go to: the one typed, else the link's own (systemd-resolved's,
+/// else NetworkManager's), else the host's own that isn't on this PC. Never a public default.
 pub fn choose_dns(typed: &str, link: Option<String>, host: Option<String>) -> Option<String> {
     Some(typed.trim()).filter(|text| !text.is_empty()).map(str::to_owned).or(link).or(host)
 }
@@ -101,6 +109,11 @@ pub fn choose_dns(typed: &str, link: Option<String>, host: Option<String>) -> Op
 fn link_dns_now(interface: &str) -> Option<String> {
     let output = Command::new("resolvectl").args(["dns", interface]).output().ok()?;
     output.status.success().then(|| link_dns(&String::from_utf8_lossy(&output.stdout)))?
+}
+
+fn network_manager_dns_now(interface: &str) -> Option<String> {
+    let output = Command::new("nmcli").args(["-g", "IP4.DNS", "device", "show", interface]).output().ok()?;
+    output.status.success().then(|| network_manager_dns(&String::from_utf8_lossy(&output.stdout)))?
 }
 
 fn host_dns_now() -> Option<String> {
@@ -113,7 +126,8 @@ pub fn dns_now(typed: &str, interface: &str) -> Option<String> {
     if !typed.is_empty() {
         return Some(typed.to_owned());
     }
-    choose_dns(typed, link_dns_now(interface), host_dns_now())
+    let link = link_dns_now(interface).or_else(|| network_manager_dns_now(interface));
+    choose_dns(typed, link, host_dns_now())
 }
 
 #[cfg(test)]
@@ -146,6 +160,14 @@ fc000000000000000000000000000002 07 80 00 80    wg0
         assert_eq!(link_dns("Link 7 (wg0): fc00::1\n"), None);
         assert_eq!(link_dns("Link 7 (wg0):\n"), None);
         assert_eq!(link_dns(""), None);
+    }
+
+    #[test]
+    fn the_links_first_ipv4_server_is_read_from_network_manager() {
+        assert_eq!(network_manager_dns("10.64.0.1\n").as_deref(), Some("10.64.0.1"));
+        assert_eq!(network_manager_dns("10.64.0.1 | 10.64.0.2\n").as_deref(), Some("10.64.0.1"));
+        assert_eq!(network_manager_dns("\n"), None);
+        assert_eq!(network_manager_dns(""), None);
     }
 
     #[test]

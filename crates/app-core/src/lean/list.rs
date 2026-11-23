@@ -97,6 +97,23 @@ pub const POLICIES: [Policy; 5] = [
     },
 ];
 
+/// Packages that lean Windows never touches, but that Windows then doesn't add after the first logon,
+/// as what brings them is gone or switched off. A plain and a lean install of Windows 11 build 26300
+/// differed by these two besides the list. Which of the list keeps each away is read from what each
+/// is for, and not from Microsoft.
+pub const NOT_ADDED: [App; 2] = [
+    App {
+        name: "Microsoft.StartExperiencesApp",
+        title: "Start's companion content, such as the Phone Link panel",
+        saves: "kept away with Phone Link, it seems",
+    },
+    App {
+        name: "Microsoft.WidgetsPlatformRuntime",
+        title: "the runtime Widgets run on",
+        saves: "kept away with Widgets switched off, it seems",
+    },
+];
+
 /// What stays, and why, for the person deciding.
 pub const LEFT_ALONE: [&str; 6] = [
     "Defender, the firewall, SmartScreen, Windows Update, UAC, Secure Boot, the TPM and BitLocker, as \
@@ -126,6 +143,10 @@ pub fn what_it_does() -> String {
             "- {} = {} in HKLM\\SOFTWARE\\Policies\\{}: {}",
             policy.value, policy.data, policy.key, policy.what
         );
+    }
+    text.push_str("Windows then doesn't add these, which it otherwise adds after the first logon:\n");
+    for app in &NOT_ADDED {
+        let _ = writeln!(text, "- {} ({}): {}", app.title, app.name, app.saves);
     }
     text.push_str("It leaves alone:\n");
     for item in &LEFT_ALONE {

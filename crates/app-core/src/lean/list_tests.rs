@@ -99,6 +99,10 @@ fn the_user_reads_every_item_the_guest_is_given() {
         )));
     }
     assert!(text.contains("Defender, the firewall, SmartScreen, Windows Update"));
+    for app in &NOT_ADDED {
+        assert!(text.contains(&format!("({})", app.name)), "{}", app.name);
+        assert!(!APPS.iter().any(|listed| listed.name == app.name), "never taken out, only not added");
+    }
     let data: serde_json::Value = serde_json::from_str(&guest_data()).unwrap();
     assert_eq!(data["apps"].as_array().unwrap().len(), APPS.len());
     assert_eq!(data["policies"].as_array().unwrap().len(), POLICIES.len());
@@ -110,6 +114,9 @@ fn the_docs_list_every_item() {
     let docs =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/recipes.md")).unwrap();
     for app in &APPS {
+        assert!(docs.contains(&format!("`{}`", app.name)), "docs/recipes.md is missing {}", app.name);
+    }
+    for app in &NOT_ADDED {
         assert!(docs.contains(&format!("`{}`", app.name)), "docs/recipes.md is missing {}", app.name);
     }
     for policy in &POLICIES {

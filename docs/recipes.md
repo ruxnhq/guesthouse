@@ -72,6 +72,8 @@ It only does two kinds of thing, both documented and both undone the documented 
   - `Microsoft\Windows\OneDrive` `DisableFileSyncNGSC = 1`: OneDrive doesn't run or sync.
   - `Microsoft\Edge` `StartupBoostEnabled = 0` and `BackgroundModeEnabled = 0`: Edge doesn't start at logon, and doesn't keep running after its last window closes.
 
+Windows then doesn't add two packages it otherwise adds after the first logon, which lean Windows never touches itself: `Microsoft.StartExperiencesApp`, Start's companion content such as the Phone Link panel, which seems to stay away with Phone Link, and `Microsoft.WidgetsPlatformRuntime`, the runtime Widgets run on, which seems to stay away with Widgets off. A plain and a lean install of the same Windows differed by these two besides the list.
+
 Settings and Edge then say some settings are managed by your organization, as they do for any policy.
 
 It leaves alone, on purpose: Defender, the firewall, SmartScreen, Windows Update, UAC, Secure Boot, the TPM and BitLocker, as Windows sets them; the Store, App Installer and winget, which recipes install with; every Xbox part, Game Bar and the Xbox identity provider, which games and Game Pass need; Edge and the WebView2 runtime; Get Help, which is Windows 11's troubleshooters, and Quick Assist; Photos, Media Player, Notepad, Paint, Calculator, Terminal, Snipping Tool, Camera, Clock, Sound Recorder and Sticky Notes; the runtimes, languages, input methods and accessibility tools; every service and scheduled task. The services that cost something at idle are the search indexer, SysMain, Defender and Update, and each is either kept on purpose or what Start's search needs.

@@ -15,6 +15,7 @@ mod linux_gpu;
 mod macos;
 mod network;
 mod nvapi_wrapper;
+mod recipe;
 mod remote_access;
 mod remove;
 mod sharing;
@@ -186,6 +187,8 @@ struct Parts {
     sharing: sharing::Sharing,
     network: network::Network,
     remote_access: remote_access::RemoteAccess,
+    /// Only a machine made for a recipe has one.
+    recipe: Option<recipe::Recipe>,
     usb: usb::Usb,
     remove: remove::Remove,
     /// The names of the pages, down the dialog's side.
@@ -218,6 +221,8 @@ impl SettingsDialog {
             _account: account::Account::new(&shared, &pages.general),
             _token: token::Token::new(&shared, &pages.general),
             _jail: jail::Jail::new(&shared, &pages.general),
+            // Built in the order they show: Remove stays last on its page.
+            recipe: recipe::Recipe::new(&shared, &pages.general),
             remove: remove::Remove::new(&shared, &pages.general),
             display: display::Display::new(&shared, &pages.display),
             disk: disk::Disk::new(&shared, &pages.storage),
@@ -264,6 +269,9 @@ impl SettingsDialog {
         parts.sharing.set_status(status);
         parts.network.set_status(status);
         parts.remote_access.set_status(status);
+        if let Some(recipe) = &parts.recipe {
+            recipe.set_status(status);
+        }
         parts.usb.set_status(status);
         parts.linux_gpu.set_status(status);
         parts.macos.set_status(status);

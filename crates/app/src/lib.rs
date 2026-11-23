@@ -15,6 +15,7 @@ pub mod login;
 pub mod new_machine;
 pub mod notify;
 pub mod preferences;
+pub mod recipe_dialog;
 pub mod report_dialog;
 pub mod rows;
 pub mod settings;

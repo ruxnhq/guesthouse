@@ -9574,3 +9574,120 @@ index 0000000..ad4fa66
 -- 
 2.56.1
 
+From 2595c1df5627bc909f5c8239dde0777f8586416b Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 12:08:29 -0800
+Subject: [PATCH 35/35] hw/misc/nvfwd: answer a pinned control at another size
+ as the driver does
+
+A control the device takes at one size only failed the whole ioctl with
+EINVAL at any other size, and nothing said so. The filter now answers it
+with NV_ERR_INVALID_PARAM_STRUCT, which is what the driver says to a
+control at the wrong size, and notes "REFUSED size of ctrl" once. Calls
+at the right size are as before, and the parser keeps its own check.
+---
+ hw/misc/nvfwd/forward.c   | 11 ++++++++++-
+ hw/misc/nvfwd/nvfwd.h     |  2 +-
+ hw/misc/nvfwd/rm_layout.h |  1 +
+ hw/misc/nvfwd/rmargs.c    |  9 ++++++---
+ hw/misc/nvfwd/rmargs.h    |  3 +++
+ 5 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index af201b6..0c42a2b 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -105,7 +105,16 @@ static int filter_rm(NvfwdState *s, uint32_t nr, uint8_t *arg, uint32_t size)
+             return 0;
+         }
+         if (allowed(s, "ctrl", K_CTRL, cmd)) {
+-            return 0;
++            uint32_t params_size, st = STATUS_INVALID_PARAM_STRUCT;
++
++            memcpy(&params_size, arg + RM_CONTROL_PARAMS_SIZE, 4);
++            if (rmargs_control_size_ok(cmd, params_size)) {
++                return 0;
++            }
++            /* As the host's driver answers a control at the wrong size, and said once, as a refusal is. */
++            note_once(s, "REFUSED", "size of ctrl", KEY(K_SIZE, cmd), cmd);
++            memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++            return 1;
+         }
+         status_at = 28;
+         break;
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index 302f4b1..c73977d 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -96,7 +96,7 @@ struct NvfwdState {
+ };
+ 
+ enum { K_IOCTL = 1, K_CTRL = 2, K_CLASS = 3, K_UVM = 4, K_MEMCLASS = 5, K_EMUCTRL = 6, K_LIMIT = 7, K_CLIENT = 8,
+-       K_CARD = 9, K_QUESTION = 10 };
++       K_CARD = 9, K_QUESTION = 10, K_SIZE = 11 };
+ 
+ #define KEY(kind, value) (((uint64_t)(kind) << 32) | (uint32_t)(value))
+ 
+diff --git a/hw/misc/nvfwd/rm_layout.h b/hw/misc/nvfwd/rm_layout.h
+index 4c00adf..c6ef907 100644
+--- a/hw/misc/nvfwd/rm_layout.h
++++ b/hw/misc/nvfwd/rm_layout.h
+@@ -105,6 +105,7 @@
+ #define STATUS_OK 0
+ #define STATUS_INSUFFICIENT_RESOURCES 0x1a
+ #define STATUS_INVALID_ARGUMENT 0x1f
++#define STATUS_INVALID_PARAM_STRUCT 0x3a /* what the RM says to a control at the wrong size */
+ #define STATUS_INVALID_CLASS 0x22 /* what the RM says to a device instance it doesn't have */
+ #define STATUS_NO_MEMORY 0x51
+ #define STATUS_NOT_SUPPORTED 0x56
+diff --git a/hw/misc/nvfwd/rmargs.c b/hw/misc/nvfwd/rmargs.c
+index 1ccfbaa..60e261d 100644
+--- a/hw/misc/nvfwd/rmargs.c
++++ b/hw/misc/nvfwd/rmargs.c
+@@ -51,7 +51,10 @@ static const struct control_size pinned_controls[] = {
+  * Controls with no public layout that the CUDA runtime won't start without. The host never reads the
+  * guest's bytes for them: the guest has to ask the one question NVIDIA's own library was seen to ask,
+  * and the device sends that question, written by the device, in its place. Bytes not named here are
+- * zero on the way to the host. Seen from libcuda 620.73.04 on an RTX 5090.
++ * zero on the way to the host, whatever the guest put there: a call that differs only outside the named
++ * fields is answered, as the host is asked the same thing either way. That is by design, not a hole: no
++ * byte of the guest's parameters ever reaches the host's driver for these. Seen from libcuda 620.73.04
++ * on an RTX 5090.
+  */
+ #define OWNED_FIELDS_MAX 4
+ struct owned_request {
+@@ -184,7 +187,7 @@ static bool inside(Walk *w, uint64_t start, uint64_t bytes, uint32_t size)
+     return true;
+ }
+ 
+-static bool size_allowed(uint32_t cmd, uint32_t size)
++bool rmargs_control_size_ok(uint32_t cmd, uint32_t size)
+ {
+     for (size_t i = 0; i < ARRAY_LENGTH(pinned_controls); i++) {
+         if (pinned_controls[i].cmd == cmd) {
+@@ -231,7 +234,7 @@ static void walk_control(Walk *w)
+     }
+     cmd = read32(arg + RM_CONTROL_CMD);
+     size = read32(arg + RM_CONTROL_PARAMS_SIZE);
+-    if (!size_allowed(cmd, size)) {
++    if (!rmargs_control_size_ok(cmd, size)) { /* the filter has refused these already: a second guard */
+         w->error = -EINVAL;
+         return;
+     }
+diff --git a/hw/misc/nvfwd/rmargs.h b/hw/misc/nvfwd/rmargs.h
+index cc41fe4..ab1a507 100644
+--- a/hw/misc/nvfwd/rmargs.h
++++ b/hw/misc/nvfwd/rmargs.h
+@@ -50,6 +50,9 @@ int rmargs_fields(const RmCall *call, RmField *fields, int *matched);
+ int rmargs_uvm_fields(uint32_t cmd, uint32_t len, const struct nvfwd_fix *fix, uint32_t nfix,
+                       RmField *fields, int *matched);
+ 
++/* False for a control the device takes at one size only, asked at another. */
++bool rmargs_control_size_ok(uint32_t cmd, uint32_t size);
++
+ /*
+  * For a control whose parameters no public source describes, puts the device's own copy of the one
+  * question it may ask in place of the guest's. 0: not such a control. 1: `params` now holds only the
+-- 
+2.56.1
+

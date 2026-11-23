@@ -109,6 +109,24 @@ static void test_the_cuda_runtimes_controls_go_at_their_sizes_only(void)
     }
 }
 
+/* The filter's question, asked before any field is read: the device answers a wrong size with the driver's status. */
+static void test_a_wrong_size_is_said_before_anything_is_read(void)
+{
+    static const uint32_t wrong[] = { 0, 1, 3, 4, 5, 7, 8, 9, 16, 64, 531, 533, 536, 1024, UINT32_MAX };
+
+    for (size_t i = 0; i < sizeof(cuda_runtime_controls) / sizeof(cuda_runtime_controls[0]); i++) {
+        uint32_t cmd = cuda_runtime_controls[i].cmd, size = cuda_runtime_controls[i].size;
+
+        assert(rmargs_control_size_ok(cmd, size));
+        for (size_t j = 0; j < sizeof(wrong) / sizeof(wrong[0]); j++) {
+            assert(rmargs_control_size_ok(cmd, wrong[j]) == (wrong[j] == size));
+        }
+    }
+    assert(rmargs_control_size_ok(CTRL_NO_PUBLIC_SOURCE, CTRL_NO_PUBLIC_SOURCE_BYTES));
+    assert(!rmargs_control_size_ok(CTRL_NO_PUBLIC_SOURCE, 8));
+    assert(rmargs_control_size_ok(0x20800110u, 100)); /* the rest aren't held to a size */
+}
+
 /* The host only ever reads the device's own bytes for the two controls nobody can read. */
 static void test_an_owned_control_carries_only_the_devices_bytes(void)
 {
@@ -169,6 +187,27 @@ static void test_an_owned_control_carries_only_the_devices_bytes(void)
     memcpy(params, recorded, 52); /* the same call without leftovers past the question */
     memset(params + 4, 0, 12);
     assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == 1);
+
+    /* Bytes outside the named fields are the guest's to set: the call is answered, and none of them goes on. */
+    for (uint32_t at = 0; at < sizeof(params); at++) {
+        int named = at < 4 || (at >= 16 && at < 24) || (at >= 36 && at < 40);
+
+        if (named) {
+            continue;
+        }
+        memset(params, 0, sizeof(params));
+        for (size_t i = 0; i < 4; i++) {
+            memcpy(params + question[i][0], &question[i][1], 4);
+        }
+        params[at] = 0x5a;
+        assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == 1);
+        assert(params[at] == 0);
+    }
+    for (uint32_t at = 0; at < 8; at++) {
+        memset(params, 0, 8);
+        params[at] = 0x80;
+        assert(rmargs_own_request(0x20809001u, params, 8) == 1 && params[at] == 0);
+    }
 
     /* A control with a public layout keeps the guest's parameters. */
     memset(params, 0xab, sizeof(params));
@@ -374,6 +413,7 @@ int main(void)
     test_a_pinned_control_goes_at_its_size_only();
     test_the_cuda_runtimes_controls_go_at_their_sizes_only();
     test_an_owned_control_carries_only_the_devices_bytes();
+    test_a_wrong_size_is_said_before_anything_is_read();
     test_xfer_points_at_what_was_read();
     test_control();
     test_alloc_and_memory();

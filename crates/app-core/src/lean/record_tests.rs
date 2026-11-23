@@ -30,6 +30,14 @@ fn the_machine_says_what_was_taken_out_and_what_came_back() {
             .unwrap()
             .ends_with("Windows had put back Dev Home, and a start took it out again.")
     );
+    outcome.put_back = vec!["Microsoft.Windows.DevHome".into(), "Microsoft.BingNews".into()];
+    write_outcome(&context, &vm, &outcome).unwrap();
+    assert!(
+        state_text(&context, &vm)
+            .unwrap()
+            .ends_with("Windows had put back Dev Home, News, and a start took them out again.")
+    );
+    outcome.put_back = vec!["Microsoft.Windows.DevHome".into()];
     outcome.still_back = Some("in use".into());
     write_outcome(&context, &vm, &outcome).unwrap();
     assert!(state_text(&context, &vm).unwrap().ends_with("could not be taken out again: in use"));

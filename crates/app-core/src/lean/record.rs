@@ -75,9 +75,10 @@ pub fn state_text(context: &Context, machine: &Machine) -> Option<String> {
     }
     if !outcome.put_back.is_empty() {
         let back = titles(&outcome.put_back);
+        let it = if outcome.put_back.len() == 1 { "it" } else { "them" };
         parts.push(match &outcome.still_back {
-            None => format!("Windows had put back {back}, and a start took it out again."),
-            Some(why) => format!("Windows had put back {back}, and it could not be taken out again: {why}"),
+            None => format!("Windows had put back {back}, and a start took {it} out again."),
+            Some(why) => format!("Windows had put back {back}, and {it} could not be taken out again: {why}"),
         });
     }
     (!parts.is_empty()).then(|| parts.join(" "))

@@ -10,7 +10,9 @@ use crate::gpu_maker::GpuMaker;
 use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
 use crate::network::{Forward, Mode, Protocol, read_port};
-use crate::network_settings::{add_forward, read_forward, remove_forward, set_bridge, set_network};
+use crate::network_settings::{
+    add_forward, read_forward, remove_forward, set_bridge, set_dns, set_network, set_only_through,
+};
 use crate::remote_access::{APPLY_TASK, Reaches, Service, choose, read_access, when_it_reaches};
 use crate::settings::max_vram_gib_for;
 use crate::start_checks::share_problem;
@@ -20,7 +22,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 15] = [
+const SETTINGS: [&str; 17] = [
     "cores",
     "ram",
     "vram",
@@ -29,6 +31,8 @@ const SETTINGS: [&str; 15] = [
     "network",
     "passt",
     "bridge",
+    "only-through",
+    "dns",
     "sound",
     "share",
     "window-speed",
@@ -206,6 +210,23 @@ pub(super) fn set(
             set_bridge(context, &mut machine, value)?;
             return said(out, key, value);
         }
+        "only-through" => {
+            not_for_ubuntu(&machine)?;
+            must_be_off(context, &machine)?;
+            if machine.network_mode != Mode::Nat {
+                return Err(Failure::new("only-through is for the NAT network."));
+            }
+            let name = if value.eq_ignore_ascii_case("off") { "" } else { value };
+            set_only_through(context, &mut machine, name)?;
+            return said(out, key, value);
+        }
+        "dns" => {
+            not_for_ubuntu(&machine)?;
+            must_be_off(context, &machine)?;
+            let address = if value.eq_ignore_ascii_case("auto") { "" } else { value };
+            set_dns(context, &mut machine, address)?;
+            return said(out, key, value);
+        }
         "share" => {
             not_for_ubuntu(&machine)?;
             must_be_off(context, &machine)?;
@@ -295,6 +316,10 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "network", &machine.network_mode.name())?;
         if machine.network_mode == Mode::Nat {
             line(out, "passt", &switch(machine.passt))?;
+            let through = if machine.only_through.is_empty() { "off" } else { &machine.only_through };
+            line(out, "only-through", &through)?;
+            let dns = if machine.dns.is_empty() { "auto" } else { &machine.dns };
+            line(out, "dns", &dns)?;
         }
         if machine.network_mode == Mode::Bridged {
             line(out, "bridge", &machine.bridge)?;

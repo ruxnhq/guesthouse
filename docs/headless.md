@@ -65,6 +65,8 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `network` | nat, none or bridged | not Ubuntu |
 | `passt` | on or off, with NAT | not Ubuntu |
 | `bridge` | the bridge's name | not Ubuntu |
+| `only-through` | an interface's name such as wg0, or off, with NAT | not Ubuntu |
+| `dns` | an IPv4 address, or auto | not Ubuntu |
 | `share` | a folder, or `none` | not Ubuntu |
 | `remote-desktop` | on or off | Windows |
 | `ssh` | on or off | Windows |

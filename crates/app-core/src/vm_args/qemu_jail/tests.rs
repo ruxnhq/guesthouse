@@ -215,6 +215,19 @@ fn without_a_jail_a_machine_held_to_an_interface_still_has_the_launcher_start_pa
 }
 
 #[test]
+fn a_machine_held_to_an_interface_has_the_launcher_guard_its_passt_with_or_without_a_jail() {
+    for jailed_too in [false, true] {
+        let (_scratch, plan) = held_to_wg0(windows(), jailed_too);
+        let command = plan.qemu_command();
+        let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
+        let cut_file = plan.run_folder.join("network-cut").display().to_string();
+        assert_eq!(command[guard + 1..guard + 3], ["wg0".to_owned(), cut_file]);
+    }
+    let (_scratch, plan) = on_passt(windows(), true);
+    assert!(!plan.qemu_command().contains(&"--passt-only-through".to_owned()), "passt alone has no guard");
+}
+
+#[test]
 fn without_a_jail_a_machine_on_passt_alone_has_no_launcher() {
     let (_scratch, plan) = held_to_wg0(windows(), false);
     let plan = VmPlan { network: NetworkPlan { only_through: None, ..plan.network.clone() }, ..plan };

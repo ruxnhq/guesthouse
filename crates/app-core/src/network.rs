@@ -245,12 +245,16 @@ pub fn port_taken(protocol: Protocol, port: u16) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InUse {
     Passt,
+    /// passt, held to one interface that has since gone, so nothing gets out any more.
+    Cut,
     Bridge,
     Restricted,
     Slirp,
 }
 
 const SLIRP_NAME: &str = "QEMU's built-in NAT (slirp)";
+const CUT: &str = "Its network is cut, as the interface it goes out through went away. \
+                   Start the machine again once the interface is back.";
 const SECOND_ADAPTER: &str = "The guest sees a second network adapter, which only Guesthouse uses.";
 
 pub fn in_use_of(words: &[Vec<u8>]) -> Option<InUse> {
@@ -274,7 +278,8 @@ pub fn describe(mode: Mode, passt: bool, installed: bool, only_through: &str) ->
     match mode {
         Mode::Nat if !only_through.is_empty() && installed => format!(
             "All of the guest's traffic goes out through {only_through} and nothing else, with passt. \
-             If {only_through} goes down, the guest has no network. {SECOND_ADAPTER}"
+             If {only_through} goes away, the guest has no network until the machine is started again. \
+             {SECOND_ADAPTER}"
         ),
         Mode::Nat if !only_through.is_empty() => {
             format!(
@@ -294,6 +299,7 @@ pub fn describe(mode: Mode, passt: bool, installed: bool, only_through: &str) ->
 /// What a running machine really has.
 pub fn in_use_text(found: Option<InUse>) -> String {
     let name = match found {
+        Some(InUse::Cut) => return CUT.to_owned(),
         Some(InUse::Passt) => "passt",
         Some(InUse::Bridge) => "the bridge",
         Some(InUse::Restricted) => "no internet",
@@ -425,6 +431,7 @@ mod tests {
         assert_eq!(in_use_of(&words("user,restrict=on")), Some(InUse::Restricted));
         assert_eq!(in_use_of(&words("user,model=e1000e")), Some(InUse::Slirp));
         assert_eq!(in_use_text(None), "");
+        assert!(in_use_text(Some(InUse::Cut)).contains("Start the machine again"));
     }
 
     #[test]

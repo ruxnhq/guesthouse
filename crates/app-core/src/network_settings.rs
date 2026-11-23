@@ -6,9 +6,10 @@ use crate::library::unused_mac;
 use crate::machine::{Kind, Machine, load_all};
 use crate::network::{self, Forward, InUse, Mode, Protocol};
 use crate::only_through;
-use crate::processes::{qemu_processes, running_vms};
+use crate::processes::running_vms;
 use crate::slots;
 use crate::vm_args::passt_installed;
+use guesthouse_jail::launch::CUT_FILE;
 use std::collections::BTreeMap;
 
 /// The machines running in other slots, as far as the library knows them.
@@ -186,11 +187,16 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
 }
 
 /// What this running machine's network really is, or `None` if it's off. It may not be what the
-/// settings say now: they can change while it runs, and passt can be removed.
+/// settings say now: they can change while it runs, and passt can be removed. A passt held to one
+/// interface has its guard leave a file in the run folder once that interface has gone.
 pub fn network_in_use(context: &Context, machine: &Machine) -> Option<InUse> {
-    let processes = qemu_processes(context);
-    let qemu = processes.iter().find(|qemu| qemu.runs(machine))?;
-    network::in_use_of(&qemu.words)
+    let running = running_vms(context);
+    let (slot, qemu) = running.iter().find(|(_, qemu)| qemu.runs(machine))?;
+    let found = network::in_use_of(&qemu.words)?;
+    let cut = slots::all()
+        .find(|known| known.number() == *slot)
+        .is_some_and(|slot| context.paths.run_folder(slot).join(CUT_FILE).exists());
+    Some(if found == InUse::Passt && cut { InUse::Cut } else { found })
 }
 
 #[cfg(test)]

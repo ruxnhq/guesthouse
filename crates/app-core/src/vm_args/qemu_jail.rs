@@ -12,7 +12,7 @@ use super::{Boot, QemuJail, VmPlan};
 use crate::disk_image::backing::backing_files;
 use crate::failure::{Failure, Result};
 use crate::network::{Mode, Protocol, bridge_helper};
-use guesthouse_jail::launch::{Launch, Passt, Tap, UnixSocket};
+use guesthouse_jail::launch::{self, Launch, Passt, Tap, UnixSocket};
 use guesthouse_jail::{Grant, Network, Plan, Ports, system};
 use std::path::{Path, PathBuf};
 
@@ -217,7 +217,10 @@ impl VmPlan {
             fd: PASST_FD,
             pid_file: self.run_folder.join(super::PASST_PID_FILE),
             words: self.passt_words(),
-            only_through: None,
+            only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
+                interface: through.interface.clone(),
+                cut_file: self.run_folder.join(launch::CUT_FILE),
+            }),
         })
     }
 

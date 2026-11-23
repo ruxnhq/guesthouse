@@ -13,6 +13,7 @@ pub mod actions;
 pub mod agent;
 pub mod bridge;
 pub mod card_choice;
+pub mod card_share;
 pub mod clock;
 pub mod context;
 pub mod daemon;

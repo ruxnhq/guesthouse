@@ -87,7 +87,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 `--lean on` makes a Windows machine as [lean Windows](recipes.md#lean-windows), without the apps Windows adds for every account, and prints all it takes out and switches off first. It's off unless you say so or the recipe turns it on, and `--lean off` turns a recipe's off. `show` says `lean on` for a machine made with it, and `lean NAME` does it again in the running guest.
 
-`--skip-scanning on` has Defender leave out of its real-time scanning the folders the recipe names, and prints what that means first. It's off unless you say it, a recipe can't turn it on, and it needs a recipe that names folders. [Recipes](recipes.md#leaving-folders-out-of-virus-scanning) says what it means and doesn't. `show` says `defender  leaves out` and the folders for as long as it does, and `scan-all NAME` has Defender scan them again.
+`--skip-scanning on` has Defender leave out of its real-time scanning the folders the recipe names, and prints what that means first. It's off unless you say it, a recipe can't turn it on, and it needs a recipe that names folders. [Recipes](recipes.md#leaving-folders-out-of-virus-scanning) says what it means and doesn't. `show` says on its `defender` line which folders Defender leaves out, for as long as it does, and `scan-all NAME` has Defender scan them again.
 
 `remove` says what it would delete, and does it when you add `--yes`. A machine whose disk is outside its folder only loses its entry, and the disk stays.
 

@@ -79,6 +79,8 @@ pub(crate) const UNFINISHED_ENTRIES_LIMIT: u64 = 4000;
 
 /// What the guest's runtime says a Vulkan context is for. Vulkan's video queue families can also
 /// transfer, and it uses them for plain copies, so its contexts on video nodes get copy channels.
+/// Vulkan Video needs the engine's own channel there, which they get on a generation whose profile
+/// says it runs.
 const CLIENT_HINT_VULKAN: u32 = 4;
 
 /// A word in a video context's private data, which we set to one.
@@ -301,7 +303,7 @@ impl<R: Rm> NvidiaBackend<R> {
 
     /// The video engine this work's commands are for, if they are for one.
     pub(crate) fn video_engine(&self, work: &Work<'_>) -> Option<VideoEngine> {
-        if work.client_hint == CLIENT_HINT_VULKAN {
+        if work.client_hint == CLIENT_HINT_VULKAN && !self.generation.nodes.vulkan_video_runs {
             return None;
         }
         let node = self.nodes.get(work.node as usize)?;

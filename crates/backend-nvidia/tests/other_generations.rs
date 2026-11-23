@@ -15,7 +15,7 @@ use guesthouse_backend_nvidia::profile::{
 };
 use guesthouse_backend_nvidia::pushbuffer::{RingEntry, ZERO_EXTENDED_BASE, ring_entry};
 use guesthouse_backend_nvidia::record::card::COPY_ENGINE_CAPS;
-use guesthouse_backend_nvidia::rm::classes::CHANNEL_GROUP;
+use guesthouse_backend_nvidia::rm::classes::{CHANNEL_GROUP, ENGINE_COPY_0};
 use guesthouse_backend_nvidia::rm::device::Device;
 use guesthouse_backend_nvidia::rm::fake::FakeRm;
 use guesthouse_backend_nvidia::rm::fake_card::{FAKE_ADA, FAKE_AMPERE, FAKE_TURING, FakeCard};
@@ -47,6 +47,9 @@ const LIST_OFFSET_FIELD: usize = 0x0C;
 const ENTRIES_FIELD: usize = 0x14;
 const LIST_AT: usize = 0x84;
 const VULKAN_CLIENT: u32 = 4;
+const NO_CLIENT: u32 = 0;
+/// Where a request for a context says what the guest's runtime wants it for.
+const CONTEXT_CLIENT_FIELD: usize = 0x2C;
 const NODE_ENTRY_SIZE: usize = 40;
 const NODE_RECORD_SIZE: usize = 0x110;
 const NODE_COPY_ENGINE_FIELD: usize = 0x0C;
@@ -526,8 +529,14 @@ fn a_guests_first_submission_runs_on_a_channel_of_this_generation() {
 
 /// A hardware queue on a node, and a submission to it with these ring entries as its list.
 fn submit_list(session: &mut Guest, node: u32, entries: &[u64]) -> u32 {
+    submit_list_as(session, NO_CLIENT, node, entries)
+}
+
+/// The same, from a context whose runtime says what it is for.
+fn submit_list_as(session: &mut Guest, client: u32, node: u32, entries: &[u64]) -> u32 {
     let mut request = message(Command::CreateContext, 0x34);
     set_u32(&mut request, 0x20, node);
+    set_u32(&mut request, CONTEXT_CLIENT_FIELD, client);
     let context = u32_at(&send(session, &request), 0x18).unwrap();
     assert_ne!(context, 0, "node {node} takes a context");
     let mut request = message(Command::CreateHardwareQueue, 0x44 + 0x80);
@@ -554,13 +563,15 @@ fn group_engines(session: &Guest) -> Vec<u32> {
         .collect()
 }
 
+/// Ampere's decoder and encoder: the node, the RM's engine and the class of a channel on it.
+const AMPERE_VIDEO: [(u32, u32, u32); 2] = [
+    (AMPERE_DECODE_NODE, RM_DECODER, AMPERE.video_decode_class),
+    (AMPERE_ENCODE_NODE, RM_ENCODER, AMPERE.video_encode_class),
+];
+
 #[test]
 fn work_on_amperes_decoder_and_encoder_runs_on_that_engine_with_amperes_class() {
-    let video = [
-        (AMPERE_DECODE_NODE, RM_DECODER, AMPERE.video_decode_class),
-        (AMPERE_ENCODE_NODE, RM_ENCODER, AMPERE.video_encode_class),
-    ];
-    for (node, engine, class) in video {
+    for (node, engine, class) in AMPERE_VIDEO {
         let mut session = guest_on(&FAKE_AMPERE);
         submit_list(&mut session, node, &[ring_entry(0x1000, 4)]);
         assert!(group_engines(&session).contains(&engine), "node {node}");
@@ -569,6 +580,31 @@ fn work_on_amperes_decoder_and_encoder_runs_on_that_engine_with_amperes_class() 
         assert!(rm.allocated().any(|(made, _)| made == AMPERE.channel_class));
         assert_eq!(rm.doorbells().len(), 1);
     }
+}
+
+/// Vulkan Video's commands are the decoder's and the encoder's, which a copy engine refuses.
+#[test]
+fn vulkans_work_on_amperes_decoder_and_encoder_runs_on_that_engine_too() {
+    for (node, engine, class) in AMPERE_VIDEO {
+        let mut session = guest_on(&FAKE_AMPERE);
+        submit_list_as(&mut session, VULKAN_CLIENT, node, &[ring_entry(0x1000, 4)]);
+        assert!(group_engines(&session).contains(&engine), "node {node}");
+        assert!(!group_engines(&session).contains(&ENGINE_COPY_0), "node {node}");
+        let rm = &session.backend().device().rm;
+        assert!(rm.allocated().any(|(made, _)| made == class), "{class:#x}");
+        assert_eq!(rm.doorbells().len(), 1);
+    }
+}
+
+#[test]
+fn only_amperes_profile_gives_vulkan_the_video_engines() {
+    let generations = [&BLACKWELL, &ADA, &AMPERE, &TURING];
+    let given: Vec<&str> = generations
+        .iter()
+        .filter(|generation| generation.nodes.vulkan_video_runs)
+        .map(|generation| generation.name)
+        .collect();
+    assert_eq!(given, [AMPERE.name]);
 }
 
 /// NVENC through CUDA starts its lists this way, on the encoder's queue and on a copy queue, and

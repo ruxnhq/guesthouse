@@ -58,14 +58,19 @@ static void test_parse(void)
     assert(!rmargs_parse(&c, RM_CMD(ESC_XFER, 16), data, 64, NULL, 0));
 }
 
-static int control_of_size(uint32_t cmd, uint32_t size)
+static int control_of_size_in(uint32_t cmd, uint32_t size, uint32_t len)
 {
     struct nvfwd_fix fix = { NVFWD_FIX_PTR, RM_CONTROL_PARAMS, 64, 0 };
 
     memset(data, 0, sizeof(data));
     put32(RM_CONTROL_CMD, cmd);
     put32(RM_CONTROL_PARAMS_SIZE, size);
-    return walk(RM_CMD(ESC_RM_CONTROL, 32), 192, &fix, 1);
+    return walk(RM_CMD(ESC_RM_CONTROL, 32), len, &fix, 1);
+}
+
+static int control_of_size(uint32_t cmd, uint32_t size)
+{
+    return control_of_size_in(cmd, size, 192);
 }
 
 /* Nobody can read what this control does, so its size is the one thing known about it. */
@@ -79,6 +84,97 @@ static void test_a_pinned_control_goes_at_its_size_only(void)
     }
     /* Others aren't held to it. */
     assert(control_of_size(0x20800110u, 100) == 1);
+}
+
+/* What the CUDA runtime asks before its first call returns. None of it can carry a pointer. */
+static const struct { uint32_t cmd, size; } cuda_runtime_controls[] = {
+    { 0x20802209u, 4 },   /* NV2080_CTRL_CMD_RC_GET_WATCHDOG_INFO */
+    { 0x20809001u, 8 },   /* no public name */
+    { 0x2080a026u, 532 }, /* no public name */
+};
+
+static void test_the_cuda_runtimes_controls_go_at_their_sizes_only(void)
+{
+    static const uint32_t wrong[] = { 0, 1, 3, 5, 7, 9, 16, 64, 531, 533, 1024, UINT32_MAX };
+
+    for (size_t i = 0; i < sizeof(cuda_runtime_controls) / sizeof(cuda_runtime_controls[0]); i++) {
+        uint32_t cmd = cuda_runtime_controls[i].cmd, size = cuda_runtime_controls[i].size;
+
+        assert(control_of_size_in(cmd, size, 64 + size) == 1);
+        for (size_t j = 0; j < sizeof(wrong) / sizeof(wrong[0]); j++) {
+            if (wrong[j] != size) {
+                assert(control_of_size_in(cmd, wrong[j], sizeof(data)) == -EINVAL);
+            }
+        }
+    }
+}
+
+/* The host only ever reads the device's own bytes for the two controls nobody can read. */
+static void test_an_owned_control_carries_only_the_devices_bytes(void)
+{
+    static const uint32_t question[][2] = { { 0, 0x400 }, { 16, 2 }, { 20, 1 }, { 36, 0x10 } };
+    uint8_t params[532], before[532];
+
+    /* NVIDIA's library leaves the rest of the block as it found it: here, the guest's leftovers. */
+    memset(params, 0xab, sizeof(params));
+    for (size_t i = 0; i < 4; i++) {
+        memcpy(params + question[i][0], &question[i][1], 4);
+    }
+    assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == 1);
+    for (uint32_t at = 0; at < sizeof(params); at++) {
+        uint8_t want = 0;
+        for (size_t i = 0; i < 4; i++) {
+            if (at >= question[i][0] && at < question[i][0] + 4) {
+                want = ((const uint8_t *)&question[i][1])[at - question[i][0]];
+            }
+        }
+        assert(params[at] == want);
+    }
+
+    /* Any other question goes nowhere, and the block is left alone. */
+    for (size_t i = 0; i < 4; i++) {
+        uint32_t other = question[i][1] + 1;
+
+        memcpy(before, params, sizeof(params));
+        memcpy(before + question[i][0], &other, 4);
+        memcpy(params, before, sizeof(params));
+        assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == -1);
+        assert(!memcmp(params, before, sizeof(params)));
+        memcpy(params + question[i][0], &question[i][1], 4);
+    }
+    assert(rmargs_own_request(0x2080a026u, params, 531) == -1);
+    assert(rmargs_own_request(0x2080a026u, NULL, sizeof(params)) == -1);
+
+    memset(params, 0xab, 8);
+    assert(rmargs_own_request(0x20809001u, params, 8) == 1);
+    for (uint32_t at = 0; at < 8; at++) {
+        assert(params[at] == 0);
+    }
+    assert(rmargs_own_request(0x20809001u, params, 4) == -1);
+
+    /* What libcuda 620.73.04 really sent, leftovers and all, recorded on the host. */
+    static const uint8_t recorded[] = {
+        0x00, 0x04, 0x00, 0x00, 0x00, 0x61, 0x2f, 0x30, 0x00, 0x00, 0x00, 0x00, 0x30, 0x30, 0x30, 0x3a, 0x02, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x34, 0x3a,
+        0x30, 0x30, 0x2e, 0x30, 0x2f, 0x76, 0x72, 0x61, 0x6d, 0x20, 0x34, 0x33, 0x30, 0x38, 0x39, 0x39, 0x32, 0x0a,
+    };
+    memset(params, 0, sizeof(params));
+    memcpy(params, recorded, sizeof(recorded));
+    assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == 1);
+    for (uint32_t at = 52; at < sizeof(params); at++) {
+        assert(params[at] == 0);
+    }
+    memset(params, 0, sizeof(params));
+    memcpy(params, recorded, 52); /* the same call without leftovers past the question */
+    memset(params + 4, 0, 12);
+    assert(rmargs_own_request(0x2080a026u, params, sizeof(params)) == 1);
+
+    /* A control with a public layout keeps the guest's parameters. */
+    memset(params, 0xab, sizeof(params));
+    assert(rmargs_own_request(0x20802209u, params, 4) == 0);
+    assert(rmargs_own_request(0x20800110u, params, 100) == 0);
+    assert(params[0] == 0xab && params[99] == 0xab);
 }
 
 static void test_xfer_points_at_what_was_read(void)
@@ -276,6 +372,8 @@ int main(void)
 {
     test_parse();
     test_a_pinned_control_goes_at_its_size_only();
+    test_the_cuda_runtimes_controls_go_at_their_sizes_only();
+    test_an_owned_control_carries_only_the_devices_bytes();
     test_xfer_points_at_what_was_read();
     test_control();
     test_alloc_and_memory();

@@ -216,3 +216,6 @@ ctrl 0x801f02 NV0080_CTRL_CMD_NVJPG_GET_CAPS_V2 video encoding reads what the ca
 ctrl 0x2080016c NV2080_CTRL_CMD_GPU_GET_ENCODER_CAPACITY video encoding asks how much it may use. Read only, no pointers
 ctrl 0x20808163 no public name. NVENC won't open a session without the driver's own answer. The device forwards it at 4 bytes and no other size
 class 0x2 NV01_CONTEXT_DMA video encoding wants a window on its own memory. The same object as RM_ALLOC_CONTEXT_DMA2 makes
+ctrl 0x20802209 NV2080_CTRL_CMD_RC_GET_WATCHDOG_INFO the CUDA runtime reads it as it starts. Read only, one NvU32 the driver writes, and the device forwards it at 4 bytes and no other size
+ctrl 0x20809001 no public name. The CUDA runtime won't start without the driver's answer. The device sends its own copy of the one question NVIDIA's library asks, at 8 bytes, never the guest's bytes
+ctrl 0x2080a026 no public name. The CUDA runtime won't start without the driver's answer. The device sends its own copy of the one question NVIDIA's library asks, at 532 bytes, never the guest's bytes

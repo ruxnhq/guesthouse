@@ -9250,3 +9250,136 @@ index a92c67a..bfb7bc6 100644
 -- 
 2.47.3
 
+From e3fc6d30693b673ca2c40e9982f49c795a9a67b2 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 11:45:55 -0800
+Subject: [PATCH 33/33] hw/misc/nvfwd: let the CUDA runtime ask what it needs
+ to start
+
+The CUDA runtime stops with "initialization error" unless three controls
+succeed. RC_GET_WATCHDOG_INFO is public, one NvU32 the driver writes, and
+goes at its 4 bytes only. The other two have no public layout, so the host
+never reads the guest's bytes for them: the guest has to ask the one
+question NVIDIA's own library was seen to ask, and the device sends its
+own copy of that question, with every other byte zero.
+---
+ hw/misc/nvfwd/forward.c |  7 +++++++
+ hw/misc/nvfwd/nvfwd.h   |  2 +-
+ hw/misc/nvfwd/rmargs.c  | 44 +++++++++++++++++++++++++++++++++++++++++
+ hw/misc/nvfwd/rmargs.h  |  7 +++++++
+ 4 files changed, 59 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 17ae253..af201b6 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -425,6 +425,13 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+         memcpy(&params, arg + RM_CONTROL_PARAMS, 8);
+         memcpy(&params_size, arg + RM_CONTROL_PARAMS_SIZE, 4);
+         /* By now this pointer is ours or null, and fits the size it claims. */
++        if (rmargs_own_request(cmd, (uint8_t *)(uintptr_t)params, params_size) < 0) {
++            uint32_t st = STATUS_NOT_SUPPORTED;
++            note_once(s, "REFUSED", "question in ctrl", KEY(K_QUESTION, cmd), cmd);
++            memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++            r->ret = 0;
++            return;
++        }
+         if (cmd == 0x906f0101 && params && params_size >= sizeof(hobj)) { /* which engine owns this object? */
+             memcpy(&hobj, (const void *)params, sizeof(hobj));
+             if (objects_is_local(s->objects, hclient, hobj)) {
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index 8812830..e230825 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -94,7 +94,7 @@ struct NvfwdState {
+ };
+ 
+ enum { K_IOCTL = 1, K_CTRL = 2, K_CLASS = 3, K_UVM = 4, K_MEMCLASS = 5, K_EMUCTRL = 6, K_LIMIT = 7, K_CLIENT = 8,
+-       K_CARD = 9 };
++       K_CARD = 9, K_QUESTION = 10 };
+ 
+ #define KEY(kind, value) (((uint64_t)(kind) << 32) | (uint32_t)(value))
+ 
+diff --git a/hw/misc/nvfwd/rmargs.c b/hw/misc/nvfwd/rmargs.c
+index f4b7979..1ccfbaa 100644
+--- a/hw/misc/nvfwd/rmargs.c
++++ b/hw/misc/nvfwd/rmargs.c
+@@ -42,6 +42,25 @@ struct control_size {
+ };
+ static const struct control_size pinned_controls[] = {
+     { 0x20808163, 4 },
++    { 0x20802209, 4 },   /* NV2080_CTRL_CMD_RC_GET_WATCHDOG_INFO, which is public: one NvU32 out */
++    { 0x20809001, 8 },   /* the CUDA runtime's, see owned_requests */
++    { 0x2080a026, 532 }, /* likewise */
++};
++
++/*
++ * Controls with no public layout that the CUDA runtime won't start without. The host never reads the
++ * guest's bytes for them: the guest has to ask the one question NVIDIA's own library was seen to ask,
++ * and the device sends that question, written by the device, in its place. Bytes not named here are
++ * zero on the way to the host. Seen from libcuda 620.73.04 on an RTX 5090.
++ */
++#define OWNED_FIELDS_MAX 4
++struct owned_request {
++    uint32_t cmd, size, nfields;
++    struct { uint32_t at, value; } field[OWNED_FIELDS_MAX];
++};
++static const struct owned_request owned_requests[] = {
++    { 0x20809001, 8, 0, { { 0, 0 } } },
++    { 0x2080a026, 532, 4, { { 0, 0x400 }, { 16, 2 }, { 20, 1 }, { 36, 0x10 } } },
+ };
+ 
+ struct class_size {
+@@ -175,6 +194,31 @@ static bool size_allowed(uint32_t cmd, uint32_t size)
+     return true;
+ }
+ 
++int rmargs_own_request(uint32_t cmd, uint8_t *params, uint32_t size)
++{
++    for (size_t i = 0; i < ARRAY_LENGTH(owned_requests); i++) {
++        const struct owned_request *o = &owned_requests[i];
++
++        if (o->cmd != cmd) {
++            continue;
++        }
++        if (!params || size != o->size) {
++            return -1;
++        }
++        for (uint32_t f = 0; f < o->nfields; f++) {
++            if (read32(params + o->field[f].at) != o->field[f].value) {
++                return -1;
++            }
++        }
++        memset(params, 0, size);
++        for (uint32_t f = 0; f < o->nfields; f++) {
++            memcpy(params + o->field[f].at, &o->field[f].value, sizeof(uint32_t));
++        }
++        return 1;
++    }
++    return 0;
++}
++
+ static void walk_control(Walk *w)
+ {
+     const RmCall *c = w->call;
+diff --git a/hw/misc/nvfwd/rmargs.h b/hw/misc/nvfwd/rmargs.h
+index 68d413a..cc41fe4 100644
+--- a/hw/misc/nvfwd/rmargs.h
++++ b/hw/misc/nvfwd/rmargs.h
+@@ -50,6 +50,13 @@ int rmargs_fields(const RmCall *call, RmField *fields, int *matched);
+ int rmargs_uvm_fields(uint32_t cmd, uint32_t len, const struct nvfwd_fix *fix, uint32_t nfix,
+                       RmField *fields, int *matched);
+ 
++/*
++ * For a control whose parameters no public source describes, puts the device's own copy of the one
++ * question it may ask in place of the guest's. 0: not such a control. 1: `params` now holds only the
++ * device's bytes. -1: the guest asked something else, or at another size, so the call goes no further.
++ */
++int rmargs_own_request(uint32_t cmd, uint8_t *params, uint32_t size);
++
+ /*
+  * Reads calls as the host's driver at `version` will, which is "615.78.08" or the like. False for
+  * a branch this device has no tables for, whose calls it can't read safely.
+-- 
+2.56.1
+

@@ -171,6 +171,22 @@ fn what_was_noted_is_kept_by_a_snapshot_and_a_snapshot_from_before_leaves_notes_
     assert!(!state_file(&context, &machine).exists());
 }
 
+#[test]
+fn going_back_to_before_a_recipes_steps_says_they_have_not_run() {
+    use crate::recipe::{Outcome, read_outcome, write_outcome};
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows(&context, &scratch);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "go_back", machine.clone());
+    write_outcome(&context, &machine, &Outcome::Pending).unwrap();
+    take_snapshot(&mut task, "Before the steps").unwrap();
+    let tag = list_snapshots(&context, &machine)[0].tag.clone();
+    write_outcome(&context, &machine, &Outcome::Done).unwrap();
+    go_back(&mut task, &tag).unwrap();
+    assert_eq!(read_outcome(&context, &machine), Outcome::Pending, "the disk has nothing they installed");
+}
+
 fn read_identity_shown(context: &Context, machine: &Machine) -> bool {
     crate::gpu_identity::read_state(context, machine).shown == Shown::Maker
 }

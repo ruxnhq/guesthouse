@@ -10,6 +10,7 @@ use crate::failure::Result;
 use crate::gpu_identity;
 use crate::intel_desktop;
 use crate::machine::Machine;
+use crate::recipe;
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs;
@@ -24,6 +25,7 @@ fn files(context: &Context, machine: &Machine) -> Vec<PathBuf> {
         trial,
         refused,
         intel_desktop::device_off_file(context, machine),
+        machine.folder(context).join(recipe::OUTCOME_FILE),
     ]
 }
 

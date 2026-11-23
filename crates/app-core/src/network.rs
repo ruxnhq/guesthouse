@@ -5,7 +5,7 @@ use crate::random::random_bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::net::{TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::path::Path;
 
 pub const MOST_PORT: u32 = 65535;
@@ -300,6 +300,20 @@ pub fn bridge_name_problem(bridge: &str) -> Option<String> {
     (!good).then(|| "A bridge's name is up to 15 letters, digits, dots, dashes or underscores.".into())
 }
 
+/// The interface's name goes to passt as a word of its own and to the launcher, so it must not hold
+/// a space or a slash, and an empty one means the setting is off.
+pub fn interface_name_problem(name: &str) -> Option<String> {
+    let allowed = |byte: u8| byte.is_ascii_graphic() && !b",/".contains(&byte);
+    let good = name.is_empty() || ((1..=MOST_BRIDGE_NAME).contains(&name.len()) && name.bytes().all(allowed));
+    (!good).then(|| "An interface's name is up to 15 characters, with no spaces, commas or slashes.".into())
+}
+
+/// Why this can't be the DNS server of a machine that goes out through one interface. Empty finds one.
+pub fn dns_problem(address: &str) -> Option<String> {
+    let good = address.is_empty() || address.parse::<Ipv4Addr>().is_ok();
+    (!good).then(|| "A DNS server is an IPv4 address, like 10.64.0.1.".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +427,24 @@ mod tests {
     fn a_comma_cannot_reach_qemus_options() {
         assert!(bridge_name_problem("br0,helper=/tmp/x").unwrap().contains("up to 15"));
         assert_eq!(bridge_name_problem("br0"), None);
+    }
+
+    #[test]
+    fn an_interface_name_is_empty_or_one_the_kernel_and_passt_take() {
+        for name in ["", "wg0", "tun0", "proton0", "wlan0.5"] {
+            assert_eq!(interface_name_problem(name), None, "{name}");
+        }
+        for name in ["wg 0", "wg0,x", "../wg0", "a-name-that-is-too-long"] {
+            assert!(interface_name_problem(name).unwrap().contains("up to 15"), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_dns_server_is_an_ipv4_address_or_left_to_be_found() {
+        assert_eq!(dns_problem(""), None);
+        assert_eq!(dns_problem("10.64.0.1"), None);
+        for text in ["fc00::1", "one.one.one.one", "10.64.0.256", "10.64.0.1 "] {
+            assert!(dns_problem(text).unwrap().contains("IPv4"), "{text}");
+        }
     }
 }

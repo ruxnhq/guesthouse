@@ -51,6 +51,8 @@ Direct3D 11 in a window had the same copy, because Windows only spares it for pr
 
 Encoding through ffmpeg comes out clean too: 300 frames each of H.264, HEVC and AV1, with 0 errors, and the worst frame around 43 dB against the source. NVENC stops at the card's session limit, the same as it does natively.
 
+A program that asks Media Foundation for a hardware encoder finds NVIDIA's too. The driver's INF registers them on a PC, and a guest never installs it, so each start registers what that INF asks for the machine's card. With them registered, ffmpeg's `h264_mf` and `hevc_mf` encoded on an RTX 3080 Ti with driver 617.42 in Windows, 60 frames of 60.
+
 ### Windows on AMD
 
 This is experimental. These numbers are from the integrated RDNA2 Radeon in the same Ryzen, with AMD's driver 32.0.21045.20006 in Windows. The same pixel tests pass there: the Direct3D 11 triangle matches WARP exactly, and Vulkan and OpenGL windows come out with 0 wrong pixels. There's no hardware video decode yet. On a tester's RX 9070 XT, Superposition at 720p Low went from 21,920 to 36,903 with the speed work in 0.5.2, and 4K Optimized reaches 72% of the same card on the host. More in [AMD](amd.md).

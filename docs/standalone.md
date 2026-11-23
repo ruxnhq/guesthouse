@@ -150,7 +150,7 @@ Guesthouse does more than start two processes. After Windows answers, the app:
 - decides which vendor ID the render device shows, and restarts Windows once if that changed. The printed command shows the one the app last left for the machine;
 - sets the desktop's size and refresh rate on the display driver at each boot. The refresh rate doesn't survive a restart of Windows;
 - connects the shared folder, if the machine has one;
-- puts NVIDIA's driver files and settings store into Windows when they're missing.
+- puts NVIDIA's driver files and settings store into Windows when they're missing, and registers its Media Foundation transforms.
 
 None of that happens on this route. A machine Guesthouse has started before keeps what it put in Windows, so it should come up the same. A change you make to the machine, such as a new size, isn't applied.
 

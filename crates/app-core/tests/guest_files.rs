@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 23] = [
+const SENT_TO_THE_GUEST: [&str; 24] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "api-check.ps1",
@@ -20,6 +20,7 @@ const SENT_TO_THE_GUEST: [&str; 23] = [
     "files.ps1",
     "finish.ps1",
     "nv-files.ps1",
+    "nv-media-foundation.ps1",
     "nv-profiles.ps1",
     "nvme-ready.ps1",
     "setmode.ps1",
@@ -54,6 +55,31 @@ fn the_window_speed_script_removes_only_its_own_entries() {
     assert!(removals[1].contains("SubKeyCount -eq 0") && removals[1].contains("ValueCount -eq 0"));
     assert!(script.contains("$_.FullName -ne $windows"), "Windows' own folder gets no entry");
     assert!(script.contains("WOW6432Node"), "a 32-bit program reads its own copy of the key");
+}
+
+/// Which transforms NVIDIA's driver has for a card, what they're called and which files they're in
+/// is the driver's to say, and the user brings the driver. The script holds none of that: it reads
+/// the INF in the guest, for the card the host names, and writes only through the one function that
+/// takes an entry read from it.
+#[test]
+fn the_transforms_script_registers_only_what_the_drivers_inf_asks_for() {
+    let script = fs::read_to_string(guest_file("nv-media-foundation.ps1")).unwrap();
+    let code: Vec<&str> = script.lines().filter(|line| !line.trim_start().starts_with('#')).collect();
+    let id = regex::Regex::new("[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}").unwrap();
+    for line in &code {
+        assert!(!id.is_match(line), "a transform's ID is in the script: {line}");
+        assert!(!line.to_lowercase().contains(".dll"), "a driver file is named in the script: {line}");
+    }
+    assert!(script.contains("[IO.File]::ReadAllLines($inf,"));
+    assert!(script.trim_end().ends_with("\nRegister-Transforms $store $card"));
+    assert!(!script.contains("$card ="), "the card is the host's to name");
+    let writes: Vec<&&str> = code.iter().filter(|line| line.contains(".SetValue(")).collect();
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert!(writes.iter().all(|line| line.contains("$key.SetValue($entry.Name, ")), "{writes:?}");
+    assert_eq!(script.matches("Write-Entry $entry").count(), 1, "only an entry from the INF is written");
+    for removal in ["Remove-Item", "DeleteSubKey", "DeleteValue"] {
+        assert!(!script.contains(removal), "nothing in the registry is removed: {removal}");
+    }
 }
 
 /// The helper for dragged files listens on the guest's network, so both the firewall rule and the

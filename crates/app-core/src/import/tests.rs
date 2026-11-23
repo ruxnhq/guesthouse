@@ -8,6 +8,15 @@ use crate::testing::{Scratch, scratch_context};
 use crate::token_change::next_token_file;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+/// A PC with sixteen cores and 64 GiB, whatever the one the test runs on has, so a machine comes
+/// across with the cores and RAM it had and no note about them.
+fn roomy_pc(scratch: &Scratch) -> Context {
+    let mut context = scratch_context(scratch);
+    context.cpus = crate::host::stand_in::fake_cpus(scratch, "cpus", &[32768; 32]);
+    context.meminfo = scratch.write("meminfo", "MemTotal: 67108864 kB\nMemAvailable: 60000000 kB\n");
+    context
+}
+
 fn imported(context: &Context, file: &Path, name: Option<&str>) -> Result<Imported> {
     import(context, file, name, &mut |_| {})
 }
@@ -57,7 +66,7 @@ fn nothing_left(context: &Context) {
 #[test]
 fn a_machine_exported_on_one_pc_is_whole_on_another() {
     let (here, there) = (Scratch::new(), Scratch::new());
-    let (from, to) = (scratch_context(&here), scratch_context(&there));
+    let (from, to) = (roomy_pc(&here), roomy_pc(&there));
     let machine = exportable(&here, &from);
     let kept = machine.folder(&from).join("snapshots");
     let display = serde_json::to_string(&crate::display::DisplayState::default()).unwrap();
@@ -112,7 +121,7 @@ fn a_machine_exported_on_one_pc_is_whole_on_another() {
 #[test]
 fn settings_that_name_this_pc_are_never_taken_from_an_export() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let settings = Machine {
         disk: "/etc/shadow".into(),
         vars: "/home/someone/vars.fd".into(),
@@ -158,7 +167,7 @@ fn settings_that_name_this_pc_are_never_taken_from_an_export() {
 #[test]
 fn a_disk_that_reaches_past_itself_is_refused() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let secret = scratch.write("secret.img", vec![1; 4096]);
     let backed = qcow2(&scratch, "backed", &["-F", "raw", "-b", &secret.display().to_string()]);
     let file = crafted(&scratch, &plain_settings(), &[("vars.fd", b"v".to_vec()), (DISK_FILE, backed)]);
@@ -178,7 +187,7 @@ fn a_disk_that_reaches_past_itself_is_refused() {
 #[test]
 fn a_snapshot_whose_name_would_lead_out_of_the_folder_is_refused() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let disk = scratch.path("snapped.qcow2");
     assert!(
         Command::new("qemu-img")
@@ -209,7 +218,7 @@ fn a_snapshot_whose_name_would_lead_out_of_the_folder_is_refused() {
 #[test]
 fn a_file_named_outside_the_folder_said_twice_or_cut_short_leaves_nothing() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let disk = qcow2(&scratch, "d", &[]);
     let mut evil = crafted(&scratch, &plain_settings(), &[("vars.fd", b"v".to_vec())]);
     let mut bytes = fs::read(&evil).unwrap();
@@ -237,7 +246,7 @@ fn a_file_named_outside_the_folder_said_twice_or_cut_short_leaves_nothing() {
 #[test]
 fn a_token_or_password_that_is_not_the_apps_is_left_out() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let files = [
         ("vars.fd", b"v".to_vec()),
         ("guest.token", b"abc\n$(rm -rf ~)\n".to_vec()),
@@ -266,7 +275,7 @@ fn a_token_or_password_that_is_not_the_apps_is_left_out() {
 #[test]
 fn windows_for_a_maker_this_pc_has_no_card_of_is_refused_plainly() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let mut settings = Machine::new("", "Radeon", DISK_FILE, FIRMWARE_FILE);
     settings.use_windows_card(GpuMaker::Amd, "0000:03:00.0");
     let file =
@@ -278,7 +287,7 @@ fn windows_for_a_maker_this_pc_has_no_card_of_is_refused_plainly() {
 #[test]
 fn what_is_not_an_export_is_said_so() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let zip = scratch.write("photos.zip", "PK\x03\x04");
     assert!(imported(&context, &zip, None).unwrap_err().0.contains("not a machine exported"));
     let missing = scratch.path("gone.guesthouse");
@@ -301,7 +310,7 @@ fn imported_notes(context: &Context, file: &Path) -> Vec<String> {
 #[test]
 fn any_qcow2_in_an_export_is_checked_before_qemu_img_opens_it() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let secret = scratch.write("secret.img", vec![1; 4096]);
     let backed = qcow2(&scratch, "backed", &["-F", "raw", "-b", &secret.display().to_string()]);
     let settings = Machine { opencore: "opencore.qcow2".into(), ..plain_settings() };
@@ -315,7 +324,7 @@ fn any_qcow2_in_an_export_is_checked_before_qemu_img_opens_it() {
 #[test]
 fn only_files_the_app_knows_are_written_and_each_is_checked_or_made_again() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let context = roomy_pc(&scratch);
     let files = [
         ("vars.fd", b"v".to_vec()),
         ("remote-access.json", br#"{"ssh": true, "remote_desktop": true}"#.to_vec()),

@@ -15,6 +15,8 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::log::read_log;
 use crate::machine::{Kind, Machine, load_all};
+use crate::network::{self, InUse};
+use crate::network_settings::network_in_use;
 use crate::setup::checks::machine_gpu_warning;
 use crate::slots;
 use crate::tasks::{State, Status, launch, status, still_working};
@@ -170,6 +172,11 @@ fn show_status(context: &Context, machine: &Machine, out: &mut dyn Write) -> Res
     ];
     for note in notes.into_iter().filter(|note| !note.is_empty()) {
         writeln!(out, "{note}")?;
+    }
+    // A machine held to one interface that has gone still runs, with no network.
+    let in_use = found.slot.and_then(|_| network_in_use(context, machine));
+    if in_use == Some(InUse::Cut) {
+        writeln!(out, "{}", network::in_use_text(in_use))?;
     }
     Ok(())
 }

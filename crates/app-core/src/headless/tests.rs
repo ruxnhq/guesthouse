@@ -156,6 +156,24 @@ fn status_shows_the_state_and_what_is_wrong() {
 }
 
 #[test]
+fn status_says_when_a_machine_held_to_an_interface_had_its_network_cut() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = make(&context, "work", "Office PC", Kind::Plain);
+    let qemu = context.paths.qemu.display().to_string();
+    let monitor = format!("unix:{}/qmp.sock,server=on", context.run_folder(None).display());
+    let disk = format!("file={},format=qcow2", machine.disk);
+    let words = [&qemu, "-qmp", &monitor, &disk, "-nic", "socket,model=e1000e,fd=11"];
+    fake_process(&context, 40, &words, &[], "");
+    assert!(!said(&context, "status work").0.contains("network is cut"));
+    let run_folder = context.run_folder(None);
+    std::fs::create_dir_all(&run_folder).unwrap();
+    std::fs::write(run_folder.join("network-cut"), "wg0 went away\n").unwrap();
+    let (out, _) = said(&context, "status work");
+    assert!(out.contains("State: Running") && out.contains("Its network is cut"), "{out}");
+}
+
+#[test]
 fn every_step_is_said_even_one_that_comes_and_goes_between_two_looks() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);

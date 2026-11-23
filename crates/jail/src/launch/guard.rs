@@ -30,6 +30,8 @@ use std::process::{Command, Stdio};
 pub const GUARD: &str = "--only-through-guard";
 /// This program, whatever it's called and wherever it is.
 const SELF: &str = "/proc/self/exe";
+/// What the guard is called in a list of processes, where the path above would say nothing.
+const NAME: &str = "guesthouse-jail";
 /// What a refused connect tells passt, as the kernel would with no route.
 const REFUSAL: i32 = libc::ENETUNREACH;
 /// The control message that carries one descriptor, with room for its padding.
@@ -168,7 +170,7 @@ pub(super) fn start(only: &OnlyThrough, number: u32, listener: &OwnedFd) -> io::
         _ => {}
     }
     let mut guard = Command::new(SELF);
-    guard.arg(GUARD).arg(&only.interface).arg(number.to_string());
+    guard.arg0(NAME).arg(GUARD).arg(&only.interface).arg(number.to_string());
     guard.arg(listener.as_raw_fd().to_string()).arg(&only.cut_file);
     keep_only(&mut guard, listener.as_raw_fd());
     guard.stdin(Stdio::null()).spawn().map(drop)

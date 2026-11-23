@@ -129,6 +129,12 @@ function Set-PresentMethod {
         if (-not ('GuesthouseDrs' -as [type])) { Add-Type -TypeDefinition $drs -ErrorAction Stop }
         $value = [GuesthouseDrs]::Read($presentSetting)
         $ours = (Get-ItemProperty -LiteralPath $markKey -Name $markName -ea 0).$markName -eq 1
+        if ($ours -and $value -ne $presentValue) {
+            # The user changed it since, or took it out: it's theirs now.
+            Remove-ItemProperty -LiteralPath $markKey -Name $markName -ErrorAction Stop
+            $ours = $false
+            if ($value -ge 0) { return "kept the present method the user set ($value)" }
+        }
         if ($on) {
             if ($value -eq $presentValue) { return "kept the present method" }
             if ($value -ge 0 -and -not $ours) { return "kept the present method the user set ($value)" }

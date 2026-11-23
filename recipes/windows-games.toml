@@ -1,0 +1,12 @@
+name = "Games"
+description = "Windows with room for games, and Steam."
+guest = "windows"
+
+[settings]
+cores = 8
+ram_gib = 16
+disk_gib = 256
+
+[steps]
+# Valve's launcher. Installed by winget, which takes it from Valve.
+packages = ["Valve.Steam"]

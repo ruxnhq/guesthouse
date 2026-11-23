@@ -60,6 +60,7 @@ pub mod payload_install;
 pub mod process_stat;
 pub mod processes;
 pub mod random;
+pub mod recipe;
 pub mod remote_access;
 pub mod render_cards;
 pub mod report;

@@ -37,6 +37,11 @@ const DISPLAY_DRIVER_FOLDER: &str = "display-driver";
 const OPENSSH_INSTALLER: &str = "openssh/OpenSSH-Win64.msi";
 /// A file that tells the repo's guest folder from any other folder of that name.
 const REPO_GUEST_MARK: &str = "setup.ps1";
+/// The recipes that come with the app, and the file that tells the repo's folder of them from another.
+const RECIPES_FOLDER: &str = "recipes";
+const RECIPES_MARK: &str = "README.md";
+/// The user's own recipes, in the app's config folder.
+const YOUR_RECIPES_FOLDER: &str = "recipes";
 const SHARED_MEMORY: &str = "/dev/shm";
 /// Where the system makes each user's runtime folder, named by user id.
 const USER_RUN_FOLDERS: &str = "/run/user";
@@ -107,6 +112,8 @@ pub struct Paths {
     guest: PathBuf,
     /// The sources of a Linux guest. See [`shipped_folder`].
     linux: PathBuf,
+    /// The recipes that come with the app. See [`shipped_folder`].
+    recipes: PathBuf,
     pub home: PathBuf,
     /// The program folder: QEMU and the guest's files. It isn't in this repo, and the app runs plain
     /// VMs without it.
@@ -148,6 +155,7 @@ impl Paths {
         Self {
             guest: shipped_folder(&program, running_from, PROGRAM_MARK, REPO_GUEST_MARK),
             linux: shipped_folder(&program, running_from, SOURCES_FOLDER, SOURCES_MARK),
+            recipes: shipped_folder(&program, running_from, RECIPES_FOLDER, RECIPES_MARK),
             home: variables.home(),
             qemu: variables.folder(QEMU_VARIABLE).unwrap_or_else(|| qemu_program(variables, &program)),
             binaries: running_from.map_or_else(|| program.clone(), Path::to_owned),
@@ -217,6 +225,16 @@ impl Paths {
     /// OpenSSH's installer for a Windows guest, if this program folder has it.
     pub fn openssh_installer(&self) -> PathBuf {
         self.program.join(OPENSSH_INSTALLER)
+    }
+
+    /// The recipes that come with the app, which may not be there.
+    pub fn shipped_recipes(&self) -> PathBuf {
+        self.recipes.clone()
+    }
+
+    /// The user's own recipes, a file for each. The folder is theirs to make.
+    pub fn your_recipes(&self) -> PathBuf {
+        self.config.join(YOUR_RECIPES_FOLDER)
     }
 
     /// The sources of a Linux guest.

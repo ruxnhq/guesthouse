@@ -68,7 +68,7 @@ const NOT_INSTALLED: &str = "Its install has not finished.";
 const ASK_AGAIN: &str = "Run it again with --yes to go on.";
 
 /// Snapshots change only while the machine is off, with nothing at work on it, and installed, as on
-/// the app's page.
+/// the app's page. A throwaway's run is the machine running.
 fn can_change(context: &Context, machine: &Machine) -> Result<()> {
     if machine.installing {
         return Err(Failure::new(NOT_INSTALLED));

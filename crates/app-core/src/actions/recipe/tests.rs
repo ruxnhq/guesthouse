@@ -288,6 +288,23 @@ fn a_machine_left_off_keeps_its_steps_waiting() {
 }
 
 #[test]
+fn an_install_on_a_throwaway_leaves_its_steps_waiting_and_says_why() {
+    let scratch = Scratch::new();
+    let mut context = windows_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::default());
+    context.agent = agent.clone();
+    let recipe = chosen("windows", &["Git.Git"], None);
+    let vm = Machine { throwaway: true, ..windows_machine(&context, &recipe) };
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "install", vm.clone());
+    after_install(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty(), "nothing goes into a run that is thrown away");
+    assert!(task.error.contains("a throwaway loses what they install"), "{}", task.error);
+    assert_eq!(crate::recipe::read_outcome(&context, &vm), Outcome::Pending);
+    assert!(crate::recipe::summary(&context, &vm).unwrap().ends_with("gone when it shuts down."));
+}
+
+#[test]
 fn running_again_needs_a_machine_that_is_installed_and_running() {
     let scratch = Scratch::new();
     let context = plain_task_context(&scratch);

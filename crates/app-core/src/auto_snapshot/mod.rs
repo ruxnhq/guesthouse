@@ -58,9 +58,14 @@ pub fn disk_can_hold(machine: &Machine) -> bool {
     disk_info(&machine.disk).is_ok_and(|info| info["format"] == "qcow2")
 }
 
-/// Whether the machine takes automatic snapshots at all: the kinds with a start that changes Windows.
+/// Why a throwaway takes none: what a start changes is gone when it stops, so there is nothing to go
+/// back from, and its disk is the clean state, which a snapshot of a run's notes would not match.
+pub const NOT_FOR_THROWAWAY: &str = "A throwaway starts clean each time, so it takes none.";
+
+/// Whether the machine takes automatic snapshots at all: the kinds with a start that changes Windows,
+/// and only where that change stays.
 pub fn applies_to(machine: &Machine) -> bool {
-    machine.kind == Kind::Windows && !machine.installing
+    machine.kind == Kind::Windows && !machine.installing && !machine.throwaway
 }
 
 /// The snapshot, if one is due. Called as a start begins, with nothing running.

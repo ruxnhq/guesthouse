@@ -337,7 +337,7 @@ fn task_with_room(arguments: &[String]) {
     context.ram_limit = Some(PLENTY_OF_GIB);
     context.reserve_memory = guesthouse_app_core::guest_memory::GuestMemory::sized;
     // The flow reads each task's file, as the app does, so the exit code is left to the real task.
-    let _ = run_task(&context, &LocalHost { context: &context }, action, machine, rest);
+    let _ = run_task(&context, &LocalHost::new(&context), action, machine, rest);
 }
 
 pub fn main() {

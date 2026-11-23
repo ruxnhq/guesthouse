@@ -111,6 +111,8 @@ pub struct Status {
     pub display_problem: String,
     /// What stands in the way of the card maker's vendor ID, or when it comes.
     pub identity_note: String,
+    /// The guest refused its new agent token and still shares the old one with another machine.
+    pub token_note: String,
     /// What the running machine's jail is missing, if anything.
     pub jail_note: String,
     /// Which card a GPU machine runs on, on a PC with more than one NVIDIA card.
@@ -225,6 +227,7 @@ pub fn status_since(context: &Context, machine: &Machine, before: Option<(u8, Se
         found.display_problem = shown.problem(found.state == State::Running).to_owned();
         let identity = read_identity(context, machine);
         found.identity_note = identity.problem(found.state == State::Running).to_owned();
+        found.token_note = crate::token_change::refused_note(context, machine).unwrap_or_default();
         if found.state == State::Off && !found.busy {
             found.restore_point = restore_point(context, machine);
         }

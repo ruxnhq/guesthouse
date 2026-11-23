@@ -100,7 +100,7 @@ fn a_qemu_that_proc_cannot_show_yet_is_still_a_qemu() {
     let (daemon, qemu) = pretend_programs(&scratch, &mut context);
     context.agent = Arc::new(ScriptedAgent::answering(&["", "", "up"]));
     let (machine, plan) = windows_plan(&context);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
     assert_eq!(started, Ok(()));
@@ -113,7 +113,7 @@ fn a_start_that_gives_up_leaves_no_qemu_running() {
     let (daemon, qemu) = pretend_programs(&scratch, &mut context);
     context.agent = Arc::new(ScriptedAgent::answering(&[]));
     let (machine, plan) = windows_plan(&context);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     let left = left_running(&qemu);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
@@ -131,7 +131,7 @@ fn a_daemon_that_stops_during_the_boot_ends_the_start_and_qemu() {
     scratch.program("bin/guesthouse-daemon", daemon);
     context.agent = Arc::new(ScriptedAgent::answering(&[]));
     let (machine, plan) = windows_plan(&context);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     let left = left_running(&qemu);
     end_pretend_program(&qemu);
     let error = started.unwrap_err();
@@ -144,7 +144,7 @@ fn a_plain_qemu_whose_monitor_never_answers_is_not_left_running() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     let (_, qemu) = pretend_programs(&scratch, &mut context);
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let started = host.start(&plan, &machine);
@@ -159,7 +159,7 @@ fn a_second_instance_never_reaches_what_finds_vms_by_program() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.own_run = Some(scratch.path("second"));
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = Machine::new("vm", "VM", "/d", "/v");
     assert!(host.stop(&machine, 1).unwrap_err().0.contains("leaves GPU-PV alone"));
     assert!(host.release().unwrap_err().0.contains("leaves GPU-PV alone"));
@@ -172,7 +172,7 @@ fn a_qemu_that_exits_at_once_says_why() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.program("not-qemu", "#!/bin/sh\necho 'could not open disk' >&2\nexit 1\n");
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let error = host.start(&plan, &machine).unwrap_err();
@@ -187,7 +187,7 @@ fn a_daemon_that_stops_says_why_and_no_qemu_is_started() {
     let marker = scratch.path("qemu-ran");
     context.paths.qemu = scratch.program("not-qemu", &format!("#!/bin/sh\ntouch {}\n", marker.display()));
     scratch.program("bin/guesthouse-daemon", "#!/bin/sh\necho 'no card here'\nexit 1\n");
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = gpu_machine();
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
     let error = host.start(&plan, &machine).unwrap_err();
@@ -208,7 +208,7 @@ fn release_frees_memory_only_when_no_other_vm_has_it() {
         &[],
         &memory.display().to_string(),
     );
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     host.release().unwrap();
     assert!(memory.exists());
     fs::remove_dir_all(context.processes.join("300")).unwrap();
@@ -228,7 +228,7 @@ fn a_passt_left_running_is_ended_at_a_stop() {
     let stat = fs::read_to_string(format!("/proc/{}/stat", passt.id())).unwrap();
     let started = guesthouse_jail::launch::start_time(&stat).unwrap();
     fs::write(&pid_file, format!("{} {started}\n", passt.id())).unwrap();
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let plain = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
     host.stop(&plain, 1).unwrap();
     let ended = passt.try_wait().unwrap().is_some() || {
@@ -278,7 +278,7 @@ fn no_qemu_at_all_says_so() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.path("not-installed");
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     assert!(host.start(&plan, &machine).unwrap_err().0.contains("isn't installed"));
@@ -294,7 +294,7 @@ fn memory_that_doesnt_fit_stops_a_start_before_anything_runs() {
     let daemon = format!("#!/bin/sh\ntouch {}\n", marker.display());
     scratch.program("bin/guesthouse-daemon", &daemon);
     context.paths.qemu = scratch.program("not-qemu", &daemon);
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     let machine = gpu_machine();
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
     assert_eq!(host.start(&plan, &machine).unwrap_err().0, "no room for it");
@@ -325,7 +325,7 @@ fn a_jailed_start_with_a_missing_backing_file_says_so_and_starts_nothing() {
     fs::remove_file(&base).unwrap();
     let machine = Machine::new("vm", "VM", disk.to_str().unwrap(), "/v");
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
-    let refused = LocalHost { context: &context }.start(&plan, &machine).unwrap_err();
+    let refused = LocalHost::new(&context).start(&plan, &machine).unwrap_err();
     assert_eq!(
         refused.0,
         format!("The VM did not start, as its disk is built on {}, which is missing.", base.display())
@@ -352,7 +352,7 @@ fn a_jailed_start_runs_qemu_through_the_launcher_with_a_clean_environment() {
     machine.save(&context).unwrap();
     make_token(&context, &machine).unwrap();
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     // The pretend agent answers at once, so QEMU may not have got far yet.
     left_running(&qemu);
     let environment = fs::read_to_string(&seen).unwrap_or_default();
@@ -372,7 +372,7 @@ fn a_machine_that_cant_be_jailed_doesnt_start_unless_allowed() {
     let (daemon, qemu) = pretend_programs(&scratch, &mut context);
     let machine = Machine::new("vm", "VM", "/d", "/v");
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
-    let refused = LocalHost { context: &context }.start(&plan, &machine).unwrap_err();
+    let refused = LocalHost::new(&context).start(&plan, &machine).unwrap_err();
     assert!(refused.0.contains("can't be jailed"), "{refused}");
     assert_eq!((read_pid(&daemon), read_pid(&qemu)), (None, None), "nothing ran");
 }
@@ -391,7 +391,7 @@ fn a_machine_allowed_to_start_unjailed_tells_the_daemon_and_its_row() {
     scratch.program("bin/guesthouse-daemon", &daemon_program);
     context.agent = Arc::new(ScriptedAgent::answering(&["up"]));
     let (machine, plan) = windows_plan(&context);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     left_running(&qemu);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
@@ -415,7 +415,7 @@ fn a_machine_with_its_sound_off_gets_no_pipewire_and_no_sockets_of_its_own() {
     machine.save(&context).unwrap();
     make_token(&context, &machine).unwrap();
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
-    let started = LocalHost { context: &context }.start(&plan, &machine);
+    let started = LocalHost::new(&context).start(&plan, &machine);
     left_running(&qemu);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
@@ -423,4 +423,71 @@ fn a_machine_with_its_sound_off_gets_no_pipewire_and_no_sockets_of_its_own() {
     let words = fs::read_to_string(&said).unwrap();
     assert!(words.contains("--no-new-unix-sockets"), "{words}");
     assert!(words.contains("none,id=silent") && !words.contains("pipewire"), "{words}");
+}
+
+/// A pretend QEMU that notes what it has open at the throwaway run's first number.
+fn noting_qemu(scratch: &Scratch, context: &mut crate::context::Context) -> (PathBuf, PathBuf, PathBuf) {
+    let (daemon, qemu) = pretend_programs(scratch, context);
+    let noted = scratch.path("overlay-seen");
+    let script = format!(
+        "#!/bin/sh\necho $$ > {}\nreadlink /proc/$$/fd/50 >> {}\nexec sleep {PRETEND_LIFE_SECONDS}\n",
+        qemu.display(),
+        noted.display()
+    );
+    context.paths.qemu = scratch.program("not-qemu", &script);
+    (daemon, qemu, noted)
+}
+
+#[test]
+fn a_throwaway_run_keeps_its_overlay_for_the_task_and_the_next_task_gets_a_new_one() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    let (daemon, qemu, noted) = noting_qemu(&scratch, &mut context);
+    context.agent = Arc::new(ScriptedAgent::answering(&["up", "up", "up"]));
+    let disk = scratch.path("machine-disk/disk.qcow2");
+    fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    assert!(
+        Command::new("qemu-img")
+            .args(["create", "-q", "-f", "qcow2"])
+            .arg(&disk)
+            .arg("1G")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let vars = scratch.write("machine-disk/vars.fd", "settings").display().to_string();
+    let mut machine = Machine { disk: disk.display().to_string(), vars, ..gpu_machine() };
+    machine.save(&context).unwrap();
+    make_token(&context, &machine).unwrap();
+    crate::throwaway::set_throwaway(&context, &mut machine, true).unwrap();
+    crate::throwaway::mark_for_deletion(&machine.folder(&context)).unwrap();
+    let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
+    let seen = |count: usize| {
+        let end = Instant::now() + NOTICE_WITHIN;
+        while Instant::now() < end {
+            let lines: Vec<String> =
+                fs::read_to_string(&noted).unwrap_or_default().lines().map(str::to_owned).collect();
+            if lines.len() >= count {
+                return lines;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("QEMU never noted its overlay");
+    };
+    let task = LocalHost::new(&context);
+    task.start(&plan, &machine).unwrap();
+    let mark = machine.folder(&context).join(crate::throwaway::DELETE_MARK);
+    assert_eq!(fs::read_to_string(mark).unwrap(), "started", "its VM was up");
+    end_pretend_program(&qemu);
+    end_pretend_program(&daemon);
+    task.start(&plan, &machine).unwrap();
+    end_pretend_program(&qemu);
+    end_pretend_program(&daemon);
+    LocalHost::new(&context).start(&plan, &machine).unwrap();
+    end_pretend_program(&qemu);
+    end_pretend_program(&daemon);
+    let lines = seen(3);
+    assert!(lines.iter().all(|line| line.ends_with(" (deleted)")), "{lines:?}");
+    assert_eq!(lines[0], lines[1], "one task, one overlay");
+    assert_ne!(lines[1], lines[2], "a new task, a new one");
 }

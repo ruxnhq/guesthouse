@@ -2,6 +2,7 @@
 //! VM shows, what the display driver is doing and where the disk sits all describe what is inside
 //! Windows (and whether an Intel guest's render device was switched off in it), so after going back to a disk from before a change they must say what that disk holds. A
 //! machine left showing a vendor ID whose driver package the old disk never had starts with no GPU.
+//! A throwaway's disk is its clean state, so its clean notes are the ones kept and put back.
 
 use crate::actions::nvme_state_files;
 use crate::context::Context;
@@ -11,22 +12,29 @@ use crate::gpu_identity;
 use crate::intel_desktop;
 use crate::machine::Machine;
 use crate::recipe;
+use crate::throwaway;
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The notes as they describe the disk.
+/// The notes as they describe the disk. A throwaway's are the clean ones, as its disk is the clean
+/// state and the notes beside its settings are what its last run left.
 fn files(context: &Context, machine: &Machine) -> Vec<PathBuf> {
     let [trial, refused] = nvme_state_files(context, machine);
-    vec![
+    let notes = [
         gpu_identity::state_file(context, machine),
         display::state_file(context, machine),
         trial,
         refused,
         intel_desktop::device_off_file(context, machine),
         machine.folder(context).join(recipe::OUTCOME_FILE),
-    ]
+    ];
+    let clean = throwaway::clean_folder(context, machine);
+    if !(machine.throwaway && clean.is_dir()) {
+        return notes.into();
+    }
+    notes.iter().map(|note| clean.join(name_of(note))).collect()
 }
 
 fn name_of(path: &Path) -> &OsStr {

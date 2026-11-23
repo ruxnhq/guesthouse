@@ -13,6 +13,10 @@ use crate::failure::{Failure, Result};
 use crate::recipe::{Chosen, Guest, Outcome, read_chosen, read_outcome, write_outcome};
 use crate::text::base64_encode;
 
+/// A throwaway's run is gone at its next start, and so would be what the steps install.
+const NOT_ON_THROWAWAY: &str = "Its recipe's steps did not run, as a throwaway loses what they install when it \
+                                shuts down. Turn Throwaway off and run them from its settings to keep them.";
+
 /// The most of what a guest said that goes into a line a person reads.
 const WHY_LONGEST: usize = 300;
 
@@ -87,6 +91,10 @@ fn failure_text(chosen: &Chosen, stopped: &Stopped) -> String {
 /// has its steps waiting.
 pub(super) fn after_install(task: &mut Task) {
     let Some(chosen) = read_chosen(task.context, &task.machine) else { return };
+    if task.machine.throwaway && !chosen.recipe.step_names().is_empty() {
+        task.error = [task.error.as_str(), NOT_ON_THROWAWAY].join(" ").trim().to_owned();
+        return;
+    }
     if task.pid().is_none() {
         let note = "Its recipe's steps wait for the machine to run. Run them from its settings.";
         task.error = [task.error.as_str(), note].join(" ").trim().to_owned();
@@ -99,7 +107,8 @@ pub(super) fn after_install(task: &mut Task) {
 }
 
 /// A recipe's steps again, as the machine's settings ask. This is the user's own request, so a step
-/// that fails is this task's failure.
+/// that fails is this task's failure. On a throwaway they run for this run only, and how they went
+/// goes back to the clean state's at its next start.
 pub(super) fn run_again(task: &mut Task) -> Result<()> {
     let Some(chosen) = read_chosen(task.context, &task.machine) else {
         return Err(Failure::new("This machine has no recipe."));

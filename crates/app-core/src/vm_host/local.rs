@@ -18,10 +18,12 @@ use crate::monitor::Command as Qmp;
 use crate::processes::{memory_taken, passt_pid, qemu_pid};
 use crate::setup::swtpm_profile::{self, missing_rules};
 use crate::start_checks::SECOND_INSTANCE_REFUSAL;
+use crate::throwaway::ThrowawayRun;
 use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, Sound, VmPlan};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 use std::fs::{self, File};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 const LAST_WORDS_BYTES: usize = 300;
@@ -63,6 +65,21 @@ const AGENT_UP_SCRIPT: &str = "\"up\"";
 /// The VM and the daemon as processes on this PC.
 pub struct LocalHost<'a> {
     pub context: &'a Context,
+    /// A throwaway machine's run, kept for as long as this task, so a start that starts the VM
+    /// again goes on from the same overlay.
+    throwaway: Mutex<Option<ThrowawayRun>>,
+}
+
+impl<'a> LocalHost<'a> {
+    pub fn new(context: &'a Context) -> Self {
+        Self { context, throwaway: Mutex::default() }
+    }
+}
+
+/// What the app opened for QEMU, to leave open in it.
+struct Handed<'a> {
+    drives: &'a OpenDrives,
+    throwaway: Option<&'a ThrowawayRun>,
 }
 
 impl LocalHost<'_> {
@@ -120,7 +137,7 @@ impl LocalHost<'_> {
         Ok(())
     }
 
-    fn spawn_qemu(&self, plan: &VmPlan, memory: Option<&GuestMemory>, drives: &OpenDrives) -> Result<Child> {
+    fn spawn_qemu(&self, plan: &VmPlan, memory: Option<&GuestMemory>, handed: &Handed) -> Result<Child> {
         self.spawn_tpm(plan)?;
         let output = File::create(self.run_file(OUTPUT_FILE))?;
         let command = plan.qemu_command();
@@ -132,7 +149,10 @@ impl LocalHost<'_> {
         if let Some(memory) = memory {
             memory.hand_to(&mut qemu);
         }
-        drives.hand_to(&mut qemu);
+        handed.drives.hand_to(&mut qemu);
+        if let Some(run) = handed.throwaway {
+            run.hand_to(&mut qemu);
+        }
         let spawned = detached(qemu.args(arguments))
             .envs(plan.qemu_environment())
             .stdin(Stdio::null())
@@ -144,7 +164,7 @@ impl LocalHost<'_> {
     }
 
     /// QEMU with no daemon and no shared memory. Returns once its monitor answers.
-    fn start_plain(&self, plan: &VmPlan, machine: &Machine, drives: &OpenDrives) -> Result<()> {
+    fn start_plain(&self, plan: &VmPlan, machine: &Machine, handed: &Handed) -> Result<()> {
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
         self.keep_last_run();
         fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
@@ -156,7 +176,7 @@ impl LocalHost<'_> {
         if !plan.qemu.exists() {
             return Err(Failure::new(NO_QEMU_HELP));
         }
-        let mut qemu = self.spawn_qemu(plan, None, drives)?;
+        let mut qemu = self.spawn_qemu(plan, None, handed)?;
         let answered = self.wait_for_monitor(&mut qemu);
         if answered.is_err() {
             self.end_qemu(&mut qemu);
@@ -275,7 +295,7 @@ impl LocalHost<'_> {
 
     /// The VM with its GPU: the daemon must be up before QEMU, and anything left of an earlier run
     /// goes first.
-    fn start_gpu(&self, plan: &VmPlan, machine: &Machine, drives: &OpenDrives) -> Result<()> {
+    fn start_gpu(&self, plan: &VmPlan, machine: &Machine, handed: &Handed) -> Result<()> {
         let sound = if machine.sound { sound_on_this_host() } else { None };
         let plan = VmPlan { sound, ..plan.clone() };
         let choice = jailing::choose(self.context, machine, &plan, &(self.context.jail_offer)(&plan))?;
@@ -306,7 +326,7 @@ impl LocalHost<'_> {
         }
         let mut daemon = start.spawn(&plan.run_folder, &memory)?;
         self.wait_for_daemon(&mut daemon)?;
-        let mut qemu = self.spawn_qemu(&plan, Some(&memory), drives)?;
+        let mut qemu = self.spawn_qemu(&plan, Some(&memory), handed)?;
         let answered = self.wait_for_agent(machine, &mut qemu, &mut daemon);
         if answered.is_err() {
             self.end_qemu(&mut qemu);
@@ -320,13 +340,26 @@ impl VmHost for LocalHost<'_> {
         self.context.make_run_folder(Some(plan.slot))?;
         // Before anything is started, so a drive that can't be had leaves nothing running.
         let drives = OpenDrives::open(self.context, &plan.drives)?;
-        if !plan.is_gpu() {
-            return self.start_plain(plan, machine, &drives);
+        let mut kept = self.throwaway.lock().unwrap_or_else(PoisonError::into_inner);
+        // An install writes to the disk itself, whatever the machine is.
+        let throwaway = machine.throwaway && !machine.installing;
+        if throwaway && kept.as_ref().is_none_or(|run| run.machine != machine.id) {
+            *kept = Some(ThrowawayRun::prepare(self.context, machine)?);
         }
-        if self.context.second_instance() {
-            return Err(Failure::new(SECOND_INSTANCE_REFUSAL));
+        let run = kept.as_ref().filter(|_| throwaway);
+        let plan = run.map_or_else(|| plan.clone(), |run| run.applied_to(plan));
+        let handed = Handed { drives: &drives, throwaway: run };
+        let started = if !plan.is_gpu() {
+            self.start_plain(&plan, machine, &handed)
+        } else if self.context.second_instance() {
+            Err(Failure::new(SECOND_INSTANCE_REFUSAL))
+        } else {
+            self.start_gpu(&plan, machine, &handed)
+        };
+        if started.is_ok() && run.is_some() {
+            crate::throwaway::note_started(self.context, machine);
         }
-        self.start_gpu(plan, machine, &drives)
+        started
     }
 
     /// With no daemon there's no agent to rely on, so the power button goes first.

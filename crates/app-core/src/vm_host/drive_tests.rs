@@ -135,7 +135,7 @@ fn give_a_loop_device(jailed: Jailed) {
     };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let plan = VmPlan { jail: jail_for(&plan, jailed), ..plan };
-    let host = LocalHost { context: &context };
+    let host = LocalHost::new(&context);
     host.start(&plan, &machine).unwrap();
     // Stops the QEMU whatever the checks below find.
     let _stop = StopQemu(&context);

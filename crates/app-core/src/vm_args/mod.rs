@@ -13,6 +13,7 @@ mod own_linux;
 mod passt_age;
 mod qemu_jail;
 mod standalone;
+mod throwaway;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
@@ -21,6 +22,7 @@ pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;
+pub use throwaway::{THROWAWAY_FDS, THROWAWAY_MARK, throwaway_disk};
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
 
 use crate::context::Context;
@@ -180,6 +182,9 @@ pub struct VmPlan {
     /// The folder of the drives' names, when QEMU opens each by its path and not from a descriptor
     /// the app opened: see [`standalone`].
     pub drives_by_path: Option<PathBuf>,
+    /// For a throwaway machine's run, its own disk, which is only read. `disk` is then the overlay
+    /// the app handed QEMU open: see [`crate::throwaway`].
+    pub throwaway: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +271,7 @@ impl VmPlan {
             jail_note: String::new(),
             memory_by_path: None,
             drives_by_path: None,
+            throwaway: None,
             run_folder,
         }
     }

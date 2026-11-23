@@ -74,16 +74,23 @@ pub fn what_it_will_run(recipe: &Recipe, source: Source, file: &str) -> String {
     text.trim().to_owned()
 }
 
-/// How the steps of a machine's recipe went.
+/// How the steps of a machine's recipe went, and what a throwaway does to them.
 fn outcome_text(context: &Context, machine: &Machine, recipe: &Recipe) -> String {
-    if recipe.steps.is_empty() {
-        return "It has no steps to run.".to_owned();
-    }
-    match read_outcome(context, machine) {
-        Outcome::Pending => "Its steps have not run yet.".to_owned(),
-        Outcome::Done => "Its steps ran.".to_owned(),
-        Outcome::Failed { step, why } => format!("Its steps stopped at \"{step}\": {why}"),
-    }
+    let went = if recipe.steps.is_empty() {
+        "It has no steps to run.".to_owned()
+    } else {
+        match read_outcome(context, machine) {
+            Outcome::Pending => "Its steps have not run yet.".to_owned(),
+            Outcome::Done => "Its steps ran.".to_owned(),
+            Outcome::Failed { step, why } => format!("Its steps stopped at \"{step}\": {why}"),
+        }
+    };
+    let throwaway = if machine.throwaway && !recipe.steps.is_empty() {
+        " On a throwaway, what they install is gone when it shuts down."
+    } else {
+        ""
+    };
+    format!("{went}{throwaway}")
 }
 
 /// Where a machine's recipe is from and how its steps went, for a row that has the recipe's name as its

@@ -233,6 +233,13 @@ impl VmPlan {
     }
 
     pub fn qemu_arguments(&self) -> Vec<String> {
+        let mut arguments = self.line_arguments();
+        arguments.extend(self.throwaway_arguments());
+        arguments
+    }
+
+    /// The arguments of this kind of machine's own line.
+    fn line_arguments(&self) -> Vec<String> {
         if let Some(arguments) = self.ubuntu_arguments() {
             return arguments;
         }

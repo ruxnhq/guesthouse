@@ -105,6 +105,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     task.machine.installing = false;
     task.machine.iso.clear();
     task.machine.save(context)?;
+    crate::throwaway::installed(task.context, &task.machine)?;
     start_if_there_is_room(task, "Ubuntu")?;
     // Last, and after all of it has succeeded: what a recipe's steps do can't undo the install.
     super::recipe::after_install(task);

@@ -279,6 +279,11 @@ pub struct Machine {
     /// Left out of the file until then, so an older build can still read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_snapshot: Option<bool>,
+    /// Every start begins from the disk, firmware settings and TPM as they are now, and what a run
+    /// writes to them is gone once it ends: see [`crate::throwaway`]. Left out of the file when off.
+    /// An app from before this setting refuses a file with it, so it can't write to the clean disk.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub throwaway: bool,
 }
 
 impl Machine {
@@ -331,6 +336,7 @@ impl Machine {
             nvme: false,
             opencore: String::new(),
             auto_snapshot: None,
+            throwaway: false,
         }
     }
 
@@ -485,6 +491,11 @@ impl Machine {
         self.summary_showing(&self.screen_wanted())
     }
 
+    /// The summary with the screen as known, and a word for a throwaway machine.
+    fn with_throwaway(&self, summary: String) -> String {
+        if self.throwaway { format!("{summary}, throwaway") } else { summary }
+    }
+
     /// What sort of guest it is, such as "Windows with GPU-PV", which says nothing of whose it is.
     pub fn kind_name(&self) -> &'static str {
         self.kind.name()
@@ -493,7 +504,7 @@ impl Machine {
     /// The summary, with what's known of the screen.
     pub fn summary_showing(&self, screen: &str) -> String {
         let (kind, cores, ram) = (self.kind.name(), self.cores, self.ram_gib);
-        match self.kind {
+        let summary = match self.kind {
             Kind::Plain if self.macos() => {
                 format!("macOS, {cores} cores, {ram} GiB, {}, GPU preview", self.screen)
             }
@@ -502,7 +513,8 @@ impl Machine {
             Kind::Linux if self.gpu_preview => format!("{kind}, {cores} cores, {ram} GiB, GPU preview"),
             Kind::Linux => format!("{kind}, {cores} cores, {ram} GiB, no GPU"),
             Kind::Windows => format!("{kind}, {cores} cores, {ram} GiB, {screen}"),
-        }
+        };
+        self.with_throwaway(summary)
     }
 
     /// Says what is wrong with these settings, whatever the host. `max_vram_gib` is what the card allows.

@@ -212,6 +212,26 @@ fn the_switch_and_the_kind_of_machine_decide_whether_a_snapshot_is_taken() {
 }
 
 #[test]
+fn a_throwaway_takes_none_and_offers_no_way_back_as_each_start_is_clean() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { throwaway: true, ..windows(&context, &scratch) };
+    machine.save(&context).unwrap();
+    restart_due(&context, &machine);
+    let task = start(&context, &machine, false);
+    assert!(names(&context, &machine).is_empty(), "the clean disk gains no snapshot");
+    assert!(task.auto.covers.is_empty() && task.auto.note.is_empty());
+    let left = record::Record {
+        tag: "guesthouse-0a1b2c3d".into(),
+        name: "Before".into(),
+        pending: true,
+        covered: vec![],
+    };
+    record::write(&context, &machine, &left).unwrap();
+    assert_eq!(restore_point(&context, &machine), None, "a failed run is undone by the next start");
+}
+
+#[test]
 fn the_default_is_the_constant_and_a_choice_is_kept_only_when_made() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);

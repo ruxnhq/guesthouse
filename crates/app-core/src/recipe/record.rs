@@ -14,7 +14,8 @@ use std::fs;
 use std::path::PathBuf;
 
 pub const CHOSEN_FILE: &str = "recipe.json";
-/// How the steps went, kept beside the recipe.
+/// How the steps went describes what is on the disk, so a snapshot keeps it and a throwaway's run
+/// starts from its clean one, as with the other notes about the guest.
 pub const OUTCOME_FILE: &str = "recipe-result.json";
 
 /// The recipe a machine was made for, and where it came from.

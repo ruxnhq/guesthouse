@@ -125,7 +125,8 @@ pub fn import_token(context: &Context, machine: &Machine, file: &Path) -> Result
 }
 
 fn read_token(context: &Context, machine: &Machine) -> Option<String> {
-    let text = fs::read_to_string(machine.token_file(context)).ok()?;
+    // A throwaway run's guest is moved to a token of its own at each start.
+    let text = fs::read_to_string(crate::token_change::token_in_use(context, machine)).ok()?;
     Some(text.trim().to_owned())
 }
 
@@ -139,7 +140,15 @@ impl Context {
     /// token, which from the app's side is the same thing.
     pub fn ask_guest(&self, machine: &Machine, script: &str, seconds: u64, slot: Option<Slot>) -> String {
         let Some(token) = read_token(self, machine) else { return String::new() };
-        self.agent.ask(self.agent_port(slot), &token, script, seconds)
+        let port = self.agent_port(slot);
+        let answer = self.agent.ask(port, &token, script, seconds);
+        if !answer.is_empty() {
+            return answer;
+        }
+        match crate::token_change::recovered_token(self, machine, port) {
+            Some(token) => self.agent.ask(port, &token, script, seconds),
+            None => answer,
+        }
     }
 }
 

@@ -98,7 +98,9 @@ pub(crate) fn pending(context: &Context, machine: &Machine) -> Option<&'static s
 /// on SATA. Anything that goes wrong is logged, the machine stays on SATA, and the next start tries
 /// again.
 pub(super) fn ready_windows(task: &mut Task) -> Result<bool> {
-    if !due(task.context, &task.machine) {
+    // What readies Windows would go with the run, and the disk would move without it. A throwaway
+    // moves once it's an ordinary machine again.
+    if task.machine.throwaway || !due(task.context, &task.machine) {
         return Ok(false);
     }
     let script = match guest_script(task.context, SCRIPT_NAME) {

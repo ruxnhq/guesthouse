@@ -276,15 +276,11 @@ pub fn in_use_of(words: &[Vec<u8>]) -> Option<InUse> {
 /// What these settings give the guest. `only_through` is the interface everything is held to, or empty.
 pub fn describe(mode: Mode, passt: bool, installed: bool, only_through: &str) -> String {
     match mode {
-        Mode::Nat if !only_through.is_empty() && installed => format!(
-            "All of the guest's traffic goes out through {only_through} and nothing else, with passt. \
-             If {only_through} goes away, the guest has no network until the machine is started again. \
-             {SECOND_ADAPTER}"
-        ),
+        Mode::Nat if !only_through.is_empty() && installed => {
+            format!("Uses passt, through {only_through} and nothing else. {SECOND_ADAPTER}")
+        }
         Mode::Nat if !only_through.is_empty() => {
-            format!(
-                "The guest can only go out through {only_through}, and that needs passt, which is not installed."
-            )
+            format!("Only through {only_through}, which needs passt, and it is not installed.")
         }
         Mode::None => {
             "No internet. Guesthouse can still reach the guest, and a shared folder still works.".into()

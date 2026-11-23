@@ -75,7 +75,8 @@ impl Network {
             std::iter::once(ANY_INTERFACE).chain(through_names.iter().map(String::as_str)).collect();
         let through = choice_row("Only through", &shown);
         through.set_subtitle(
-            "All of the guest's traffic goes out through this interface, such as a VPN's, and nothing else.",
+            "All of the guest's traffic goes out through this interface, such as a VPN's, and nothing else. \
+             If it goes away, the guest has no network until the machine is started again.",
         );
         through.set_subtitle_lines(0);
         let chosen = through_names.iter().position(|name| *name == machine.only_through);

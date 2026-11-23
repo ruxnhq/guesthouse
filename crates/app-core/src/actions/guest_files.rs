@@ -27,7 +27,10 @@ const PROFILES_SECONDS: u64 = 30;
 const DISPLAY_NAME_SCRIPT: &str = "display-name.ps1";
 const DISPLAY_NAME_SECONDS: u64 = 20;
 const SETMODE_SCRIPT: &str = "setmode.ps1";
-const SETMODE_PLACED: &str = "logon script placed";
+const SCRIPT_PLACED: &str = "script placed";
+const TAKE_OVER_SCRIPT: &str = "take-over-display.ps1";
+/// Where the display driver's install leaves its take-over script.
+const TAKE_OVER_IN_GUEST: &str = "C:\\gpupv\\idd\\take-over-display.ps1";
 /// The name the display driver's INF gives the device.
 const INF_DISPLAY_NAME: &str = "RDPUDD Chained DD";
 /// The name the guest's scripts also know it by, see display-name.ps1.
@@ -131,46 +134,55 @@ fn display_name(shown: Shown) -> &'static str {
 /// Windows reads the name at boot, so what this writes counts from the next start. The start that
 /// moves a machine to NVIDIA's number restarts Windows anyway, so that boot has it already.
 pub(super) fn name_display(task: &mut Task) -> Result<()> {
-    let script = match guest_script(task.context, DISPLAY_NAME_SCRIPT) {
-        Ok(script) => script,
-        Err(failure) => {
-            write_log(task.context, &format!("display name: {}", failure.0))?;
-            return Ok(());
-        }
-    };
-    let name = display_name(read_state(task.context, &task.machine).shown);
-    // The logon task's script finds our display by its name too, and a guest keeps the copy it was
-    // installed with, which knows only the INF's.
-    if name != INF_DISPLAY_NAME {
-        refresh_setmode(task)?;
-    }
-    let said = task.ask_guest(&format!("$name = '{name}'\n{script}"), DISPLAY_NAME_SECONDS);
-    if said.contains(FAILED_MARK) {
+    if give_display_its_name(task)? {
         task.error =
             "Windows could not be given the display's name for NVIDIA's driver. The log says why.".to_owned();
-    }
-    if !all_kept(&said) {
-        write_log(task.context, &format!("display name: {}", said.trim()))?;
     }
     Ok(())
 }
 
-/// The install copied it from read-only media, and the copy kept the read-only mark.
-fn refresh_setmode(task: &Task) -> Result<()> {
-    let data = base64_encode(&fs::read(task.context.paths.guest_files().join(SETMODE_SCRIPT))?);
-    let path = guest_path(SETMODE_SCRIPT);
+/// Names the display for the vendor number the machine's next start shows, and says whether that
+/// failed. Also for a start whose GPU failed, which moves the machine back to Microsoft's number:
+/// with NVIDIA's name left on it, OpenGL and Vulkan would find no GPU on the start after.
+pub(super) fn give_display_its_name(task: &Task) -> Result<bool> {
+    let script = match guest_script(task.context, DISPLAY_NAME_SCRIPT) {
+        Ok(script) => script,
+        Err(failure) => {
+            write_log(task.context, &format!("display name: {}", failure.0))?;
+            return Ok(false);
+        }
+    };
+    let name = display_name(read_state(task.context, &task.machine).shown);
+    // The logon task's script and the display driver's take-over script find our display by its
+    // name too, and a guest keeps the copies it was installed with, which know only the INF's.
+    if name != INF_DISPLAY_NAME {
+        let setmode = task.context.paths.guest_files().join(SETMODE_SCRIPT);
+        refresh_guest_script(task, &setmode, &guest_path(SETMODE_SCRIPT))?;
+        let take_over = task.context.paths.display_driver().join(TAKE_OVER_SCRIPT);
+        if take_over.is_file() {
+            refresh_guest_script(task, &take_over, TAKE_OVER_IN_GUEST)?;
+        }
+    }
+    let said = task.ask_guest(&format!("$name = '{name}'\n{script}"), DISPLAY_NAME_SECONDS);
+    if !all_kept(&said) {
+        write_log(task.context, &format!("display name: {}", said.trim()))?;
+    }
+    Ok(said.contains(FAILED_MARK))
+}
+
+/// Writes a guest's copy of one of our scripts again, where the guest has one. The install copied
+/// some from read-only media, and those kept the read-only mark.
+fn refresh_guest_script(task: &Task, local: &std::path::Path, path: &str) -> Result<()> {
+    let data = base64_encode(&fs::read(local)?);
     let said = task.ask_guest(
         &format!(
-            "$file = '{path}'; if (Test-Path -LiteralPath $file) {{ (Get-Item -LiteralPath $file).IsReadOnly = $false }}; \
-             [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String('{data}')); '{SETMODE_PLACED}'"
+            "$file = '{path}'; if (Test-Path -LiteralPath $file) {{ (Get-Item -LiteralPath $file).IsReadOnly = $false; \
+             [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String('{data}')) }}; '{SCRIPT_PLACED}'"
         ),
         DISPLAY_NAME_SECONDS,
     );
-    if !said.contains(SETMODE_PLACED) {
-        write_log(
-            task.context,
-            &format!("display name: the logon script stayed as it was: {}", said.trim()),
-        )?;
+    if !said.contains(SCRIPT_PLACED) {
+        write_log(task.context, &format!("display name: {path} stayed as it was: {}", said.trim()))?;
     }
     Ok(())
 }

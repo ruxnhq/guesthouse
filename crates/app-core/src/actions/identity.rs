@@ -4,12 +4,14 @@
 //! guest that won't take the package keeps Microsoft's number, and the row says why.
 
 use super::Task;
+use super::guest_files::give_display_its_name;
 use crate::agent::guest_script;
 use crate::failure::{Failure, Result};
 use crate::gpu_identity::{
     FELL_BACK, IdentityState, STAYS_ON_INTEL, Shown, falls_back_after_failed_check, machine_maker,
     maker_identity, maker_name, read_state, write_state,
 };
+use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::qemu_sets_identity;
 use crate::log::write_log;
 use std::collections::hash_map::DefaultHasher;
@@ -127,6 +129,10 @@ pub(super) fn after_failed_gpu(task: &Task, failure: Failure) -> Failure {
     }
     if let Err(problem) = write_state(task.context, &task.machine, &state) {
         let _ = write_log(task.context, &format!("gpu identity: could not fall back: {}", problem.0));
+    }
+    if task.machine.windows_maker() == Some(GpuMaker::Nvidia) {
+        // The guest is still up, so it can have the name the next start's driver needs.
+        let _ = give_display_its_name(task);
     }
     Failure(format!("{} {FELL_BACK}", failure.0))
 }

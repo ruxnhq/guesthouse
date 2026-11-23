@@ -728,9 +728,9 @@ fn the_display_is_named_by_the_vendor_number_windows_sees() {
     scratch.write("program/guest/setmode.ps1", "set the mode");
     let agent = Arc::new(ScriptedAgent::answering(&[
         "kept RDPUDD Chained DD\r\n",
-        "logon script placed\r\n",
+        "script placed\r\n",
         "named Guesthouse Display from the next start (was RDPUDD Chained DD)\r\n",
-        "logon script placed\r\n",
+        "script placed\r\n",
         "FAILED display name: denied\r\n",
     ]));
     context.agent = agent.clone();

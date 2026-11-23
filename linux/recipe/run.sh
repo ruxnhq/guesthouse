@@ -17,11 +17,13 @@ export DEBIAN_FRONTEND=noninteractive
 
 # The first boot installs the desktop and then restarts the guest, so it is ready when its marker is
 # older than this boot and no restart is on its way. A step started before then would be cut off.
+# Nor while the GPU step of this boot is waiting or running: a step that installs GPU software, such
+# as CUDA, must find it done, with the GPU on or off. A guest with no GPU step has no job for it.
 ready() {
     [ -f "$marker" ] || exit 1
     booted=$(($(date +%s) - $(cut -d. -f1 /proc/uptime)))
     [ "$(stat -c %Y "$marker")" -lt "$booted" ] || exit 1
-    if systemctl list-jobs 2>/dev/null | grep -Eq 'reboot|shutdown|poweroff'; then
+    if systemctl list-jobs 2>/dev/null | grep -Eq 'reboot|shutdown|poweroff|nvfwd-gpu\.service'; then
         exit 1
     fi
 }

@@ -121,6 +121,23 @@ fn the_guest_is_ready_only_after_its_first_boot_is_over_and_it_has_restarted() {
 }
 
 #[test]
+fn the_guest_is_not_ready_while_its_gpu_step_waits_or_runs_and_is_once_it_has_ended() {
+    let scratch = Scratch::new();
+    let guest = Guest::new(&scratch);
+    let marker = scratch.write("guest/first-boot-done", "");
+    assert!(Command::new("touch").args(["-d", "@1"]).arg(&marker).status().unwrap().success());
+    for (job, what) in [("start waiting", "waits for its turn"), ("start running", "is setting the GPU up")] {
+        scratch.write("guest/jobs", format!("JOB UNIT TYPE STATE\n7 nvfwd-gpu.service {job}\n"));
+        assert_eq!(guest.run(&["ready"]).status.code(), Some(1), "the GPU step {what}");
+    }
+    // Ended, with the GPU on or off, or a guest that has no GPU step: no job for it.
+    scratch.write("guest/jobs", "JOB UNIT TYPE STATE\n9 nvfwd-desktop.service start waiting\n");
+    assert_eq!(guest.run(&["ready"]).status.code(), Some(0));
+    scratch.write("guest/jobs", "No jobs running.\n");
+    assert_eq!(guest.run(&["ready"]).status.code(), Some(0));
+}
+
+#[test]
 fn the_package_lists_are_tried_again_while_something_else_holds_them() {
     let scratch = Scratch::new();
     let guest = Guest::new(&scratch);

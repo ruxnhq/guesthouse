@@ -309,6 +309,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     // While the install's own session is up, as SYSTEM, and before its shutdown makes the next start
     // the first that counts. It only ever adds a note.
     super::lean::after_install(task);
+    super::scan_exclusions::after_install(task);
     // Here, so the first start is already on the card maker's vendor number and needs no second VM.
     set_up_identity(task);
     task.step("Shutting down Windows");

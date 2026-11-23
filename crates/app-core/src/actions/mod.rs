@@ -28,6 +28,7 @@ mod nvme_move;
 mod own_linux;
 mod recipe;
 mod remote_access;
+mod scan_exclusions;
 mod ubuntu;
 mod window_speed;
 
@@ -97,6 +98,8 @@ pub(crate) const KEY_POLL: Duration = Duration::from_millis(500);
 pub const RECIPE_TASK: &str = "recipe";
 /// Makes a lean machine lean again, as its settings ask.
 pub const LEAN_TASK: &str = "lean";
+/// Has Defender scan the folders a machine left out, as its settings ask.
+pub const SCAN_ALL_TASK: &str = "scan_all";
 
 /// The running side of a task: reports steps, and holds what the actions need.
 pub struct Task<'a> {
@@ -568,6 +571,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
         RECIPE_TASK => recipe::run_again(task),
         LEAN_TASK => lean::run_again(task),
+        SCAN_ALL_TASK => scan_exclusions::scan_all(task),
         "install" if task.machine.macos() => macos_install::install(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),

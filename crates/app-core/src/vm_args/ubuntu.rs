@@ -77,7 +77,7 @@ impl VmPlan {
             "-drive",
             &format!("file={},media=cdrom,readonly=on", qemu_value(&install.seed.to_string_lossy())),
             "-nic",
-            "user,model=virtio-net-pci",
+            &self.ubuntu_nic(""),
             "-display",
             "dbus,p2p=yes",
             "-vga",
@@ -170,7 +170,7 @@ impl VmPlan {
             "-device",
             "virtio-blk-pci,drive=system,bootindex=1",
             "-nic",
-            &format!("user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:{ssh_port}-:{GUEST_SSH_PORT}"),
+            &self.ubuntu_nic(&format!("hostfwd=tcp:127.0.0.1:{ssh_port}-:{GUEST_SSH_PORT}")),
             "-device",
             "qemu-xhci,id=xhci",
             "-device",
@@ -313,6 +313,43 @@ mod tests {
         assert!(arguments.iter().any(|word| word == "virtio-blk-pci,drive=system,bootindex=1"));
         assert!(arguments.iter().any(|word| word.contains("file=/m/disk.qcow2,")));
         assert!(arguments.iter().any(|word| word.contains("/run/qmp.sock,")));
+    }
+
+    fn with_mac(context: &Context, boot: Boot, mac: &str) -> VmPlan {
+        let machine = Machine {
+            kind: Kind::Linux,
+            mac: mac.into(),
+            ..Machine::new("ubuntu", "Ubuntu", "/m/disk.qcow2", "")
+        };
+        VmPlan::new(context, &machine, boot, slots::first(), 0)
+    }
+
+    #[test]
+    fn the_card_has_the_machines_own_address_in_a_start_and_an_install() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let mac = "52:54:00:a2:1c:6d";
+        let started = with_mac(&context, no_gpu(), mac).qemu_arguments();
+        let card = value_after(&started, "-nic");
+        assert!(
+            card.starts_with(&format!("user,model=virtio-net-pci,mac={mac},hostfwd=tcp:127.0.0.1:")),
+            "{card}"
+        );
+        let install = UbuntuInstall {
+            iso: "/iso/a.iso".into(),
+            seed: "/m/seed/cidata.iso".into(),
+            kernel: PathBuf::from("/m/boot/vmlinuz"),
+            initrd: PathBuf::from("/m/boot/initrd"),
+        };
+        let installing = with_mac(&context, Boot::UbuntuInstall(install), mac).qemu_arguments();
+        assert_eq!(value_after(&installing, "-nic"), format!("user,model=virtio-net-pci,mac={mac}"));
+    }
+
+    #[test]
+    fn a_machine_with_no_address_yet_keeps_qemus_default() {
+        let scratch = Scratch::new();
+        let arguments = with_mac(&scratch_context(&scratch), no_gpu(), "").qemu_arguments();
+        assert!(value_after(&arguments, "-nic").starts_with("user,model=virtio-net-pci,hostfwd="));
     }
 
     #[test]

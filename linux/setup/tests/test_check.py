@@ -41,6 +41,8 @@ class FakeGuest:
         self.file(f"opt/nv/driver/lib/libcuda.so.{V}", "")
         self.file("opt/nv/built/vkcompute", "#!/bin/sh\necho 'checked 16 values, 0 wrong'\n", True)
         self.file("opt/nv/built/cudavec", "#!/bin/sh\necho 'seed 1: checked 4 values, 0 wrong'\n", True)
+        self.file("opt/nv/built/cudartcheck", "#!/bin/sh\necho 'runtime 12040, seed 1: checked 8 values, 0 wrong'\n",
+                  True)
         self.state(f"gpu=on\nversion={V}\ntested=yes\n")
         self.fake("dpkg-query", "echo 'install ok installed'")
         self.fake("systemctl", '[ "$1" = get-default ] && echo graphical.target; exit 0')
@@ -134,6 +136,38 @@ class Verdict(unittest.TestCase):
         result = self.guest.run()
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL CUDA kernel", result.stdout)
+
+    def test_a_cuda_runtime_that_wont_start_fails(self):
+        # What every nvcc program did while the device refused what the runtime asks for at its start.
+        self.guest.file("opt/nv/built/cudartcheck",
+                        "#!/bin/sh\necho 'cudaGetDeviceCount(&count) = 3 (initialization error)'; exit 1\n", True)
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL CUDA runtime: cudaGetDeviceCount(&count) = 3 (initialization error)", result.stdout)
+
+    def test_no_cuda_runtime_is_said_and_not_a_failure(self):
+        self.guest.file("opt/nv/built/cudartcheck", "#!/bin/sh\necho 'no CUDA runtime here: install one'; exit 77\n",
+                        True)
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("SKIP CUDA runtime: no CUDA runtime here: install one", result.stdout)
+
+    def test_a_guest_built_before_the_runtime_check_is_not_failed(self):
+        os.remove(os.path.join(self.guest.root, "opt/nv/built/cudartcheck"))
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("SKIP CUDA runtime", result.stdout)
+
+    def test_what_the_device_turned_down_is_named(self):
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", "REFUSED ctrl 0x2080a084\nOVER limit 0x2b\n")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("turned down 2 kinds of call since the VM started: REFUSED ctrl 0x2080a084, OVER limit 0x2b",
+                      result.stdout)
+
+    def test_nothing_turned_down_says_nothing(self):
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", "")
+        self.assertNotIn("turned down", self.guest.run().stdout)
 
     def test_the_host_answering_another_version_fails(self):
         self.guest.script("driver-version.py", "#!/bin/sh\necho 620.10\n")

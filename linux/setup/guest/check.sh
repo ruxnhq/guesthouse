@@ -103,6 +103,35 @@ check_compute() {
     if [ $? = 0 ] && echo "$output" | grep -q ' 0 wrong'; then pass "$text"; else fail "$text: $(echo "$output" | tail -n 1)"; fi
 }
 
+# What nvcc builds goes through the CUDA runtime, which asks the driver for more than cudavec does. The runtime
+# comes with a CUDA toolkit, not the driver, so a guest without one has nothing to check here.
+check_cuda_runtime() {
+    local output status
+    if [ ! -x "$built/cudartcheck" ]; then
+        echo "SKIP CUDA runtime: the check isn't built yet, it comes with the next driver image"
+        return 0
+    fi
+    output=$(timeout "$gpu_test_seconds" "$built/cudartcheck" 2>&1)
+    status=$?
+    if [ "$status" = 77 ]; then
+        echo "SKIP CUDA runtime: $(echo "$output" | tail -n 1)"
+    elif [ "$status" = 0 ] && echo "$output" | grep -q ' 0 wrong'; then
+        pass "CUDA runtime, every value checked"
+    else
+        fail "CUDA runtime: $(echo "$output" | tail -n 1)"
+    fi
+}
+
+# A refused control comes back as a status inside a call that worked, so a program only says its own error.
+# The device keeps one line for each kind of call it turned down, at most 64, and this names them.
+say_refused() {
+    local list=$root/proc/driver/nvidia/nvfwd-refused lines
+    [ -r "$list" ] || return 0
+    lines=$(grep -c . "$list")
+    [ "$lines" -gt 0 ] || return 0
+    echo "---- the device turned down $lines kinds of call since the VM started: $(paste -sd, "$list" | sed 's/,/, /g')"
+}
+
 check_gpu() {
     local listing vulkan
     listing=$(timeout "$gpu_test_seconds" nvidia-smi -L 2>&1)
@@ -113,6 +142,7 @@ check_gpu() {
     if echo "$vulkan" | grep -q 'driverName *= *NVIDIA'; then pass 'Vulkan sees the NVIDIA driver'; else fail 'Vulkan sees the NVIDIA driver'; fi
     check_compute 'Vulkan compute, every value checked' "$built/vkcompute"
     check_compute 'CUDA kernel, every value checked' "$built/cudavec"
+    check_cuda_runtime
     # Not a failure: the rest of the GPU doesn't need them.
     timeout "$gpu_test_seconds" nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader 2>&1 | grep -q '^[0-9]' ||
         warn "no sensor readings, so nvidia-smi shows N/A: the host's sensor daemon isn't running, or doesn't know this driver"
@@ -207,6 +237,7 @@ check_guest_files() {
 
 finish() {
     check_guest_files
+    [ "$gpu" != on ] || say_refused
     echo '----'
     if [ "$failed" != 0 ]; then
         echo "FAIL $failed parts do not work"

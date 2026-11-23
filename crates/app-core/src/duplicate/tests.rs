@@ -87,11 +87,10 @@ fn a_copy_keeps_what_the_guest_relies_on_and_gets_its_own_identity() {
     assert_eq!(fs::read_to_string(copy.token_file(&context)).unwrap(), "secret\n", "its disk knows this one");
     let (copy_next, source_next) = (next_token_file(&context, &copy), next_token_file(&context, &source));
     assert!(copy_next.exists() && source_next.exists());
-    assert_eq!(fs::read(&copy_next).unwrap(), fs::read(&source_next).unwrap(), "planned before the copy");
-    assert!(
-        crate::settings::with_suffix(&copy_next, ".again").exists(),
-        "so the copy moves on to one of its own"
-    );
+    assert_ne!(fs::read(&copy_next).unwrap(), fs::read(&source_next).unwrap(), "each has one of its own");
+    for next in [&copy_next, &source_next] {
+        assert!(!crate::settings::with_suffix(next, ".again").exists(), "one change each is enough");
+    }
     assert!(disk_info(&copy.disk).unwrap()["snapshots"][0]["name"] == "guesthouse-1");
     assert!(holds(&copy.disk, 0x11));
     fill(&copy.disk, 0x22);
@@ -324,4 +323,47 @@ fn only_duplicate_marks_a_machine_to_go_and_nothing_carries_the_mark_on() {
     crate::throwaway::set_throwaway(&context, &mut copy, false).unwrap();
     assert!(crate::throwaway::delete_finished(&context).is_empty(), "made ordinary, it's kept");
     assert_eq!(load_all(&context).0.len(), 3);
+}
+
+/// A guest's agent that only answers to its token, takes a new one as the real one does, and counts
+/// the changes it was asked for.
+struct Guest {
+    token: std::sync::Mutex<String>,
+    changes: std::sync::Mutex<Vec<String>>,
+}
+
+impl crate::agent::GuestAgent for Guest {
+    fn ask(&self, _port: u16, token: &str, script: &str, _seconds: u64) -> String {
+        let mut held = self.token.lock().unwrap();
+        if *held != token {
+            return String::new();
+        }
+        if let Some(new) = crate::token_change::token_in_change(script) {
+            self.changes.lock().unwrap().push(new.to_owned());
+            *held = new.to_owned();
+            return "token changed\n".to_owned();
+        }
+        "up\n".to_owned()
+    }
+}
+
+#[test]
+fn a_copys_first_start_moves_its_guest_to_a_token_of_its_own_in_one_change() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    let guest = std::sync::Arc::new(Guest { token: "old".to_owned().into(), changes: Vec::new().into() });
+    context.agent = guest.clone();
+    let source = create(&context, &new_plain(&scratch, "Base", "")).unwrap();
+    scratch.write(&format!("{}/guest.token", source.folder(&context).display()), "old\n");
+    let copy = copy_called(&context, &source, "Base Copy").unwrap();
+    crate::token_change::finish_token_change(&context, &copy, 1);
+    let changes = guest.changes.lock().unwrap().clone();
+    let [only] = &changes[..] else { panic!("one change, not {changes:?}") };
+    assert_eq!(fs::read_to_string(copy.token_file(&context)).unwrap().trim(), only);
+    let source_next = fs::read_to_string(next_token_file(&context, &source)).unwrap();
+    assert_ne!(source_next.trim(), only, "not the token the original moves to");
+    crate::token_change::finish_token_change(&context, &copy, 1);
+    assert_eq!(guest.changes.lock().unwrap().len(), 1, "the next start has nothing to change");
+    let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
+    assert_eq!(log.matches("its guest's agent has a new token").count(), 1, "{log}");
 }

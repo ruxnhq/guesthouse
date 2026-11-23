@@ -58,6 +58,11 @@ pub fn next_token_file(context: &Context, machine: &Machine) -> PathBuf {
     with_suffix(&machine.token_file(context), NEXT_SUFFIX)
 }
 
+/// The waiting token beside the token at `token_file`, as in a machine's folder that isn't in place yet.
+pub fn next_token_file_at(token_file: &Path) -> PathBuf {
+    with_suffix(token_file, NEXT_SUFFIX)
+}
+
 /// The token the app asks the guest with: a throwaway run's own once it has one.
 pub fn token_in_use(context: &Context, machine: &Machine) -> PathBuf {
     let run = crate::throwaway::run_token_file(context, machine);

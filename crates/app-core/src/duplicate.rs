@@ -17,7 +17,7 @@ use crate::machine::{MACHINE_FILE, Machine, sorted_names};
 use crate::random::random_hex;
 use crate::settings::{max_vram_gib_for, write_json};
 use crate::tasks::{State, status};
-use crate::token_change::plan_token_change_at;
+use crate::token_change::{next_token_file_at, plan_token_change_at};
 use rustix::fs::{FlockOperation, flock};
 use std::fs::{self, File};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -401,6 +401,7 @@ fn build(
     source: &Machine,
     plan: &DuplicatePlan,
     staging: &Staging,
+    waiting_before: bool,
 ) -> Result<()> {
     let copy = &plan.copy;
     let staged_disk = staging.disk(copy, context);
@@ -427,7 +428,13 @@ fn build(
     if plan.delete_when_stopped {
         crate::throwaway::mark_for_deletion(&staging.folder())?;
     }
-    plan_token_change_at(&staging.folder().join(copy.token_file(context).file_name().unwrap_or_default()))?;
+    let token_file = staging.folder().join(copy.token_file(context).file_name().unwrap_or_default());
+    if !waiting_before {
+        // The original's waiting token was made by this duplicate, while it was off, so no guest can
+        // have it yet. The copy plans one of its own, and moves to it in one change, not two.
+        let _ = fs::remove_file(next_token_file_at(&token_file));
+    }
+    plan_token_change_at(&token_file)?;
     if let Some(problem) = copy.problems(max_vram_gib_for(context, copy)).into_iter().next() {
         return Err(Failure(problem));
     }
@@ -453,11 +460,14 @@ pub fn duplicate(task: &mut Task, name: &str, throwaway: bool, delete_when_stopp
         return Err(Failure::new("Only a throwaway copy can be deleted once it has stopped."));
     }
     let plan = DuplicatePlan { delete_when_stopped, ..plan_duplicate(context, &source, name, throwaway)? };
+    // A waiting token from before may be the original guest's already, after a change cut short, so
+    // the copy keeps it to reach its guest, and both move on from it once more.
+    let waiting_before = crate::token_change::next_token_file(context, &source).exists();
     // Before the copy, so a crash once it's in place can't leave the original on the shared token.
     // A copy that then fails costs the original no more than a change of token it didn't need.
     crate::token_change::plan_token_change(context, &source)?;
     let staging = Staging::new(context, &plan.copy)?;
-    let made = build(context, task, &source, &plan, &staging)
+    let made = build(context, task, &source, &plan, &staging, waiting_before)
         .and_then(|()| put_in_place(context, &plan.copy, &staging));
     if let Err(failure) = made {
         if let Some(other) = other_drive_staging(&plan.copy) {

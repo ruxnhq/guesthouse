@@ -1,6 +1,9 @@
 name = "Games"
 description = "Windows with room for games, and Steam."
 guest = "windows"
+# Without the apps Windows adds for every account. It keeps the Store, winget and every Xbox part, which
+# games need. docs/recipes.md lists all it does.
+lean = true
 
 [settings]
 cores = 8

@@ -633,6 +633,10 @@ pub fn run_task(
     if result.is_ok() && task.watch_after_start {
         late_watch::watch_after_start(&mut task);
     }
+    // Also once the start is reported done, and never part of it.
+    if result.is_ok() && action == "start" {
+        lean::after_start(&mut task);
+    }
     result
 }
 

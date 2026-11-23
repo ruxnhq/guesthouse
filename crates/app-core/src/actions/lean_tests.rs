@@ -122,3 +122,53 @@ fn the_machine_keeps_which_apps_this_windows_had_and_lost() {
     let text = crate::lean::state_text(&context, &vm).unwrap();
     assert_eq!(text, "Took out Teams (free), News, Dev Home, which this Windows had.");
 }
+
+fn started_lean(scratch: &Scratch, answers: &[&str], lean: bool) -> (Context, Arc<ScriptedAgent>, Machine) {
+    let (context, agent) = lean_context(scratch, answers);
+    scratch.write("program/guest/lean-check.ps1", "CHECK\n");
+    let vm = windows_machine(&context, lean);
+    (context, agent, vm)
+}
+
+#[test]
+fn what_windows_put_back_is_taken_out_again_after_a_start_and_said() {
+    let scratch = Scratch::new();
+    let (context, agent, vm) = started_lean(
+        &scratch,
+        &[
+            "checked\n",
+            "back Microsoft.Windows.DevHome\nchecked\n",
+            "started",
+            "begin\nremoved Microsoft.Windows.DevHome\nend 0\n",
+        ],
+        true,
+    );
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    let before = crate::tasks::read_task(&context, None);
+    after_start(&mut task);
+    let outcome = crate::lean::read_outcome(&context, &vm);
+    assert_eq!(outcome.put_back, ["Microsoft.Windows.DevHome"]);
+    assert_eq!(outcome.still_back, None);
+    assert!(crate::lean::state_text(&context, &vm).unwrap().contains("Windows had put back Dev Home"));
+    assert_eq!(crate::tasks::read_task(&context, None), before, "the start is over, so no step is written");
+    let requests = agent.requests.lock().unwrap();
+    assert!(requests[0].2.starts_with("$data = '") && requests[0].2.ends_with("CHECK\n"));
+    assert_eq!(requests.len(), 4, "a look at once, a look later, and one run");
+}
+
+#[test]
+fn a_guest_that_cannot_say_or_a_machine_not_made_lean_is_left_alone() {
+    let scratch = Scratch::new();
+    let (context, agent, vm) = started_lean(&scratch, &["not checked: busy", ""], true);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    after_start(&mut task);
+    assert_eq!(agent.requests.lock().unwrap().len(), 2, "two looks and nothing run");
+    assert_eq!(crate::lean::read_outcome(&context, &vm), crate::lean::Outcome::default());
+    let scratch = Scratch::new();
+    let (context, agent, vm) = started_lean(&scratch, &[], false);
+    let mut task = Task::new(&context, &host, "start", vm);
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty());
+}

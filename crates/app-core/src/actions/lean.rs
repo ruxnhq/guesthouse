@@ -9,7 +9,10 @@
 use super::Task;
 use crate::agent::{QUICK_SECONDS, guest_script};
 use crate::failure::{Failure, Result};
-use crate::lean::{APPS, SCRIPT, guest_data, is_lean, names_taken_out, read_outcome, write_outcome};
+use crate::lean::{
+    APPS, SCRIPT, guest_data, is_lean, names_back, names_taken_out, read_outcome, write_outcome,
+};
+use crate::log::write_log;
 use crate::text::base64_encode;
 use std::time::Duration;
 
@@ -27,6 +30,12 @@ const LIMIT_MINUTES: u64 = 20;
 const POLL: Duration = Duration::from_secs(5);
 pub const STEP: &str = "Making Windows lean";
 const AGAIN: &str = "Run it again from the machine's settings.";
+const CHECK_SCRIPT: &str = "lean-check.ps1";
+const CHECK_SECONDS: u64 = 60;
+const CHECKED: &str = "checked";
+/// Dev Home came back about ten minutes after a restart, so the second look is a while after that.
+const LOOK_AGAIN_MINUTES: u64 = 15;
+const WAIT_POLL: Duration = Duration::from_secs(30);
 
 /// How the status file ended: how many things the script couldn't do, and the first of them.
 #[derive(Debug, PartialEq, Eq)]
@@ -56,9 +65,12 @@ fn start_script(task: &Task) -> Result<String> {
     Ok(format!("$data = '{data}'\n$runner = '{}'\n{start}", base64_encode(runner.as_bytes())))
 }
 
-/// Runs the script in the guest and waits for it. What it says is why it didn't all happen.
-fn run(task: &Task) -> std::result::Result<(), String> {
-    task.step(STEP);
+/// Runs the script in the guest and waits for it. What it says is why it didn't all happen. A run after
+/// a start that has been reported done writes no step, as the task is over.
+fn run(task: &Task, show: bool) -> std::result::Result<(), String> {
+    if show {
+        task.step(STEP);
+    }
     let script = start_script(task).map_err(|failure| failure.0)?;
     let started = task.ask_guest(&script, START_SECONDS);
     if !started.contains(START_MARK) {
@@ -112,7 +124,7 @@ pub(super) fn after_install(task: &mut Task) {
     if !is_lean(task.context, &task.machine) {
         return;
     }
-    let ran = run(task);
+    let ran = run(task, true);
     note_taken_out(task);
     if let Err(why) = ran {
         let note = format!("Lean Windows did not all happen: {why}. {AGAIN}");
@@ -132,9 +144,65 @@ pub(super) fn run_again(task: &mut Task) -> Result<()> {
     if task.pid().is_none() {
         return Err(Failure::new("Start the machine first. This runs in the guest."));
     }
-    let ran = run(task);
+    let ran = run(task, true);
     note_taken_out(task);
     ran.map_err(|why| Failure(format!("Lean Windows did not all happen: {why}.")))
+}
+
+/// Whether the same VM is still up after this long, looked at now and then.
+fn still_up_after(task: &Task, qemu: u32, time: Duration) -> bool {
+    let end = task.now() + time;
+    while task.now() < end {
+        task.sleep(WAIT_POLL.min(end - task.now()));
+        if task.pid() != Some(qemu) {
+            return false;
+        }
+    }
+    task.pid() == Some(qemu)
+}
+
+/// What on the list Windows has again, or nothing when the guest couldn't say.
+fn look(task: &Task) -> Option<Vec<String>> {
+    let script = guest_script(task.context, CHECK_SCRIPT).ok()?;
+    let data = base64_encode(guest_data().as_bytes());
+    let said = task.ask_guest(&format!("$data = '{data}'\n{script}"), CHECK_SECONDS);
+    said.lines().any(|line| line.trim() == CHECKED).then(|| names_back(&said))
+}
+
+/// After a start of a lean machine has been reported done, so that it never makes a start slower or
+/// failed. Windows can put an app back by itself, as it did with Dev Home about ten minutes after a
+/// restart in a real guest, while the Store was updating. So this looks once at once and once more
+/// later, while the same VM runs, and takes out again what came back, with the same script. It writes
+/// no step: what it found and did goes into the machine's record, which its settings and `show` say,
+/// and into the app's log.
+pub(super) fn after_start(task: &mut Task) {
+    if !is_lean(task.context, &task.machine) || task.machine.installing {
+        return;
+    }
+    let Some(qemu) = task.pid() else { return };
+    for minutes in [0, LOOK_AGAIN_MINUTES] {
+        if !still_up_after(task, qemu, Duration::from_secs(minutes * 60)) {
+            return;
+        }
+        let Some(back) = look(task) else {
+            let _ = write_log(task.context, "lean Windows: the guest could not say what it has");
+            continue;
+        };
+        if back.is_empty() {
+            continue;
+        }
+        let ran = run(task, false);
+        let titles = crate::lean::titles(&back);
+        let said = match &ran {
+            Ok(()) => format!("lean Windows: Windows had put back {titles}, taken out again"),
+            Err(why) => format!("lean Windows: Windows had put back {titles}, still there: {why}"),
+        };
+        let _ = write_log(task.context, &said);
+        let mut outcome = read_outcome(task.context, &task.machine);
+        outcome.put_back = back;
+        outcome.still_back = ran.err();
+        let _ = write_outcome(task.context, &task.machine, &outcome);
+    }
 }
 
 #[cfg(test)]

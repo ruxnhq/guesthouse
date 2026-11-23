@@ -6,13 +6,24 @@ use adw::prelude::*;
 const TEXT_WIDTH: i32 = 480;
 const TEXT_LEAST_HEIGHT: i32 = 160;
 const TEXT_MOST_HEIGHT: i32 = 360;
+const MARGIN: i32 = 12;
 
 fn dialog(heading: &str, text: &str) -> adw::AlertDialog {
     let dialog = adw::AlertDialog::new(Some(heading), None);
-    let label = gtk::Label::builder().label(text).xalign(0.0).selectable(true).wrap(true).build();
-    label.add_css_class("monospace");
+    // A text view, as the log's dialog has: a selectable label starts with all of it selected.
+    let view = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .monospace(true)
+        .top_margin(MARGIN)
+        .bottom_margin(MARGIN)
+        .left_margin(MARGIN)
+        .right_margin(MARGIN)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .build();
+    view.buffer().set_text(text);
     let scroll = gtk::ScrolledWindow::builder()
-        .child(&label)
+        .child(&view)
         .min_content_width(TEXT_WIDTH)
         .min_content_height(TEXT_LEAST_HEIGHT)
         .max_content_height(TEXT_MOST_HEIGHT)

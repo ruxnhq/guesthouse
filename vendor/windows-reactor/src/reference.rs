@@ -30,10 +30,7 @@ pub struct ElementRef<T = AnyElement> {
 
 impl<T> ElementRef<T> {
     pub fn new() -> Self {
-        Self {
-            target: Rc::new(RefCell::new(ReferenceTarget::default())),
-            marker: PhantomData,
-        }
+        Self { target: Rc::new(RefCell::new(ReferenceTarget::default())), marker: PhantomData }
     }
 
     fn object(&self) -> Option<ObjectId> {
@@ -47,24 +44,15 @@ impl<T> ElementRef<T> {
 
     pub(crate) fn bind(&self, endpoint: ReferenceEndpoint, object: ObjectId) {
         self.retire_current_binding();
-        let binding = ReferenceBinding {
-            id: NEXT_BINDING_ID.fetch_add(1, Ordering::Relaxed),
-            endpoint,
-            object,
-        };
+        let binding =
+            ReferenceBinding { id: NEXT_BINDING_ID.fetch_add(1, Ordering::Relaxed), endpoint, object };
         let observations = {
             let mut target = self.target.borrow_mut();
             target.observations.retain(|observation| {
-                observation
-                    .upgrade()
-                    .is_some_and(|observation| observation.active.get())
+                observation.upgrade().is_some_and(|observation| observation.active.get())
             });
             target.binding = Some(binding.clone());
-            target
-                .observations
-                .iter()
-                .filter_map(Weak::upgrade)
-                .collect::<Vec<_>>()
+            target.observations.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
         };
         for observation in observations {
             binding.endpoint.enqueue(QueuedImperative {
@@ -105,10 +93,7 @@ impl<T> ElementRef<T> {
     }
 
     pub(crate) fn erased(&self) -> ElementRef {
-        ElementRef {
-            target: Rc::clone(&self.target),
-            marker: PhantomData,
-        }
+        ElementRef { target: Rc::clone(&self.target), marker: PhantomData }
     }
 
     fn binding(&self) -> Option<ReferenceBinding> {
@@ -141,10 +126,7 @@ impl<T> ElementRef<T> {
 
     /// Enqueues programmatic focus and reports the native result asynchronously.
     #[must_use]
-    pub fn request_focus_result(
-        &self,
-        completion: impl Fn(Result<bool, FocusError>) + 'static,
-    ) -> bool {
+    pub fn request_focus_result(&self, completion: impl Fn(Result<bool, FocusError>) + 'static) -> bool {
         self.enqueue(move |object, binding, target| ImperativeRequest::Focus {
             object,
             completion: current_completion(target, binding, completion),
@@ -218,10 +200,7 @@ impl<T> ElementRef<T> {
 
 impl<T> Clone for ElementRef<T> {
     fn clone(&self) -> Self {
-        Self {
-            target: Rc::clone(&self.target),
-            marker: PhantomData,
-        }
+        Self { target: Rc::clone(&self.target), marker: PhantomData }
     }
 }
 
@@ -233,10 +212,7 @@ impl<T> Default for ElementRef<T> {
 
 impl<T> fmt::Debug for ElementRef<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("ElementRef")
-            .field(&self.object())
-            .finish()
+        formatter.debug_tuple("ElementRef").field(&self.object()).finish()
     }
 }
 
@@ -254,12 +230,10 @@ impl ElementRef<WebView2> {
         &self,
         completion: impl Fn(Result<windows_core::IUnknown, IntegrationError>) + 'static,
     ) -> bool {
-        self.enqueue(
-            move |object, binding, target| ImperativeRequest::InitializeWebView2 {
-                object,
-                completion: current_completion(target, binding, completion),
-            },
-        )
+        self.enqueue(move |object, binding, target| ImperativeRequest::InitializeWebView2 {
+            object,
+            completion: current_completion(target, binding, completion),
+        })
     }
 }
 
@@ -282,24 +256,16 @@ impl ElementRef<SwapChainPanel> {
     }
 
     #[must_use]
-    pub fn request_surface_frame(
-        &self,
-        completion: impl Fn(Result<(), IntegrationError>) + 'static,
-    ) -> bool {
-        self.enqueue(
-            move |object, binding, target| ImperativeRequest::RequestSwapChainPanelFrame {
-                object,
-                completion: current_completion(target, binding, completion),
-            },
-        )
+    pub fn request_surface_frame(&self, completion: impl Fn(Result<(), IntegrationError>) + 'static) -> bool {
+        self.enqueue(move |object, binding, target| ImperativeRequest::RequestSwapChainPanelFrame {
+            object,
+            completion: current_completion(target, binding, completion),
+        })
     }
 
     #[must_use]
     /// Observes surface metrics and composition rendering events.
-    pub fn observe_surface(
-        &self,
-        callback: impl Fn(SwapChainPanelEvent) + 'static,
-    ) -> ElementObservation {
+    pub fn observe_surface(&self, callback: impl Fn(SwapChainPanelEvent) + 'static) -> ElementObservation {
         self.observe(ReferenceObservation::SwapChainPanel {
             callback: Callback::new(callback),
             rendering: true,
@@ -323,13 +289,11 @@ impl ElementRef<SwapChainPanel> {
         swap_chain: Option<windows_core::IUnknown>,
         completion: impl Fn(Result<(), IntegrationError>) + 'static,
     ) -> bool {
-        self.enqueue(
-            move |object, binding, target| ImperativeRequest::SetSwapChain {
-                object,
-                swap_chain,
-                completion: current_completion(target, binding, completion),
-            },
-        )
+        self.enqueue(move |object, binding, target| ImperativeRequest::SetSwapChain {
+            object,
+            swap_chain,
+            completion: current_completion(target, binding, completion),
+        })
     }
 }
 
@@ -340,20 +304,15 @@ impl ElementRef<Image> {
         source: Option<windows_core::IUnknown>,
         completion: impl Fn(Result<(), IntegrationError>) + 'static,
     ) -> bool {
-        self.enqueue(
-            move |object, binding, target| ImperativeRequest::SetNativeImageSource {
-                object,
-                source,
-                completion: current_completion(target, binding, completion),
-            },
-        )
+        self.enqueue(move |object, binding, target| ImperativeRequest::SetNativeImageSource {
+            object,
+            source,
+            completion: current_completion(target, binding, completion),
+        })
     }
 
     #[must_use]
-    pub fn observe_rasterization_scale(
-        &self,
-        callback: impl Fn(f64) + 'static,
-    ) -> ElementObservation {
+    pub fn observe_rasterization_scale(&self, callback: impl Fn(f64) + 'static) -> ElementObservation {
         self.observe(ReferenceObservation::ImageScale(Callback::new(callback)))
     }
 }
@@ -364,10 +323,7 @@ impl ElementRef<ScrollView> {
     /// The callback runs once the view is bound and again whenever any of these values change,
     /// including during user and animated scrolling.
     #[must_use]
-    pub fn observe_view(
-        &self,
-        callback: impl Fn(ScrollViewMetrics) + 'static,
-    ) -> ElementObservation {
+    pub fn observe_view(&self, callback: impl Fn(ScrollViewMetrics) + 'static) -> ElementObservation {
         self.observe(ReferenceObservation::ScrollView(Callback::new(callback)))
     }
 
@@ -421,9 +377,7 @@ impl ElementRef<Grid> {
         &self,
         callback: impl Fn(CompositionHostEvent) + 'static,
     ) -> ElementObservation {
-        self.observe(ReferenceObservation::CompositionHost(Callback::new(
-            callback,
-        )))
+        self.observe(ReferenceObservation::CompositionHost(Callback::new(callback)))
     }
 
     #[must_use]
@@ -432,29 +386,18 @@ impl ElementRef<Grid> {
         visual: Option<windows_core::IUnknown>,
         completion: impl Fn(Result<(), IntegrationError>) + 'static,
     ) -> bool {
-        self.enqueue(
-            move |object, binding, target| ImperativeRequest::SetCompositionChildVisual {
-                object,
-                visual,
-                completion: current_completion(target, binding, completion),
-            },
-        )
+        self.enqueue(move |object, binding, target| ImperativeRequest::SetCompositionChildVisual {
+            object,
+            visual,
+            completion: current_completion(target, binding, completion),
+        })
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompositionHostEvent {
-    Ready {
-        compositor: windows_core::IUnknown,
-        width: f64,
-        height: f64,
-        scale: f64,
-    },
-    Metrics {
-        width: f64,
-        height: f64,
-        scale: f64,
-    },
+    Ready { compositor: windows_core::IUnknown, width: f64, height: f64, scale: f64 },
+    Metrics { width: f64, height: f64, scale: f64 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -548,13 +491,7 @@ impl SwapChainPanelBinding {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SwapChainPanelEvent {
-    Metrics {
-        binding: SwapChainPanelBinding,
-        width: f64,
-        height: f64,
-        scale_x: f32,
-        scale_y: f32,
-    },
+    Metrics { binding: SwapChainPanelBinding, width: f64, height: f64, scale_x: f32, scale_y: f32 },
     Rendering,
 }
 
@@ -574,10 +511,7 @@ impl Drop for ElementObservation {
             binding: binding.id,
             object: binding.object,
             target: None,
-            request: ImperativeRequest::RevokeObservation {
-                object: binding.object,
-                observation: self.0.id,
-            },
+            request: ImperativeRequest::RevokeObservation { object: binding.object, observation: self.0.id },
         });
     }
 }
@@ -604,10 +538,7 @@ struct ObservationRegistration {
 }
 
 enum ReferenceObservation {
-    SwapChainPanel {
-        callback: Callback<SwapChainPanelEvent>,
-        rendering: bool,
-    },
+    SwapChainPanel { callback: Callback<SwapChainPanelEvent>, rendering: bool },
     ImageScale(Callback<f64>),
     CompositionHost(Callback<CompositionHostEvent>),
     ScrollView(Callback<ScrollViewMetrics>),
@@ -620,35 +551,12 @@ impl ObservationRegistration {
         binding: &ReferenceBinding,
     ) -> ImperativeRequest {
         match &self.kind {
-            ReferenceObservation::SwapChainPanel {
-                callback,
-                rendering,
-            } => ImperativeRequest::ObserveSwapChainPanel {
-                object: binding.object,
-                observation: self.id,
-                binding: binding.id,
-                rendering: *rendering,
-                callback: current_observation(
-                    Rc::downgrade(target),
-                    binding.id,
-                    self.id,
-                    callback.clone(),
-                ),
-            },
-            ReferenceObservation::ImageScale(callback) => ImperativeRequest::ObserveImageScale {
-                object: binding.object,
-                observation: self.id,
-                callback: current_observation(
-                    Rc::downgrade(target),
-                    binding.id,
-                    self.id,
-                    callback.clone(),
-                ),
-            },
-            ReferenceObservation::CompositionHost(callback) => {
-                ImperativeRequest::ObserveCompositionHost {
+            ReferenceObservation::SwapChainPanel { callback, rendering } => {
+                ImperativeRequest::ObserveSwapChainPanel {
                     object: binding.object,
                     observation: self.id,
+                    binding: binding.id,
+                    rendering: *rendering,
                     callback: current_observation(
                         Rc::downgrade(target),
                         binding.id,
@@ -657,15 +565,20 @@ impl ObservationRegistration {
                     ),
                 }
             }
+            ReferenceObservation::ImageScale(callback) => ImperativeRequest::ObserveImageScale {
+                object: binding.object,
+                observation: self.id,
+                callback: current_observation(Rc::downgrade(target), binding.id, self.id, callback.clone()),
+            },
+            ReferenceObservation::CompositionHost(callback) => ImperativeRequest::ObserveCompositionHost {
+                object: binding.object,
+                observation: self.id,
+                callback: current_observation(Rc::downgrade(target), binding.id, self.id, callback.clone()),
+            },
             ReferenceObservation::ScrollView(callback) => ImperativeRequest::ObserveScrollView {
                 object: binding.object,
                 observation: self.id,
-                callback: current_observation(
-                    Rc::downgrade(target),
-                    binding.id,
-                    self.id,
-                    callback.clone(),
-                ),
+                callback: current_observation(Rc::downgrade(target), binding.id, self.id, callback.clone()),
             },
         }
     }
@@ -678,17 +591,9 @@ fn current_completion<T: 'static>(
 ) -> Callback<Result<T, IntegrationError>> {
     Callback::new(move |result| {
         let current = target.upgrade().is_some_and(|target| {
-            target
-                .borrow()
-                .binding
-                .as_ref()
-                .is_some_and(|current| current.id == binding)
+            target.borrow().binding.as_ref().is_some_and(|current| current.id == binding)
         });
-        completion(if current {
-            result
-        } else {
-            Err(IntegrationError::Unavailable)
-        });
+        completion(if current { result } else { Err(IntegrationError::Unavailable) });
     })
 }
 
@@ -701,10 +606,7 @@ fn current_observation<T: 'static>(
     Callback::new(move |value| {
         let current = target.upgrade().is_some_and(|target| {
             let target = target.borrow();
-            target
-                .binding
-                .as_ref()
-                .is_some_and(|current| current.id == binding)
+            target.binding.as_ref().is_some_and(|current| current.id == binding)
                 && target
                     .observations
                     .iter()
@@ -741,9 +643,8 @@ impl ReferenceEndpoint {
         let lifecycle = request.request.observation_key();
         let mut queue = self.queue.borrow_mut();
         if let Some(key) = lifecycle {
-            if let Some(index) = queue
-                .iter()
-                .rposition(|queued| queued.request.observation_key() == Some(key))
+            if let Some(index) =
+                queue.iter().rposition(|queued| queued.request.observation_key() == Some(key))
             {
                 queue.remove(index);
             }
@@ -805,9 +706,11 @@ impl QueuedImperative {
     pub(crate) fn is_current(&self) -> bool {
         self.target.as_ref().is_none_or(|target| {
             target.upgrade().is_some_and(|target| {
-                target.borrow().binding.as_ref().is_some_and(|binding| {
-                    binding.id == self.binding && binding.object == self.object
-                })
+                target
+                    .borrow()
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.id == self.binding && binding.object == self.object)
             })
         })
     }
@@ -885,30 +788,11 @@ pub enum ImperativeRequest {
 impl ImperativeRequest {
     fn observation_key(&self) -> Option<(ObjectId, u64)> {
         match self {
-            Self::ObserveSwapChainPanel {
-                object,
-                observation,
-                ..
-            }
-            | Self::ObserveImageScale {
-                object,
-                observation,
-                ..
-            }
-            | Self::ObserveCompositionHost {
-                object,
-                observation,
-                ..
-            }
-            | Self::ObserveScrollView {
-                object,
-                observation,
-                ..
-            }
-            | Self::RevokeObservation {
-                object,
-                observation,
-            } => Some((*object, *observation)),
+            Self::ObserveSwapChainPanel { object, observation, .. }
+            | Self::ObserveImageScale { object, observation, .. }
+            | Self::ObserveCompositionHost { object, observation, .. }
+            | Self::ObserveScrollView { object, observation, .. }
+            | Self::RevokeObservation { object, observation } => Some((*object, *observation)),
             _ => None,
         }
     }

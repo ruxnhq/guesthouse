@@ -51,12 +51,7 @@ struct Local<T> {
 impl<T: 'static> Local<T> {
     fn new(value: T) -> Self {
         let dispatcher = DispatcherQueue::GetForCurrentThread().unwrap();
-        Self {
-            id: register(value),
-            owner: current().id(),
-            dispatcher,
-            marker: PhantomData,
-        }
+        Self { id: register(value), owner: current().id(), dispatcher, marker: PhantomData }
     }
 
     fn with(&self, callback: impl FnOnce(&T)) {
@@ -72,10 +67,7 @@ impl<T> Drop for Local<T> {
             let id = self.id;
             let handler = DispatcherQueueHandler::new(move || remove(id));
             // Rejected cleanup is covered by the UI thread's shutdown clear.
-            _ = self
-                .dispatcher
-                .TryEnqueueWithPriority(DispatcherQueuePriority::Normal, &handler)
-                .unwrap();
+            _ = self.dispatcher.TryEnqueueWithPriority(DispatcherQueuePriority::Normal, &handler).unwrap();
         }
     }
 }

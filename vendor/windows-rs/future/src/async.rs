@@ -14,18 +14,11 @@ unsafe impl<T: Send> Sync for Once<T> {}
 
 impl<T> Once<T> {
     fn new(value: T) -> Self {
-        Self {
-            taken: AtomicBool::new(false),
-            value: UnsafeCell::new(Some(value)),
-        }
+        Self { taken: AtomicBool::new(false), value: UnsafeCell::new(Some(value)) }
     }
 
     fn take(&self) -> Option<T> {
-        if self.taken.swap(true, Ordering::Relaxed) {
-            None
-        } else {
-            unsafe { (*self.value.get()).take() }
-        }
+        if self.taken.swap(true, Ordering::Relaxed) { None } else { unsafe { (*self.value.get()).take() } }
     }
 }
 
@@ -154,12 +147,10 @@ impl<P: RuntimeType> Async for IAsyncActionWithProgress<P> {
     type CompletedHandler = AsyncActionWithProgressCompletedHandler<P>;
 
     fn set_completed<F: Fn(&Self) + Send + Sync + 'static>(&self, handler: F) -> Result<()> {
-        self.SetCompleted(&AsyncActionWithProgressCompletedHandler::new(
-            move |sender, _| {
-                handler(sender.ok()?);
-                Ok(())
-            },
-        ))
+        self.SetCompleted(&AsyncActionWithProgressCompletedHandler::new(move |sender, _| {
+            handler(sender.ok()?);
+            Ok(())
+        }))
     }
 
     #[cfg(feature = "std")]
@@ -181,12 +172,10 @@ impl<T: RuntimeType, P: RuntimeType> Async for IAsyncOperationWithProgress<T, P>
     type CompletedHandler = AsyncOperationWithProgressCompletedHandler<T, P>;
 
     fn set_completed<F: Fn(&Self) + Send + Sync + 'static>(&self, handler: F) -> Result<()> {
-        self.SetCompleted(&AsyncOperationWithProgressCompletedHandler::new(
-            move |sender, _| {
-                handler(sender.ok()?);
-                Ok(())
-            },
-        ))
+        self.SetCompleted(&AsyncOperationWithProgressCompletedHandler::new(move |sender, _| {
+            handler(sender.ok()?);
+            Ok(())
+        }))
     }
 
     #[cfg(feature = "std")]

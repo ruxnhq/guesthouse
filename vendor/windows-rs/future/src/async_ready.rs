@@ -8,18 +8,11 @@ struct ReadyState<T: Async> {
 
 impl<T: Async> ReadyState<T> {
     fn new(result: Result<T::Output>) -> Self {
-        Self {
-            set_completed: AtomicBool::new(false),
-            result,
-        }
+        Self { set_completed: AtomicBool::new(false), result }
     }
 
     fn status(&self) -> AsyncStatus {
-        if self.result.is_ok() {
-            AsyncStatus::Completed
-        } else {
-            AsyncStatus::Error
-        }
+        if self.result.is_ok() { AsyncStatus::Completed } else { AsyncStatus::Error }
     }
 
     // Ready operations invoke the handler immediately but still permit only one assignment.
@@ -201,10 +194,7 @@ impl<P: RuntimeType> IAsyncActionWithProgress_Impl<P> for ReadyActionWithProgres
 impl<T: RuntimeType, P: RuntimeType> IAsyncOperationWithProgress_Impl<T, P>
     for ReadyOperationWithProgress_Impl<T, P>
 {
-    fn SetCompleted(
-        &self,
-        handler: Ref<AsyncOperationWithProgressCompletedHandler<T, P>>,
-    ) -> Result<()> {
+    fn SetCompleted(&self, handler: Ref<AsyncOperationWithProgressCompletedHandler<T, P>>) -> Result<()> {
         self.0.invoke_completed(&self.as_interface(), handler)
     }
     fn Completed(&self) -> Result<AsyncOperationWithProgressCompletedHandler<T, P>> {

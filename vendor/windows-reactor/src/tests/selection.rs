@@ -9,18 +9,8 @@ fn selection_contracts_cover_navigation_list_box_and_selector_bar() {
             &[RelationId::MenuItems, RelationId::FooterMenuItems][..],
             PropertyId::Tag,
         ),
-        (
-            ObjectType::ListBox,
-            ObjectType::ListBoxItem,
-            &[RelationId::Items][..],
-            PropertyId::Tag,
-        ),
-        (
-            ObjectType::SelectorBar,
-            ObjectType::SelectorBarItem,
-            &[RelationId::Items][..],
-            PropertyId::Text,
-        ),
+        (ObjectType::ListBox, ObjectType::ListBoxItem, &[RelationId::Items][..], PropertyId::Tag),
+        (ObjectType::SelectorBar, ObjectType::SelectorBarItem, &[RelationId::Items][..], PropertyId::Text),
     ] {
         let contract = selection_contract(owner).unwrap();
         assert_eq!(contract.item, item);

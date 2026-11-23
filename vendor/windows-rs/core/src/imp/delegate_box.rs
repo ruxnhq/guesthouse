@@ -21,11 +21,7 @@ impl<I: Interface, F> DelegateBox<I, F> {
     pub fn new(vtable: *const I::Vtable, invoke: F) -> Self {
         #[cfg(windows_cast_diagnostics)]
         live_objects::DELEGATES.add();
-        Self {
-            vtable,
-            invoke,
-            count: RefCount::new(1),
-        }
+        Self { vtable, invoke, count: RefCount::new(1) }
     }
 
     /// Generic `IUnknown::QueryInterface` implementation for delegate boxes.

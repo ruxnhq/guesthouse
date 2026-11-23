@@ -558,116 +558,47 @@ pub fn controlled_event(kind: ObjectType, id: PropertyId) -> Option<EventId> {
 }
 pub fn reorder_contracts(kind: ObjectType) -> &'static [ReorderContract] {
     match kind {
-        ObjectType::ListView => &[ReorderContract {
-            relation: RelationId::Items,
-            event: EventId::DragItemsCompleted,
-        }],
-        ObjectType::TabView => &[ReorderContract {
-            relation: RelationId::TabItems,
-            event: EventId::TabItemsChanged,
-        }],
-        ObjectType::GridView => &[ReorderContract {
-            relation: RelationId::Items,
-            event: EventId::DragItemsCompleted,
-        }],
+        ObjectType::ListView => {
+            &[ReorderContract { relation: RelationId::Items, event: EventId::DragItemsCompleted }]
+        }
+        ObjectType::TabView => {
+            &[ReorderContract { relation: RelationId::TabItems, event: EventId::TabItemsChanged }]
+        }
+        ObjectType::GridView => {
+            &[ReorderContract { relation: RelationId::Items, event: EventId::DragItemsCompleted }]
+        }
         _ => &[],
     }
 }
 pub fn event_contracts(kind: ObjectType) -> &'static [EventContract] {
     match kind {
         ObjectType::TextBlock => &[],
-        ObjectType::TextBox => &[EventContract {
-            id: EventId::TextChanged,
-            value: ValueType::String,
-        }],
-        ObjectType::Button => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
+        ObjectType::TextBox => &[EventContract { id: EventId::TextChanged, value: ValueType::String }],
+        ObjectType::Button => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
         ObjectType::CheckBox => &[
-            EventContract {
-                id: EventId::Click,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::IsCheckedChanged,
-                value: ValueType::OptionalBool,
-            },
+            EventContract { id: EventId::Click, value: ValueType::Unit },
+            EventContract { id: EventId::IsCheckedChanged, value: ValueType::OptionalBool },
         ],
         ObjectType::Border => &[
-            EventContract {
-                id: EventId::PointerPressed,
-                value: ValueType::PointerEventInfo,
-            },
+            EventContract { id: EventId::PointerPressed, value: ValueType::PointerEventInfo },
             // remoteman patch (VENDORED.md, patch 7).
-            EventContract {
-                id: EventId::PointerWheelChanged,
-                value: ValueType::PointerEventInfo,
-            },
-            EventContract {
-                id: EventId::PointerMoved,
-                value: ValueType::PointerEventInfo,
-            },
-            EventContract {
-                id: EventId::PointerEntered,
-                value: ValueType::PointerEventInfo,
-            },
-            EventContract {
-                id: EventId::PointerExited,
-                value: ValueType::PointerEventInfo,
-            },
-            EventContract {
-                id: EventId::PointerReleased,
-                value: ValueType::PointerEventInfo,
-            },
-            EventContract {
-                id: EventId::PointerCaptureLost,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::PointerCanceled,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::DoubleTapped,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::PreviewKeyDown,
-                value: ValueType::KeyEventInfo,
-            },
-            EventContract {
-                id: EventId::KeyUp,
-                value: ValueType::KeyEventInfo,
-            },
-            EventContract {
-                id: EventId::CharacterReceived,
-                value: ValueType::CharacterEventInfo,
-            },
-            EventContract {
-                id: EventId::GotFocus,
-                value: ValueType::FocusEventInfo,
-            },
-            EventContract {
-                id: EventId::LostFocus,
-                value: ValueType::FocusEventInfo,
-            },
-            EventContract {
-                id: EventId::DragEnter,
-                value: ValueType::DragKind,
-            },
-            EventContract {
-                id: EventId::DragOver,
-                value: ValueType::DragKind,
-            },
-            EventContract {
-                id: EventId::DragLeave,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::Drop,
-                value: ValueType::DroppedData,
-            },
+            EventContract { id: EventId::PointerWheelChanged, value: ValueType::PointerEventInfo },
+            EventContract { id: EventId::PointerMoved, value: ValueType::PointerEventInfo },
+            EventContract { id: EventId::PointerEntered, value: ValueType::PointerEventInfo },
+            EventContract { id: EventId::PointerExited, value: ValueType::PointerEventInfo },
+            EventContract { id: EventId::PointerReleased, value: ValueType::PointerEventInfo },
+            EventContract { id: EventId::PointerCaptureLost, value: ValueType::Unit },
+            EventContract { id: EventId::PointerCanceled, value: ValueType::Unit },
+            EventContract { id: EventId::DoubleTapped, value: ValueType::Unit },
+            EventContract { id: EventId::PreviewKeyDown, value: ValueType::KeyEventInfo },
+            EventContract { id: EventId::KeyUp, value: ValueType::KeyEventInfo },
+            EventContract { id: EventId::CharacterReceived, value: ValueType::CharacterEventInfo },
+            EventContract { id: EventId::GotFocus, value: ValueType::FocusEventInfo },
+            EventContract { id: EventId::LostFocus, value: ValueType::FocusEventInfo },
+            EventContract { id: EventId::DragEnter, value: ValueType::DragKind },
+            EventContract { id: EventId::DragOver, value: ValueType::DragKind },
+            EventContract { id: EventId::DragLeave, value: ValueType::Unit },
+            EventContract { id: EventId::Drop, value: ValueType::DroppedData },
         ],
         ObjectType::Grid => &[],
         ObjectType::StackPanel => &[],
@@ -675,131 +606,63 @@ pub fn event_contracts(kind: ObjectType) -> &'static [EventContract] {
         ObjectType::ScrollViewer => &[],
         ObjectType::Viewbox => &[],
         ObjectType::TitleBar => &[
-            EventContract {
-                id: EventId::BackRequested,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::PaneToggleRequested,
-                value: ValueType::Unit,
-            },
+            EventContract { id: EventId::BackRequested, value: ValueType::Unit },
+            EventContract { id: EventId::PaneToggleRequested, value: ValueType::Unit },
         ],
-        ObjectType::Slider => &[EventContract {
-            id: EventId::ValueChanged,
-            value: ValueType::F64,
-        }],
-        ObjectType::TreeView => &[EventContract {
-            id: EventId::ItemInvoked,
-            value: ValueType::String,
-        }],
+        ObjectType::Slider => &[EventContract { id: EventId::ValueChanged, value: ValueType::F64 }],
+        ObjectType::TreeView => &[EventContract { id: EventId::ItemInvoked, value: ValueType::String }],
         ObjectType::TreeNode => &[],
         ObjectType::ListView => &[
-            EventContract {
-                id: EventId::SelectionChanged,
-                value: ValueType::SelectionIndex,
-            },
-            EventContract {
-                id: EventId::DragItemsCompleted,
-                value: ValueType::Keys,
-            },
+            EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex },
+            EventContract { id: EventId::DragItemsCompleted, value: ValueType::Keys },
         ],
         ObjectType::DataItem => &[],
-        ObjectType::HyperlinkButton => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
-        ObjectType::RepeatButton => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
-        ObjectType::BreadcrumbBar => &[EventContract {
-            id: EventId::ItemClicked,
-            value: ValueType::String,
-        }],
+        ObjectType::HyperlinkButton => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
+        ObjectType::RepeatButton => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
+        ObjectType::BreadcrumbBar => &[EventContract { id: EventId::ItemClicked, value: ValueType::String }],
         ObjectType::VariableSizedWrapGrid => &[],
         ObjectType::AutoSuggestBox => &[
-            EventContract {
-                id: EventId::TextChanged,
-                value: ValueType::String,
-            },
-            EventContract {
-                id: EventId::SuggestionChosen,
-                value: ValueType::String,
-            },
+            EventContract { id: EventId::TextChanged, value: ValueType::String },
+            EventContract { id: EventId::SuggestionChosen, value: ValueType::String },
         ],
-        ObjectType::PasswordBox => &[EventContract {
-            id: EventId::PasswordChanged,
-            value: ValueType::String,
-        }],
-        ObjectType::NumberBox => &[EventContract {
-            id: EventId::ValueChanged,
-            value: ValueType::OptionalF64,
-        }],
+        ObjectType::PasswordBox => {
+            &[EventContract { id: EventId::PasswordChanged, value: ValueType::String }]
+        }
+        ObjectType::NumberBox => {
+            &[EventContract { id: EventId::ValueChanged, value: ValueType::OptionalF64 }]
+        }
         ObjectType::NavigationView => &[
-            EventContract {
-                id: EventId::IsPaneOpenChanged,
-                value: ValueType::Bool,
-            },
-            EventContract {
-                id: EventId::SelectionChanged,
-                value: ValueType::Selection,
-            },
-            EventContract {
-                id: EventId::DisplayModeChanged,
-                value: ValueType::NavigationViewDisplayMode,
-            },
+            EventContract { id: EventId::IsPaneOpenChanged, value: ValueType::Bool },
+            EventContract { id: EventId::SelectionChanged, value: ValueType::Selection },
+            EventContract { id: EventId::DisplayModeChanged, value: ValueType::NavigationViewDisplayMode },
         ],
         ObjectType::NavigationViewItem => &[],
-        ObjectType::SplitView => &[EventContract {
-            id: EventId::PaneClosed,
-            value: ValueType::Bool,
-        }],
+        ObjectType::SplitView => &[EventContract { id: EventId::PaneClosed, value: ValueType::Bool }],
         ObjectType::ProgressBar => &[],
-        ObjectType::ToggleSwitch => &[EventContract {
-            id: EventId::Toggled,
-            value: ValueType::Bool,
-        }],
-        ObjectType::ToggleButton => &[EventContract {
-            id: EventId::IsCheckedChanged,
-            value: ValueType::OptionalBool,
-        }],
+        ObjectType::ToggleSwitch => &[EventContract { id: EventId::Toggled, value: ValueType::Bool }],
+        ObjectType::ToggleButton => {
+            &[EventContract { id: EventId::IsCheckedChanged, value: ValueType::OptionalBool }]
+        }
         ObjectType::RadioButton => &[
-            EventContract {
-                id: EventId::Checked,
-                value: ValueType::OptionalBool,
-            },
-            EventContract {
-                id: EventId::Unchecked,
-                value: ValueType::OptionalBool,
-            },
+            EventContract { id: EventId::Checked, value: ValueType::OptionalBool },
+            EventContract { id: EventId::Unchecked, value: ValueType::OptionalBool },
         ],
-        ObjectType::RadioButtons => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::SelectionIndex,
-        }],
+        ObjectType::RadioButtons => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex }]
+        }
         ObjectType::ItemsRepeater => &[],
         ObjectType::InfoBadge => &[],
-        ObjectType::InfoBar => &[EventContract {
-            id: EventId::Closed,
-            value: ValueType::Unit,
-        }],
+        ObjectType::InfoBar => &[EventContract { id: EventId::Closed, value: ValueType::Unit }],
         ObjectType::PersonPicture => &[],
         ObjectType::ScrollView => &[],
         ObjectType::Image => &[
-            EventContract {
-                id: EventId::ImageOpened,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::ImageFailed,
-                value: ValueType::Unit,
-            },
+            EventContract { id: EventId::ImageOpened, value: ValueType::Unit },
+            EventContract { id: EventId::ImageFailed, value: ValueType::Unit },
         ],
         ObjectType::ProgressRing => &[],
-        ObjectType::ListBox => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::Selection,
-        }],
+        ObjectType::ListBox => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::Selection }]
+        }
         ObjectType::Rectangle => &[],
         ObjectType::Ellipse => &[],
         ObjectType::Line => &[],
@@ -809,123 +672,68 @@ pub fn event_contracts(kind: ObjectType) -> &'static [EventContract] {
         ObjectType::BitmapIcon => &[],
         ObjectType::PathIcon => &[],
         ObjectType::ListBoxItem => &[],
-        ObjectType::RatingControl => &[EventContract {
-            id: EventId::ValueChanged,
-            value: ValueType::OptionalF64,
-        }],
-        ObjectType::Expander => &[EventContract {
-            id: EventId::IsExpandedChanged,
-            value: ValueType::Bool,
-        }],
-        ObjectType::ComboBox => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::SelectionIndex,
-        }],
-        ObjectType::Pivot => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::SelectionIndex,
-        }],
+        ObjectType::RatingControl => {
+            &[EventContract { id: EventId::ValueChanged, value: ValueType::OptionalF64 }]
+        }
+        ObjectType::Expander => &[EventContract { id: EventId::IsExpandedChanged, value: ValueType::Bool }],
+        ObjectType::ComboBox => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex }]
+        }
+        ObjectType::Pivot => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex }]
+        }
         ObjectType::PivotItem => &[],
-        ObjectType::FlipView => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::SelectionIndex,
-        }],
-        ObjectType::SelectorBar => &[EventContract {
-            id: EventId::SelectionChanged,
-            value: ValueType::Selection,
-        }],
+        ObjectType::FlipView => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex }]
+        }
+        ObjectType::SelectorBar => {
+            &[EventContract { id: EventId::SelectionChanged, value: ValueType::Selection }]
+        }
         ObjectType::SelectorBarItem => &[],
         ObjectType::TabView => &[
-            EventContract {
-                id: EventId::AddTabButtonClick,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::SelectionChanged,
-                value: ValueType::SelectionIndex,
-            },
-            EventContract {
-                id: EventId::TabCloseRequested,
-                value: ValueType::Key,
-            },
-            EventContract {
-                id: EventId::TabItemsChanged,
-                value: ValueType::Keys,
-            },
+            EventContract { id: EventId::AddTabButtonClick, value: ValueType::Unit },
+            EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex },
+            EventContract { id: EventId::TabCloseRequested, value: ValueType::Key },
+            EventContract { id: EventId::TabItemsChanged, value: ValueType::Keys },
         ],
         ObjectType::TabViewItem => &[],
         ObjectType::TeachingTip => &[
-            EventContract {
-                id: EventId::Closed,
-                value: ValueType::Unit,
-            },
-            EventContract {
-                id: EventId::IsOpenChanged,
-                value: ValueType::Bool,
-            },
-            EventContract {
-                id: EventId::ActionButtonClick,
-                value: ValueType::Unit,
-            },
+            EventContract { id: EventId::Closed, value: ValueType::Unit },
+            EventContract { id: EventId::IsOpenChanged, value: ValueType::Bool },
+            EventContract { id: EventId::ActionButtonClick, value: ValueType::Unit },
         ],
-        ObjectType::DropDownButton => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
+        ObjectType::DropDownButton => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
         ObjectType::CommandBar => &[],
-        ObjectType::AppBarButton => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
+        ObjectType::AppBarButton => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
         ObjectType::AppBarSeparator => &[],
         ObjectType::MenuBar => &[],
         ObjectType::MenuBarItem => &[],
-        ObjectType::SplitButton => &[EventContract {
-            id: EventId::Click,
-            value: ValueType::Unit,
-        }],
-        ObjectType::ColorPicker => &[EventContract {
-            id: EventId::ColorChanged,
-            value: ValueType::Color,
-        }],
-        ObjectType::DatePicker => &[EventContract {
-            id: EventId::SelectedDateChanged,
-            value: ValueType::OptionalDateTime,
-        }],
-        ObjectType::TimePicker => &[EventContract {
-            id: EventId::SelectedTimeChanged,
-            value: ValueType::OptionalTimeSpan,
-        }],
-        ObjectType::CalendarDatePicker => &[EventContract {
-            id: EventId::DateChanged,
-            value: ValueType::OptionalDateTime,
-        }],
+        ObjectType::SplitButton => &[EventContract { id: EventId::Click, value: ValueType::Unit }],
+        ObjectType::ColorPicker => &[EventContract { id: EventId::ColorChanged, value: ValueType::Color }],
+        ObjectType::DatePicker => {
+            &[EventContract { id: EventId::SelectedDateChanged, value: ValueType::OptionalDateTime }]
+        }
+        ObjectType::TimePicker => {
+            &[EventContract { id: EventId::SelectedTimeChanged, value: ValueType::OptionalTimeSpan }]
+        }
+        ObjectType::CalendarDatePicker => {
+            &[EventContract { id: EventId::DateChanged, value: ValueType::OptionalDateTime }]
+        }
         ObjectType::ToolTip => &[],
-        ObjectType::ContentDialog => &[EventContract {
-            id: EventId::Closed,
-            value: ValueType::ContentDialogResult,
-        }],
-        ObjectType::CalendarView => &[EventContract {
-            id: EventId::SelectedDatesChanged,
-            value: ValueType::Unit,
-        }],
+        ObjectType::ContentDialog => {
+            &[EventContract { id: EventId::Closed, value: ValueType::ContentDialogResult }]
+        }
+        ObjectType::CalendarView => {
+            &[EventContract { id: EventId::SelectedDatesChanged, value: ValueType::Unit }]
+        }
         ObjectType::ListViewItem => &[],
         ObjectType::GridView => &[
-            EventContract {
-                id: EventId::SelectionChanged,
-                value: ValueType::SelectionIndex,
-            },
-            EventContract {
-                id: EventId::DragItemsCompleted,
-                value: ValueType::Keys,
-            },
+            EventContract { id: EventId::SelectionChanged, value: ValueType::SelectionIndex },
+            EventContract { id: EventId::DragItemsCompleted, value: ValueType::Keys },
         ],
         ObjectType::GridViewItem => &[],
         ObjectType::RelativePanel => &[],
-        ObjectType::RichEditBox => &[EventContract {
-            id: EventId::TextChanged,
-            value: ValueType::String,
-        }],
+        ObjectType::RichEditBox => &[EventContract { id: EventId::TextChanged, value: ValueType::String }],
         ObjectType::RichTextBlock => &[],
         ObjectType::WebView2 => &[],
         ObjectType::SwapChainPanel => &[],
@@ -935,88 +743,46 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
     if object_category(kind) == ObjectCategory::Visual {
         match id {
             PropertyId::CanvasLeft => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::CanvasTop => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::GridRow => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::I32,
-                });
+                return Some(PropertyContract { id, value: ValueType::I32 });
             }
             PropertyId::GridColumn => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::I32,
-                });
+                return Some(PropertyContract { id, value: ValueType::I32 });
             }
             PropertyId::GridRowSpan => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::I32,
-                });
+                return Some(PropertyContract { id, value: ValueType::I32 });
             }
             PropertyId::GridColumnSpan => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::I32,
-                });
+                return Some(PropertyContract { id, value: ValueType::I32 });
             }
             PropertyId::RelativeAlignLeft => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::RelativeAlignTop => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::RelativeAlignRight => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::RelativeAlignBottom => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::RelativeAlignHorizontalCenter => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::RelativeAlignVerticalCenter => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Bool,
-                });
+                return Some(PropertyContract { id, value: ValueType::Bool });
             }
             PropertyId::AutomationName => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::String,
-                });
+                return Some(PropertyContract { id, value: ValueType::String });
             }
             PropertyId::AutomationId => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::String,
-                });
+                return Some(PropertyContract { id, value: ValueType::String });
             }
             PropertyId::AutomationHeadingLevel => {
                 return Some(PropertyContract {
@@ -1024,23 +790,17 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                     value: ValueType::Enum {
                         kind: "AutomationHeadingLevel",
                         variants: &[
-                            "None", "Level1", "Level2", "Level3", "Level4", "Level5", "Level6",
-                            "Level7", "Level8", "Level9",
+                            "None", "Level1", "Level2", "Level3", "Level4", "Level5", "Level6", "Level7",
+                            "Level8", "Level9",
                         ],
                     },
                 });
             }
             PropertyId::AutomationHelpText => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::String,
-                });
+                return Some(PropertyContract { id, value: ValueType::String });
             }
             PropertyId::AutomationFullDescription => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::String,
-                });
+                return Some(PropertyContract { id, value: ValueType::String });
             }
             PropertyId::AutomationLiveSetting => {
                 return Some(PropertyContract {
@@ -1052,46 +812,25 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 });
             }
             PropertyId::Width => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::Height => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::MinWidth => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::MaxWidth => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::MinHeight => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::MaxHeight => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::Margin => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::Thickness,
-                });
+                return Some(PropertyContract { id, value: ValueType::Thickness });
             }
             PropertyId::HorizontalAlignment => {
                 return Some(PropertyContract {
@@ -1112,16 +851,10 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 });
             }
             PropertyId::Opacity => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::F64,
-                });
+                return Some(PropertyContract { id, value: ValueType::F64 });
             }
             PropertyId::Transitions => {
-                return Some(PropertyContract {
-                    id,
-                    value: ValueType::ThemeTransitions,
-                });
+                return Some(PropertyContract { id, value: ValueType::ThemeTransitions });
             }
             _ => {}
         }
@@ -1163,55 +896,36 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 | ObjectType::RichEditBox
         )
     {
-        return Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        });
+        return Some(PropertyContract { id, value: ValueType::Bool });
     }
     match (kind, id) {
-        (ObjectType::TextBlock, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TextBlock, PropertyId::FontSize) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::TextBlock, PropertyId::FontWeight) => Some(PropertyContract {
-            id,
-            value: ValueType::FontWeight,
-        }),
-        (ObjectType::TextBlock, PropertyId::FontFamily) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TextBlock, PropertyId::CharacterSpacing) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::TextBlock, PropertyId::LineHeight) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::TextBlock, PropertyId::Foreground) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::TextBlock, PropertyId::Padding) => Some(PropertyContract {
-            id,
-            value: ValueType::Thickness,
-        }),
+        (ObjectType::TextBlock, PropertyId::Text) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::TextBlock, PropertyId::FontSize) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::TextBlock, PropertyId::FontWeight) => {
+            Some(PropertyContract { id, value: ValueType::FontWeight })
+        }
+        (ObjectType::TextBlock, PropertyId::FontFamily) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TextBlock, PropertyId::CharacterSpacing) => {
+            Some(PropertyContract { id, value: ValueType::I32 })
+        }
+        (ObjectType::TextBlock, PropertyId::LineHeight) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::TextBlock, PropertyId::Foreground) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::TextBlock, PropertyId::Padding) => {
+            Some(PropertyContract { id, value: ValueType::Thickness })
+        }
         (ObjectType::TextBlock, PropertyId::TextWrapping) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "TextWrapping",
-                variants: &["NoWrap", "Wrap", "WrapWholeWords"],
-            },
+            value: ValueType::Enum { kind: "TextWrapping", variants: &["NoWrap", "Wrap", "WrapWholeWords"] },
         }),
-        (ObjectType::TextBlock, PropertyId::IsTextSelectionEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::TextBlock, PropertyId::IsTextSelectionEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::TextBlock, PropertyId::TextTrimming) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1219,79 +933,47 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "CharacterEllipsis", "WordEllipsis", "Clip"],
             },
         }),
-        (ObjectType::TextBlock, PropertyId::MaxLines) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
+        (ObjectType::TextBlock, PropertyId::MaxLines) => Some(PropertyContract { id, value: ValueType::I32 }),
         (ObjectType::TextBlock, PropertyId::TextAlignment) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
                 kind: "TextAlignment",
-                variants: &[
-                    "Center",
-                    "Left",
-                    "Start",
-                    "Right",
-                    "End",
-                    "Justify",
-                    "DetectFromContent",
-                ],
+                variants: &["Center", "Left", "Start", "Right", "End", "Justify", "DetectFromContent"],
             },
         }),
-        (ObjectType::TextBox, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TextBox, PropertyId::AcceptsReturn) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TextBox, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TextBox, PropertyId::IsReadOnly) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::TextBox, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TextBox, PropertyId::AcceptsReturn) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TextBox, PropertyId::Text) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::TextBox, PropertyId::IsReadOnly) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::TextBox, PropertyId::TextAlignment) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
                 kind: "TextAlignment",
-                variants: &[
-                    "Center",
-                    "Left",
-                    "Start",
-                    "Right",
-                    "End",
-                    "Justify",
-                    "DetectFromContent",
-                ],
+                variants: &["Center", "Left", "Start", "Right", "End", "Justify", "DetectFromContent"],
             },
         }),
         (ObjectType::TextBox, PropertyId::TextWrapping) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "TextWrapping",
-                variants: &["NoWrap", "Wrap", "WrapWholeWords"],
-            },
+            value: ValueType::Enum { kind: "TextWrapping", variants: &["NoWrap", "Wrap", "WrapWholeWords"] },
         }),
-        (ObjectType::TextBox, PropertyId::Background) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::TextBox, PropertyId::BorderBrush) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::TextBox, PropertyId::BorderThickness) => Some(PropertyContract {
-            id,
-            value: ValueType::Thickness,
-        }),
-        (ObjectType::Button, PropertyId::Background) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
+        (ObjectType::TextBox, PropertyId::Background) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::TextBox, PropertyId::BorderBrush) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::TextBox, PropertyId::BorderThickness) => {
+            Some(PropertyContract { id, value: ValueType::Thickness })
+        }
+        (ObjectType::Button, PropertyId::Background) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
         (ObjectType::Button, PropertyId::HorizontalContentAlignment) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1306,78 +988,56 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Top", "Center", "Bottom", "Stretch"],
             },
         }),
-        (ObjectType::Button, PropertyId::Resources) => Some(PropertyContract {
-            id,
-            value: ValueType::ResourceOverrides,
-        }),
-        (ObjectType::Button, PropertyId::Style) => Some(PropertyContract {
-            id,
-            value: ValueType::ButtonStyle,
-        }),
-        (ObjectType::Button, PropertyId::KeyboardAccelerators) => Some(PropertyContract {
-            id,
-            value: ValueType::KeyAccelerators,
-        }),
-        (ObjectType::CheckBox, PropertyId::IsChecked) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalBool,
-        }),
-        (ObjectType::Border, PropertyId::ChildTransitions) => Some(PropertyContract {
-            id,
-            value: ValueType::ThemeTransitions,
-        }),
-        (ObjectType::Border, PropertyId::Background) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Border, PropertyId::BorderBrush) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Border, PropertyId::BorderThickness) => Some(PropertyContract {
-            id,
-            value: ValueType::Thickness,
-        }),
-        (ObjectType::Border, PropertyId::CornerRadius) => Some(PropertyContract {
-            id,
-            value: ValueType::CornerRadius,
-        }),
-        (ObjectType::Border, PropertyId::Padding) => Some(PropertyContract {
-            id,
-            value: ValueType::Thickness,
-        }),
-        (ObjectType::Border, PropertyId::IsTabStop) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::Border, PropertyId::AllowFocusOnInteraction) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::Border, PropertyId::OpacityTransition) => Some(PropertyContract {
-            id,
-            value: ValueType::Duration,
-        }),
-        (ObjectType::Border, PropertyId::Scale) => Some(PropertyContract {
-            id,
-            value: ValueType::Vector2,
-        }),
-        (ObjectType::Border, PropertyId::ScaleTransition) => Some(PropertyContract {
-            id,
-            value: ValueType::Duration,
-        }),
-        (ObjectType::Border, PropertyId::Translation) => Some(PropertyContract {
-            id,
-            value: ValueType::Vector2,
-        }),
-        (ObjectType::Border, PropertyId::TranslationTransition) => Some(PropertyContract {
-            id,
-            value: ValueType::Duration,
-        }),
-        (ObjectType::Border, PropertyId::CapturePointerOnPress) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::Button, PropertyId::Resources) => {
+            Some(PropertyContract { id, value: ValueType::ResourceOverrides })
+        }
+        (ObjectType::Button, PropertyId::Style) => {
+            Some(PropertyContract { id, value: ValueType::ButtonStyle })
+        }
+        (ObjectType::Button, PropertyId::KeyboardAccelerators) => {
+            Some(PropertyContract { id, value: ValueType::KeyAccelerators })
+        }
+        (ObjectType::CheckBox, PropertyId::IsChecked) => {
+            Some(PropertyContract { id, value: ValueType::OptionalBool })
+        }
+        (ObjectType::Border, PropertyId::ChildTransitions) => {
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
+        }
+        (ObjectType::Border, PropertyId::Background) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::Border, PropertyId::BorderBrush) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::Border, PropertyId::BorderThickness) => {
+            Some(PropertyContract { id, value: ValueType::Thickness })
+        }
+        (ObjectType::Border, PropertyId::CornerRadius) => {
+            Some(PropertyContract { id, value: ValueType::CornerRadius })
+        }
+        (ObjectType::Border, PropertyId::Padding) => {
+            Some(PropertyContract { id, value: ValueType::Thickness })
+        }
+        (ObjectType::Border, PropertyId::IsTabStop) => Some(PropertyContract { id, value: ValueType::Bool }),
+        (ObjectType::Border, PropertyId::AllowFocusOnInteraction) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::Border, PropertyId::OpacityTransition) => {
+            Some(PropertyContract { id, value: ValueType::Duration })
+        }
+        (ObjectType::Border, PropertyId::Scale) => Some(PropertyContract { id, value: ValueType::Vector2 }),
+        (ObjectType::Border, PropertyId::ScaleTransition) => {
+            Some(PropertyContract { id, value: ValueType::Duration })
+        }
+        (ObjectType::Border, PropertyId::Translation) => {
+            Some(PropertyContract { id, value: ValueType::Vector2 })
+        }
+        (ObjectType::Border, PropertyId::TranslationTransition) => {
+            Some(PropertyContract { id, value: ValueType::Duration })
+        }
+        (ObjectType::Border, PropertyId::CapturePointerOnPress) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::Border, PropertyId::PointerCursor) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1403,79 +1063,52 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 ],
             },
         }),
-        (ObjectType::Border, PropertyId::FocusOnPointerRelease) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::Border, PropertyId::DropPolicy) => Some(PropertyContract {
-            id,
-            value: ValueType::DragDropPolicy,
-        }),
-        (ObjectType::Grid, PropertyId::ChildrenTransitions) => Some(PropertyContract {
-            id,
-            value: ValueType::ThemeTransitions,
-        }),
-        (ObjectType::Grid, PropertyId::GridRows) => Some(PropertyContract {
-            id,
-            value: ValueType::GridLengths,
-        }),
-        (ObjectType::Grid, PropertyId::GridColumns) => Some(PropertyContract {
-            id,
-            value: ValueType::GridLengths,
-        }),
-        (ObjectType::Grid, PropertyId::RowSpacing) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Grid, PropertyId::ColumnSpacing) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Grid, PropertyId::Background) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Grid, PropertyId::KeyboardAccelerators) => Some(PropertyContract {
-            id,
-            value: ValueType::KeyAccelerators,
-        }),
-        (ObjectType::StackPanel, PropertyId::ChildrenTransitions) => Some(PropertyContract {
-            id,
-            value: ValueType::ThemeTransitions,
-        }),
-        (ObjectType::StackPanel, PropertyId::Spacing) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::Border, PropertyId::FocusOnPointerRelease) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::Border, PropertyId::DropPolicy) => {
+            Some(PropertyContract { id, value: ValueType::DragDropPolicy })
+        }
+        (ObjectType::Grid, PropertyId::ChildrenTransitions) => {
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
+        }
+        (ObjectType::Grid, PropertyId::GridRows) => {
+            Some(PropertyContract { id, value: ValueType::GridLengths })
+        }
+        (ObjectType::Grid, PropertyId::GridColumns) => {
+            Some(PropertyContract { id, value: ValueType::GridLengths })
+        }
+        (ObjectType::Grid, PropertyId::RowSpacing) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Grid, PropertyId::ColumnSpacing) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Grid, PropertyId::Background) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Grid, PropertyId::KeyboardAccelerators) => {
+            Some(PropertyContract { id, value: ValueType::KeyAccelerators })
+        }
+        (ObjectType::StackPanel, PropertyId::ChildrenTransitions) => {
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
+        }
+        (ObjectType::StackPanel, PropertyId::Spacing) => Some(PropertyContract { id, value: ValueType::F64 }),
         (ObjectType::StackPanel, PropertyId::Orientation) => Some(PropertyContract {
             id,
+            value: ValueType::Enum { kind: "Orientation", variants: &["Vertical", "Horizontal"] },
+        }),
+        (ObjectType::Canvas, PropertyId::ChildrenTransitions) => {
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
+        }
+        (ObjectType::ScrollViewer, PropertyId::HorizontalScrollBarVisibility) => Some(PropertyContract {
+            id,
             value: ValueType::Enum {
-                kind: "Orientation",
-                variants: &["Vertical", "Horizontal"],
+                kind: "ScrollBarVisibility",
+                variants: &["Disabled", "Auto", "Hidden", "Visible"],
             },
         }),
-        (ObjectType::Canvas, PropertyId::ChildrenTransitions) => Some(PropertyContract {
+        (ObjectType::ScrollViewer, PropertyId::VerticalScrollBarVisibility) => Some(PropertyContract {
             id,
-            value: ValueType::ThemeTransitions,
+            value: ValueType::Enum {
+                kind: "ScrollBarVisibility",
+                variants: &["Disabled", "Auto", "Hidden", "Visible"],
+            },
         }),
-        (ObjectType::ScrollViewer, PropertyId::HorizontalScrollBarVisibility) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Enum {
-                    kind: "ScrollBarVisibility",
-                    variants: &["Disabled", "Auto", "Hidden", "Visible"],
-                },
-            })
-        }
-        (ObjectType::ScrollViewer, PropertyId::VerticalScrollBarVisibility) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Enum {
-                    kind: "ScrollBarVisibility",
-                    variants: &["Disabled", "Auto", "Hidden", "Visible"],
-                },
-            })
-        }
         (ObjectType::Viewbox, PropertyId::Stretch) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1483,53 +1116,32 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "Fill", "Uniform", "UniformToFill"],
             },
         }),
-        (ObjectType::TitleBar, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TitleBar, PropertyId::Subtitle) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TitleBar, PropertyId::IsBackButtonVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TitleBar, PropertyId::IsBackButtonEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TitleBar, PropertyId::IsPaneToggleButtonVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TitleBar, PropertyId::IconSource) => Some(PropertyContract {
-            id,
-            value: ValueType::Icon,
-        }),
-        (ObjectType::Slider, PropertyId::Minimum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Slider, PropertyId::Maximum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Slider, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::TitleBar, PropertyId::Title) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::TitleBar, PropertyId::Subtitle) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TitleBar, PropertyId::IsBackButtonVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TitleBar, PropertyId::IsBackButtonEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TitleBar, PropertyId::IsPaneToggleButtonVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TitleBar, PropertyId::IconSource) => {
+            Some(PropertyContract { id, value: ValueType::Icon })
+        }
+        (ObjectType::Slider, PropertyId::Minimum) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Slider, PropertyId::Maximum) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Slider, PropertyId::Value) => Some(PropertyContract { id, value: ValueType::F64 }),
         (ObjectType::Slider, PropertyId::Orientation) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "Orientation",
-                variants: &["Vertical", "Horizontal"],
-            },
+            value: ValueType::Enum { kind: "Orientation", variants: &["Vertical", "Horizontal"] },
         }),
-        (ObjectType::Slider, PropertyId::StepFrequency) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::Slider, PropertyId::StepFrequency) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
         (ObjectType::TreeView, PropertyId::SelectionMode) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1537,14 +1149,8 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "Single", "Multiple"],
             },
         }),
-        (ObjectType::TreeNode, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TreeNode, PropertyId::Expanded) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::TreeNode, PropertyId::Text) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::TreeNode, PropertyId::Expanded) => Some(PropertyContract { id, value: ValueType::Bool }),
         (ObjectType::ListView, PropertyId::SelectionMode) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1552,110 +1158,72 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "Single", "Multiple", "Extended"],
             },
         }),
-        (ObjectType::ListView, PropertyId::CanDragItems) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ListView, PropertyId::CanReorderItems) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ListView, PropertyId::AllowDrop) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ListView, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::DataItem, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::HyperlinkButton, PropertyId::NavigateUri) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RepeatButton, PropertyId::Delay) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::RepeatButton, PropertyId::Interval) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::BreadcrumbBar, PropertyId::ItemsSource) => Some(PropertyContract {
-            id,
-            value: ValueType::StringList,
-        }),
+        (ObjectType::ListView, PropertyId::CanDragItems) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ListView, PropertyId::CanReorderItems) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ListView, PropertyId::AllowDrop) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ListView, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::DataItem, PropertyId::Text) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::HyperlinkButton, PropertyId::NavigateUri) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RepeatButton, PropertyId::Delay) => Some(PropertyContract { id, value: ValueType::I32 }),
+        (ObjectType::RepeatButton, PropertyId::Interval) => {
+            Some(PropertyContract { id, value: ValueType::I32 })
+        }
+        (ObjectType::BreadcrumbBar, PropertyId::ItemsSource) => {
+            Some(PropertyContract { id, value: ValueType::StringList })
+        }
         (ObjectType::VariableSizedWrapGrid, PropertyId::ChildrenTransitions) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::ThemeTransitions,
-            })
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
         }
         (ObjectType::VariableSizedWrapGrid, PropertyId::Orientation) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "Orientation",
-                variants: &["Vertical", "Horizontal"],
-            },
+            value: ValueType::Enum { kind: "Orientation", variants: &["Vertical", "Horizontal"] },
         }),
-        (ObjectType::VariableSizedWrapGrid, PropertyId::ItemWidth) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::VariableSizedWrapGrid, PropertyId::ItemHeight) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::AutoSuggestBox, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::AutoSuggestBox, PropertyId::ItemsSource) => Some(PropertyContract {
-            id,
-            value: ValueType::StringList,
-        }),
-        (ObjectType::AutoSuggestBox, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::AutoSuggestBox, PropertyId::QueryIcon) => Some(PropertyContract {
-            id,
-            value: ValueType::Icon,
-        }),
-        (ObjectType::PasswordBox, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
+        (ObjectType::VariableSizedWrapGrid, PropertyId::ItemWidth) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::VariableSizedWrapGrid, PropertyId::ItemHeight) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::AutoSuggestBox, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::AutoSuggestBox, PropertyId::ItemsSource) => {
+            Some(PropertyContract { id, value: ValueType::StringList })
+        }
+        (ObjectType::AutoSuggestBox, PropertyId::Text) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::AutoSuggestBox, PropertyId::QueryIcon) => {
+            Some(PropertyContract { id, value: ValueType::Icon })
+        }
+        (ObjectType::PasswordBox, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
         (ObjectType::PasswordBox, PropertyId::PasswordRevealMode) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "PasswordRevealMode",
-                variants: &["Peek", "Hidden", "Visible"],
-            },
+            value: ValueType::Enum { kind: "PasswordRevealMode", variants: &["Peek", "Hidden", "Visible"] },
         }),
-        (ObjectType::PasswordBox, PropertyId::Password) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::NumberBox, PropertyId::Minimum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::NumberBox, PropertyId::Maximum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::NumberBox, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalF64,
-        }),
-        (ObjectType::NumberBox, PropertyId::SmallChange) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::PasswordBox, PropertyId::Password) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::NumberBox, PropertyId::Minimum) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::NumberBox, PropertyId::Maximum) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::NumberBox, PropertyId::Value) => {
+            Some(PropertyContract { id, value: ValueType::OptionalF64 })
+        }
+        (ObjectType::NumberBox, PropertyId::SmallChange) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
         (ObjectType::NumberBox, PropertyId::SpinButtonPlacementMode) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1671,10 +1239,7 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
             },
         }),
         (ObjectType::NavigationView, PropertyId::IsPaneToggleButtonVisible) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Bool,
-            })
+            Some(PropertyContract { id, value: ValueType::Bool })
         }
         (ObjectType::NavigationView, PropertyId::IsBackButtonVisible) => Some(PropertyContract {
             id,
@@ -1683,62 +1248,48 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Collapsed", "Visible", "Auto"],
             },
         }),
-        (ObjectType::NavigationView, PropertyId::IsBackEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationView, PropertyId::IsPaneVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationView, PropertyId::IsSettingsVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationView, PropertyId::AlwaysShowHeader) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationView, PropertyId::PaneTitle) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::NavigationView, PropertyId::OpenPaneLength) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::NavigationView, PropertyId::IsPaneOpen) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationViewItem, PropertyId::IsSelected) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationViewItem, PropertyId::SelectsOnInvoked) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationViewItem, PropertyId::IsExpanded) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::NavigationViewItem, PropertyId::Tag) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::NavigationViewItem, PropertyId::Icon) => Some(PropertyContract {
-            id,
-            value: ValueType::Icon,
-        }),
-        (ObjectType::SplitView, PropertyId::OpenPaneLength) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::SplitView, PropertyId::CompactPaneLength) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::NavigationView, PropertyId::IsBackEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationView, PropertyId::IsPaneVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationView, PropertyId::IsSettingsVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationView, PropertyId::AlwaysShowHeader) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationView, PropertyId::PaneTitle) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::NavigationView, PropertyId::OpenPaneLength) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::NavigationView, PropertyId::IsPaneOpen) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationViewItem, PropertyId::IsSelected) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationViewItem, PropertyId::SelectsOnInvoked) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationViewItem, PropertyId::IsExpanded) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::NavigationViewItem, PropertyId::Tag) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::NavigationViewItem, PropertyId::Icon) => {
+            Some(PropertyContract { id, value: ValueType::Icon })
+        }
+        (ObjectType::SplitView, PropertyId::OpenPaneLength) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::SplitView, PropertyId::CompactPaneLength) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
         (ObjectType::SplitView, PropertyId::DisplayMode) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1746,74 +1297,47 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Overlay", "Inline", "CompactOverlay", "CompactInline"],
             },
         }),
-        (ObjectType::SplitView, PropertyId::IsPaneOpen) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ProgressBar, PropertyId::Minimum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressBar, PropertyId::Maximum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressBar, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressBar, PropertyId::IsIndeterminate) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ProgressBar, PropertyId::ShowError) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ProgressBar, PropertyId::ShowPaused) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ToggleSwitch, PropertyId::IsOn) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ToggleButton, PropertyId::IsChecked) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalBool,
-        }),
-        (ObjectType::RadioButton, PropertyId::GroupName) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RadioButton, PropertyId::IsChecked) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalBool,
-        }),
-        (ObjectType::RadioButtons, PropertyId::MaxColumns) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::RadioButtons, PropertyId::ItemsSource) => Some(PropertyContract {
-            id,
-            value: ValueType::StringList,
-        }),
-        (ObjectType::RadioButtons, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::InfoBadge, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::InfoBar, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::InfoBar, PropertyId::Message) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
+        (ObjectType::SplitView, PropertyId::IsPaneOpen) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ProgressBar, PropertyId::Minimum) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::ProgressBar, PropertyId::Maximum) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::ProgressBar, PropertyId::Value) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::ProgressBar, PropertyId::IsIndeterminate) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ProgressBar, PropertyId::ShowError) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ProgressBar, PropertyId::ShowPaused) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ToggleSwitch, PropertyId::IsOn) => Some(PropertyContract { id, value: ValueType::Bool }),
+        (ObjectType::ToggleButton, PropertyId::IsChecked) => {
+            Some(PropertyContract { id, value: ValueType::OptionalBool })
+        }
+        (ObjectType::RadioButton, PropertyId::GroupName) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RadioButton, PropertyId::IsChecked) => {
+            Some(PropertyContract { id, value: ValueType::OptionalBool })
+        }
+        (ObjectType::RadioButtons, PropertyId::MaxColumns) => {
+            Some(PropertyContract { id, value: ValueType::I32 })
+        }
+        (ObjectType::RadioButtons, PropertyId::ItemsSource) => {
+            Some(PropertyContract { id, value: ValueType::StringList })
+        }
+        (ObjectType::RadioButtons, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::InfoBadge, PropertyId::Value) => Some(PropertyContract { id, value: ValueType::I32 }),
+        (ObjectType::InfoBar, PropertyId::Title) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::InfoBar, PropertyId::Message) => Some(PropertyContract { id, value: ValueType::String }),
         (ObjectType::InfoBar, PropertyId::Severity) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1821,22 +1345,16 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Informational", "Success", "Warning", "Error"],
             },
         }),
-        (ObjectType::InfoBar, PropertyId::IsOpen) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::InfoBar, PropertyId::IsClosable) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::PersonPicture, PropertyId::DisplayName) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::PersonPicture, PropertyId::Initials) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
+        (ObjectType::InfoBar, PropertyId::IsOpen) => Some(PropertyContract { id, value: ValueType::Bool }),
+        (ObjectType::InfoBar, PropertyId::IsClosable) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::PersonPicture, PropertyId::DisplayName) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::PersonPicture, PropertyId::Initials) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
         (ObjectType::ScrollView, PropertyId::ContentOrientation) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1844,36 +1362,29 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Vertical", "Horizontal", "None", "Both"],
             },
         }),
-        (ObjectType::ScrollView, PropertyId::HorizontalAnchorRatio) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ScrollView, PropertyId::VerticalAnchorRatio) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ScrollView, PropertyId::HorizontalScrollBarVisibility) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Enum {
-                    kind: "ScrollingScrollBarVisibility",
-                    variants: &["Auto", "Visible", "Hidden"],
-                },
-            })
+        (ObjectType::ScrollView, PropertyId::HorizontalAnchorRatio) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
         }
-        (ObjectType::ScrollView, PropertyId::VerticalScrollBarVisibility) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Enum {
-                    kind: "ScrollingScrollBarVisibility",
-                    variants: &["Auto", "Visible", "Hidden"],
-                },
-            })
+        (ObjectType::ScrollView, PropertyId::VerticalAnchorRatio) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
         }
-        (ObjectType::Image, PropertyId::Source) => Some(PropertyContract {
+        (ObjectType::ScrollView, PropertyId::HorizontalScrollBarVisibility) => Some(PropertyContract {
             id,
-            value: ValueType::ImageSource,
+            value: ValueType::Enum {
+                kind: "ScrollingScrollBarVisibility",
+                variants: &["Auto", "Visible", "Hidden"],
+            },
         }),
+        (ObjectType::ScrollView, PropertyId::VerticalScrollBarVisibility) => Some(PropertyContract {
+            id,
+            value: ValueType::Enum {
+                kind: "ScrollingScrollBarVisibility",
+                variants: &["Auto", "Visible", "Hidden"],
+            },
+        }),
+        (ObjectType::Image, PropertyId::Source) => {
+            Some(PropertyContract { id, value: ValueType::ImageSource })
+        }
         (ObjectType::Image, PropertyId::Stretch) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -1881,82 +1392,39 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "Fill", "Uniform", "UniformToFill"],
             },
         }),
-        (ObjectType::ProgressRing, PropertyId::Minimum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressRing, PropertyId::Maximum) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressRing, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::ProgressRing, PropertyId::IsIndeterminate) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ProgressRing, PropertyId::IsActive) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::Rectangle, PropertyId::Fill) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Rectangle, PropertyId::Stroke) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Rectangle, PropertyId::StrokeThickness) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Rectangle, PropertyId::RadiusX) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Rectangle, PropertyId::RadiusY) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Ellipse, PropertyId::Fill) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Ellipse, PropertyId::Stroke) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Ellipse, PropertyId::StrokeThickness) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Line, PropertyId::Stroke) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::Line, PropertyId::StrokeThickness) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Line, PropertyId::X1) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Line, PropertyId::Y1) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Line, PropertyId::X2) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::Line, PropertyId::Y2) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::ProgressRing, PropertyId::Minimum) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::ProgressRing, PropertyId::Maximum) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::ProgressRing, PropertyId::Value) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::ProgressRing, PropertyId::IsIndeterminate) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ProgressRing, PropertyId::IsActive) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::Rectangle, PropertyId::Fill) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Rectangle, PropertyId::Stroke) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Rectangle, PropertyId::StrokeThickness) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::Rectangle, PropertyId::RadiusX) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Rectangle, PropertyId::RadiusY) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Ellipse, PropertyId::Fill) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Ellipse, PropertyId::Stroke) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Ellipse, PropertyId::StrokeThickness) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::Line, PropertyId::Stroke) => Some(PropertyContract { id, value: ValueType::Brush }),
+        (ObjectType::Line, PropertyId::StrokeThickness) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
+        (ObjectType::Line, PropertyId::X1) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Line, PropertyId::Y1) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Line, PropertyId::X2) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::Line, PropertyId::Y2) => Some(PropertyContract { id, value: ValueType::F64 }),
         (ObjectType::SymbolIcon, PropertyId::Symbol) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -2162,62 +1630,40 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 ],
             },
         }),
-        (ObjectType::ImageIcon, PropertyId::Source) => Some(PropertyContract {
-            id,
-            value: ValueType::ImageSource,
-        }),
-        (ObjectType::FontIcon, PropertyId::Glyph) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::FontIcon, PropertyId::FontSize) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
-        (ObjectType::FontIcon, PropertyId::Foreground) => Some(PropertyContract {
-            id,
-            value: ValueType::Brush,
-        }),
-        (ObjectType::BitmapIcon, PropertyId::ShowAsMonochrome) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::BitmapIcon, PropertyId::UriSource) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::PathIcon, PropertyId::Data) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ListBoxItem, PropertyId::IsSelected) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ListBoxItem, PropertyId::Tag) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RatingControl, PropertyId::Caption) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RatingControl, PropertyId::IsReadOnly) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::RatingControl, PropertyId::MaxRating) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::RatingControl, PropertyId::Value) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalF64,
-        }),
-        (ObjectType::Expander, PropertyId::IsExpanded) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::ImageIcon, PropertyId::Source) => {
+            Some(PropertyContract { id, value: ValueType::ImageSource })
+        }
+        (ObjectType::FontIcon, PropertyId::Glyph) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::FontIcon, PropertyId::FontSize) => Some(PropertyContract { id, value: ValueType::F64 }),
+        (ObjectType::FontIcon, PropertyId::Foreground) => {
+            Some(PropertyContract { id, value: ValueType::Brush })
+        }
+        (ObjectType::BitmapIcon, PropertyId::ShowAsMonochrome) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::BitmapIcon, PropertyId::UriSource) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::PathIcon, PropertyId::Data) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::ListBoxItem, PropertyId::IsSelected) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ListBoxItem, PropertyId::Tag) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::RatingControl, PropertyId::Caption) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RatingControl, PropertyId::IsReadOnly) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::RatingControl, PropertyId::MaxRating) => {
+            Some(PropertyContract { id, value: ValueType::I32 })
+        }
+        (ObjectType::RatingControl, PropertyId::Value) => {
+            Some(PropertyContract { id, value: ValueType::OptionalF64 })
+        }
+        (ObjectType::Expander, PropertyId::IsExpanded) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::Expander, PropertyId::HorizontalContentAlignment) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -2225,94 +1671,68 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["Left", "Center", "Right", "Stretch"],
             },
         }),
-        (ObjectType::Expander, PropertyId::Resources) => Some(PropertyContract {
-            id,
-            value: ValueType::ResourceOverrides,
-        }),
-        (ObjectType::ComboBox, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ComboBox, PropertyId::IsEditable) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ComboBox, PropertyId::ItemsSource) => Some(PropertyContract {
-            id,
-            value: ValueType::StringList,
-        }),
-        (ObjectType::ComboBox, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::Pivot, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::Pivot, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::PivotItem, PropertyId::Header) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::FlipView, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::SelectorBarItem, PropertyId::Text) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::SelectorBarItem, PropertyId::IsSelected) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::SelectorBarItem, PropertyId::Icon) => Some(PropertyContract {
-            id,
-            value: ValueType::Icon,
-        }),
-        (ObjectType::TabView, PropertyId::CanReorderTabs) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TabView, PropertyId::IsAddTabButtonVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TabView, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::TabViewItem, PropertyId::IsClosable) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TabViewItem, PropertyId::Header) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TabViewItem, PropertyId::Tag) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TeachingTip, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TeachingTip, PropertyId::Subtitle) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TeachingTip, PropertyId::IsOpen) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TeachingTip, PropertyId::IsLightDismissEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::Expander, PropertyId::Resources) => {
+            Some(PropertyContract { id, value: ValueType::ResourceOverrides })
+        }
+        (ObjectType::ComboBox, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::ComboBox, PropertyId::IsEditable) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ComboBox, PropertyId::ItemsSource) => {
+            Some(PropertyContract { id, value: ValueType::StringList })
+        }
+        (ObjectType::ComboBox, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::Pivot, PropertyId::Title) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::Pivot, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::PivotItem, PropertyId::Header) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::FlipView, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::SelectorBarItem, PropertyId::Text) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::SelectorBarItem, PropertyId::IsSelected) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::SelectorBarItem, PropertyId::Icon) => {
+            Some(PropertyContract { id, value: ValueType::Icon })
+        }
+        (ObjectType::TabView, PropertyId::CanReorderTabs) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TabView, PropertyId::IsAddTabButtonVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TabView, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::TabViewItem, PropertyId::IsClosable) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TabViewItem, PropertyId::Header) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TabViewItem, PropertyId::Tag) => Some(PropertyContract { id, value: ValueType::String }),
+        (ObjectType::TeachingTip, PropertyId::Title) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TeachingTip, PropertyId::Subtitle) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TeachingTip, PropertyId::IsOpen) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TeachingTip, PropertyId::IsLightDismissEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::TeachingTip, PropertyId::PreferredPlacement) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -2335,120 +1755,85 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 ],
             },
         }),
-        (ObjectType::TeachingTip, PropertyId::ActionButtonContent) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::TeachingTip, PropertyId::CloseButtonContent) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::AppBarButton, PropertyId::Label) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::AppBarButton, PropertyId::Icon) => Some(PropertyContract {
-            id,
-            value: ValueType::Icon,
-        }),
-        (ObjectType::MenuBarItem, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ColorPicker, PropertyId::Color) => Some(PropertyContract {
-            id,
-            value: ValueType::Color,
-        }),
-        (ObjectType::ColorPicker, PropertyId::IsAlphaEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ColorPicker, PropertyId::IsHexInputVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ColorPicker, PropertyId::IsColorSliderVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::TeachingTip, PropertyId::ActionButtonContent) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::TeachingTip, PropertyId::CloseButtonContent) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::AppBarButton, PropertyId::Label) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::AppBarButton, PropertyId::Icon) => Some(PropertyContract { id, value: ValueType::Icon }),
+        (ObjectType::MenuBarItem, PropertyId::Title) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::ColorPicker, PropertyId::Color) => {
+            Some(PropertyContract { id, value: ValueType::Color })
+        }
+        (ObjectType::ColorPicker, PropertyId::IsAlphaEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ColorPicker, PropertyId::IsHexInputVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ColorPicker, PropertyId::IsColorSliderVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::ColorPicker, PropertyId::IsColorChannelTextInputVisible) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Bool,
-            })
+            Some(PropertyContract { id, value: ValueType::Bool })
         }
-        (ObjectType::DatePicker, PropertyId::DayVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::DatePicker, PropertyId::MonthVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::DatePicker, PropertyId::YearVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::TimePicker, PropertyId::MinuteIncrement) => Some(PropertyContract {
-            id,
-            value: ValueType::I32,
-        }),
-        (ObjectType::TimePicker, PropertyId::ClockIdentifier) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::CalendarDatePicker, PropertyId::MinDate) => Some(PropertyContract {
-            id,
-            value: ValueType::DateTime,
-        }),
-        (ObjectType::CalendarDatePicker, PropertyId::MaxDate) => Some(PropertyContract {
-            id,
-            value: ValueType::DateTime,
-        }),
-        (ObjectType::CalendarDatePicker, PropertyId::Date) => Some(PropertyContract {
-            id,
-            value: ValueType::OptionalDateTime,
-        }),
-        (ObjectType::CalendarDatePicker, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
+        (ObjectType::DatePicker, PropertyId::DayVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::DatePicker, PropertyId::MonthVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::DatePicker, PropertyId::YearVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::TimePicker, PropertyId::MinuteIncrement) => {
+            Some(PropertyContract { id, value: ValueType::I32 })
+        }
+        (ObjectType::TimePicker, PropertyId::ClockIdentifier) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::CalendarDatePicker, PropertyId::MinDate) => {
+            Some(PropertyContract { id, value: ValueType::DateTime })
+        }
+        (ObjectType::CalendarDatePicker, PropertyId::MaxDate) => {
+            Some(PropertyContract { id, value: ValueType::DateTime })
+        }
+        (ObjectType::CalendarDatePicker, PropertyId::Date) => {
+            Some(PropertyContract { id, value: ValueType::OptionalDateTime })
+        }
+        (ObjectType::CalendarDatePicker, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
         (ObjectType::CalendarDatePicker, PropertyId::IsTodayHighlighted) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Bool,
-            })
+            Some(PropertyContract { id, value: ValueType::Bool })
         }
-        (ObjectType::CalendarDatePicker, PropertyId::IsCalendarOpen) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ContentDialog, PropertyId::PrimaryButtonText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ContentDialog, PropertyId::SecondaryButtonText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ContentDialog, PropertyId::CloseButtonText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::ContentDialog, PropertyId::IsPrimaryButtonEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::CalendarDatePicker, PropertyId::IsCalendarOpen) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ContentDialog, PropertyId::PrimaryButtonText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::ContentDialog, PropertyId::SecondaryButtonText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::ContentDialog, PropertyId::CloseButtonText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::ContentDialog, PropertyId::IsPrimaryButtonEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::ContentDialog, PropertyId::IsSecondaryButtonEnabled) => {
-            Some(PropertyContract {
-                id,
-                value: ValueType::Bool,
-            })
+            Some(PropertyContract { id, value: ValueType::Bool })
         }
-        (ObjectType::ContentDialog, PropertyId::Title) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
+        (ObjectType::ContentDialog, PropertyId::Title) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
         (ObjectType::ContentDialog, PropertyId::DefaultButton) => Some(PropertyContract {
             id,
             value: ValueType::Enum {
@@ -2456,73 +1841,55 @@ pub fn property_contract(kind: ObjectType, id: PropertyId) -> Option<PropertyCon
                 variants: &["None", "Primary", "Secondary", "Close"],
             },
         }),
-        (ObjectType::CalendarView, PropertyId::IsTodayHighlighted) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::CalendarView, PropertyId::IsGroupLabelVisible) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::ListViewItem, PropertyId::Tag) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::GridView, PropertyId::CanDragItems) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::GridView, PropertyId::CanReorderItems) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::GridView, PropertyId::AllowDrop) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::GridView, PropertyId::SelectedIndex) => Some(PropertyContract {
-            id,
-            value: ValueType::SelectionIndex,
-        }),
-        (ObjectType::GridViewItem, PropertyId::Tag) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RelativePanel, PropertyId::ChildrenTransitions) => Some(PropertyContract {
-            id,
-            value: ValueType::ThemeTransitions,
-        }),
-        (ObjectType::RichEditBox, PropertyId::Document) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RichEditBox, PropertyId::PlaceholderText) => Some(PropertyContract {
-            id,
-            value: ValueType::String,
-        }),
-        (ObjectType::RichEditBox, PropertyId::IsReadOnly) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
-        (ObjectType::RichTextBlock, PropertyId::Blocks) => Some(PropertyContract {
-            id,
-            value: ValueType::RichText,
-        }),
-        (ObjectType::RichTextBlock, PropertyId::IsTextSelectionEnabled) => Some(PropertyContract {
-            id,
-            value: ValueType::Bool,
-        }),
+        (ObjectType::CalendarView, PropertyId::IsTodayHighlighted) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::CalendarView, PropertyId::IsGroupLabelVisible) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::ListViewItem, PropertyId::Tag) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::GridView, PropertyId::CanDragItems) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::GridView, PropertyId::CanReorderItems) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::GridView, PropertyId::AllowDrop) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::GridView, PropertyId::SelectedIndex) => {
+            Some(PropertyContract { id, value: ValueType::SelectionIndex })
+        }
+        (ObjectType::GridViewItem, PropertyId::Tag) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RelativePanel, PropertyId::ChildrenTransitions) => {
+            Some(PropertyContract { id, value: ValueType::ThemeTransitions })
+        }
+        (ObjectType::RichEditBox, PropertyId::Document) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RichEditBox, PropertyId::PlaceholderText) => {
+            Some(PropertyContract { id, value: ValueType::String })
+        }
+        (ObjectType::RichEditBox, PropertyId::IsReadOnly) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
+        (ObjectType::RichTextBlock, PropertyId::Blocks) => {
+            Some(PropertyContract { id, value: ValueType::RichText })
+        }
+        (ObjectType::RichTextBlock, PropertyId::IsTextSelectionEnabled) => {
+            Some(PropertyContract { id, value: ValueType::Bool })
+        }
         (ObjectType::RichTextBlock, PropertyId::TextWrapping) => Some(PropertyContract {
             id,
-            value: ValueType::Enum {
-                kind: "TextWrapping",
-                variants: &["NoWrap", "Wrap", "WrapWholeWords"],
-            },
+            value: ValueType::Enum { kind: "TextWrapping", variants: &["NoWrap", "Wrap", "WrapWholeWords"] },
         }),
-        (ObjectType::RichTextBlock, PropertyId::FontSize) => Some(PropertyContract {
-            id,
-            value: ValueType::F64,
-        }),
+        (ObjectType::RichTextBlock, PropertyId::FontSize) => {
+            Some(PropertyContract { id, value: ValueType::F64 })
+        }
         _ => None,
     }
 }

@@ -22,9 +22,7 @@ impl<T: Interface> Default for Event<T> {
 impl<T: Interface> Event<T> {
     /// Creates a new, empty `Event<T>`.
     pub const fn new() -> Self {
-        Self {
-            delegates: RwLock::new(None),
-        }
+        Self { delegates: RwLock::new(None) }
     }
 
     /// Registers a delegate with the event object.
@@ -53,16 +51,9 @@ impl<T: Interface> Event<T> {
         let mut old_list = None;
         if let Some(old_delegates) = guard.as_ref() {
             // `self.delegates` is only modified if the token is found.
-            if let Some(i) = old_delegates
-                .iter()
-                .position(|old_delegate| old_delegate.to_token() == token)
-            {
-                let new_list = Arc::from_iter(
-                    old_delegates[..i]
-                        .iter()
-                        .chain(old_delegates[i + 1..].iter())
-                        .cloned(),
-                );
+            if let Some(i) = old_delegates.iter().position(|old_delegate| old_delegate.to_token() == token) {
+                let new_list =
+                    Arc::from_iter(old_delegates[..i].iter().chain(old_delegates[i + 1..].iter()).cloned());
 
                 old_list = guard.replace(new_list);
             }

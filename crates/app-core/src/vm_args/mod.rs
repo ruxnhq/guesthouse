@@ -4,6 +4,7 @@
 //! to run. The order of devices is what the guest has already seen, so it must not change.
 
 mod amd;
+mod android;
 mod arguments;
 mod drives;
 mod forwarding_jail;
@@ -17,6 +18,7 @@ mod throwaway;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
+pub use android::{AndroidBoot, AndroidCard};
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
 pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;
@@ -66,6 +68,8 @@ pub enum Boot {
     OwnLinux { iso: String, gpu: UbuntuBoot },
     /// A plain machine holding macOS, on reims-vgpu's QEMU.
     Macos(MacosBoot),
+    /// A plain machine holding Android for VMs, drawing through the virtio GPU on the host's card.
+    Android(AndroidBoot),
 }
 
 /// What Ubuntu's unattended install starts from.
@@ -242,7 +246,11 @@ impl VmPlan {
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
             // Its device takes any size, where the VGA only has the firmware's.
-            screen: if machine.macos() { machine.screen.clone() } else { machine.basic_screen().to_owned() },
+            screen: if machine.macos() || machine.android() {
+                machine.screen.clone()
+            } else {
+                machine.basic_screen().to_owned()
+            },
             disk: machine.disk.clone(),
             nvme: machine.nvme,
             vars: machine.vars.clone(),

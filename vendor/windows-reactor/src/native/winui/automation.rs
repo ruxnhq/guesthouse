@@ -19,10 +19,7 @@ impl WinUiAdapter {
         if clear.contains(&PropertyId::AutomationLiveSetting) {
             self.live_regions.remove(&object);
         }
-        if let Some(property) = set
-            .iter()
-            .find(|property| property.id == PropertyId::AutomationLiveSetting)
-        {
+        if let Some(property) = set.iter().find(|property| property.id == PropertyId::AutomationLiveSetting) {
             if property.value == AutomationLiveSetting::Off.property_value() {
                 self.live_regions.remove(&object);
             } else if self.live_regions.insert(object) {
@@ -86,9 +83,7 @@ impl WinUiAdapter {
         use native::AutomationNotificationProcessing as NativeProcessing;
 
         let Some(peer) = automation_peer(&self.ui_element(object)?)? else {
-            return Err(
-                windows_core::Error::new(native::E_FAIL, "element has no automation peer").into(),
-            );
+            return Err(windows_core::Error::new(native::E_FAIL, "element has no automation peer").into());
         };
         let kind = match notification.kind {
             Kind::ItemAdded => NativeKind::ItemAdded,
@@ -104,20 +99,13 @@ impl WinUiAdapter {
             Processing::MostRecent => NativeProcessing::MostRecent,
             Processing::CurrentThenMostRecent => NativeProcessing::CurrentThenMostRecent,
         };
-        peer.RaiseNotificationEvent(
-            kind,
-            processing,
-            &notification.text,
-            &notification.activity_id,
-        )?;
+        peer.RaiseNotificationEvent(kind, processing, &notification.text, &notification.activity_id)?;
         Ok(())
     }
 }
 
 /// Returns the element's automation peer, or `None` for elements such as panels that have none.
-fn automation_peer(
-    element: &native::UIElement,
-) -> windows_core::Result<Option<native::AutomationPeer>> {
+fn automation_peer(element: &native::UIElement) -> windows_core::Result<Option<native::AutomationPeer>> {
     match native::FrameworkElementAutomationPeer::CreatePeerForElement(element) {
         Ok(peer) => Ok(Some(peer)),
         Err(error) if error.code().is_ok() => Ok(None),

@@ -31,11 +31,7 @@ pub const E_NOINTERFACE: windows_core::HRESULT = windows_core::HRESULT(0x8000400
 pub const E_POINTER: windows_core::HRESULT = windows_core::HRESULT(0x80004003_u32 as _);
 #[cfg(target_arch = "x86")]
 pub type FARPROC = Option<unsafe extern "system" fn() -> i32>;
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "arm64ec",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
 pub type FARPROC = Option<unsafe extern "system" fn() -> INT_PTR>;
 pub type HANDLE = *mut core::ffi::c_void;
 #[repr(C)]
@@ -44,11 +40,7 @@ pub struct HINSTANCE__ {
     pub unused: i32,
 }
 pub type HMODULE = *mut HINSTANCE__;
-windows_core::imp::define_interface!(
-    IAgileObject,
-    IAgileObject_Vtbl,
-    0x94ea2b94_e9cc_49e0_c0ff_ee64ca8f5b90
-);
+windows_core::imp::define_interface!(IAgileObject, IAgileObject_Vtbl, 0x94ea2b94_e9cc_49e0_c0ff_ee64ca8f5b90);
 windows_core::imp::interface_hierarchy!(IAgileObject, windows_core::IUnknown);
 #[repr(C)]
 pub struct IAgileObject_Vtbl {

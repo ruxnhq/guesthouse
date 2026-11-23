@@ -13,8 +13,7 @@ impl<T: Type> InRef<'_, T> {
 
     /// Returns the referenced value or `E_POINTER` if null.
     pub fn ok(&self) -> Result<&T> {
-        self.as_ref()
-            .ok_or_else(|| Error::from_hresult(imp::E_POINTER))
+        self.as_ref().ok_or_else(|| Error::from_hresult(imp::E_POINTER))
     }
 
     /// Returns the referenced value if non-null.
@@ -29,8 +28,7 @@ impl<T: Type> InRef<'_, T> {
     /// Panics if the argument is null.
     #[track_caller]
     pub fn unwrap(&self) -> &T {
-        self.as_ref()
-            .expect("called `InRef::unwrap` on a null value")
+        self.as_ref().expect("called `InRef::unwrap` on a null value")
     }
 
     /// Converts the argument to an [`Option<T>`] by cloning the reference.

@@ -19,15 +19,9 @@ impl WinUiAdapter {
         object: ObjectId,
         resources: &ResourceOverrides,
     ) -> Result<(), WinUiError> {
-        let dictionary = self
-            .ui_element(object)?
-            .cast::<native::IFrameworkElement>()?
-            .Resources()?;
+        let dictionary = self.ui_element(object)?.cast::<native::IFrameworkElement>()?.Resources()?;
         let map = dictionary.cast::<IMap<IInspectable, IInspectable>>()?;
-        let desired = resources
-            .values()
-            .map(|(key, _)| key.to_string())
-            .collect::<HashSet<_>>();
+        let desired = resources.values().map(|(key, _)| key.to_string()).collect::<HashSet<_>>();
         if let Some(previous) = self.resource_override_keys.get(&object) {
             for key in previous.difference(&desired) {
                 let key = windows_reference::IReference::from(key.as_str());
@@ -40,15 +34,13 @@ impl WinUiAdapter {
             let key = windows_reference::IReference::from(key);
             let value: IInspectable = match value {
                 ResourceValue::Color(value) => solid_color_brush(*value)?.into(),
-                ResourceValue::Thickness(value) => {
-                    windows_reference::IReference::from(native::Thickness {
-                        left: value.left,
-                        top: value.top,
-                        right: value.right,
-                        bottom: value.bottom,
-                    })
-                    .into()
-                }
+                ResourceValue::Thickness(value) => windows_reference::IReference::from(native::Thickness {
+                    left: value.left,
+                    top: value.top,
+                    right: value.right,
+                    bottom: value.bottom,
+                })
+                .into(),
                 ResourceValue::CornerRadius(value) => {
                     windows_reference::IReference::from(native::CornerRadius {
                         top_left: value.top_left,
@@ -107,9 +99,7 @@ impl WinUiAdapter {
     fn apply_style_state(&mut self, object: ObjectId) -> Result<(), WinUiError> {
         let kind = self.kind(object)?;
         let state = self.style_states.get(&object).cloned().unwrap_or_default();
-        let element = self
-            .ui_element(object)?
-            .cast::<native::IFrameworkElement>()?;
+        let element = self.ui_element(object)?.cast::<native::IFrameworkElement>()?;
         if state.base.is_none() && state.brushes.is_empty() {
             self.style_states.remove(&object);
             element.SetStyle(None::<&native::Style>)?;
@@ -123,17 +113,12 @@ impl WinUiAdapter {
         let key = NativeStyleKey {
             kind,
             base: state.base,
-            brushes: state
-                .brushes
-                .iter()
-                .map(|(property, brush)| (*property, *brush))
-                .collect(),
+            brushes: state.brushes.iter().map(|(property, brush)| (*property, *brush)).collect(),
         };
         let style = if let Some(style) = self.style_cache.get(&key) {
             style.clone()
         } else {
-            let (target, properties) =
-                theme_style_info(kind).ok_or(WinUiError::InvalidObject(object))?;
+            let (target, properties) = theme_style_info(kind).ok_or(WinUiError::InvalidObject(object))?;
             let based_on = state
                 .base
                 .map(button_style_resource)

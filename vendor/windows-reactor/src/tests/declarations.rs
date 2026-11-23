@@ -2,14 +2,7 @@ use super::*;
 
 #[test]
 fn scale_requires_non_negative_finite_native_factors() {
-    for value in [
-        -1.0,
-        -f64::MIN_POSITIVE,
-        f64::NAN,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::MAX,
-    ] {
+    for value in [-1.0, -f64::MIN_POSITIVE, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
         assert!(std::panic::catch_unwind(|| Border::new().scale(value, 1.0)).is_err());
         assert!(std::panic::catch_unwind(|| Border::new().scale(1.0, value)).is_err());
     }
@@ -132,12 +125,7 @@ fn shared_value_builders_cover_the_public_family() {
                     .style(ButtonStyle::Accent)
                     .key_accelerators(accelerators),
             ),
-            keyed(
-                "link",
-                HyperlinkButton::new()
-                    .navigate_uri("https://example.com")
-                    .unwrap(),
-            ),
+            keyed("link", HyperlinkButton::new().navigate_uri("https://example.com").unwrap()),
             keyed(
                 "border",
                 Border::new()
@@ -147,12 +135,7 @@ fn shared_value_builders_cover_the_public_family() {
                     .scale(0.95, 0.95)
                     .scale_transition(Duration::from_millis(120)),
             ),
-            keyed(
-                "text",
-                TextBlock::new()
-                    .text("Text")
-                    .foreground(ThemeBrush::PrimaryText),
-            ),
+            keyed("text", TextBlock::new().text("Text").foreground(ThemeBrush::PrimaryText)),
             keyed(
                 "input",
                 TextBox::new()
@@ -161,45 +144,22 @@ fn shared_value_builders_cover_the_public_family() {
                     .border_brush(ThemeBrush::Accent)
                     .border_thickness(Thickness::uniform(2.0)),
             ),
-            keyed(
-                "rectangle",
-                Rectangle::new()
-                    .fill(ThemeBrush::Accent)
-                    .stroke(Color::rgb(10, 11, 12)),
-            ),
-            keyed(
-                "ellipse",
-                Ellipse::new()
-                    .fill(Color::rgb(13, 14, 15))
-                    .stroke(ThemeBrush::SystemCritical),
-            ),
+            keyed("rectangle", Rectangle::new().fill(ThemeBrush::Accent).stroke(Color::rgb(10, 11, 12))),
+            keyed("ellipse", Ellipse::new().fill(Color::rgb(13, 14, 15)).stroke(ThemeBrush::SystemCritical)),
             keyed("line", Line::new().stroke(ThemeBrush::AccentText)),
-            keyed(
-                "bitmap",
-                BitmapIcon::new()
-                    .uri_source("ms-appx:///Assets/icon.png")
-                    .unwrap(),
-            ),
+            keyed("bitmap", BitmapIcon::new().uri_source("ms-appx:///Assets/icon.png").unwrap()),
             keyed("path", PathIcon::new().data("M 0,0 L 8,8")),
         ]);
 }
 
 #[test]
 fn shared_value_validation_rejects_invalid_inputs() {
-    for (x, y) in [
-        (f64::NAN, 0.0),
-        (0.0, f64::INFINITY),
-        (f64::MAX, 0.0),
-        (0.0, -f64::MAX),
-    ] {
+    for (x, y) in [(f64::NAN, 0.0), (0.0, f64::INFINITY), (f64::MAX, 0.0), (0.0, -f64::MAX)] {
         assert!(std::panic::catch_unwind(|| Border::new().translation(x, y)).is_err());
         assert!(
             std::panic::catch_unwind(|| validate_property(
                 ObjectType::Border,
-                &Property {
-                    id: PropertyId::Translation,
-                    value: PropertyValue::Vector2([x, y]),
-                }
+                &Property { id: PropertyId::Translation, value: PropertyValue::Vector2([x, y]) }
             ))
             .is_err()
         );
@@ -223,32 +183,22 @@ fn shared_value_validation_rejects_invalid_inputs() {
 #[test]
 fn scroll_anchor_ratios_enforce_native_boundaries() {
     for ratio in [f64::NEG_INFINITY, -0.01, 1.01, f64::INFINITY] {
-        assert!(
-            std::panic::catch_unwind(|| ScrollView::new().horizontal_anchor_ratio(ratio)).is_err()
-        );
-        assert!(
-            std::panic::catch_unwind(|| ScrollView::new().vertical_anchor_ratio(ratio)).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| ScrollView::new().horizontal_anchor_ratio(ratio)).is_err());
+        assert!(std::panic::catch_unwind(|| ScrollView::new().vertical_anchor_ratio(ratio)).is_err());
     }
     for ratio in [0.0, 0.5, 1.0, f64::NAN] {
-        ScrollView::new()
-            .horizontal_anchor_ratio(ratio)
-            .vertical_anchor_ratio(ratio);
+        ScrollView::new().horizontal_anchor_ratio(ratio).vertical_anchor_ratio(ratio);
     }
 }
 
 #[test]
 fn unchanged_nan_properties_are_not_changes() {
     let declare = || {
-        View::from(
-            ScrollView::new()
-                .horizontal_anchor_ratio(f64::NAN)
-                .vertical_anchor_ratio(f64::NAN),
-        )
-        .0
-        .object()
-        .properties
-        .clone()
+        View::from(ScrollView::new().horizontal_anchor_ratio(f64::NAN).vertical_anchor_ratio(f64::NAN))
+            .0
+            .object()
+            .properties
+            .clone()
     };
     assert_eq!(declare().as_slice(), declare().as_slice());
 }
@@ -262,13 +212,7 @@ fn grid_placement_builders_enforce_native_boundaries() {
     assert!(std::panic::catch_unwind(|| Button::new().grid_column_span(-1)).is_err());
     assert!(std::panic::catch_unwind(|| Button::new().grid_column_span(0)).is_err());
 
-    Button::new()
-        .grid_row(0)
-        .grid_row(1)
-        .grid_column(0)
-        .grid_column(1)
-        .grid_row_span(1)
-        .grid_column_span(1);
+    Button::new().grid_row(0).grid_row(1).grid_column(0).grid_column(1).grid_row_span(1).grid_column_span(1);
 }
 
 #[test]

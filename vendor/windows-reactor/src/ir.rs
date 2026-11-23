@@ -111,10 +111,7 @@ pub enum ValueType {
     Vector2,
     SelectionIndex,
     StringList,
-    Enum {
-        kind: &'static str,
-        variants: &'static [&'static str],
-    },
+    Enum { kind: &'static str, variants: &'static [&'static str] },
     Unit,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -154,8 +151,7 @@ pub fn relation_accepts(contract: &RelationContract, kind: ObjectType) -> bool {
 
 #[cfg(test)]
 pub fn property_contracts(kind: ObjectType) -> &'static [PropertyContract] {
-    static CONTRACTS: std::sync::OnceLock<Vec<&'static [PropertyContract]>> =
-        std::sync::OnceLock::new();
+    static CONTRACTS: std::sync::OnceLock<Vec<&'static [PropertyContract]>> = std::sync::OnceLock::new();
     let contracts = CONTRACTS.get_or_init(|| {
         let mut unique = Vec::<&'static [PropertyContract]>::new();
         ALL_OBJECT_TYPES
@@ -168,15 +164,12 @@ pub fn property_contracts(kind: ObjectType) -> &'static [PropertyContract] {
                     .filter_map(|id| property_contract(kind, id))
                     .collect::<Vec<_>>();
                 current.sort_by_key(|contract| property_order(kind, contract.id));
-                if let Some(existing) = unique
-                    .iter()
-                    .copied()
-                    .find(|existing| *existing == current.as_slice())
+                if let Some(existing) =
+                    unique.iter().copied().find(|existing| *existing == current.as_slice())
                 {
                     existing
                 } else {
-                    let current: &'static [PropertyContract] =
-                        Box::leak(current.into_boxed_slice());
+                    let current: &'static [PropertyContract] = Box::leak(current.into_boxed_slice());
                     unique.push(current);
                     current
                 }
@@ -203,15 +196,7 @@ impl DeclarationValidator {
         self.references.clear();
         self.keys.clear();
         let mut objects = 0;
-        validate_object(
-            root,
-            0,
-            &mut objects,
-            &mut self.references,
-            &mut self.keys,
-            true,
-            None,
-        );
+        validate_object(root, 0, &mut objects, &mut self.references, &mut self.keys, true, None);
         objects
     }
 }
@@ -244,14 +229,8 @@ fn validate_commands(commands: &[CommandBarCommand], keys: &mut HashSet<Key>) {
 }
 
 pub(crate) fn validate_limits(depth: usize, objects: usize) {
-    assert!(
-        depth <= MAX_DEPTH,
-        "declaration exceeds the maximum depth of {MAX_DEPTH}"
-    );
-    assert!(
-        objects < MAX_OBJECTS,
-        "declaration exceeds the maximum of {MAX_OBJECTS} objects"
-    );
+    assert!(depth <= MAX_DEPTH, "declaration exceeds the maximum depth of {MAX_DEPTH}");
+    assert!(objects < MAX_OBJECTS, "declaration exceeds the maximum of {MAX_OBJECTS} objects");
 }
 
 fn invalid_attachment(kind: ObjectType) -> ! {
@@ -269,18 +248,13 @@ fn validate_object(
 ) {
     validate_limits(depth, *objects);
     *objects += 1;
-    if matches!(
-        declaration.kind,
-        ObjectType::ToolTip | ObjectType::ContentDialog
-    ) && internal_kind != Some(declaration.kind)
+    if matches!(declaration.kind, ObjectType::ToolTip | ObjectType::ContentDialog)
+        && internal_kind != Some(declaration.kind)
     {
         invalid_attachment(declaration.kind);
     }
     assert!(
-        declaration
-            .reference
-            .as_ref()
-            .is_none_or(|reference| references.insert(reference.identity())),
+        declaration.reference.as_ref().is_none_or(|reference| references.insert(reference.identity())),
         "element reference declared more than once"
     );
 
@@ -307,15 +281,7 @@ fn validate_object(
             }
             validate_limits(depth + 1, *objects);
             *objects += 1;
-            validate_object(
-                child_object(&flyout.content),
-                depth + 2,
-                objects,
-                references,
-                keys,
-                false,
-                None,
-            );
+            validate_object(child_object(&flyout.content), depth + 2, objects, references, keys, false, None);
         }
         if let Some(menu) = &attachments.menu {
             if object_category(declaration.kind) != ObjectCategory::Visual {
@@ -358,9 +324,8 @@ fn validate_object(
     }
 
     for event in declaration.events.iter() {
-        let Some(contract) = event_contracts(declaration.kind)
-            .iter()
-            .find(|contract| contract.id == event.id)
+        let Some(contract) =
+            event_contracts(declaration.kind).iter().find(|contract| contract.id == event.id)
         else {
             panic!("invalid event {:?} for {:?}", event.id, declaration.kind);
         };
@@ -368,14 +333,8 @@ fn validate_object(
             (contract.value, &event.value),
             (ValueType::Bool, EventValue::Bool(_))
                 | (ValueType::Color, EventValue::Color(_))
-                | (
-                    ValueType::CharacterEventInfo,
-                    EventValue::CharacterEventInfo(_)
-                )
-                | (
-                    ValueType::ContentDialogResult,
-                    EventValue::ContentDialogResult(_)
-                )
+                | (ValueType::CharacterEventInfo, EventValue::CharacterEventInfo(_))
+                | (ValueType::ContentDialogResult, EventValue::ContentDialogResult(_))
                 | (ValueType::String, EventValue::String(_))
                 | (ValueType::F64, EventValue::F64(_))
                 | (ValueType::FocusEventInfo, EventValue::FocusEventInfo(_))
@@ -385,10 +344,7 @@ fn validate_object(
                 | (ValueType::OptionalDateTime, EventValue::OptionalDateTime(_))
                 | (ValueType::OptionalF64, EventValue::OptionalF64(_))
                 | (ValueType::OptionalTimeSpan, EventValue::OptionalTimeSpan(_))
-                | (
-                    ValueType::NavigationViewDisplayMode,
-                    EventValue::NavigationViewDisplayMode(_)
-                )
+                | (ValueType::NavigationViewDisplayMode, EventValue::NavigationViewDisplayMode(_))
                 | (ValueType::PointerEventInfo, EventValue::PointerEventInfo(_))
                 | (ValueType::KeyEventInfo, EventValue::KeyEventInfo(_))
                 | (ValueType::Selection, EventValue::Selection(_))
@@ -416,24 +372,16 @@ fn validate_object(
     }
 
     for relation in declaration.relations.iter() {
-        let Some(contract) = relation_contracts(declaration.kind)
-            .iter()
-            .find(|contract| contract.id == relation.id)
+        let Some(contract) =
+            relation_contracts(declaration.kind).iter().find(|contract| contract.id == relation.id)
         else {
-            panic!(
-                "invalid relation {:?} for {:?}",
-                relation.id, declaration.kind
-            );
+            panic!("invalid relation {:?} for {:?}", relation.id, declaration.kind);
         };
         let cardinality = match &relation.value {
             RelationValue::One(_) => Cardinality::One,
             RelationValue::Many(_) => Cardinality::Many,
         };
-        assert!(
-            contract.cardinality == cardinality,
-            "invalid cardinality for relation {:?}",
-            relation.id
-        );
+        assert!(contract.cardinality == cardinality, "invalid cardinality for relation {:?}", relation.id);
         match &relation.value {
             RelationValue::One(child) => {
                 if let Some(child) = child {
@@ -516,13 +464,9 @@ pub(crate) fn validate_property(kind: ObjectType, property: &Property) {
         (ValueType::Vector2, PropertyValue::Vector2(value)) => {
             value.iter().all(|value| (*value as f32).is_finite())
         }
-        (
-            ValueType::Enum {
-                kind: expected,
-                variants,
-            },
-            PropertyValue::Enum { kind, variant },
-        ) => expected == *kind && variants.contains(variant),
+        (ValueType::Enum { kind: expected, variants }, PropertyValue::Enum { kind, variant }) => {
+            expected == *kind && variants.contains(variant)
+        }
         _ => false,
     };
     assert!(valid, "invalid value for property {:?}", property.id);

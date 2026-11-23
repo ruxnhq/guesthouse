@@ -62,16 +62,11 @@ mod bindings {
         IClosable_Vtbl,
         0x30d5a829_7fa4_4026_83bb_d75bae4ea99e
     );
-    windows_core::imp::interface_hierarchy!(
-        IClosable,
-        windows_core::IUnknown,
-        windows_core::IInspectable
-    );
+    windows_core::imp::interface_hierarchy!(IClosable, windows_core::IUnknown, windows_core::IInspectable);
     impl IClosable {
         pub(crate) fn Close(&self) -> windows_core::Result<()> {
             unsafe {
-                (windows_core::Interface::vtable(self).Close)(windows_core::Interface::as_raw(self))
-                    .ok()
+                (windows_core::Interface::vtable(self).Close)(windows_core::Interface::as_raw(self)).ok()
             }
         }
     }
@@ -120,11 +115,8 @@ mod bindings {
     impl IMicaController2 {
         pub(crate) fn SetKind(&self, value: MicaKind) -> windows_core::Result<()> {
             unsafe {
-                (windows_core::Interface::vtable(self).SetKind)(
-                    windows_core::Interface::as_raw(self),
-                    value,
-                )
-                .ok()
+                (windows_core::Interface::vtable(self).SetKind)(windows_core::Interface::as_raw(self), value)
+                    .ok()
             }
         }
     }
@@ -132,8 +124,7 @@ mod bindings {
     pub struct IMicaController2_Vtbl {
         pub base__: windows_core::IInspectable_Vtbl,
         Kind: usize,
-        pub SetKind:
-            unsafe extern "system" fn(*mut core::ffi::c_void, MicaKind) -> windows_core::HRESULT,
+        pub SetKind: unsafe extern "system" fn(*mut core::ffi::c_void, MicaKind) -> windows_core::HRESULT,
     }
     windows_core::imp::define_winrt_interface!(
         ISystemBackdropConfiguration,
@@ -152,11 +143,8 @@ mod bindings {
         }
         pub(crate) fn SetTheme(&self, value: SystemBackdropTheme) -> windows_core::Result<()> {
             unsafe {
-                (windows_core::Interface::vtable(self).SetTheme)(
-                    windows_core::Interface::as_raw(self),
-                    value,
-                )
-                .ok()
+                (windows_core::Interface::vtable(self).SetTheme)(windows_core::Interface::as_raw(self), value)
+                    .ok()
             }
         }
     }
@@ -171,10 +159,8 @@ mod bindings {
         pub SetIsInputActive:
             unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
         Theme: usize,
-        pub SetTheme: unsafe extern "system" fn(
-            *mut core::ffi::c_void,
-            SystemBackdropTheme,
-        ) -> windows_core::HRESULT,
+        pub SetTheme:
+            unsafe extern "system" fn(*mut core::ffi::c_void, SystemBackdropTheme) -> windows_core::HRESULT,
     }
     windows_core::imp::define_winrt_interface!(
         ISystemBackdropControllerWithTargets,
@@ -212,10 +198,7 @@ mod bindings {
                 .ok()
             }
         }
-        pub(crate) fn SetSystemBackdropConfiguration<P0>(
-            &self,
-            configuration: P0,
-        ) -> windows_core::Result<()>
+        pub(crate) fn SetSystemBackdropConfiguration<P0>(&self, configuration: P0) -> windows_core::Result<()>
         where
             P0: windows_core::Param<SystemBackdropConfiguration>,
         {
@@ -304,9 +287,8 @@ mod bindings {
         const SIGNATURE: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
             b"enum(Microsoft.UI.Composition.SystemBackdrops.MicaKind;i4)",
         );
-        const NAME: windows_core::imp::ConstBuffer = windows_core::imp::ConstBuffer::from_slice(
-            b"Microsoft.UI.Composition.SystemBackdrops.MicaKind",
-        );
+        const NAME: windows_core::imp::ConstBuffer =
+            windows_core::imp::ConstBuffer::from_slice(b"Microsoft.UI.Composition.SystemBackdrops.MicaKind");
     }
     #[repr(transparent)]
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -349,8 +331,7 @@ mod bindings {
         }
     }
     impl windows_core::RuntimeName for SystemBackdropConfiguration {
-        const NAME: &'static str =
-            "Microsoft.UI.Composition.SystemBackdrops.SystemBackdropConfiguration";
+        const NAME: &'static str = "Microsoft.UI.Composition.SystemBackdrops.SystemBackdropConfiguration";
     }
     unsafe impl Send for SystemBackdropConfiguration {}
     unsafe impl Sync for SystemBackdropConfiguration {}
@@ -428,12 +409,7 @@ impl ActiveBackdrop {
             let released = released.clone();
             window.Closed(super::local::handler(move |_, _| release(&controller, &released)))?
         };
-        Ok(Self {
-            controller,
-            configuration,
-            released,
-            _closed: closed,
-        })
+        Ok(Self { controller, configuration, released, _closed: closed })
     }
 
     pub(super) fn set_theme(&self, theme: WindowTheme) -> windows_core::Result<()> {

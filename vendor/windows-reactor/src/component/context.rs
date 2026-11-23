@@ -51,13 +51,8 @@ impl<C: Component> ComponentContext<'_, C> {
     }
 
     #[must_use]
-    pub fn open_window_with_policy<W: Component>(
-        &self,
-        input: W::Input,
-        policy: WindowPolicy,
-    ) -> bool {
-        self.ui_services
-            .open_window(component::<W>("root", input), policy)
+    pub fn open_window_with_policy<W: Component>(&self, input: W::Input, policy: WindowPolicy) -> bool {
+        self.ui_services.open_window(component::<W>("root", input), policy)
     }
 
     #[must_use]
@@ -71,10 +66,7 @@ impl<C: Component> ComponentContext<'_, C> {
     }
 
     #[must_use]
-    pub fn run_window(
-        &self,
-        work: impl for<'a> FnOnce(WindowHandle<'a>) -> C::Message + 'static,
-    ) -> bool {
+    pub fn run_window(&self, work: impl for<'a> FnOnce(WindowHandle<'a>) -> C::Message + 'static) -> bool {
         let sender = self.local_sender.clone();
         self.ui_services.run_window(Box::new(move |raw| {
             _ = sender.send(work(WindowHandle::new(raw)));
@@ -107,9 +99,7 @@ impl<C: Component> ComponentContext<'_, C> {
             }),
         );
         control.set_timer(registration);
-        ComponentTimer {
-            task: ComponentTask { control },
-        }
+        ComponentTimer { task: ComponentTask { control } }
     }
 }
 
@@ -130,9 +120,7 @@ where
         let sender = self.sender.clone();
         let thread_control = Arc::clone(&control);
         self.services.spawn_background(Box::new(move || {
-            let message = work(CancellationToken {
-                control: Arc::clone(&thread_control),
-            });
+            let message = work(CancellationToken { control: Arc::clone(&thread_control) });
             if thread_control.queue() {
                 sender.send_controlled(message, Arc::clone(&thread_control));
             }
@@ -159,9 +147,7 @@ where
             }),
         );
         control.set_timer(registration);
-        ComponentTimer {
-            task: ComponentTask { control },
-        }
+        ComponentTimer { task: ComponentTask { control } }
     }
 }
 
@@ -203,10 +189,9 @@ impl<C: Component> ViewContext<'_, C> {
 
     pub fn use_context<T: Clone + 'static>(&mut self, context: &Context<T>) -> T {
         self.dependencies.insert(context.id);
-        self.contexts.get(&context.id).map_or_else(
-            || context.default.clone(),
-            |value| value.value.downcast_ref::<T>().unwrap().clone(),
-        )
+        self.contexts
+            .get(&context.id)
+            .map_or_else(|| context.default.clone(), |value| value.value.downcast_ref::<T>().unwrap().clone())
     }
 
     pub fn use_effect<D>(
@@ -242,10 +227,7 @@ impl<C: Component> ViewContext<'_, C> {
             generation: 0,
             callback: callback.into_payload_callback(),
         });
-        assert!(
-            previous.is_none(),
-            "window size observer declared more than once"
-        );
+        assert!(previous.is_none(), "window size observer declared more than once");
     }
 
     /// Observes restored outer bounds and maximized state, including the initial placement.
@@ -261,10 +243,7 @@ impl<C: Component> ViewContext<'_, C> {
             generation: 0,
             callback: callback.into_payload_callback(),
         });
-        assert!(
-            previous.is_none(),
-            "window placement observer declared more than once"
-        );
+        assert!(previous.is_none(), "window placement observer declared more than once");
     }
 
     /// Reports the current scheme when subscribed, then only changes to that scheme.
@@ -273,18 +252,12 @@ impl<C: Component> ViewContext<'_, C> {
     /// observer or changing its subscribing component starts a new subscription and reports the
     /// current scheme again.
     pub fn on_color_scheme(&mut self, callback: impl IntoPayloadCallback<ColorScheme>) {
-        let previous = self
-            .window
-            .on_color_scheme
-            .replace(WindowObserverDeclaration {
-                owner: self.context.local_sender.component,
-                generation: 0,
-                callback: callback.into_payload_callback(),
-            });
-        assert!(
-            previous.is_none(),
-            "color scheme observer declared more than once"
-        );
+        let previous = self.window.on_color_scheme.replace(WindowObserverDeclaration {
+            owner: self.context.local_sender.component,
+            generation: 0,
+            callback: callback.into_payload_callback(),
+        });
+        assert!(previous.is_none(), "color scheme observer declared more than once");
     }
 
     pub fn window_title(&mut self, title: impl Into<String>) {
@@ -298,10 +271,7 @@ impl<C: Component> ViewContext<'_, C> {
         self.window_title(title.clone());
         Grid::new()
             .rows([GridLength::Auto, GridLength::STAR])
-            .children((
-                TitleBar::new().title(title),
-                Border::new().grid_row(1).content(content),
-            ))
+            .children((TitleBar::new().title(title), Border::new().grid_row(1).content(content)))
             .into()
     }
 

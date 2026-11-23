@@ -17,9 +17,7 @@ where
 }
 
 /// Decodes UTF-8 incrementally and reports invalid sequences.
-pub fn decode_utf8(
-    mut buffer: &[u8],
-) -> impl Iterator<Item = Result<char, core::str::Utf8Error>> + '_ {
+pub fn decode_utf8(mut buffer: &[u8]) -> impl Iterator<Item = Result<char, core::str::Utf8Error>> + '_ {
     let mut current = "".chars();
     let mut previous_error = None;
     core::iter::from_fn(move || {

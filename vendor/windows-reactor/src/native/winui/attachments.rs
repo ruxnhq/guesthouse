@@ -25,19 +25,14 @@ impl WinUiAdapter {
         if self.tooltip_owners.contains_key(&target) {
             return Err(WinUiError::StillOwned(target));
         }
-        let target_element = self
-            .ui_element(target)?
-            .cast::<native::DependencyObject>()?;
+        let target_element = self.ui_element(target)?.cast::<native::DependencyObject>()?;
         let tooltip_element = tooltip
             .map(|tooltip| {
                 if tooltip == target || self.kind(tooltip)? != ObjectType::ToolTip {
                     return Err(WinUiError::InvalidObject(tooltip));
                 }
                 if self.owners.contains_key(&tooltip)
-                    || self
-                        .tooltip_owners
-                        .get(&tooltip)
-                        .is_some_and(|owner| *owner != target)
+                    || self.tooltip_owners.get(&tooltip).is_some_and(|owner| *owner != target)
                 {
                     return Err(WinUiError::StillOwned(tooltip));
                 }
@@ -83,10 +78,7 @@ impl WinUiAdapter {
                 if content == target
                     || self.owners.contains_key(&content)
                     || self.tooltip_owners.contains_key(&content)
-                    || self
-                        .flyout_owners
-                        .get(&content)
-                        .is_some_and(|owner| *owner != target)
+                    || self.flyout_owners.get(&content).is_some_and(|owner| *owner != target)
                     || self.content_dialog_owners.contains_key(&content)
                 {
                     return Err(WinUiError::StillOwned(content));
@@ -94,10 +86,7 @@ impl WinUiAdapter {
                 self.ui_element(content)
             })
             .transpose()?;
-        let handle = self
-            .handles
-            .get(&target)
-            .ok_or(WinUiError::InvalidObject(target))?;
+        let handle = self.handles.get(&target).ok_or(WinUiError::InvalidObject(target))?;
         if let Some(content) = content {
             let flyout = if let Some((flyout, previous, _)) = self.flyouts.get(&target) {
                 if *previous != content {
@@ -111,10 +100,7 @@ impl WinUiAdapter {
                         control.value.SetFlyout(&flyout)?;
                     }
                     Handle::Generated(GeneratedHandle::DropDownButton(control)) => {
-                        control
-                            .value
-                            .cast::<native::IButton>()?
-                            .SetFlyout(&flyout)?;
+                        control.value.cast::<native::IButton>()?.SetFlyout(&flyout)?;
                     }
                     Handle::Generated(GeneratedHandle::SplitButton(control)) => {
                         control.value.SetFlyout(&flyout)?;
@@ -124,43 +110,27 @@ impl WinUiAdapter {
                 flyout
             };
             flyout.SetContent(content_element.as_ref().unwrap())?;
-            flyout
-                .cast::<native::IFlyoutBase>()?
-                .SetPlacement(match placement {
-                    FlyoutPlacement::Top => native::FlyoutPlacementMode::Top,
-                    FlyoutPlacement::Bottom => native::FlyoutPlacementMode::Bottom,
-                    FlyoutPlacement::Left => native::FlyoutPlacementMode::Left,
-                    FlyoutPlacement::Right => native::FlyoutPlacementMode::Right,
-                    FlyoutPlacement::Full => native::FlyoutPlacementMode::Full,
-                    FlyoutPlacement::TopEdgeAlignedLeft => {
-                        native::FlyoutPlacementMode::TopEdgeAlignedLeft
-                    }
-                    FlyoutPlacement::TopEdgeAlignedRight => {
-                        native::FlyoutPlacementMode::TopEdgeAlignedRight
-                    }
-                    FlyoutPlacement::BottomEdgeAlignedLeft => {
-                        native::FlyoutPlacementMode::BottomEdgeAlignedLeft
-                    }
-                    FlyoutPlacement::BottomEdgeAlignedRight => {
-                        native::FlyoutPlacementMode::BottomEdgeAlignedRight
-                    }
-                    FlyoutPlacement::LeftEdgeAlignedTop => {
-                        native::FlyoutPlacementMode::LeftEdgeAlignedTop
-                    }
-                    FlyoutPlacement::LeftEdgeAlignedBottom => {
-                        native::FlyoutPlacementMode::LeftEdgeAlignedBottom
-                    }
-                    FlyoutPlacement::RightEdgeAlignedTop => {
-                        native::FlyoutPlacementMode::RightEdgeAlignedTop
-                    }
-                    FlyoutPlacement::RightEdgeAlignedBottom => {
-                        native::FlyoutPlacementMode::RightEdgeAlignedBottom
-                    }
-                    FlyoutPlacement::Auto => native::FlyoutPlacementMode::Auto,
-                })?;
-            if let Some((_, previous, _)) =
-                self.flyouts.insert(target, (flyout, content, placement))
-            {
+            flyout.cast::<native::IFlyoutBase>()?.SetPlacement(match placement {
+                FlyoutPlacement::Top => native::FlyoutPlacementMode::Top,
+                FlyoutPlacement::Bottom => native::FlyoutPlacementMode::Bottom,
+                FlyoutPlacement::Left => native::FlyoutPlacementMode::Left,
+                FlyoutPlacement::Right => native::FlyoutPlacementMode::Right,
+                FlyoutPlacement::Full => native::FlyoutPlacementMode::Full,
+                FlyoutPlacement::TopEdgeAlignedLeft => native::FlyoutPlacementMode::TopEdgeAlignedLeft,
+                FlyoutPlacement::TopEdgeAlignedRight => native::FlyoutPlacementMode::TopEdgeAlignedRight,
+                FlyoutPlacement::BottomEdgeAlignedLeft => native::FlyoutPlacementMode::BottomEdgeAlignedLeft,
+                FlyoutPlacement::BottomEdgeAlignedRight => {
+                    native::FlyoutPlacementMode::BottomEdgeAlignedRight
+                }
+                FlyoutPlacement::LeftEdgeAlignedTop => native::FlyoutPlacementMode::LeftEdgeAlignedTop,
+                FlyoutPlacement::LeftEdgeAlignedBottom => native::FlyoutPlacementMode::LeftEdgeAlignedBottom,
+                FlyoutPlacement::RightEdgeAlignedTop => native::FlyoutPlacementMode::RightEdgeAlignedTop,
+                FlyoutPlacement::RightEdgeAlignedBottom => {
+                    native::FlyoutPlacementMode::RightEdgeAlignedBottom
+                }
+                FlyoutPlacement::Auto => native::FlyoutPlacementMode::Auto,
+            })?;
+            if let Some((_, previous, _)) = self.flyouts.insert(target, (flyout, content, placement)) {
                 self.flyout_owners.remove(&previous);
             }
             self.flyout_owners.insert(content, target);
@@ -174,10 +144,7 @@ impl WinUiAdapter {
                     control.value.SetFlyout(None::<&native::FlyoutBase>)?;
                 }
                 Handle::Generated(GeneratedHandle::DropDownButton(control)) => {
-                    control
-                        .value
-                        .cast::<native::IButton>()?
-                        .SetFlyout(None::<&native::FlyoutBase>)?;
+                    control.value.cast::<native::IButton>()?.SetFlyout(None::<&native::FlyoutBase>)?;
                 }
                 Handle::Generated(GeneratedHandle::SplitButton(control)) => {
                     control.value.SetFlyout(None::<&native::FlyoutBase>)?;
@@ -243,8 +210,7 @@ impl WinUiAdapter {
         };
         let mut revokers = Vec::new();
         let flyout = if kind == ObjectType::MenuBarItem {
-            let Some(Handle::Generated(GeneratedHandle::MenuBarItem(item))) =
-                self.handles.get(&target)
+            let Some(Handle::Generated(GeneratedHandle::MenuBarItem(item))) = self.handles.get(&target)
             else {
                 return Err(WinUiError::InvalidObject(target));
             };
@@ -275,15 +241,7 @@ impl WinUiAdapter {
             }
             Some(flyout)
         };
-        self.menus.insert(
-            target,
-            NativeMenu {
-                menu: menu.clone(),
-                revision,
-                flyout,
-                _revokers: revokers,
-            },
-        );
+        self.menus.insert(target, NativeMenu { menu: menu.clone(), revision, flyout, _revokers: revokers });
         Ok(())
     }
 
@@ -305,11 +263,8 @@ impl WinUiAdapter {
         }
         if let Some(previous) = self.command_bar_flyouts.remove(&target) {
             previous.native.cast::<native::IFlyoutBase>()?.Hide()?;
-            self.ui_element(target)?
-                .cast::<native::IButton>()?
-                .SetFlyout(None::<&native::FlyoutBase>)?;
-            self.released_images
-                .extend(previous.images.into_iter().map(ImageUse::release));
+            self.ui_element(target)?.cast::<native::IButton>()?.SetFlyout(None::<&native::FlyoutBase>)?;
+            self.released_images.extend(previous.images.into_iter().map(ImageUse::release));
         }
         let Some(flyout) = flyout else {
             return Ok(());
@@ -337,18 +292,10 @@ impl WinUiAdapter {
                 revision,
             )?)?;
         }
-        self.ui_element(target)?
-            .cast::<native::IButton>()?
-            .SetFlyout(&native)?;
+        self.ui_element(target)?.cast::<native::IButton>()?.SetFlyout(&native)?;
         self.command_bar_flyouts.insert(
             target,
-            NativeCommandBarFlyout {
-                flyout: flyout.clone(),
-                revision,
-                native,
-                _revokers: revokers,
-                images,
-            },
+            NativeCommandBarFlyout { flyout: flyout.clone(), revision, native, _revokers: revokers, images },
         );
         Ok(())
     }
@@ -362,12 +309,7 @@ impl WinUiAdapter {
         revision: u64,
     ) -> Result<native::ICommandBarElement, WinUiError> {
         match command {
-            CommandBarCommand::Button {
-                key,
-                label,
-                icon,
-                enabled,
-            } => {
+            CommandBarCommand::Button { key, label, icon, enabled } => {
                 let button = native::AppBarButton::new()?;
                 button.SetLabel(label)?;
                 button.cast::<native::IControl>()?.SetIsEnabled(*enabled)?;
@@ -378,21 +320,16 @@ impl WinUiAdapter {
                 }
                 let clicked_key = key.clone();
                 let clicked_queue = Rc::clone(&self.event_queue);
-                revokers.push(button.cast::<native::IButtonBase>()?.Click(local::handler(
-                    move |_, _| {
-                        clicked_queue.queue(
-                            None,
-                            Some(QueuedEvent {
-                                object: target,
-                                event: EventId::CommandInvoked,
-                                handler: QueuedHandler::Presentation {
-                                    revision,
-                                    key: clicked_key.clone(),
-                                },
-                            }),
-                        );
-                    },
-                ))?);
+                revokers.push(button.cast::<native::IButtonBase>()?.Click(local::handler(move |_, _| {
+                    clicked_queue.queue(
+                        None,
+                        Some(QueuedEvent {
+                            object: target,
+                            event: EventId::CommandInvoked,
+                            handler: QueuedHandler::Presentation { revision, key: clicked_key.clone() },
+                        }),
+                    );
+                }))?);
                 Ok(button.cast()?)
             }
             CommandBarCommand::Separator { .. } => Ok(native::AppBarSeparator::new()?.cast()?),
@@ -426,10 +363,7 @@ fn build_menu_items(
                         Some(QueuedEvent {
                             object: target,
                             event: EventId::MenuItemInvoked,
-                            handler: QueuedHandler::Presentation {
-                                revision,
-                                key: clicked_key.clone(),
-                            },
+                            handler: QueuedHandler::Presentation { revision, key: clicked_key.clone() },
                         }),
                     );
                 }))?);
@@ -439,14 +373,7 @@ fn build_menu_items(
             MenuItem::Submenu { label, items, .. } => {
                 let item = native::MenuFlyoutSubItem::new()?;
                 item.SetText(label)?;
-                build_menu_items(
-                    items,
-                    &item.Items()?,
-                    revokers,
-                    event_queue,
-                    target,
-                    revision,
-                )?;
+                build_menu_items(items, &item.Items()?, revokers, event_queue, target, revision)?;
                 item.cast()?
             }
         };

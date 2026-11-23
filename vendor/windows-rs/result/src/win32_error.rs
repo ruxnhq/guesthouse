@@ -22,11 +22,9 @@ impl WIN32_ERROR {
     /// Maps a Win32 error code to an HRESULT value.
     #[inline]
     pub const fn to_hresult(self) -> HRESULT {
-        HRESULT(if self.0 as i32 <= 0 {
-            self.0
-        } else {
-            (self.0 & 0x0000_FFFF) | (7 << 16) | 0x8000_0000
-        } as i32)
+        HRESULT(
+            if self.0 as i32 <= 0 { self.0 } else { (self.0 & 0x0000_FFFF) | (7 << 16) | 0x8000_0000 } as i32
+        )
     }
 
     /// Returns the Win32 error contained in `error`, if it represents one.
@@ -34,11 +32,7 @@ impl WIN32_ERROR {
     pub fn from_error(error: &Error) -> Option<Self> {
         let hresult = error.code().0 as u32;
 
-        if ((hresult >> 16) & 0x7FF) == 7 {
-            Some(Self(hresult & 0xFFFF))
-        } else {
-            None
-        }
+        if ((hresult >> 16) & 0x7FF) == 7 { Some(Self(hresult & 0xFFFF)) } else { None }
     }
 
     /// Converts the error to a [`Result`], treating a successful code as `Ok`.

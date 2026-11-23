@@ -42,8 +42,7 @@ where
     unsafe fn param(self) -> ParamValue<T> {
         unsafe {
             if U::QUERY {
-                self.cast()
-                    .map_or(ParamValue::Borrowed(zeroed()), |ok| ParamValue::Owned(ok))
+                self.cast().map_or(ParamValue::Borrowed(zeroed()), |ok| ParamValue::Owned(ok))
             } else {
                 ParamValue::Borrowed(transmute_copy(self))
             }

@@ -11,9 +11,7 @@ const RUNTIME_VERSION: &str = "2.6.4";
 /// Packs a dotted version into a `PACKAGE_VERSION` value with 16 bits per part.
 fn pack_version(version: &str) -> u64 {
     let mut parts = version.split('.').map(|part| part.parse().unwrap());
-    (0..4).fold(0, |packed, _| {
-        packed << 16 | parts.next().unwrap_or(0_u16) as u64
-    })
+    (0..4).fold(0, |packed, _| packed << 16 | parts.next().unwrap_or(0_u16) as u64)
 }
 
 static BOOTSTRAPPED: Mutex<bool> = Mutex::new(false);
@@ -34,11 +32,7 @@ unsafe fn bootstrap_inner() -> Result<()> {
         TryCreatePackageDependency(
             std::ptr::null_mut(),
             FRAMEWORK_FAMILY,
-            PACKAGE_VERSION {
-                Anonymous: PACKAGE_VERSION_0 {
-                    Version: pack_version(RUNTIME_VERSION),
-                },
-            },
+            PACKAGE_VERSION { Anonymous: PACKAGE_VERSION_0 { Version: pack_version(RUNTIME_VERSION) } },
             process_architecture().flags | PackageDependencyProcessorArchitectures_Neutral,
             PACKAGE_DEPENDENCY_LIFETIME_KIND_PROCESS,
             PCWSTR::null(),
@@ -48,42 +42,21 @@ unsafe fn bootstrap_inner() -> Result<()> {
     };
     if hr == STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED {
         show_install_dialog();
-        return Err(Error::new(
-            hr,
-            "Microsoft.WindowsAppRuntime.2 framework package is not installed.",
-        ));
+        return Err(Error::new(hr, "Microsoft.WindowsAppRuntime.2 framework package is not installed."));
     }
     hr.ok()?;
 
     let mut handle = std::ptr::null_mut();
     let mut package_full_name = PWSTR::null();
-    let result = unsafe {
-        AddPackageDependency(
-            PCWSTR(dependency_id.0),
-            0,
-            0,
-            &mut handle,
-            &mut package_full_name,
-        )
-    };
+    let result =
+        unsafe { AddPackageDependency(PCWSTR(dependency_id.0), 0, 0, &mut handle, &mut package_full_name) };
     unsafe {
-        _ = HeapFree(
-            GetProcessHeap(),
-            0,
-            dependency_id.0.cast::<std::ffi::c_void>(),
-        );
-        _ = HeapFree(
-            GetProcessHeap(),
-            0,
-            package_full_name.0.cast::<std::ffi::c_void>(),
-        );
+        _ = HeapFree(GetProcessHeap(), 0, dependency_id.0.cast::<std::ffi::c_void>());
+        _ = HeapFree(GetProcessHeap(), 0, package_full_name.0.cast::<std::ffi::c_void>());
     }
     if result == STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED {
         show_install_dialog();
-        return Err(Error::new(
-            result,
-            "Microsoft.WindowsAppRuntime.2 framework package is not installed.",
-        ));
+        return Err(Error::new(result, "Microsoft.WindowsAppRuntime.2 framework package is not installed."));
     }
     result.ok()
 }
@@ -96,22 +69,14 @@ struct ProcessArchitecture {
 
 fn process_architecture() -> ProcessArchitecture {
     match std::env::consts::ARCH {
-        "x86_64" => ProcessArchitecture {
-            display: "x64",
-            flags: PackageDependencyProcessorArchitectures_X64,
-        },
-        "x86" => ProcessArchitecture {
-            display: "x86",
-            flags: PackageDependencyProcessorArchitectures_X86,
-        },
-        "aarch64" => ProcessArchitecture {
-            display: "arm64",
-            flags: PackageDependencyProcessorArchitectures_Arm64,
-        },
-        "arm" => ProcessArchitecture {
-            display: "arm",
-            flags: PackageDependencyProcessorArchitectures_Arm,
-        },
+        "x86_64" => {
+            ProcessArchitecture { display: "x64", flags: PackageDependencyProcessorArchitectures_X64 }
+        }
+        "x86" => ProcessArchitecture { display: "x86", flags: PackageDependencyProcessorArchitectures_X86 },
+        "aarch64" => {
+            ProcessArchitecture { display: "arm64", flags: PackageDependencyProcessorArchitectures_Arm64 }
+        }
+        "arm" => ProcessArchitecture { display: "arm", flags: PackageDependencyProcessorArchitectures_Arm },
         _ => ProcessArchitecture {
             display: std::env::consts::ARCH,
             flags: PackageDependencyProcessorArchitectures_None,
@@ -122,14 +87,8 @@ fn process_architecture() -> ProcessArchitecture {
 fn process_caption() -> HSTRING {
     std::env::current_exe()
         .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .map_or_else(
-            || HSTRING::from("This application could not be started"),
-            HSTRING::from,
-        )
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .map_or_else(|| HSTRING::from("This application could not be started"), HSTRING::from)
 }
 
 fn show_install_dialog() {

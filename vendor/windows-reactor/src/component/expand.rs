@@ -49,12 +49,7 @@ impl ExpansionState {
         render: ComponentRender,
         environment: OwnedContextEnvironment,
     ) -> View {
-        let ComponentRender {
-            dependencies,
-            effects,
-            view,
-            window,
-        } = render;
+        let ComponentRender { dependencies, effects, view, window } = render;
         self.pending.push(PendingScopeRender {
             dependencies,
             environment: Box::new(environment),
@@ -81,10 +76,7 @@ impl ComponentHost {
             owner,
             view.0,
             environment,
-            ExpansionLocation {
-                depth,
-                path: &mut path,
-            },
+            ExpansionLocation { depth, path: &mut path },
             expansion,
         )))
     }
@@ -119,27 +111,16 @@ impl ComponentHost {
                 self.expand_root(
                     owner,
                     provider.child,
-                    &ContextEnvironment {
-                        contexts: &contexts,
-                        provided: &provided,
-                    },
+                    &ContextEnvironment { contexts: &contexts, provided: &provided },
                     location,
                     expansion,
                 )
             }
-            DeclaredNode::Component {
-                node,
-                relation_key,
-                attachments,
-            } => {
+            DeclaredNode::Component { node, relation_key, attachments } => {
                 validate_limits(location.depth + 1, expansion.objects);
                 let (child, declaration) = self.expand_component(
                     owner,
-                    ComponentExpansion {
-                        attachments,
-                        node,
-                        relation_key,
-                    },
+                    ComponentExpansion { attachments, node, relation_key },
                     environment,
                     location.depth + 1,
                     expansion,
@@ -165,25 +146,16 @@ impl ComponentHost {
         if scope_root && declaration.component != Some(owner) {
             declaration.to_mut().component = Some(owner);
         }
-        if declaration
-            .virtual_items
-            .as_ref()
-            .is_some_and(|items| items.owner != Some(owner))
-        {
+        if declaration.virtual_items.as_ref().is_some_and(|items| items.owner != Some(owner)) {
             declaration.to_mut().virtual_items.as_mut().unwrap().owner = Some(owner);
         }
         let attachments = match &mut declaration {
             Cow::Borrowed(current) => current.attachments.as_ref().map(Cow::Borrowed),
             Cow::Owned(current) => current.attachments.take().map(Cow::Owned),
         };
-        if let Some(Cow::Owned(attachments)) = self.expand_attachments(
-            owner,
-            attachments,
-            environment,
-            location.depth,
-            expansion,
-            location.path,
-        ) {
+        if let Some(Cow::Owned(attachments)) =
+            self.expand_attachments(owner, attachments, environment, location.depth, expansion, location.path)
+        {
             let attachments = Some(attachments);
             match &mut declaration {
                 Cow::Borrowed(current) => {
@@ -196,10 +168,9 @@ impl ComponentHost {
             let relation = &declaration.relations.as_slice()[relation_index];
             let value = match &relation.value {
                 RelationValue::One(Some(child)) => {
-                    location.path.push(ComponentPathSegment::Relation(
-                        relation.id,
-                        child.relation_identity(0),
-                    ));
+                    location
+                        .path
+                        .push(ComponentPathSegment::Relation(relation.id, child.relation_identity(0)));
                     let result = self.expand_node(
                         owner,
                         child,
@@ -210,9 +181,9 @@ impl ComponentHost {
                     );
                     location.path.pop();
                     match result {
-                        Cow::Owned(expanded) => Some(RelationValue::One(Some(Rc::new(
-                            DeclaredNode::Object(expanded),
-                        )))),
+                        Cow::Owned(expanded) => {
+                            Some(RelationValue::One(Some(Rc::new(DeclaredNode::Object(expanded)))))
+                        }
                         Cow::Borrowed(_) => None,
                     }
                 }
@@ -220,9 +191,7 @@ impl ComponentHost {
                     let mut next = None;
                     for (index, child) in children.iter().enumerate() {
                         let identity = child.relation_identity(index);
-                        location
-                            .path
-                            .push(ComponentPathSegment::Relation(relation.id, identity));
+                        location.path.push(ComponentPathSegment::Relation(relation.id, identity));
                         let result = self.expand_node(
                             owner,
                             child,
@@ -290,11 +259,7 @@ impl ComponentHost {
                 ExpansionLocation { depth, path },
                 expansion,
             )),
-            DeclaredNode::Component {
-                node,
-                relation_key,
-                attachments,
-            } => Cow::Owned(
+            DeclaredNode::Component { node, relation_key, attachments } => Cow::Owned(
                 self.expand_component(
                     owner,
                     ComponentExpansion {
@@ -322,13 +287,8 @@ impl ComponentHost {
         path: &mut Vec<ComponentPathSegment>,
     ) -> (ComponentId, Declaration) {
         let mut prepared = self.prepare_component(owner, component, environment, expansion, path);
-        let expanded = self.expand_view(
-            prepared.id,
-            prepared.view.take().unwrap(),
-            environment,
-            depth,
-            expansion,
-        );
+        let expanded =
+            self.expand_view(prepared.id, prepared.view.take().unwrap(), environment, depth, expansion);
         let mut declaration = expanded.0.object();
         declaration.key = Some(prepared.declaration_key);
         let attachments = self
@@ -353,11 +313,7 @@ impl ComponentHost {
         expansion: &mut ExpansionState,
         path: &[ComponentPathSegment],
     ) -> Box<PreparedComponentExpansion> {
-        let ComponentExpansion {
-            attachments,
-            mut node,
-            relation_key,
-        } = component;
+        let ComponentExpansion { attachments, mut node, relation_key } = component;
         if let Some(component_key) = node.key.as_ref()
             && let Some(RelationKey::Explicit(relation_key)) = &relation_key
             && relation_key != component_key
@@ -366,24 +322,14 @@ impl ComponentHost {
         }
         let component_key = node.key.clone().unwrap_or_else(|| {
             let mut path = path.to_vec();
-            path.push(ComponentPathSegment::Component(
-                node.factory.component_type(),
-            ));
+            path.push(ComponentPathSegment::Component(node.factory.component_type()));
             Key::component_path(&path)
         });
-        let declaration_key = relation_key
-            .as_ref()
-            .map_or(&component_key, RelationKey::key)
-            .clone();
+        let declaration_key = relation_key.as_ref().map_or(&component_key, RelationKey::key).clone();
         node.key = Some(component_key.clone());
         let seen = expansion.seen.entry(owner).or_default();
-        assert!(
-            seen.insert(component_key.clone()),
-            "duplicate key {component_key:?}"
-        );
-        let existing = self
-            .scope(owner)
-            .and_then(|scope| scope.children.get(&component_key).copied());
+        assert!(seen.insert(component_key.clone()), "duplicate key {component_key:?}");
+        let existing = self.scope(owner).and_then(|scope| scope.children.get(&component_key).copied());
         let (id, view) = if let Some(id) = existing {
             assert!(
                 self.scope(id).unwrap().component.component_type() == node.factory.component_type(),
@@ -391,11 +337,8 @@ impl ComponentHost {
             );
             let scope = self.scope_mut(id).unwrap();
             let reference = scope.reference.clone();
-            let render = scope.component.apply_input(
-                node.factory.input(),
-                reference.clone(),
-                environment.contexts,
-            );
+            let render =
+                scope.component.apply_input(node.factory.input(), reference.clone(), environment.contexts);
             let render = match render {
                 Some(render) => Some(render),
                 None if scope.dependencies_changed(environment.contexts) => {
@@ -425,10 +368,7 @@ impl ComponentHost {
                 environment.contexts.clone(),
                 environment.provided.clone(),
             );
-            self.scope_mut(owner)
-                .unwrap()
-                .children
-                .insert(component_key, created.0);
+            self.scope_mut(owner).unwrap().children.insert(component_key, created.0);
             let view = expansion.push_render(
                 created.0,
                 created.1,
@@ -439,12 +379,7 @@ impl ComponentHost {
             );
             (created.0, view)
         };
-        Box::new(PreparedComponentExpansion {
-            attachments,
-            declaration_key,
-            id,
-            view: Some(view),
-        })
+        Box::new(PreparedComponentExpansion { attachments, declaration_key, id, view: Some(view) })
     }
 
     fn expand_provider_node(
@@ -463,10 +398,7 @@ impl ComponentHost {
         self.expand_node(
             owner,
             child,
-            &ContextEnvironment {
-                contexts: &contexts,
-                provided: &provided,
-            },
+            &ContextEnvironment { contexts: &contexts, provided: &provided },
             location.depth,
             expansion,
             location.path,
@@ -488,36 +420,20 @@ impl ComponentHost {
             validate_limits(depth, expansion.objects);
             expansion.objects += 1;
             path.push(ComponentPathSegment::Tooltip);
-            let result = self.expand_node(
-                owner,
-                &tooltip.content,
-                environment,
-                depth + 2,
-                expansion,
-                path,
-            );
+            let result = self.expand_node(owner, &tooltip.content, environment, depth + 2, expansion, path);
             path.pop();
             if let Cow::Owned(content) = result {
-                *attachments.to_mut().tooltip.as_mut().unwrap().content =
-                    DeclaredNode::Object(content);
+                *attachments.to_mut().tooltip.as_mut().unwrap().content = DeclaredNode::Object(content);
             }
         }
         if let Some(flyout) = &attachments.flyout {
             validate_limits(depth, expansion.objects);
             expansion.objects += 1;
             path.push(ComponentPathSegment::Flyout);
-            let result = self.expand_node(
-                owner,
-                &flyout.content,
-                environment,
-                depth + 2,
-                expansion,
-                path,
-            );
+            let result = self.expand_node(owner, &flyout.content, environment, depth + 2, expansion, path);
             path.pop();
             if let Cow::Owned(content) = result {
-                *attachments.to_mut().flyout.as_mut().unwrap().content =
-                    DeclaredNode::Object(content);
+                *attachments.to_mut().flyout.as_mut().unwrap().content = DeclaredNode::Object(content);
             }
         }
         if let Some(dialog) = &attachments.content_dialog {
@@ -527,20 +443,12 @@ impl ComponentHost {
                 Cow::Borrowed(&dialog.declaration),
                 environment,
                 false,
-                ExpansionLocation {
-                    depth: depth + 1,
-                    path,
-                },
+                ExpansionLocation { depth: depth + 1, path },
                 expansion,
             );
             path.pop();
             if let Cow::Owned(declaration) = result {
-                attachments
-                    .to_mut()
-                    .content_dialog
-                    .as_mut()
-                    .unwrap()
-                    .declaration = declaration;
+                attachments.to_mut().content_dialog.as_mut().unwrap().declaration = declaration;
             }
         }
         Some(attachments)
@@ -559,18 +467,12 @@ impl ComponentHost {
             let scope = self.scope_mut(id).unwrap();
             scope.root = Some(object);
             scope.reference.set(Some(object));
-            component = scope
-                .parent
-                .filter(|&parent| self.scope(parent).unwrap().root_child == Some(id));
+            component = scope.parent.filter(|&parent| self.scope(parent).unwrap().root_child == Some(id));
         }
         if let Some(attachments) = &declaration.attachments {
             if let Some(tooltip) = &attachments.tooltip {
                 let tooltip_object = self.runtime.graph().tooltip(object).unwrap();
-                let content_object = self
-                    .runtime
-                    .graph()
-                    .child(tooltip_object, RelationId::Content)
-                    .unwrap();
+                let content_object = self.runtime.graph().child(tooltip_object, RelationId::Content).unwrap();
                 self.refresh_roots_from(tooltip.content.as_object(), content_object);
             }
             if let Some(flyout) = &attachments.flyout {
@@ -590,8 +492,7 @@ impl ComponentHost {
                 }
                 RelationValue::Many(children) => {
                     for (index, child) in children.iter().enumerate() {
-                        let object =
-                            self.runtime.graph().children(object, relation.id).unwrap()[index];
+                        let object = self.runtime.graph().children(object, relation.id).unwrap()[index];
                         self.refresh_roots_from(child.as_object(), object);
                     }
                 }

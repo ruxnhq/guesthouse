@@ -1,5 +1,6 @@
 //! The VM and the daemon as processes on this PC.
 
+use super::android_stop::long_power_press;
 use super::macos_stop::{KEYS_SHARE, shutdown_keys};
 use super::{Stopped, VmHost};
 use crate::context::Context;
@@ -372,6 +373,8 @@ impl VmHost for LocalHost<'_> {
             let mut left = seconds;
             if machine.has_gpu() {
                 self.context.ask_guest(machine, "Stop-Computer -Force", crate::agent::QUICK_SECONDS, None);
+            } else if machine.android() {
+                self.context.ask_monitor(None, &long_power_press());
             } else if machine.macos() {
                 self.context.ask_monitor(None, &shutdown_keys());
                 left -= seconds / KEYS_SHARE;

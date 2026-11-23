@@ -21,7 +21,9 @@ pub(super) fn native_item(entry: &MenuItem) -> windows_core::Result<Option<(Menu
         Ok(item)
     };
     Ok(Some(match entry {
-        MenuItem::Item { key, label, enabled } => (finish(MenuFlyoutItem::new()?, label, *enabled)?, key.clone()),
+        MenuItem::Item { key, label, enabled } => {
+            (finish(MenuFlyoutItem::new()?, label, *enabled)?, key.clone())
+        }
         MenuItem::Check { key, label, enabled, checked } => {
             let item = ToggleMenuFlyoutItem::new()?;
             item.SetIsChecked(*checked)?;
@@ -60,11 +62,8 @@ windows_core::imp::define_winrt_interface!(
 impl IRadioMenuFlyoutItem {
     pub(crate) fn SetIsChecked(&self, value: bool) -> windows_core::Result<()> {
         unsafe {
-            (windows_core::Interface::vtable(self).SetIsChecked)(
-                windows_core::Interface::as_raw(self),
-                value,
-            )
-            .ok()
+            (windows_core::Interface::vtable(self).SetIsChecked)(windows_core::Interface::as_raw(self), value)
+                .ok()
         }
     }
     pub(crate) fn SetGroupName(&self, value: &str) -> windows_core::Result<()> {
@@ -81,13 +80,10 @@ impl IRadioMenuFlyoutItem {
 pub struct IRadioMenuFlyoutItem_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
     IsChecked: usize,
-    pub SetIsChecked:
-        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
+    pub SetIsChecked: unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
     GroupName: usize,
-    pub SetGroupName: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut core::ffi::c_void,
-    ) -> windows_core::HRESULT,
+    pub SetGroupName:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> windows_core::HRESULT,
 }
 windows_core::imp::define_winrt_interface!(
     IRadioMenuFlyoutItemFactory,
@@ -122,21 +118,16 @@ impl IToggleMenuFlyoutItem {
     }
     pub(crate) fn SetIsChecked(&self, value: bool) -> windows_core::Result<()> {
         unsafe {
-            (windows_core::Interface::vtable(self).SetIsChecked)(
-                windows_core::Interface::as_raw(self),
-                value,
-            )
-            .ok()
+            (windows_core::Interface::vtable(self).SetIsChecked)(windows_core::Interface::as_raw(self), value)
+                .ok()
         }
     }
 }
 #[repr(C)]
 pub struct IToggleMenuFlyoutItem_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
-    pub IsChecked:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
-    pub SetIsChecked:
-        unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
+    pub IsChecked: unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
+    pub SetIsChecked: unsafe extern "system" fn(*mut core::ffi::c_void, bool) -> windows_core::HRESULT,
 }
 windows_core::imp::define_winrt_interface!(
     IToggleMenuFlyoutItemFactory,
@@ -183,16 +174,11 @@ impl RadioMenuFlyoutItem {
             .and_then(|| windows_core::imp::from_abi(result__))
         })
     }
-    fn IRadioMenuFlyoutItemFactory<
-        R,
-        F: FnOnce(&IRadioMenuFlyoutItemFactory) -> windows_core::Result<R>,
-    >(
+    fn IRadioMenuFlyoutItemFactory<R, F: FnOnce(&IRadioMenuFlyoutItemFactory) -> windows_core::Result<R>>(
         callback: F,
     ) -> windows_core::Result<R> {
-        static SHARED: windows_core::imp::FactoryCache<
-            RadioMenuFlyoutItem,
-            IRadioMenuFlyoutItemFactory,
-        > = windows_core::imp::FactoryCache::new();
+        static SHARED: windows_core::imp::FactoryCache<RadioMenuFlyoutItem, IRadioMenuFlyoutItemFactory> =
+            windows_core::imp::FactoryCache::new();
         SHARED.call(callback)
     }
 }
@@ -252,10 +238,8 @@ impl ToggleMenuFlyoutItem {
     >(
         callback: F,
     ) -> windows_core::Result<R> {
-        static SHARED: windows_core::imp::FactoryCache<
-            ToggleMenuFlyoutItem,
-            IToggleMenuFlyoutItemFactory,
-        > = windows_core::imp::FactoryCache::new();
+        static SHARED: windows_core::imp::FactoryCache<ToggleMenuFlyoutItem, IToggleMenuFlyoutItemFactory> =
+            windows_core::imp::FactoryCache::new();
         SHARED.call(callback)
     }
 }

@@ -25,18 +25,9 @@ where
     K::Default: Ord,
 {
     fn First(&self) -> Result<IIterator<IKeyValuePair<K, V>>> {
-        let snapshot: Vec<(K::Default, V::Default)> = self
-            .map
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        Ok(ComObject::new(StockMapIterator::<K, V> {
-            snapshot,
-            current: 0.into(),
-        })
-        .into_interface())
+        let snapshot: Vec<(K::Default, V::Default)> =
+            self.map.read().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        Ok(ComObject::new(StockMapIterator::<K, V> { snapshot, current: 0.into() }).into_interface())
     }
 }
 
@@ -48,9 +39,7 @@ where
 {
     fn Lookup(&self, key: Ref<K>) -> Result<V> {
         let map = self.map.read().unwrap();
-        let value = map
-            .get(ref_as_default::<K>(&key))
-            .ok_or_else(|| Error::from(E_BOUNDS))?;
+        let value = map.get(ref_as_default::<K>(&key)).ok_or_else(|| Error::from(E_BOUNDS))?;
         V::from_default(value)
     }
 
@@ -59,11 +48,7 @@ where
     }
 
     fn HasKey(&self, key: Ref<K>) -> Result<bool> {
-        Ok(self
-            .map
-            .read()
-            .unwrap()
-            .contains_key(ref_as_default::<K>(&key)))
+        Ok(self.map.read().unwrap().contains_key(ref_as_default::<K>(&key)))
     }
 
     fn GetView(&self) -> Result<IMapView<K, V>> {
@@ -74,10 +59,7 @@ where
     fn Insert(&self, key: Ref<K>, value: Ref<V>) -> Result<bool> {
         let mut map = self.map.write().unwrap();
         let replaced = map.contains_key(ref_as_default::<K>(&key));
-        map.insert(
-            ref_as_default::<K>(&key).clone(),
-            ref_as_default::<V>(&value).clone(),
-        );
+        map.insert(ref_as_default::<K>(&key).clone(), ref_as_default::<V>(&value).clone());
         Ok(replaced)
     }
 
@@ -121,11 +103,8 @@ where
     fn Current(&self) -> Result<IKeyValuePair<K, V>> {
         let current = self.current.load(std::sync::atomic::Ordering::Relaxed);
         if let Some((key, value)) = self.snapshot.get(current) {
-            Ok(ComObject::new(key_value_pair::StockKeyValuePair {
-                key: key.clone(),
-                value: value.clone(),
-            })
-            .into_interface())
+            Ok(ComObject::new(key_value_pair::StockKeyValuePair { key: key.clone(), value: value.clone() })
+                .into_interface())
         } else {
             Err(Error::from(E_BOUNDS))
         }
@@ -140,8 +119,7 @@ where
         let current = self.current.load(std::sync::atomic::Ordering::Relaxed);
         let len = self.snapshot.len();
         if current < len {
-            self.current
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.current.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(len > current + 1)
     }
@@ -157,16 +135,12 @@ where
 
         for (item, (key, value)) in items.iter_mut().zip(self.snapshot[current..].iter()) {
             *item = Some(
-                ComObject::new(key_value_pair::StockKeyValuePair {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .into_interface(),
+                ComObject::new(key_value_pair::StockKeyValuePair { key: key.clone(), value: value.clone() })
+                    .into_interface(),
             );
         }
 
-        self.current
-            .fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
+        self.current.fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
 
         Ok(actual as u32)
     }
@@ -180,9 +154,6 @@ where
 {
     /// Creates a mutable `IMap<K, V>` from the given key/value pairs.
     fn from(map: std::collections::BTreeMap<K::Default, V::Default>) -> Self {
-        ComObject::new(StockMap {
-            map: std::sync::RwLock::new(map),
-        })
-        .into_interface()
+        ComObject::new(StockMap { map: std::sync::RwLock::new(map) }).into_interface()
     }
 }

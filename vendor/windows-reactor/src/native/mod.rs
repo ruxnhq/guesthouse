@@ -8,12 +8,7 @@ use windows_core::{
     implement_decl,
 };
 
-#[allow(
-    clippy::upper_case_acronyms,
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals
-)]
+#[allow(clippy::upper_case_acronyms, non_camel_case_types, non_snake_case, non_upper_case_globals)]
 mod bindings;
 
 mod app;
@@ -21,12 +16,7 @@ mod app_shim;
 mod bootstrap;
 mod local;
 // remoteman patch (VENDORED.md, patch 6): check and radio menu items.
-#[allow(
-    clippy::upper_case_acronyms,
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals
-)]
+#[allow(clippy::upper_case_acronyms, non_camel_case_types, non_snake_case, non_upper_case_globals)]
 mod menu_items;
 mod notifyicon;
 // remoteman patch (VENDORED.md, patch 9): a cursor from the app's resources.
@@ -42,9 +32,7 @@ struct PhysicalCoordinates(bindings::DPI_AWARENESS_CONTEXT);
 impl PhysicalCoordinates {
     fn enter() -> windows_core::Result<Self> {
         let previous = unsafe {
-            bindings::SetThreadDpiAwarenessContext(
-                bindings::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-            )
+            bindings::SetThreadDpiAwarenessContext(bindings::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
         };
         if previous.is_null() {
             return Err(windows_core::Error::from_thread());

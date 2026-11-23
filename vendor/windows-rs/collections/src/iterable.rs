@@ -20,11 +20,7 @@ where
     T: RuntimeType,
 {
     fn First(&self) -> Result<IIterator<T>> {
-        Ok(ComObject::new(StockIterator {
-            owner: self.to_object(),
-            current: 0.into(),
-        })
-        .into_interface())
+        Ok(ComObject::new(StockIterator { owner: self.to_object(), current: 0.into() }).into_interface())
     }
 }
 
@@ -70,8 +66,7 @@ where
         let current = self.current.load(std::sync::atomic::Ordering::Relaxed);
 
         if current < owner.values.len() {
-            self.current
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.current.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(owner.values.len() > current + 1)
@@ -89,8 +84,7 @@ where
         let (values, _) = values.split_at_mut(actual);
         values.clone_from_slice(&owner.values[current..current + actual]);
 
-        self.current
-            .fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
+        self.current.fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
 
         Ok(actual as u32)
     }

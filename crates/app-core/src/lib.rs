@@ -11,6 +11,7 @@
 pub mod account;
 pub mod actions;
 pub mod agent;
+pub mod android_setup;
 pub mod auto_snapshot;
 pub mod bridge;
 pub mod card_choice;

@@ -9,13 +9,7 @@ impl RetainedGraph {
             if let Some(reference) = object.reference.as_ref()
                 && let Ok(index) = u32::try_from(index)
             {
-                reference.clear(
-                    endpoint,
-                    ObjectId {
-                        index,
-                        generation: slot.generation,
-                    },
-                );
+                reference.clear(endpoint, ObjectId { index, generation: slot.generation });
             }
         }
     }
@@ -52,10 +46,7 @@ impl RetainedGraph {
                 };
                 if contains {
                     Some((
-                        ObjectId {
-                            index: index.try_into().ok()?,
-                            generation: slot.generation,
-                        },
+                        ObjectId { index: index.try_into().ok()?, generation: slot.generation },
                         relation.id,
                     ))
                 } else {
@@ -67,9 +58,7 @@ impl RetainedGraph {
 
     pub(super) fn get(&self, object: ObjectId) -> Option<&RetainedObject> {
         let slot = self.objects.get(object.index as usize)?;
-        (slot.generation == object.generation)
-            .then_some(slot.object.as_ref())
-            .flatten()
+        (slot.generation == object.generation).then_some(slot.object.as_ref()).flatten()
     }
 
     pub(super) fn get_mut(&mut self, object: ObjectId) -> &mut RetainedObject {
@@ -78,15 +67,8 @@ impl RetainedGraph {
         slot.object.as_mut().unwrap()
     }
 
-    pub(super) fn relation(
-        &self,
-        object: ObjectId,
-        relation: RelationId,
-    ) -> Option<&RetainedRelation> {
-        self.get(object)?
-            .relations
-            .iter()
-            .find(|state| state.id == relation)
+    pub(super) fn relation(&self, object: ObjectId, relation: RelationId) -> Option<&RetainedRelation> {
+        self.get(object)?.relations.iter().find(|state| state.id == relation)
     }
 
     pub(super) fn matches_declaration(
@@ -138,14 +120,8 @@ impl RetainedGraph {
         {
             return false;
         }
-        let current_attachments = current
-            .attachments
-            .as_deref()
-            .unwrap_or(&RetainedAttachments::EMPTY);
-        let declared_attachments = declaration
-            .attachments
-            .as_deref()
-            .unwrap_or(&DeclaredAttachments::EMPTY);
+        let current_attachments = current.attachments.as_deref().unwrap_or(&RetainedAttachments::EMPTY);
+        let declared_attachments = declaration.attachments.as_deref().unwrap_or(&DeclaredAttachments::EMPTY);
         match (&current_attachments.tooltip, &declared_attachments.tooltip) {
             (None, None) => {}
             (Some(current), Some(declared))
@@ -163,10 +139,7 @@ impl RetainedGraph {
             (Some(current), Some(declared)) if current.menu == declared.menu => {}
             _ => return false,
         }
-        match (
-            &current_attachments.command_bar_flyout,
-            &declared_attachments.command_bar_flyout,
-        ) {
+        match (&current_attachments.command_bar_flyout, &declared_attachments.command_bar_flyout) {
             (None, None) => {}
             (Some(current), Some(declared)) if current.flyout == declared.flyout => {}
             _ => return false,
@@ -183,10 +156,7 @@ impl RetainedGraph {
                     ) => {}
             _ => return false,
         }
-        match (
-            &current_attachments.content_dialog,
-            &declared_attachments.content_dialog,
-        ) {
+        match (&current_attachments.content_dialog, &declared_attachments.content_dialog) {
             (None, None) => {}
             (Some(current), Some(declared))
                 if current.open == declared.open
@@ -201,9 +171,7 @@ impl RetainedGraph {
         if let Some(current_virtual) = &current.virtual_items {
             let declared = declaration.virtual_items.as_ref();
             if declared.map(|declared| &declared.items) != Some(&current_virtual.items)
-                || declared
-                    .and_then(|declared| declared.owner)
-                    .or(declaration.component)
+                || declared.and_then(|declared| declared.owner).or(declaration.component)
                     != current_virtual.owner
             {
                 return false;
@@ -214,9 +182,7 @@ impl RetainedGraph {
         let contracts = relation_contracts(current.kind);
         for (index, relation) in declaration.relations.iter().enumerate() {
             if !contracts.iter().any(|contract| contract.id == relation.id)
-                || declaration.relations.as_slice()[..index]
-                    .iter()
-                    .any(|previous| previous.id == relation.id)
+                || declaration.relations.as_slice()[..index].iter().any(|previous| previous.id == relation.id)
             {
                 return false;
             }
@@ -225,15 +191,8 @@ impl RetainedGraph {
             if contract.realization == Realization::Container && current.virtual_items.is_some() {
                 continue;
             }
-            let declared = declaration
-                .relations
-                .iter()
-                .find(|relation| relation.id == contract.id);
-            let retained = current
-                .relations
-                .iter()
-                .find(|relation| relation.id == contract.id)
-                .unwrap();
+            let declared = declaration.relations.iter().find(|relation| relation.id == contract.id);
+            let retained = current.relations.iter().find(|relation| relation.id == contract.id).unwrap();
             match (&retained.value, declared.map(|relation| &relation.value)) {
                 (RetainedRelationValue::One(None), None) => {}
                 (RetainedRelationValue::Many(children), None) if children.is_empty() => {}
@@ -255,12 +214,7 @@ impl RetainedGraph {
                         return false;
                     }
                     for (previous, next) in previous.iter().zip(next.iter()) {
-                        if !self.matches_declaration_inner(
-                            *previous,
-                            next.as_object(),
-                            remaining,
-                            true,
-                        ) {
+                        if !self.matches_declaration_inner(*previous, next.as_object(), remaining, true) {
                             return false;
                         }
                     }
@@ -271,32 +225,20 @@ impl RetainedGraph {
         true
     }
 
-    pub(super) fn relation_mut(
-        &mut self,
-        object: ObjectId,
-        relation: RelationId,
-    ) -> &mut RetainedRelation {
-        self.get_mut(object)
-            .relations
-            .iter_mut()
-            .find(|state| state.id == relation)
-            .unwrap()
+    pub(super) fn relation_mut(&mut self, object: ObjectId, relation: RelationId) -> &mut RetainedRelation {
+        self.get_mut(object).relations.iter_mut().find(|state| state.id == relation).unwrap()
     }
 
     pub(super) fn set_window_title_bar(&mut self, object: ObjectId, height: WindowTitleBarHeight) {
         assert!(
-            self.window_title_bar
-                .is_none_or(|(current, _)| current == object),
+            self.window_title_bar.is_none_or(|(current, _)| current == object),
             "window title bar declared more than once"
         );
         self.window_title_bar = Some((object, height));
     }
 
     pub(super) fn clear_window_title_bar(&mut self, object: ObjectId) {
-        if self
-            .window_title_bar
-            .is_some_and(|(current, _)| current == object)
-        {
+        if self.window_title_bar.is_some_and(|(current, _)| current == object) {
             self.window_title_bar = None;
         }
     }
@@ -305,20 +247,11 @@ impl RetainedGraph {
         if let Some(index) = self.free.pop() {
             let slot = &mut self.objects[index as usize];
             slot.object = Some(object);
-            ObjectId {
-                index,
-                generation: slot.generation,
-            }
+            ObjectId { index, generation: slot.generation }
         } else {
             let index = self.objects.len().try_into().unwrap();
-            self.objects.push(RetainedSlot {
-                generation: 0,
-                object: Some(object),
-            });
-            ObjectId {
-                index,
-                generation: 0,
-            }
+            self.objects.push(RetainedSlot { generation: 0, object: Some(object) });
+            ObjectId { index, generation: 0 }
         }
     }
 

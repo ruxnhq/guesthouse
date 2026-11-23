@@ -15,10 +15,7 @@ pub(super) struct TaskControl {
 
 impl Default for TaskControl {
     fn default() -> Self {
-        Self {
-            status: AtomicU8::new(0),
-            timer: Mutex::new(None),
-        }
+        Self { status: AtomicU8::new(0), timer: Mutex::new(None) }
     }
 }
 
@@ -38,24 +35,17 @@ impl TaskControl {
     }
 
     pub(super) fn queue(&self) -> bool {
-        self.status
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        self.status.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 
     pub(super) fn deliver(&self) -> bool {
-        self.status
-            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        self.status.compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 
     pub(super) fn cancel(&self) {
         let mut current = self.status.load(Ordering::Acquire);
         while current <= 1 {
-            match self
-                .status
-                .compare_exchange(current, 3, Ordering::AcqRel, Ordering::Acquire)
-            {
+            match self.status.compare_exchange(current, 3, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => {
                     if let Some(timer) = self.timer.lock().unwrap().take() {
                         timer.cancel();

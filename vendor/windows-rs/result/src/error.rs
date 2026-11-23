@@ -53,20 +53,13 @@ const fn const_nonzero_i32(i: i32) -> NonZeroI32 {
 }
 
 fn nonzero_hresult(hr: HRESULT) -> NonZeroI32 {
-    if let Some(nz) = NonZeroI32::new(hr.0) {
-        nz
-    } else {
-        S_EMPTY_ERROR
-    }
+    if let Some(nz) = NonZeroI32::new(hr.0) { nz } else { S_EMPTY_ERROR }
 }
 
 impl Error {
     /// Creates an error object without any failure information.
     pub const fn empty() -> Self {
-        Self {
-            code: S_EMPTY_ERROR,
-            info: ErrorInfo::empty(),
-        }
+        Self { code: S_EMPTY_ERROR, info: ErrorInfo::empty() }
     }
 
     /// Creates a new error object, capturing the stack and other information about the
@@ -83,10 +76,7 @@ impl Error {
 
     /// Creates a new error object with an error code, but without additional error information.
     pub fn from_hresult(code: HRESULT) -> Self {
-        Self {
-            code: nonzero_hresult(code),
-            info: ErrorInfo::empty(),
-        }
+        Self { code: nonzero_hresult(code), info: ErrorInfo::empty() }
     }
 
     /// Creates a new `Error` from the Win32 error code returned by `GetLastError()`.
@@ -96,11 +86,7 @@ impl Error {
 
     /// The error code describing the error.
     pub const fn code(&self) -> HRESULT {
-        if self.code.get() == S_EMPTY_ERROR.get() {
-            HRESULT(0)
-        } else {
-            HRESULT(self.code.get())
-        }
+        if self.code.get() == S_EMPTY_ERROR.get() { HRESULT(0) } else { HRESULT(self.code.get()) }
     }
 
     /// The error message describing the error.
@@ -132,10 +118,7 @@ impl From<Error> for HRESULT {
 
 impl From<HRESULT> for Error {
     fn from(code: HRESULT) -> Self {
-        Self {
-            code: nonzero_hresult(code),
-            info: ErrorInfo::from_thread(),
-        }
+        Self { code: nonzero_hresult(code), info: ErrorInfo::from_thread() }
     }
 }
 
@@ -188,10 +171,7 @@ impl From<core::num::TryFromIntError> for Error {
 impl core::fmt::Debug for Error {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::fmt::Result {
         let mut debug = fmt.debug_struct("Error");
-        debug
-            .field("code", &self.code())
-            .field("message", &self.message())
-            .finish()
+        debug.field("code", &self.code()).field("message", &self.message()).finish()
     }
 }
 
@@ -262,9 +242,7 @@ mod error_info {
         pub(crate) fn from_thread() -> Self {
             let mut ptr: *mut core::ffi::c_void = core::ptr::null_mut();
             unsafe { GetErrorInfo(0, &mut ptr) };
-            Self {
-                ptr: core::ptr::NonNull::new(ptr).map(ComPtr),
-            }
+            Self { ptr: core::ptr::NonNull::new(ptr).map(ComPtr) }
         }
 
         pub(crate) fn into_thread(self) {
@@ -314,10 +292,7 @@ mod error_info {
             // Next attempt to retrieve the regular error information.
             if message.is_empty() {
                 unsafe {
-                    com_call!(
-                        IErrorInfo_Vtbl,
-                        ptr.GetDescription(&mut message as *mut _ as _)
-                    );
+                    com_call!(IErrorInfo_Vtbl, ptr.GetDescription(&mut message as *mut _ as _));
                 }
             }
 
@@ -325,11 +300,7 @@ mod error_info {
         }
 
         pub(crate) fn as_ptr(&self) -> *mut core::ffi::c_void {
-            if let Some(info) = self.ptr.as_ref() {
-                info.as_raw()
-            } else {
-                core::ptr::null_mut()
-            }
+            if let Some(info) = self.ptr.as_ref() { info.as_raw() } else { core::ptr::null_mut() }
         }
     }
 

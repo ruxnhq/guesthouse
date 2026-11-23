@@ -43,8 +43,7 @@ fn stage_self_contained() -> io::Result<()> {
     let arch = target_arch();
     let runtime = stage_pkg(RUNTIME_PKG, RUNTIME_VER, &temp_dir, &runtime_msix(arch))?;
     let extract = ensure_msix_extracted(&runtime, arch)?;
-    fs::create_dir_all(&dest)
-        .map_err(|error| file_error("create output directory", &dest, error))?;
+    fs::create_dir_all(&dest).map_err(|error| file_error("create output directory", &dest, error))?;
     let _destination_lock = lock_file(&dest.join(".windows-reactor-setup.lock"))?;
     copy_runtime_to(&extract, &dest)?;
     deploy_webview2(&temp_dir, &dest, arch)?;
@@ -53,10 +52,7 @@ fn stage_self_contained() -> io::Result<()> {
     let mut manifest = APP_MANIFEST.to_string();
     let assembly = manifest.find("<assembly").unwrap();
     let opening = assembly + manifest[assembly..].find('>').unwrap() + 1;
-    manifest.insert_str(
-        opening,
-        &format!("<description>{SELF_CONTAINED_MARKER}</description>"),
-    );
+    manifest.insert_str(opening, &format!("<description>{SELF_CONTAINED_MARKER}</description>"));
     fs::write(&manifest_path, manifest)
         .map_err(|error| file_error("write manifest", &manifest_path, error))?;
     let target_env = env::var("CARGO_CFG_TARGET_ENV").expect("CARGO_CFG_TARGET_ENV not set");
@@ -64,17 +60,11 @@ fn stage_self_contained() -> io::Result<()> {
     match (target_env.as_str(), target_abi.as_str()) {
         ("msvc", _) => {
             println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
-            println!(
-                "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
-                manifest_path.display()
-            );
+            println!("cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}", manifest_path.display());
         }
         ("gnu", "llvm") => {
             println!("cargo:rustc-link-arg-bins=-Wl,/MANIFEST:EMBED");
-            println!(
-                "cargo:rustc-link-arg-bins=-Wl,/MANIFESTINPUT:{}",
-                manifest_path.display()
-            );
+            println!("cargo:rustc-link-arg-bins=-Wl,/MANIFESTINPUT:{}", manifest_path.display());
         }
         _ => panic!("unsupported target environment: {target_env}{target_abi}"),
     }
@@ -89,9 +79,7 @@ fn stage_self_contained() -> io::Result<()> {
 /// on the machine by default, so a self-contained app must carry it alongside
 /// the other runtime DLLs.
 fn deploy_webview2(temp: &Path, dest: &Path, arch: &str) -> io::Result<()> {
-    let relative = PathBuf::from(format!("win-{arch}"))
-        .join("native_uap")
-        .join(WEBVIEW2_CORE_DLL);
+    let relative = PathBuf::from(format!("win-{arch}")).join("native_uap").join(WEBVIEW2_CORE_DLL);
     let pkg = stage_pkg(WEBVIEW2_PKG, WEBVIEW2_VER, temp, &relative)?;
     copy_entry(&pkg.join(relative), &dest.join(WEBVIEW2_CORE_DLL))
 }
@@ -108,9 +96,7 @@ fn temp_dir() -> io::Result<PathBuf> {
     } else if let Some(p) = env::var_os("HOME") {
         PathBuf::from(p).join(".cache")
     } else {
-        panic!(
-            "could not determine cache directory: LOCALAPPDATA, XDG_CACHE_HOME, and HOME are all unset"
-        );
+        panic!("could not determine cache directory: LOCALAPPDATA, XDG_CACHE_HOME, and HOME are all unset");
     };
     // Keep caches published by this implementation separate from unchecked legacy entries.
     let temp = base.join("windows-reactor-setup").join("temp").join("v1");
@@ -119,9 +105,7 @@ fn temp_dir() -> io::Result<PathBuf> {
 }
 
 fn runtime_msix(arch: &str) -> PathBuf {
-    PathBuf::from("MSIX")
-        .join(format!("win10-{arch}"))
-        .join("Microsoft.WindowsAppRuntime.2.msix")
+    PathBuf::from("MSIX").join(format!("win10-{arch}")).join("Microsoft.WindowsAppRuntime.2.msix")
 }
 
 fn ensure_msix_extracted(runtime: &Path, arch: &str) -> io::Result<PathBuf> {
@@ -136,11 +120,10 @@ fn copy_runtime_to(src: &Path, dest: &Path) -> io::Result<()> {
     for entry in fs::read_dir(src).map_err(|error| file_error("read directory", src, error))? {
         let entry = entry.map_err(|error| file_error("read directory entry", src, error))?;
         let name = entry.file_name();
-        if name.to_str().is_some_and(|name| {
-            RUNTIME_FILES
-                .lines()
-                .any(|line| line.trim().eq_ignore_ascii_case(name))
-        }) {
+        if name
+            .to_str()
+            .is_some_and(|name| RUNTIME_FILES.lines().any(|line| line.trim().eq_ignore_ascii_case(name)))
+        {
             copy_entry(&entry.path(), &dest.join(name))?;
         }
     }
@@ -157,13 +140,9 @@ fn copy_entry(src: &Path, dest: &Path) -> io::Result<()> {
         }
     } else {
         let parent = dest.parent().unwrap();
-        fs::create_dir_all(parent)
-            .map_err(|error| file_error("create directory", parent, error))?;
+        fs::create_dir_all(parent).map_err(|error| file_error("create directory", parent, error))?;
         fs::copy(src, dest).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("copy {} to {}: {error}", src.display(), dest.display()),
-            )
+            io::Error::new(error.kind(), format!("copy {} to {}: {error}", src.display(), dest.display()))
         })?;
     }
     Ok(())
@@ -192,25 +171,18 @@ fn cached_dir(
     match fs::metadata(&dest) {
         Ok(metadata) if metadata.is_dir() => return Ok(dest),
         Ok(_) => {
-            return Err(io::Error::other(format!(
-                "not a directory: {}",
-                dest.display()
-            )));
+            return Err(io::Error::other(format!("not a directory: {}", dest.display())));
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(file_error("read cache metadata", &dest, error)),
     }
 
     let partial = root.join(format!("{name}.partial"));
-    if partial
-        .try_exists()
-        .map_err(|error| file_error("read incomplete cache metadata", &partial, error))?
-    {
+    if partial.try_exists().map_err(|error| file_error("read incomplete cache metadata", &partial, error))? {
         fs::remove_dir_all(&partial)
             .map_err(|error| file_error("remove incomplete cache", &partial, error))?;
     }
-    fs::create_dir(&partial)
-        .map_err(|error| file_error("create staging directory", &partial, error))?;
+    fs::create_dir(&partial).map_err(|error| file_error("create staging directory", &partial, error))?;
     populate(&partial)?;
     fs::rename(&partial, &dest).map_err(|error| file_error("publish cache", &dest, error))?;
     Ok(dest)
@@ -223,16 +195,12 @@ fn lock_file(path: &Path) -> io::Result<fs::File> {
         .write(true)
         .open(path)
         .map_err(|error| file_error("open lock", path, error))?;
-    file.lock()
-        .map_err(|error| file_error("lock", path, error))?;
+    file.lock().map_err(|error| file_error("lock", path, error))?;
     Ok(file)
 }
 
 fn require_file(path: &Path) -> io::Result<()> {
-    if fs::metadata(path)
-        .map_err(|error| file_error("read required file", path, error))?
-        .is_file()
-    {
+    if fs::metadata(path).map_err(|error| file_error("read required file", path, error))?.is_file() {
         Ok(())
     } else {
         Err(io::Error::other(format!("not a file: {}", path.display())))
@@ -240,35 +208,21 @@ fn require_file(path: &Path) -> io::Result<()> {
 }
 
 fn file_error(action: &str, path: &Path, error: io::Error) -> io::Error {
-    io::Error::new(
-        error.kind(),
-        format!("{action} {}: {error}", path.display()),
-    )
+    io::Error::new(error.kind(), format!("{action} {}: {error}", path.display()))
 }
 
 fn dl_nupkg(name: &str, ver: &str, dest: &Path) -> io::Result<()> {
     let url = NUGET_URL.replace("{name}", name).replace("{version}", ver);
     println!("Downloading {name} {ver}");
     run(Command::new(system_tool("curl.exe")?)
-        .args([
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--location",
-            "--output",
-        ])
+        .args(["--fail", "--silent", "--show-error", "--location", "--output"])
         .arg(dest)
         .arg(url))
 }
 
 fn extract_tar(src: &Path, dst: &Path, extra: &[&str]) -> io::Result<()> {
     println!("Extracting {} to {}", src.display(), dst.display());
-    run(Command::new(system_tool("tar.exe")?)
-        .arg("-xf")
-        .arg(src)
-        .arg("-C")
-        .arg(dst)
-        .args(extra))
+    run(Command::new(system_tool("tar.exe")?).arg("-xf").arg(src).arg("-C").arg(dst).args(extra))
 }
 
 fn system_tool(name: &str) -> io::Result<PathBuf> {
@@ -293,8 +247,7 @@ fn run(command: &mut Command) -> io::Result<()> {
 }
 
 fn target_dir_from_out(out: &Path) -> PathBuf {
-    target_dir_for_out(out)
-        .unwrap_or_else(|| panic!("unsupported Cargo OUT_DIR: {}", out.display()))
+    target_dir_for_out(out).unwrap_or_else(|| panic!("unsupported Cargo OUT_DIR: {}", out.display()))
 }
 
 // PROFILE reports debug or release even for custom profiles. Find the profile directory from
@@ -382,10 +335,7 @@ mod tests {
         runtime_archive(&temp.0, "x64");
         runtime_archive(&temp.0, "x86");
         runtime_archive(&temp.0, "arm64");
-        write(
-            &temp.0.join(".msix_extract").join("Microsoft.ui.xaml.dll"),
-            "legacy",
-        );
+        write(&temp.0.join(".msix_extract").join("Microsoft.ui.xaml.dll"), "legacy");
 
         let x64 = ensure_msix_extracted(&temp.0, "x64").unwrap();
         let x86 = ensure_msix_extracted(&temp.0, "x86").unwrap();
@@ -393,18 +343,9 @@ mod tests {
         assert_ne!(x64, x86);
         assert_ne!(x86, arm64);
         assert_ne!(x64, arm64);
-        assert_eq!(
-            fs::read_to_string(x64.join("Microsoft.ui.xaml.dll")).unwrap(),
-            "x64"
-        );
-        assert_eq!(
-            fs::read_to_string(x86.join("Microsoft.ui.xaml.dll")).unwrap(),
-            "x86"
-        );
-        assert_eq!(
-            fs::read_to_string(arm64.join("Microsoft.ui.xaml.dll")).unwrap(),
-            "arm64"
-        );
+        assert_eq!(fs::read_to_string(x64.join("Microsoft.ui.xaml.dll")).unwrap(), "x64");
+        assert_eq!(fs::read_to_string(x86.join("Microsoft.ui.xaml.dll")).unwrap(), "x86");
+        assert_eq!(fs::read_to_string(arm64.join("Microsoft.ui.xaml.dll")).unwrap(), "arm64");
         fs::remove_file(temp.0.join(runtime_msix("x64"))).unwrap();
         assert_eq!(ensure_msix_extracted(&temp.0, "x64").unwrap(), x64);
     }
@@ -420,10 +361,7 @@ mod tests {
 
         runtime_archive(&temp.0, "x64");
         let extract = ensure_msix_extracted(&temp.0, "x64").unwrap();
-        assert_eq!(
-            fs::read_to_string(extract.join("Microsoft.ui.xaml.dll")).unwrap(),
-            "x64"
-        );
+        assert_eq!(fs::read_to_string(extract.join("Microsoft.ui.xaml.dll")).unwrap(), "x64");
     }
 
     #[test]
@@ -434,11 +372,7 @@ mod tests {
         write(&payload.join("unrelated.txt"), "not a runtime");
         archive(&payload, &temp.0.join(runtime_msix("x64")));
         let error = ensure_msix_extracted(&temp.0, "x64").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Microsoft.WindowsAppRuntime.dll")
-        );
+        assert!(error.to_string().contains("Microsoft.WindowsAppRuntime.dll"));
         assert!(!temp.0.join(".msix_extract-x64").exists());
     }
 
@@ -460,10 +394,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fs::read_to_string(cache.join("complete")).unwrap(), "ready");
-        assert_eq!(
-            cached_dir(&temp.0, "package", |_| panic!("cache was rebuilt")).unwrap(),
-            cache
-        );
+        assert_eq!(cached_dir(&temp.0, "package", |_| panic!("cache was rebuilt")).unwrap(), cache);
     }
 
     #[test]
@@ -500,10 +431,7 @@ mod tests {
             write(&root.join(format!("ready-{}", std::process::id())), "");
             let deadline = Instant::now() + Duration::from_secs(30);
             while !root.join("start").is_file() {
-                assert!(
-                    Instant::now() < deadline,
-                    "deployment workers did not start"
-                );
+                assert!(Instant::now() < deadline, "deployment workers did not start");
                 std::thread::sleep(Duration::from_millis(10));
             }
             for _ in 0..4 {
@@ -579,14 +507,8 @@ mod tests {
             ));
         }
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !workers
-            .iter()
-            .all(|worker| temp.0.join(format!("ready-{}", worker.0.id())).is_file())
-        {
-            assert!(
-                Instant::now() < deadline,
-                "deployment workers were not ready"
-            );
+        while !workers.iter().all(|worker| temp.0.join(format!("ready-{}", worker.0.id())).is_file()) {
+            assert!(Instant::now() < deadline, "deployment workers were not ready");
             std::thread::sleep(Duration::from_millis(10));
         }
         write(&temp.0.join("start"), "");
@@ -616,11 +538,7 @@ mod tests {
                 fs::read_to_string(temp.0.join(format!("worker-{index}.log"))).unwrap(),
             );
         }
-        for name in [
-            "Microsoft.WindowsAppRuntime.dll",
-            "Microsoft.ui.xaml.dll",
-            WEBVIEW2_CORE_DLL,
-        ] {
+        for name in ["Microsoft.WindowsAppRuntime.dll", "Microsoft.ui.xaml.dll", WEBVIEW2_CORE_DLL] {
             assert_eq!(fs::read_to_string(dest.join(name)).unwrap(), payload);
         }
     }
@@ -647,16 +565,11 @@ mod tests {
         let src = temp.0.join("source");
         let dest = temp.0.join("destination");
         write(&src.join("Microsoft.ui.xaml.dll"), "runtime");
-        let resource = Path::new("Microsoft.UI.Xaml")
-            .join("nested")
-            .join("resource");
+        let resource = Path::new("Microsoft.UI.Xaml").join("nested").join("resource");
         write(&src.join(&resource), "resource");
         write(&src.join("unrelated.txt"), "excluded");
         copy_runtime_to(&src, &dest).unwrap();
-        assert_eq!(
-            fs::read_to_string(dest.join("Microsoft.ui.xaml.dll")).unwrap(),
-            "runtime"
-        );
+        assert_eq!(fs::read_to_string(dest.join("Microsoft.ui.xaml.dll")).unwrap(), "runtime");
         assert_eq!(fs::read_to_string(dest.join(resource)).unwrap(), "resource");
         assert!(!dest.join("unrelated.txt").exists());
     }
@@ -679,21 +592,14 @@ mod tests {
     #[test]
     fn finds_profile_in_split_package_cargo_out_dir() {
         let target = Path::new("repo").join("target").join("debug");
-        let out = target
-            .join("build")
-            .join("package")
-            .join("hash")
-            .join("out");
+        let out = target.join("build").join("package").join("hash").join("out");
         assert_eq!(target_dir_for_out(&out), Some(target));
     }
 
     #[test]
     fn custom_profile_ignores_release_named_ancestors() {
         let root = Path::new("release").join("target");
-        for target in [
-            root.join("profiling"),
-            root.join("aarch64-pc-windows-msvc").join("profiling"),
-        ] {
+        for target in [root.join("profiling"), root.join("aarch64-pc-windows-msvc").join("profiling")] {
             for package in [
                 PathBuf::from("package-hash"),
                 Path::new("package").join("hash"),
@@ -708,11 +614,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "unsupported Cargo OUT_DIR")]
     fn unrecognized_out_dir_is_rejected() {
-        let out = Path::new("release")
-            .join("target")
-            .join("profiling")
-            .join("package")
-            .join("out");
+        let out = Path::new("release").join("target").join("profiling").join("package").join("out");
         target_dir_from_out(&out);
     }
 }

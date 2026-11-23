@@ -16,9 +16,7 @@ pub struct HStringHeader {
 impl HStringHeader {
     /// Bytes required for `len` code units plus the header's inline terminator.
     fn alloc_bytes(len: u32) -> usize {
-        size_of::<Self>()
-            .checked_add((len as usize).checked_mul(2).unwrap())
-            .unwrap()
+        size_of::<Self>().checked_add((len as usize).checked_mul(2).unwrap()).unwrap()
     }
 
     pub fn alloc(len: u32) -> *mut Self {
@@ -69,11 +67,7 @@ impl HStringHeader {
             } else {
                 let copy = Self::alloc((*header).len);
                 // Fast-pass strings keep the terminator in the referenced buffer.
-                core::ptr::copy_nonoverlapping(
-                    (*header).data,
-                    (*copy).data,
-                    (*header).len as usize + 1,
-                );
+                core::ptr::copy_nonoverlapping((*header).data, (*copy).data, (*header).len as usize + 1);
                 copy
             }
         }
@@ -96,8 +90,7 @@ unsafe fn heap_alloc(bytes: usize) -> *mut u8 {
     {
         // The logical string length can shrink. Keep the allocation size outside the ABI header.
         let layout =
-            alloc::alloc::Layout::from_size_align(bytes.checked_add(PREFIX).unwrap(), ALIGN)
-                .unwrap();
+            alloc::alloc::Layout::from_size_align(bytes.checked_add(PREFIX).unwrap(), ALIGN).unwrap();
         unsafe {
             let allocation = alloc::alloc::alloc(layout);
             if allocation.is_null() {

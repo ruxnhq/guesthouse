@@ -19,10 +19,7 @@ impl ComPtr {
     pub fn cast(&self, iid: &GUID) -> Option<Self> {
         let mut result = None;
         unsafe {
-            com_call!(
-                IUnknown_Vtbl,
-                self.QueryInterface(iid, &mut result as *mut _ as _)
-            );
+            com_call!(IUnknown_Vtbl, self.QueryInterface(iid, &mut result as *mut _ as _));
         }
         result
     }

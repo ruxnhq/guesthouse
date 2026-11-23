@@ -21,10 +21,7 @@ impl Guid {
             span: proc_macro2::Span,
         ) -> syn::Result<String> {
             let Some(part) = part else {
-                return Err(syn::Error::new(
-                    span,
-                    format!("IID part at index {index} is missing"),
-                ));
+                return Err(syn::Error::new(span, format!("IID part at index {index} is missing")));
             };
 
             if part.len() != length {

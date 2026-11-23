@@ -3,9 +3,7 @@ use super::*;
 fn is_implicit_transition(id: PropertyId) -> bool {
     matches!(
         id,
-        PropertyId::OpacityTransition
-            | PropertyId::ScaleTransition
-            | PropertyId::TranslationTransition
+        PropertyId::OpacityTransition | PropertyId::ScaleTransition | PropertyId::TranslationTransition
     )
 }
 
@@ -14,12 +12,9 @@ impl WinUiAdapter {
         if self.handles.contains_key(&object) {
             return Err(WinUiError::DuplicateObject(object));
         }
-        let handle = if let Some(handle) = GeneratedHandle::create(kind, object, &self.event_queue)?
-        {
+        let handle = if let Some(handle) = GeneratedHandle::create(kind, object, &self.event_queue)? {
             if let GeneratedHandle::ListView(list) = &handle {
-                list.value
-                    .cast::<native::IItemsControl>()?
-                    .SetItemTemplate(&self.list_template()?)?;
+                list.value.cast::<native::IItemsControl>()?.SetItemTemplate(&self.list_template()?)?;
             }
             Handle::Generated(handle)
         } else {
@@ -27,60 +22,37 @@ impl WinUiAdapter {
                 ObjectType::TreeView => {
                     let value = native::TreeView::new()?;
                     let template = self.tree_template()?;
-                    value
-                        .cast::<native::ITreeView2>()?
-                        .SetItemTemplate(&template)?;
+                    value.cast::<native::ITreeView2>()?.SetItemTemplate(&template)?;
                     let item_invoked = Rc::new(RefCell::new(NativeStringEvent::default()));
                     let item_event = Rc::clone(&item_invoked);
                     let item_queue = Rc::clone(&self.event_queue);
                     let item_texts = Rc::clone(&self.tree_node_texts);
-                    let _item_invoked =
-                        value.ItemInvoked(local::handler::<
-                            _,
-                            native::TreeViewItemInvokedEventArgs,
-                            _,
-                        >(move |_, args| {
-                            let args = args.unwrap();
-                            let node = args
-                                .InvokedItem()
-                                .and_then(|value| value.cast::<native::ITreeViewNode>())
-                                .unwrap();
-                            let identity = com_identity(&node).unwrap();
-                            let value = item_texts.borrow().get(&identity).cloned().unwrap();
-                            Self::dispatch(
-                                &item_event,
-                                &item_queue,
-                                object,
-                                EventId::ItemInvoked,
-                                None,
-                                value,
-                            );
-                        }))?;
-                    Handle::TreeView(NativeTreeView {
-                        value,
-                        item_invoked,
-                        _item_invoked,
-                    })
+                    let _item_invoked = value.ItemInvoked(local::handler::<
+                        _,
+                        native::TreeViewItemInvokedEventArgs,
+                        _,
+                    >(move |_, args| {
+                        let args = args.unwrap();
+                        let node = args
+                            .InvokedItem()
+                            .and_then(|value| value.cast::<native::ITreeViewNode>())
+                            .unwrap();
+                        let identity = com_identity(&node).unwrap();
+                        let value = item_texts.borrow().get(&identity).cloned().unwrap();
+                        Self::dispatch(&item_event, &item_queue, object, EventId::ItemInvoked, None, value);
+                    }))?;
+                    Handle::TreeView(NativeTreeView { value, item_invoked, _item_invoked })
                 }
                 ObjectType::TreeNode => {
                     let value = native::TreeViewNode::new()?;
-                    self.tree_node_texts
-                        .borrow_mut()
-                        .insert(com_identity(&value)?, Rc::from(""));
-                    Handle::TreeNode(NativeTreeNode {
-                        value,
-                        text: HSTRING::new(),
-                        content: None,
-                    })
+                    self.tree_node_texts.borrow_mut().insert(com_identity(&value)?, Rc::from(""));
+                    Handle::TreeNode(NativeTreeNode { value, text: HSTRING::new(), content: None })
                 }
                 ObjectType::DataItem => {
                     let values = BTreeMap::from([
                         (self.data_text_key.clone(), Some(data_string(""))),
                         (self.data_content_key.clone(), None),
-                        (
-                            self.data_text_visibility_key.clone(),
-                            Some(data_string("Visible")),
-                        ),
+                        (self.data_text_visibility_key.clone(), Some(data_string("Visible"))),
                     ]);
                     Handle::Data(values.into())
                 }
@@ -89,15 +61,11 @@ impl WinUiAdapter {
         };
         self.handles.insert(object, handle);
         if kind == ObjectType::ContentDialog {
-            let Some(Handle::Generated(GeneratedHandle::ContentDialog(value))) =
-                self.handles.get(&object)
+            let Some(Handle::Generated(GeneratedHandle::ContentDialog(value))) = self.handles.get(&object)
             else {
                 unreachable!()
             };
-            self.event_queue
-                .content_dialogs
-                .borrow_mut()
-                .create(object, value.value.clone());
+            self.event_queue.content_dialogs.borrow_mut().create(object, value.value.clone());
         }
         Ok(())
     }
@@ -111,18 +79,13 @@ impl WinUiAdapter {
         for (id, value) in clear
             .iter()
             .map(|id| (*id, None))
-            .chain(
-                set.iter()
-                    .map(|property| (property.id, Some(&property.value))),
-            )
+            .chain(set.iter().map(|property| (property.id, Some(&property.value))))
             .filter(|(id, _)| is_implicit_transition(*id))
         {
             let Some(Handle::Generated(handle)) = self.handles.get(&object) else {
                 return Err(WinUiError::InvalidObject(object));
             };
-            handle
-                .set_property(id, value, None)
-                .ok_or(WinUiError::InvalidObject(object))??;
+            handle.set_property(id, value, None).ok_or(WinUiError::InvalidObject(object))??;
         }
         Ok(())
     }
@@ -166,15 +129,10 @@ impl WinUiAdapter {
     ) -> Result<Option<(ObjectId, EventId)>, WinUiError> {
         let suppressed = match self.selection_feedback(object, property)? {
             Some(feedback) => Some(feedback),
-            None => self
-                .index_event(object, IndexItems::Property(property))?
-                .map(|event| (object, event)),
+            None => self.index_event(object, IndexItems::Property(property))?.map(|event| (object, event)),
         };
         if let Some((owner, event)) = suppressed {
-            self.event_queue
-                .feedback
-                .borrow_mut()
-                .suppress(owner, event);
+            self.event_queue.feedback.borrow_mut().suppress(owner, event);
         }
         Ok(suppressed)
     }
@@ -182,10 +140,7 @@ impl WinUiAdapter {
     fn record_feedback(&self, object: ObjectId, event: EventId) -> Result<(), WinUiError> {
         if let Some(Handle::Generated(handle)) = self.handles.get(&object) {
             let property = handle.read_observed(event).unwrap()?;
-            Self::record(
-                &self.event_queue,
-                Observation::SetProperty { object, property },
-            );
+            Self::record(&self.event_queue, Observation::SetProperty { object, property });
         }
         Ok(())
     }
@@ -202,11 +157,9 @@ impl WinUiAdapter {
     ) -> Result<Option<DependencyWrite>, WinUiError> {
         if property == PropertyId::Source
             && value.is_none()
-            && let Some(Handle::Generated(GeneratedHandle::Image(control))) =
-                self.handles.get(&object)
+            && let Some(Handle::Generated(GeneratedHandle::Image(control))) = self.handles.get(&object)
         {
-            self.event_queue
-                .discard_events(object, &IMAGE_SOURCE_EVENTS);
+            self.event_queue.discard_events(object, &IMAGE_SOURCE_EVENTS);
             control.source.set(false);
         }
         let applied = match (property, value) {
@@ -225,9 +178,7 @@ impl WinUiAdapter {
             (PropertyId::Style, None) if kind == ObjectType::Button => {
                 Some(self.set_button_style(object, None))
             }
-            (PropertyId::Style, Some(PropertyValue::ButtonStyle(value)))
-                if kind == ObjectType::Button =>
-            {
+            (PropertyId::Style, Some(PropertyValue::ButtonStyle(value))) if kind == ObjectType::Button => {
                 Some(self.set_button_style(object, Some(*value)))
             }
             _ => None,
@@ -235,11 +186,9 @@ impl WinUiAdapter {
         if let Some(applied) = applied {
             return applied.map(|()| None);
         }
-        if theme_style_info(kind).is_some_and(|(_, properties)| {
-            properties
-                .iter()
-                .any(|(candidate, _)| *candidate == property)
-        }) {
+        if theme_style_info(kind)
+            .is_some_and(|(_, properties)| properties.iter().any(|(candidate, _)| *candidate == property))
+        {
             match value {
                 Some(PropertyValue::Brush(Brush::Theme(value))) => {
                     let Some(write) =
@@ -248,9 +197,7 @@ impl WinUiAdapter {
                         return Err(WinUiError::InvalidObject(object));
                     };
                     write?.apply()?;
-                    return self
-                        .set_theme_brush(object, property, Some(*value))
-                        .map(|()| None);
+                    return self.set_theme_brush(object, property, Some(*value)).map(|()| None);
                 }
                 None | Some(PropertyValue::Brush(Brush::Solid(_))) => {
                     self.set_theme_brush(object, property, None)?;
@@ -263,8 +210,7 @@ impl WinUiAdapter {
         {
             return write.map(Some);
         }
-        self.apply_handle_property(object, property, value)
-            .map(|()| None)
+        self.apply_handle_property(object, property, value).map(|()| None)
     }
 
     /// Sets a property that has no WinUI dependency property.
@@ -291,25 +237,15 @@ impl WinUiAdapter {
         {
             result?;
             if let Some(image) = image {
-                if let Handle::Generated(GeneratedHandle::TitleBar(title_bar)) =
-                    &self.handles[&object]
-                {
+                if let Handle::Generated(GeneratedHandle::TitleBar(title_bar)) = &self.handles[&object] {
                     image.attach_title_bar(&title_bar.value)?;
                 }
-                self.image_subscriptions.insert(
-                    object,
-                    ImageSubscription {
-                        property,
-                        image,
-                        _callback: None,
-                    },
-                );
+                self.image_subscriptions
+                    .insert(object, ImageSubscription { property, image, _callback: None });
             }
             return Ok(());
         }
-        if property == PropertyId::Text
-            && matches!(self.handles.get(&object), Some(Handle::Data(_)))
-        {
+        if property == PropertyId::Text && matches!(self.handles.get(&object), Some(Handle::Data(_))) {
             match value {
                 None => return self.set_data_text(object, ""),
                 Some(PropertyValue::String(text)) => return self.set_data_text(object, text),
@@ -321,15 +257,12 @@ impl WinUiAdapter {
             (Handle::TreeNode(node), PropertyId::Text, None | Some(PropertyValue::String(_))) => {
                 if let Some(PropertyValue::String(text)) = value {
                     node.text = HSTRING::from(text.as_ref());
-                    tree_node_texts
-                        .borrow_mut()
-                        .insert(com_identity(&node.value)?, Rc::clone(text));
+                    tree_node_texts.borrow_mut().insert(com_identity(&node.value)?, Rc::clone(text));
                 } else {
                     node.text = HSTRING::new();
                 }
                 if node.content.is_none() {
-                    let content: IInspectable =
-                        windows_reference::IReference::from(node.text.clone()).into();
+                    let content: IInspectable = windows_reference::IReference::from(node.text.clone()).into();
                     node.value.SetContent(&content)?;
                 }
                 Ok(())
@@ -346,18 +279,13 @@ impl WinUiAdapter {
 
     /// Drops all adapter state for an object whose handle was just removed. Destroy and
     /// replacement both end an object's native lifetime through this path.
-    pub(super) fn release_object(
-        &mut self,
-        object: ObjectId,
-        handle: Handle,
-    ) -> Result<(), WinUiError> {
+    pub(super) fn release_object(&mut self, object: ObjectId, handle: Handle) -> Result<(), WinUiError> {
         self.release_image(object);
         self.live_regions.remove(&object);
         self.resource_override_keys.remove(&object);
         self.style_states.remove(&object);
         self.virtual_items.remove(&object);
-        self.observations
-            .retain(|(observed, _), _| *observed != object);
+        self.observations.retain(|(observed, _), _| *observed != object);
         if let Some(initialization) = self.webview_initializations.borrow_mut().remove(&object) {
             for completion in initialization.completions {
                 completion.call(Err(IntegrationError::Unavailable));
@@ -370,15 +298,10 @@ impl WinUiAdapter {
         self.event_queue.items.borrow_mut().remove(&object);
         match handle {
             Handle::TreeNode(node) => {
-                self.tree_node_texts
-                    .borrow_mut()
-                    .remove(&com_identity(&node.value)?);
+                self.tree_node_texts.borrow_mut().remove(&com_identity(&node.value)?);
             }
             Handle::Generated(GeneratedHandle::ContentDialog(dialog)) => {
-                self.event_queue
-                    .content_dialogs
-                    .borrow_mut()
-                    .retire(object, *dialog)?;
+                self.event_queue.content_dialogs.borrow_mut().retire(object, *dialog)?;
             }
             _ => {}
         }
@@ -397,22 +320,14 @@ impl WinUiAdapter {
         {
             return Err(WinUiError::StillOwned(object));
         }
-        let (parent, relation) = self
-            .owners
-            .get(&object)
-            .copied()
-            .ok_or(WinUiError::InvalidReplacement(object))?;
+        let (parent, relation) =
+            self.owners.get(&object).copied().ok_or(WinUiError::InvalidReplacement(object))?;
         let contract = relation_contract(self.kind(parent)?, relation)?;
         if contract.realization != Realization::Owned || contract.child != object_category(kind) {
             return Err(WinUiError::InvalidReplacement(object));
         }
         let previous = self.ui_element(object)?;
-        let item = self
-            .event_queue
-            .items
-            .borrow()
-            .get(&object)
-            .map(|item| item.owner);
+        let item = self.event_queue.items.borrow().get(&object).map(|item| item.owner);
         let index = match contract.cardinality {
             Cardinality::One => {
                 match (self.handle(parent)?, relation) {
@@ -444,16 +359,12 @@ impl WinUiAdapter {
                 Some(index)
             }
         };
-        let handle = self
-            .handles
-            .remove(&object)
-            .ok_or(WinUiError::MissingObject(object))?;
+        let handle = self.handles.remove(&object).ok_or(WinUiError::MissingObject(object))?;
         self.release_object(object, handle)?;
         self.create(object, kind)?;
         let replacement = self.ui_element(object)?;
         if let Some(index) = index {
-            self.owned_collection(parent, relation)?
-                .insert_at(index, &replacement)?;
+            self.owned_collection(parent, relation)?.insert_at(index, &replacement)?;
         } else {
             match (self.handle(parent)?, relation) {
                 (Handle::Generated(parent_handle), relation) => {
@@ -470,10 +381,7 @@ impl WinUiAdapter {
         }
         if let Some(owner) = item {
             let identity = com_identity(&self.ui_element(object)?)?;
-            self.event_queue
-                .items
-                .borrow_mut()
-                .insert(object, NativeItem { owner, identity });
+            self.event_queue.items.borrow_mut().insert(object, NativeItem { owner, identity });
         }
         self.event_queue.discard_object(object);
         Ok(())
@@ -489,9 +397,7 @@ impl WinUiAdapter {
         let element = self.ui_element(object)?;
         let values = element.KeyboardAccelerators()?;
         values.Clear()?;
-        element.SetKeyboardAcceleratorPlacementMode(
-            native::KeyboardAcceleratorPlacementMode::Hidden,
-        )?;
+        element.SetKeyboardAcceleratorPlacementMode(native::KeyboardAcceleratorPlacementMode::Hidden)?;
         for accelerator in accelerators.values() {
             let value = native::KeyboardAccelerator::new()?;
             value.SetKey(match accelerator.key {
@@ -526,16 +432,14 @@ impl WinUiAdapter {
             })?;
             let callback = accelerator.callback.clone();
             value
-                .Invoked(local::handler::<
-                    _,
-                    native::KeyboardAcceleratorInvokedEventArgs,
-                    _,
-                >(move |_, args| {
-                    if let Some(args) = args.as_ref() {
-                        _ = args.SetHandled(true);
-                    }
-                    callback.call(());
-                }))?
+                .Invoked(local::handler::<_, native::KeyboardAcceleratorInvokedEventArgs, _>(
+                    move |_, args| {
+                        if let Some(args) = args.as_ref() {
+                            _ = args.SetHandled(true);
+                        }
+                        callback.call(());
+                    },
+                ))?
                 .into_token();
             values.Append(&value)?;
         }
@@ -553,18 +457,12 @@ pub(super) fn set_properties(
     clear: &[PropertyId],
     initializing: bool,
 ) -> Result<(), WinUiError> {
-    let (kind, element) =
-        state
-            .borrow_mut()
-            .prepare_properties(object, set, clear, initializing)?;
+    let (kind, element) = state.borrow_mut().prepare_properties(object, set, clear, initializing)?;
     let event_queue = Rc::clone(&state.borrow().event_queue);
     let properties = clear
         .iter()
         .map(|id| (*id, None))
-        .chain(
-            set.iter()
-                .map(|property| (property.id, Some(&property.value))),
-        )
+        .chain(set.iter().map(|property| (property.id, Some(&property.value))))
         .filter(|(id, _)| !is_implicit_transition(*id));
     for (property, value) in properties {
         // Reactor's write raises the event that reports it; drop it and record the native value
@@ -584,10 +482,7 @@ pub(super) fn set_properties(
             // element factories cannot render rows.
             element.Measure(native::LayoutInformation::GetAvailableSize(element)?)?;
         }
-        let write =
-            state
-                .borrow_mut()
-                .apply_property(object, kind, element.as_ref(), property, value);
+        let write = state.borrow_mut().apply_property(object, kind, element.as_ref(), property, value);
         let result = write.and_then(|write| write.map_or(Ok(()), DependencyWrite::apply));
         if let Some((owner, event)) = suppressed {
             event_queue.feedback.borrow_mut().release(owner, event);
@@ -601,9 +496,7 @@ pub(super) fn set_properties(
         }
     }
     if initializing {
-        state
-            .borrow()
-            .set_transition_properties(object, set, clear)?;
+        state.borrow().set_transition_properties(object, set, clear)?;
     }
     Ok(())
 }

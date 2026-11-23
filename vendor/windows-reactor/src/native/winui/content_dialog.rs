@@ -88,10 +88,7 @@ impl NativeContentDialogScheduler {
         if let Some(index) = self.root_index(&root) {
             index
         } else {
-            self.roots.push(NativeContentDialogRoot {
-                root,
-                schedule: ContentDialogSchedule::default(),
-            });
+            self.roots.push(NativeContentDialogRoot { root, schedule: ContentDialogSchedule::default() });
             self.roots.len() - 1
         }
     }
@@ -107,14 +104,8 @@ impl NativeContentDialogScheduler {
 
     fn set_root(&mut self, dialog: ObjectId, root: native::XamlRoot) -> Result<(), WinUiError> {
         self.remove_from_queues(dialog);
-        let state = self
-            .dialogs
-            .get_mut(&dialog)
-            .ok_or(WinUiError::MissingObject(dialog))?;
-        state
-            .value
-            .cast::<native::IUIElement>()?
-            .SetXamlRoot(&root)?;
+        let state = self.dialogs.get_mut(&dialog).ok_or(WinUiError::MissingObject(dialog))?;
+        state.value.cast::<native::IUIElement>()?.SetXamlRoot(&root)?;
         state.root = Some(root);
         state.loaded = None;
         if state.desired_open && state.pending_generation.is_none() {
@@ -124,12 +115,7 @@ impl NativeContentDialogScheduler {
     }
 
     fn enqueue(&mut self, dialog: ObjectId) -> Result<(), WinUiError> {
-        let root = self
-            .dialogs
-            .get(&dialog)
-            .ok_or(WinUiError::MissingObject(dialog))?
-            .root
-            .clone();
+        let root = self.dialogs.get(&dialog).ok_or(WinUiError::MissingObject(dialog))?.root.clone();
         let Some(root) = root else {
             return Ok(());
         };
@@ -144,10 +130,7 @@ impl NativeContentDialogScheduler {
         dialog: ObjectId,
         open: bool,
     ) -> Result<Option<native::ContentDialog>, WinUiError> {
-        let state = self
-            .dialogs
-            .get_mut(&dialog)
-            .ok_or(WinUiError::MissingObject(dialog))?;
+        let state = self.dialogs.get_mut(&dialog).ok_or(WinUiError::MissingObject(dialog))?;
         if state.desired_open == open {
             return Ok(None);
         }
@@ -172,11 +155,7 @@ impl NativeContentDialogScheduler {
     }
 
     fn start_next_for_dialog(&mut self, dialog: ObjectId) -> Result<(), WinUiError> {
-        let Some(root) = self
-            .dialogs
-            .get(&dialog)
-            .and_then(|state| state.root.clone())
-        else {
+        let Some(root) = self.dialogs.get(&dialog).and_then(|state| state.root.clone()) else {
             return Ok(());
         };
         self.start_next(&root)
@@ -209,10 +188,7 @@ impl NativeContentDialogScheduler {
                 state.queued = false;
                 state.pending_generation = Some(generation);
                 state.suppress_generation = None;
-                state
-                    .value
-                    .cast::<native::IUIElement>()?
-                    .SetXamlRoot(root)?;
+                state.value.cast::<native::IUIElement>()?.SetXamlRoot(root)?;
                 state.value.clone()
             };
             self.roots[index].schedule.begin(dialog, generation);
@@ -231,10 +207,7 @@ impl NativeContentDialogScheduler {
         dialog: ObjectId,
         generation: u64,
     ) -> Result<(bool, Option<native::XamlRoot>), WinUiError> {
-        let state = self
-            .dialogs
-            .get_mut(&dialog)
-            .ok_or(WinUiError::MissingObject(dialog))?;
+        let state = self.dialogs.get_mut(&dialog).ok_or(WinUiError::MissingObject(dialog))?;
         if state.pending_generation != Some(generation) {
             return Ok((false, None));
         }
@@ -265,8 +238,7 @@ impl NativeContentDialogScheduler {
             self.remove_from_queues(object);
             self.dialogs.remove(&object);
         }
-        self.roots
-            .retain(|root| root.schedule.active.is_some() || !root.schedule.queue.is_empty());
+        self.roots.retain(|root| root.schedule.active.is_some() || !root.schedule.queue.is_empty());
     }
 
     pub(super) fn retire(
@@ -274,10 +246,7 @@ impl NativeContentDialogScheduler {
         dialog: ObjectId,
         handle: GeneratedContentDialog,
     ) -> Result<bool, WinUiError> {
-        let state = self
-            .dialogs
-            .get_mut(&dialog)
-            .ok_or(WinUiError::MissingObject(dialog))?;
+        let state = self.dialogs.get_mut(&dialog).ok_or(WinUiError::MissingObject(dialog))?;
         state.retired = true;
         state.owner = None;
         state.loaded = None;
@@ -346,10 +315,7 @@ impl WinUiAdapter {
                 return Err(WinUiError::InvalidObject(dialog));
             }
             if self.owners.contains_key(&dialog)
-                || self
-                    .content_dialog_owners
-                    .get(&dialog)
-                    .is_some_and(|current| *current != owner)
+                || self.content_dialog_owners.get(&dialog).is_some_and(|current| *current != owner)
             {
                 return Err(WinUiError::StillOwned(dialog));
             }
@@ -372,18 +338,13 @@ impl WinUiAdapter {
                         let Some(sender) = sender.as_ref() else {
                             return;
                         };
-                        themed_dialog
-                            .SetRequestedTheme(sender.ActualTheme().unwrap())
-                            .unwrap();
+                        themed_dialog.SetRequestedTheme(sender.ActualTheme().unwrap()).unwrap();
                     },
                 ))?;
             dialog_element.SetRequestedTheme(framework.ActualTheme()?)?;
             {
                 let mut scheduler = self.event_queue.content_dialogs.borrow_mut();
-                let state = scheduler
-                    .dialogs
-                    .get_mut(&dialog)
-                    .ok_or(WinUiError::MissingObject(dialog))?;
+                let state = scheduler.dialogs.get_mut(&dialog).ok_or(WinUiError::MissingObject(dialog))?;
                 state.owner = Some(owner);
                 state.theme_changed = Some(theme_changed);
             }
@@ -402,13 +363,8 @@ impl WinUiAdapter {
                         scheduler.set_root(dialog, root).unwrap();
                         scheduler.start_next_for_dialog(dialog).unwrap();
                     }))?;
-                    self.event_queue
-                        .content_dialogs
-                        .borrow_mut()
-                        .dialogs
-                        .get_mut(&dialog)
-                        .unwrap()
-                        .loaded = Some(loaded);
+                    self.event_queue.content_dialogs.borrow_mut().dialogs.get_mut(&dialog).unwrap().loaded =
+                        Some(loaded);
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -444,19 +400,11 @@ impl WinUiAdapter {
         Ok(())
     }
 
-    pub(super) fn set_content_dialog_open(
-        &mut self,
-        dialog: ObjectId,
-        open: bool,
-    ) -> Result<(), WinUiError> {
+    pub(super) fn set_content_dialog_open(&mut self, dialog: ObjectId, open: bool) -> Result<(), WinUiError> {
         if !self.content_dialog_owners.contains_key(&dialog) {
             return Err(WinUiError::InvalidObject(dialog));
         }
-        let hide = self
-            .event_queue
-            .content_dialogs
-            .borrow_mut()
-            .set_open(dialog, open)?;
+        let hide = self.event_queue.content_dialogs.borrow_mut().set_open(dialog, open)?;
         if let Some(value) = hide {
             value.Hide()?;
         }
@@ -476,10 +424,7 @@ impl WinUiAdapter {
         let Some(generation) = generation else {
             return Ok(false);
         };
-        let (dispatch, root) = event_queue
-            .content_dialogs
-            .borrow_mut()
-            .closed(dialog, generation)?;
+        let (dispatch, root) = event_queue.content_dialogs.borrow_mut().closed(dialog, generation)?;
         let queue = native::DispatcherQueue::GetForCurrentThread()?;
         let deferred_queue = Rc::clone(event_queue);
         let handler = native::DispatcherQueueHandler::new(local::task(move || {

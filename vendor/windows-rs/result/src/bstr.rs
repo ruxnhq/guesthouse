@@ -8,11 +8,7 @@ impl Deref for BasicString {
     type Target = [u16];
 
     fn deref(&self) -> &[u16] {
-        let len = if self.0.is_null() {
-            0
-        } else {
-            unsafe { SysStringLen(self.0) as usize }
-        };
+        let len = if self.0.is_null() { 0 } else { unsafe { SysStringLen(self.0) as usize } };
 
         if len > 0 {
             unsafe { core::slice::from_raw_parts(self.0, len) }

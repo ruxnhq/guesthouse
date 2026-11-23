@@ -16,10 +16,7 @@ pub struct ReactorApplicationOverrides {
 
 impl ReactorApplicationOverrides {
     fn new(on_launched: Box<dyn FnOnce() -> Result<()>>) -> Self {
-        Self {
-            controls_provider: RefCell::new(None),
-            on_launched: RefCell::new(Some(on_launched)),
-        }
+        Self { controls_provider: RefCell::new(None), on_launched: RefCell::new(Some(on_launched)) }
     }
 
     fn provider(&self) -> Result<XamlControlsXamlMetaDataProvider> {
@@ -47,8 +44,7 @@ impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
     }
 
     fn GetXamlTypeByFullName(&self, full_name: &HSTRING) -> Result<IXamlType> {
-        self.provider()?
-            .GetXamlTypeByFullName(&full_name.to_string_lossy())
+        self.provider()?.GetXamlTypeByFullName(&full_name.to_string_lossy())
     }
 
     fn GetXmlnsDefinitions(&self) -> Result<Array<XmlnsDefinition>> {
@@ -56,17 +52,12 @@ impl IXamlMetadataProvider_Impl for ReactorApplicationOverrides_Impl {
     }
 }
 
-pub(super) fn create_application(
-    on_launched: Box<dyn FnOnce() -> Result<()>>,
-) -> Result<Application> {
+pub(super) fn create_application(on_launched: Box<dyn FnOnce() -> Result<()>>) -> Result<Application> {
     Application::compose(ReactorApplicationOverrides::new(on_launched))
 }
 
 pub(super) fn install_xaml_controls_resources(application: &Application) -> Result<()> {
     let controls = XamlControlsResources::new()?;
     let resources: ResourceDictionary = controls.cast()?;
-    application
-        .Resources()?
-        .MergedDictionaries()?
-        .Append(&resources)
+    application.Resources()?.MergedDictionaries()?.Append(&resources)
 }

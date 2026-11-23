@@ -76,10 +76,7 @@ pub(super) struct ImageCache<T = NativeImageSource> {
 
 impl<T> Default for ImageCache<T> {
     fn default() -> Self {
-        Self {
-            uris: HashMap::new(),
-            bytes: HashMap::new(),
-        }
+        Self { uris: HashMap::new(), bytes: HashMap::new() }
     }
 }
 
@@ -100,22 +97,9 @@ impl<T> ImageCache<T> {
                 create,
             ),
             ImageSourceValue::Encoded(bytes) | ImageSourceValue::Svg(bytes) => {
-                let key = (
-                    bytes.as_bytes().as_ptr() as usize,
-                    bytes.as_bytes().len(),
-                    svg,
-                );
-                let (_, pool) = self
-                    .bytes
-                    .entry(key)
-                    .or_insert_with(|| (bytes.downgrade(), Vec::new()));
-                acquire(
-                    pool,
-                    exclusive,
-                    |image| Some(Rc::clone(image)),
-                    Rc::clone,
-                    create,
-                )
+                let key = (bytes.as_bytes().as_ptr() as usize, bytes.as_bytes().len(), svg);
+                let (_, pool) = self.bytes.entry(key).or_insert_with(|| (bytes.downgrade(), Vec::new()));
+                acquire(pool, exclusive, |image| Some(Rc::clone(image)), Rc::clone, create)
             }
         }
     }
@@ -156,29 +140,20 @@ fn acquire<P, T, E>(
     } else {
         let image = Rc::new(create()?);
         let used = Rc::new(Cell::new(false));
-        pool.push(Pooled {
-            image: store(&image),
-            used: Rc::clone(&used),
-        });
+        pool.push(Pooled { image: store(&image), used: Rc::clone(&used) });
         (image, used)
     };
     used.set(exclusive);
-    Ok(ImageUse {
-        image,
-        used: exclusive.then_some(used),
-    })
+    Ok(ImageUse { image, used: exclusive.then_some(used) })
 }
 
 fn is_svg(source: &ImageSourceValue) -> bool {
     match source {
         ImageSourceValue::Svg(_) => true,
         ImageSourceValue::Encoded(_) => false,
-        ImageSourceValue::Uri(uri) => uri
-            .split(['?', '#'])
-            .next()
-            .unwrap()
-            .to_ascii_lowercase()
-            .ends_with(".svg"),
+        ImageSourceValue::Uri(uri) => {
+            uri.split(['?', '#']).next().unwrap().to_ascii_lowercase().ends_with(".svg")
+        }
     }
 }
 
@@ -218,11 +193,9 @@ impl NativeImageSource {
         let failed = Rc::clone(&state);
         let svg = is_svg(source);
         let deferred = match source {
-            ImageSourceValue::Encoded(bytes) | ImageSourceValue::Svg(bytes) => Some(DeferredLoad {
-                bytes: bytes.clone(),
-                svg,
-                _loaded: None,
-            }),
+            ImageSourceValue::Encoded(bytes) | ImageSourceValue::Svg(bytes) => {
+                Some(DeferredLoad { bytes: bytes.clone(), svg, _loaded: None })
+            }
             ImageSourceValue::Uri(_) => None,
         };
         let (value, opened, failed) = if svg {
@@ -242,13 +215,7 @@ impl NativeImageSource {
             }
             (image.cast()?, opened, failed)
         };
-        Ok(Self {
-            value,
-            deferred: RefCell::new(deferred),
-            state,
-            _opened: opened,
-            _failed: failed,
-        })
+        Ok(Self { value, deferred: RefCell::new(deferred), state, _opened: opened, _failed: failed })
     }
 
     /// Whether this source is waiting for a control to load before it starts loading.
@@ -265,10 +232,7 @@ impl NativeImageSource {
     ///
     /// TitleBar creates its icon element from the icon source and creates it again when its
     /// template is applied, so the element that is displayed is known once the TitleBar loads.
-    pub(super) fn attach_title_bar(
-        self: &Rc<Self>,
-        title_bar: &native::TitleBar,
-    ) -> Result<(), WinUiError> {
+    pub(super) fn attach_title_bar(self: &Rc<Self>, title_bar: &native::TitleBar) -> Result<(), WinUiError> {
         let host = title_bar.clone();
         self.when_loaded(&title_bar.cast()?, move |image| {
             image.attach(&host.TemplateSettings()?.IconElement()?.cast()?)
@@ -306,13 +270,9 @@ impl NativeImageSource {
         };
         let stream = encoded_stream(&deferred.bytes)?;
         if deferred.svg {
-            self.value
-                .cast::<native::SvgImageSource>()?
-                .SetSourceAsync(&stream)?;
+            self.value.cast::<native::SvgImageSource>()?.SetSourceAsync(&stream)?;
         } else {
-            self.value
-                .cast::<native::IBitmapSource>()?
-                .SetSourceAsync(&stream)?;
+            self.value.cast::<native::IBitmapSource>()?.SetSourceAsync(&stream)?;
         }
         Ok(())
     }
@@ -333,10 +293,7 @@ pub(super) fn icon_element(
             icon.SetGlyph(value)?;
             icon.cast().map_err(Into::into)
         }
-        IconValue::Bitmap {
-            uri,
-            show_as_monochrome,
-        } => {
+        IconValue::Bitmap { uri, show_as_monochrome } => {
             let icon = native::BitmapIcon::new()?;
             icon.SetUriSource(&native::Uri::CreateUri(uri)?)?;
             icon.SetShowAsMonochrome(*show_as_monochrome)?;
@@ -374,10 +331,7 @@ pub(super) fn icon_source(
             icon.SetGlyph(value)?;
             icon.cast().map_err(Into::into)
         }
-        IconValue::Bitmap {
-            uri,
-            show_as_monochrome,
-        } => {
+        IconValue::Bitmap { uri, show_as_monochrome } => {
             let icon = native::BitmapIconSource::new()?;
             icon.SetUriSource(&native::Uri::CreateUri(uri)?)?;
             icon.SetShowAsMonochrome(*show_as_monochrome)?;
@@ -415,15 +369,11 @@ fn encoded_stream(value: &EncodedImage) -> Result<native::IRandomAccessStream, W
 
 impl WinUiAdapter {
     fn shared_image(&mut self, source: &ImageSource) -> Result<ImageUse, WinUiError> {
-        self.images
-            .get_or_insert(source.value(), || NativeImageSource::new(source.value()))
+        self.images.get_or_insert(source.value(), || NativeImageSource::new(source.value()))
     }
 
     /// Returns the image source for `icon`, if it shows an image.
-    pub(super) fn shared_icon_image(
-        &mut self,
-        icon: &Icon,
-    ) -> Result<Option<ImageUse>, WinUiError> {
+    pub(super) fn shared_icon_image(&mut self, icon: &Icon) -> Result<Option<ImageUse>, WinUiError> {
         match icon.value() {
             IconValue::Image(source) => self.shared_image(source).map(Some),
             _ => Ok(None),
@@ -449,8 +399,7 @@ impl WinUiAdapter {
             Some(Handle::Generated(GeneratedHandle::Image(control))) => {
                 control.value.SetSource(&image.value)?;
                 image.attach(&control.value.cast()?)?;
-                self.event_queue
-                    .discard_events(object, &IMAGE_SOURCE_EVENTS);
+                self.event_queue.discard_events(object, &IMAGE_SOURCE_EVENTS);
                 control.source.set(true);
                 let opened = Rc::clone(&control.image_opened);
                 let failed = Rc::clone(&control.image_failed);
@@ -472,18 +421,10 @@ impl WinUiAdapter {
             }
             _ => return Err(WinUiError::InvalidObject(object)),
         };
-        let result = callback
-            .as_ref()
-            .and_then(|callback| image.state.subscribe(callback));
+        let result = callback.as_ref().and_then(|callback| image.state.subscribe(callback));
         let replay = callback.as_ref().map(Rc::downgrade);
-        self.image_subscriptions.insert(
-            object,
-            ImageSubscription {
-                property: PropertyId::Source,
-                image,
-                _callback: callback,
-            },
-        );
+        self.image_subscriptions
+            .insert(object, ImageSubscription { property: PropertyId::Source, image, _callback: callback });
         if let (Some(result), Some(replay)) = (result, replay) {
             // Replay a completed load after the current batch applies event handlers.
             let handler = native::DispatcherQueueHandler::new(local::task(move || {

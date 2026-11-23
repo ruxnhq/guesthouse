@@ -29,10 +29,7 @@ fn image_cache_keeps_decoded_bytes_while_the_app_holds_them() {
     assert_eq!(**get(&mut cache, &held), 1);
 
     // The same bytes as a bitmap are a different source.
-    assert_eq!(
-        **get(&mut cache, &ImageSourceValue::Encoded(bytes.clone())),
-        3
-    );
+    assert_eq!(**get(&mut cache, &ImageSourceValue::Encoded(bytes.clone())), 3);
 
     // Once the app drops the bytes, the source is released.
     drop((held, bytes));
@@ -92,9 +89,8 @@ fn image_cache_drops_unused_sources_that_have_not_started_loading() {
         ImageSourceValue::Encoded(EncodedImage::new(b"png".to_vec())),
     ] {
         let mut cache = ImageCache::<u32>::default();
-        let get = |cache: &mut ImageCache<u32>, value| {
-            cache.get_or_insert(&source, || Ok::<_, ()>(value)).unwrap()
-        };
+        let get =
+            |cache: &mut ImageCache<u32>, value| cache.get_or_insert(&source, || Ok::<_, ()>(value)).unwrap();
 
         // A pending source in use stays; an unused one goes even while the app holds its bytes.
         let shown = get(&mut cache, 1);
@@ -133,29 +129,18 @@ fn native_queue_preview_uses_current_callback_and_preserves_order() {
     let mut adapter = WinUiAdapter::default();
     adapter.menus.insert(
         object,
-        NativeMenu {
-            menu: Menu::new([], first),
-            revision: 1,
-            flyout: None,
-            _revokers: Vec::new(),
-        },
+        NativeMenu { menu: Menu::new([], first), revision: 1, flyout: None, _revokers: Vec::new() },
     );
     let observation = Observation::SetProperty {
         object,
-        property: Property {
-            id: PropertyId::Text,
-            value: PropertyValue::String(Rc::from("Before")),
-        },
+        property: Property { id: PropertyId::Text, value: PropertyValue::String(Rc::from("Before")) },
     };
     adapter.event_queue.queue(
         None,
         Some(QueuedEvent {
             object,
             event: EventId::MenuItemInvoked,
-            handler: QueuedHandler::Presentation {
-                revision: 0,
-                key: "stale".into(),
-            },
+            handler: QueuedHandler::Presentation { revision: 0, key: "stale".into() },
         }),
     );
     adapter.event_queue.queue(Some(observation.clone()), None);
@@ -164,10 +149,7 @@ fn native_queue_preview_uses_current_callback_and_preserves_order() {
         Some(QueuedEvent {
             object,
             event: EventId::MenuItemInvoked,
-            handler: QueuedHandler::Presentation {
-                revision: 1,
-                key: "current".into(),
-            },
+            handler: QueuedHandler::Presentation { revision: 1, key: "current".into() },
         }),
     );
     adapter.event_queue.queue(Some(observation.clone()), None);
@@ -183,18 +165,11 @@ fn native_queue_preview_uses_current_callback_and_preserves_order() {
     adapter.menus.get_mut(&object).unwrap().menu.on_click = second.clone();
     let current = Some(NativeEvent::Event {
         observation: None,
-        event: EventDispatch::new(
-            object,
-            EventId::MenuItemInvoked,
-            EventCall::Key(second, "current".into()),
-        ),
+        event: EventDispatch::new(object, EventId::MenuItemInvoked, EventCall::Key(second, "current".into())),
     });
     assert_eq!(adapter.peek_native_event(), current);
     assert_eq!(adapter.pop_native_event(), current);
-    assert_eq!(
-        adapter.pop_native_event(),
-        Some(NativeEvent::Observation(observation))
-    );
+    assert_eq!(adapter.pop_native_event(), Some(NativeEvent::Observation(observation)));
     assert_eq!(adapter.pop_native_event(), None);
 }
 
@@ -207,10 +182,7 @@ fn native_queue_expired_report_keeps_only_its_observation() {
     });
     let observation = |value: &str| Observation::SetProperty {
         object,
-        property: Property {
-            id: PropertyId::Text,
-            value: PropertyValue::String(Rc::from(value)),
-        },
+        property: Property { id: PropertyId::Text, value: PropertyValue::String(Rc::from(value)) },
     };
     let report = |value: &str, live: bool| QueuedNativeEvent::Event {
         observation: Some(observation(value)),
@@ -225,11 +197,7 @@ fn native_queue_expired_report_keeps_only_its_observation() {
     };
     let mut adapter = WinUiAdapter::default();
     // `on_text_changed` was removed and added again between the two reports.
-    adapter
-        .event_queue
-        .events
-        .borrow_mut()
-        .extend([report("Expired", false), report("Live", true)]);
+    adapter.event_queue.events.borrow_mut().extend([report("Expired", false), report("Live", true)]);
     let expected = Some(NativeEvent::Event {
         observation: Some(observation("Live")),
         event: EventDispatch::new(
@@ -274,13 +242,7 @@ fn image_source_change_discards_only_queued_load_results() {
             (event.object, event.event)
         })
         .collect();
-    assert_eq!(
-        remaining,
-        [
-            (image, EventId::PointerPressed),
-            (other, EventId::ImageOpened)
-        ]
-    );
+    assert_eq!(remaining, [(image, EventId::PointerPressed), (other, EventId::ImageOpened)]);
 }
 
 #[test]
@@ -288,11 +250,7 @@ fn replacement_discards_queued_reorders_without_callbacks() {
     let replaced = ObjectId::test(1);
     let other = ObjectId::test(2);
     let queue = Rc::new(NativeEventQueue::default());
-    let reorder = |object| Observation::Reorder {
-        object,
-        relation: RelationId::Items,
-        children: Vec::new(),
-    };
+    let reorder = |object| Observation::Reorder { object, relation: RelationId::Items, children: Vec::new() };
     queue.queue(Some(reorder(replaced)), None);
     queue.queue(Some(reorder(other)), None);
 
@@ -305,12 +263,7 @@ fn replacement_discards_queued_reorders_without_callbacks() {
 
 #[test]
 fn placement_coordinates_round_trip_negative_monitors_and_taskbar_offsets() {
-    let screen = native::RECT {
-        left: -1600,
-        top: -200,
-        right: -800,
-        bottom: 400,
-    };
+    let screen = native::RECT { left: -1600, top: -200, right: -800, bottom: 400 };
     for (x, y) in [(0, 0), (48, 0), (0, 40), (48, 40)] {
         let workspace = placement::translate_rect(screen, -x, -y).unwrap();
         let restored = placement::translate_rect(workspace, x, y).unwrap();
@@ -318,59 +271,27 @@ fn placement_coordinates_round_trip_negative_monitors_and_taskbar_offsets() {
         assert_eq!(workspace.left, screen.left - x);
         assert_eq!(workspace.top, screen.top - y);
     }
-    assert!(
-        placement::translate_rect(
-            native::RECT {
-                left: i32::MAX,
-                ..Default::default()
-            },
-            1,
-            0,
-        )
-        .is_err()
-    );
+    assert!(placement::translate_rect(native::RECT { left: i32::MAX, ..Default::default() }, 1, 0,).is_err());
 }
 
 #[test]
 fn initial_placement_rejects_invalid_extents_but_accepts_negative_positions() {
-    let placement = WindowPlacement {
-        x: -1200,
-        y: -600,
-        width: 800,
-        height: 500,
-        maximized: true,
-    };
+    let placement = WindowPlacement { x: -1200, y: -600, width: 800, height: 500, maximized: true };
     let visuals = WindowVisuals::new().initial_placement(placement);
     assert_eq!(visuals.initial_placement, Some(placement));
     for invalid in [
-        WindowPlacement {
-            width: 0,
-            ..placement
-        },
-        WindowPlacement {
-            height: -1,
-            ..placement
-        },
-        WindowPlacement {
-            x: i32::MAX,
-            ..placement
-        },
-        WindowPlacement {
-            y: i32::MAX,
-            ..placement
-        },
+        WindowPlacement { width: 0, ..placement },
+        WindowPlacement { height: -1, ..placement },
+        WindowPlacement { x: i32::MAX, ..placement },
+        WindowPlacement { y: i32::MAX, ..placement },
     ] {
-        assert!(
-            std::panic::catch_unwind(|| WindowVisuals::new().initial_placement(invalid)).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| WindowVisuals::new().initial_placement(invalid)).is_err());
     }
 }
 
 #[test]
 fn changed_initial_placement_does_not_become_a_reactive_resize() {
-    let initial = WindowVisuals::new()
-        .client_size(640.0, 480.0)
-        .initial_position(ScreenPoint::new(50, 60));
+    let initial = WindowVisuals::new().client_size(640.0, 480.0).initial_position(ScreenPoint::new(50, 60));
     let updated = initial.clone().initial_placement(WindowPlacement {
         x: -1200,
         y: -600,
@@ -417,11 +338,7 @@ fn content_dialog_schedule_ignores_stale_completion_generation() {
 }
 
 fn virtual_key(value: IInspectable) -> u64 {
-    value
-        .cast::<windows_reference::IReference<u64>>()
-        .unwrap()
-        .Value()
-        .unwrap()
+    value.cast::<windows_reference::IReference<u64>>().unwrap().Value().unwrap()
 }
 
 #[test]
@@ -431,9 +348,7 @@ fn recycled_physical_shell_keeps_old_token_until_acknowledged() {
 
     assert!(shells.retire(old));
     assert!(shells.retired.contains(&old));
-    let (new, reused) = shells
-        .take(|| panic!("retired physical shell was not reused"))
-        .unwrap();
+    let (new, reused) = shells.take(|| panic!("retired physical shell was not reused")).unwrap();
 
     assert_ne!(new, old);
     assert_eq!(reused, physical);
@@ -493,17 +408,8 @@ fn native_recycling_cancels_pending_keyed_realization() {
     let queue = Rc::new(NativeEventQueue::default());
     let collection = ObjectId::test(1);
     let container = RealizedContainer(2);
-    queue.queue_realization(RealizationRequest::RealizeKey {
-        collection,
-        container,
-        index: 4,
-        token: 9,
-    });
-    queue.queue_realization(RealizationRequest::Recycle {
-        collection,
-        container,
-        source_revision: 3,
-    });
+    queue.queue_realization(RealizationRequest::RealizeKey { collection, container, index: 4, token: 9 });
+    queue.queue_realization(RealizationRequest::Recycle { collection, container, source_revision: 3 });
     let events = queue.events.borrow();
     assert_eq!(events.len(), 1);
     assert!(matches!(
@@ -526,19 +432,10 @@ fn virtual_source_is_read_only_and_validates_index_limits() {
     assert!(virtual_item_count(max_count + 1).is_err());
 
     let value = virtual_item_value(0);
-    assert_eq!(
-        vector.SetAt(0, &value).unwrap_err().code(),
-        E_ILLEGAL_METHOD_CALL
-    );
-    assert_eq!(
-        vector.Append(&value).unwrap_err().code(),
-        E_ILLEGAL_METHOD_CALL
-    );
+    assert_eq!(vector.SetAt(0, &value).unwrap_err().code(), E_ILLEGAL_METHOD_CALL);
+    assert_eq!(vector.Append(&value).unwrap_err().code(), E_ILLEGAL_METHOD_CALL);
     assert_eq!(vector.Clear().unwrap_err().code(), E_ILLEGAL_METHOD_CALL);
-    assert_eq!(
-        vector.ReplaceAll(&[Some(value)]).unwrap_err().code(),
-        E_ILLEGAL_METHOD_CALL
-    );
+    assert_eq!(vector.ReplaceAll(&[Some(value)]).unwrap_err().code(), E_ILLEGAL_METHOD_CALL);
 }
 
 #[test]
@@ -570,9 +467,7 @@ fn virtual_source_reset_notifies_once_and_honors_event_removal() {
     assert_eq!(second.load(Ordering::Relaxed), 1);
 
     drop(first_revoker);
-    source
-        .set_keys(Arc::new((0..10_000).rev().collect()))
-        .unwrap();
+    source.set_keys(Arc::new((0..10_000).rev().collect())).unwrap();
     assert_eq!(first.load(Ordering::Relaxed), 1);
     assert_eq!(second.load(Ordering::Relaxed), 2);
 
@@ -593,11 +488,7 @@ fn virtual_source_reports_ordered_changes_individually() {
         .VectorChanged(move |sender, args| {
             let args = args.ok().unwrap();
             let size = sender.ok().unwrap().Size().unwrap();
-            observed.lock().unwrap().push((
-                args.CollectionChange().unwrap(),
-                args.Index().unwrap(),
-                size,
-            ));
+            observed.lock().unwrap().push((args.CollectionChange().unwrap(), args.Index().unwrap(), size));
         })
         .unwrap();
 
@@ -615,24 +506,16 @@ fn virtual_source_reports_ordered_changes_individually() {
     assert!(changes.lock().unwrap().is_empty());
 
     source.set_keys(Arc::new(vec![1, 0, 3, 4])).unwrap();
-    assert_eq!(
-        std::mem::take(&mut *changes.lock().unwrap()),
-        [(CollectionChange::Reset, 0, 4)]
-    );
+    assert_eq!(std::mem::take(&mut *changes.lock().unwrap()), [(CollectionChange::Reset, 0, 4)]);
 
     source.set_keys(Arc::new(vec![5])).unwrap();
-    assert_eq!(
-        std::mem::take(&mut *changes.lock().unwrap()),
-        [(CollectionChange::Reset, 0, 1)]
-    );
+    assert_eq!(std::mem::take(&mut *changes.lock().unwrap()), [(CollectionChange::Reset, 0, 1)]);
 }
 
 #[test]
 fn virtual_source_changes_replay_to_current_values() {
     fn values(vector: &IObservableVector<IInspectable>) -> Vec<u64> {
-        (0..vector.Size().unwrap())
-            .map(|index| virtual_key(vector.GetAt(index).unwrap()))
-            .collect()
+        (0..vector.Size().unwrap()).map(|index| virtual_key(vector.GetAt(index).unwrap())).collect()
     }
 
     let source = ComObject::new(NativeVirtualSource::new(Arc::new(vec![10, 20, 30, 40])).unwrap());
@@ -649,11 +532,7 @@ fn virtual_source_changes_replay_to_current_values() {
                 CollectionChange::ItemRemoved => {
                     let removed = replica.remove(index as usize);
                     let mut position = 0;
-                    assert!(
-                        !sender
-                            .IndexOf(&virtual_item_value(removed), &mut position)
-                            .unwrap()
-                    );
+                    assert!(!sender.IndexOf(&virtual_item_value(removed), &mut position).unwrap());
                 }
                 CollectionChange::ItemInserted => {
                     replica.insert(index as usize, virtual_key(sender.GetAt(index).unwrap()));
@@ -663,31 +542,19 @@ fn virtual_source_changes_replay_to_current_values() {
             assert_eq!(*replica, values(sender));
             for (expected, &key) in replica.iter().enumerate() {
                 let mut position = u32::MAX;
-                assert!(
-                    sender
-                        .IndexOf(&virtual_item_value(key), &mut position)
-                        .unwrap()
-                );
+                assert!(sender.IndexOf(&virtual_item_value(key), &mut position).unwrap());
                 assert_eq!(position as usize, expected);
             }
         })
         .unwrap();
 
-    for keys in [
-        vec![5, 10, 30, 35, 40, 45],
-        vec![30, 45],
-        vec![1, 2, 30, 3, 45, 4],
-    ] {
+    for keys in [vec![5, 10, 30, 35, 40, 45], vec![30, 45], vec![1, 2, 30, 3, 45, 4]] {
         source.set_keys(Arc::new(keys)).unwrap();
         let after = values(&vector);
         assert_eq!(*replica.lock().unwrap(), after);
         for position in 0..vector.Size().unwrap() {
             let mut index = u32::MAX;
-            assert!(
-                vector
-                    .IndexOf(&vector.GetAt(position).unwrap(), &mut index)
-                    .unwrap()
-            );
+            assert!(vector.IndexOf(&vector.GetAt(position).unwrap(), &mut index).unwrap());
             assert_eq!(index, position);
         }
     }
@@ -701,15 +568,8 @@ fn virtual_source_continues_from_partially_reported_change() {
     let failing = VectorChangedEventHandler::<IInspectable>::new(|_, _| {
         Err(windows_core::Error::new(E_FAIL, "failed"))
     });
-    let token = source
-        .VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(
-            &failing,
-        ))
-        .unwrap();
-    assert_eq!(
-        source.set_keys(Arc::new(vec![1, 3, 4])).unwrap_err().code(),
-        E_FAIL
-    );
+    let token = source.VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(&failing)).unwrap();
+    assert_eq!(source.set_keys(Arc::new(vec![1, 3, 4])).unwrap_err().code(), E_FAIL);
     source.RemoveVectorChanged(token).unwrap();
 
     let changes = Arc::new(Mutex::new(Vec::new()));
@@ -717,20 +577,13 @@ fn virtual_source_continues_from_partially_reported_change() {
     let _revoker = vector
         .VectorChanged(move |_, args| {
             let args = args.ok().unwrap();
-            observed
-                .lock()
-                .unwrap()
-                .push((args.CollectionChange().unwrap(), args.Index().unwrap()));
+            observed.lock().unwrap().push((args.CollectionChange().unwrap(), args.Index().unwrap()));
         })
         .unwrap();
     source.set_keys(Arc::new(vec![1, 3, 4])).unwrap();
-    assert_eq!(
-        *changes.lock().unwrap(),
-        [(CollectionChange::ItemInserted, 2)]
-    );
-    let values: Vec<u64> = (0..vector.Size().unwrap())
-        .map(|index| virtual_key(vector.GetAt(index).unwrap()))
-        .collect();
+    assert_eq!(*changes.lock().unwrap(), [(CollectionChange::ItemInserted, 2)]);
+    let values: Vec<u64> =
+        (0..vector.Size().unwrap()).map(|index| virtual_key(vector.GetAt(index).unwrap())).collect();
     assert_eq!(values, [1, 3, 4]);
 }
 
@@ -747,16 +600,8 @@ fn virtual_source_reset_returns_handler_failure() {
         counted.fetch_add(1, Ordering::Relaxed);
         Ok(())
     });
-    source
-        .VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(
-            &failing,
-        ))
-        .unwrap();
-    source
-        .VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(
-            &counting,
-        ))
-        .unwrap();
+    source.VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(&failing)).unwrap();
+    source.VectorChanged(<Ref<VectorChangedEventHandler<IInspectable>>>::from(&counting)).unwrap();
 
     let error = source.set_keys(Arc::new(vec![0])).unwrap_err();
     assert_eq!(error.code(), E_FAIL);
@@ -808,18 +653,10 @@ fn policy_preserves_requested_window_state() {
 
 #[test]
 fn policy_rejects_invalid_window_sizes() {
-    for (width, height) in [
-        (0.0, 1.0),
-        (1.0, -1.0),
-        (f64::NAN, 1.0),
-        (1.0, f64::INFINITY),
-    ] {
+    for (width, height) in [(0.0, 1.0), (1.0, -1.0), (f64::NAN, 1.0), (1.0, f64::INFINITY)] {
+        assert!(std::panic::catch_unwind(|| WindowPolicy::new().client_size(width, height)).is_err());
         assert!(
-            std::panic::catch_unwind(|| WindowPolicy::new().client_size(width, height)).is_err()
-        );
-        assert!(
-            std::panic::catch_unwind(|| { WindowPolicy::new().minimum_client_size(width, height) })
-                .is_err()
+            std::panic::catch_unwind(|| { WindowPolicy::new().minimum_client_size(width, height) }).is_err()
         );
     }
 }
@@ -848,23 +685,14 @@ fn window_visual_changes_only_apply_changed_contracts() {
 #[test]
 fn window_presentation_changes_reset_to_defaults() {
     let restricted = WindowVisuals::new().always_on_top(true).minimizable(false);
-    for (previous, next) in [
-        (WindowVisuals::new(), restricted.clone()),
-        (restricted, WindowVisuals::new()),
-    ] {
+    for (previous, next) in [(WindowVisuals::new(), restricted.clone()), (restricted, WindowVisuals::new())] {
         let changes = window_visual_changes(&previous, &next);
         assert!(changes.always_on_top);
         assert!(changes.minimizable);
         assert!(changes.any());
         assert!(!changes.client_size);
     }
-    assert!(
-        !window_visual_changes(
-            &WindowVisuals::new(),
-            &WindowVisuals::new().minimizable(true)
-        )
-        .any()
-    );
+    assert!(!window_visual_changes(&WindowVisuals::new(), &WindowVisuals::new().minimizable(true)).any());
 }
 
 #[test]
@@ -883,14 +711,7 @@ fn queued_occurrences_follow_their_subscription() {
     let event = Rc::new(RefCell::new(NativeUnitEvent::default()));
     let mut adapter = WinUiAdapter::default();
     let queue = |adapter: &WinUiAdapter| {
-        WinUiAdapter::dispatch(
-            &event,
-            &adapter.event_queue,
-            object,
-            EventId::Click,
-            None,
-            (),
-        );
+        WinUiAdapter::dispatch(&event, &adapter.event_queue, object, EventId::Click, None, ());
     };
     let delivered = |callback: &Callback<()>| {
         Some(NativeEvent::Event {
@@ -929,10 +750,7 @@ fn pointer_mode_replacement_preserves_queued_occurrences() {
     let first = Callback::new(|_| {});
     let second = Callback::new(|_| {});
     let routed = RoutedCallback::new(|_| false);
-    let payload = PointerEventInfo {
-        pointer_id: 42,
-        ..Default::default()
-    };
+    let payload = PointerEventInfo { pointer_id: 42, ..Default::default() };
     let queue = |adapter: &WinUiAdapter| {
         assert!(!WinUiAdapter::dispatch_pointer(
             &event,
@@ -961,9 +779,7 @@ fn pointer_mode_replacement_preserves_queued_occurrences() {
     event.borrow_mut().set(Some(first.clone().into()));
     queue(&adapter);
     event.borrow_mut().set(Some(routed.clone().into()));
-    event
-        .borrow_mut()
-        .set(Some(RoutedCallback::new(|_| true).into()));
+    event.borrow_mut().set(Some(RoutedCallback::new(|_| true).into()));
     event.borrow_mut().set(Some(second.clone().into()));
     queue(&adapter);
     assert_eq!(adapter.pop_native_event(), delivered(&first));
@@ -980,9 +796,7 @@ fn pointer_mode_replacement_preserves_queued_occurrences() {
     assert_eq!(adapter.pop_native_event(), delivered(&second));
 
     queue(&adapter);
-    event
-        .borrow_mut()
-        .set(Some(RoutedCallback::new(|_| false).into()));
+    event.borrow_mut().set(Some(RoutedCallback::new(|_| false).into()));
     adapter.event_queue.discard_object(object);
     assert_eq!(adapter.pop_native_event(), None);
 }
@@ -1023,9 +837,7 @@ fn routed_pointer_captures_before_deferral_and_allows_replacement() {
     assert!(adapter.pop_native_event().is_none());
     assert!(!dispatch(&adapter));
 
-    event
-        .borrow_mut()
-        .set(Some(RoutedCallback::new(|_| false).into()));
+    event.borrow_mut().set(Some(RoutedCallback::new(|_| false).into()));
     assert!(!dispatch(&adapter));
     assert!(adapter.pop_native_event().is_none());
     event.borrow_mut().set(Some(Callback::new(|_| {}).into()));
@@ -1069,45 +881,19 @@ fn optional_numeric_adapters_use_distinct_sentinels() {
 #[test]
 fn selection_index_conversion_reports_overflow() {
     assert_eq!(native_selection_index(None), Ok(-1));
-    assert_eq!(
-        native_selection_index(Some(i32::MAX as usize)),
-        Ok(i32::MAX)
-    );
+    assert_eq!(native_selection_index(Some(i32::MAX as usize)), Ok(i32::MAX));
     let overflow = i32::MAX as usize + 1;
-    assert_eq!(
-        native_selection_index(Some(overflow)),
-        Err(WinUiError::IndexOverflow(overflow))
-    );
+    assert_eq!(native_selection_index(Some(overflow)), Err(WinUiError::IndexOverflow(overflow)));
 }
 
 #[test]
 fn generated_feedback_pairs_written_properties_with_their_reporting_event() {
     let cases = [
-        (
-            ObjectType::ToggleSwitch,
-            PropertyId::IsOn,
-            Some(EventId::Toggled),
-        ),
-        (
-            ObjectType::Slider,
-            PropertyId::Value,
-            Some(EventId::ValueChanged),
-        ),
-        (
-            ObjectType::Slider,
-            PropertyId::Maximum,
-            Some(EventId::ValueChanged),
-        ),
-        (
-            ObjectType::RichEditBox,
-            PropertyId::Document,
-            Some(EventId::TextChanged),
-        ),
-        (
-            ObjectType::NavigationView,
-            PropertyId::IsPaneOpen,
-            Some(EventId::IsPaneOpenChanged),
-        ),
+        (ObjectType::ToggleSwitch, PropertyId::IsOn, Some(EventId::Toggled)),
+        (ObjectType::Slider, PropertyId::Value, Some(EventId::ValueChanged)),
+        (ObjectType::Slider, PropertyId::Maximum, Some(EventId::ValueChanged)),
+        (ObjectType::RichEditBox, PropertyId::Document, Some(EventId::TextChanged)),
+        (ObjectType::NavigationView, PropertyId::IsPaneOpen, Some(EventId::IsPaneOpenChanged)),
         (ObjectType::ProgressBar, PropertyId::Value, None),
     ];
     for (kind, property, event) in cases {

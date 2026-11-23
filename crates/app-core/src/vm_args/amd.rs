@@ -24,9 +24,9 @@ const MESA_EGL: [&str; 2] = [
 /// Where Venus's render server is, beside QEMU. The library names where it was built.
 pub const RENDER_SERVER: &str = "virgl_render_server";
 /// The shaders QEMU's Mesa compiles, kept in the run folder, which is QEMU's to write.
-const SHADER_CACHE: &str = "cache";
+pub(super) const SHADER_CACHE: &str = "cache";
 /// Where the Vulkan loader finds its drivers, and RADV's manifest among them.
-const VULKAN_DRIVER_FOLDERS: [&str; 3] =
+pub(super) const VULKAN_DRIVER_FOLDERS: [&str; 3] =
     ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d", "/run/opengl-driver/share/vulkan/icd.d"];
 /// RADV's manifest is this and QEMU's own architecture. The 32-bit one sits next to it, and the
 /// loader in a 64-bit QEMU can't load the library it names.
@@ -56,7 +56,7 @@ pub fn radv_manifest(folders: &[&Path]) -> PathBuf {
 }
 
 /// Mesa's EGL manifest on this PC, or where most distributions keep it.
-fn mesa_egl() -> &'static str {
+pub(super) fn mesa_egl() -> &'static str {
     MESA_EGL.into_iter().find(|path| Path::new(path).exists()).unwrap_or(MESA_EGL[0])
 }
 

@@ -68,10 +68,7 @@ impl<A: Application> ApplicationHost<A> {
         let host = Self { state, drain };
         let wake = host.drain.clone();
         let messages = ApplicationMessages::new(move || wake.wake());
-        let context = ApplicationContext {
-            sender: messages.sender(),
-            commands: RefCell::new(Vec::new()),
-        };
+        let context = ApplicationContext { sender: messages.sender(), commands: RefCell::new(Vec::new()) };
         application.state.borrow_mut().changed = Some(host.drain.clone());
         let model = A::create(&input, &context);
         let mut state = ApplicationState {
@@ -113,21 +110,10 @@ impl<A: Application> Drop for ApplicationState<A> {
 
 impl<A: Application> ApplicationState<A> {
     fn render(&mut self) {
-        if self
-            .context
-            .commands
-            .borrow()
-            .iter()
-            .any(|command| matches!(command, ApplicationCommand::Exit))
-        {
+        if self.context.commands.borrow().iter().any(|command| matches!(command, ApplicationCommand::Exit)) {
             return;
         }
-        let view = self.model.view(
-            &self.input,
-            &ApplicationViewContext {
-                sender: self.messages.sender(),
-            },
-        );
+        let view = self.model.view(&self.input, &ApplicationViewContext { sender: self.messages.sender() });
         view.validate();
         for (_, icon) in &view.icons {
             if let Some(menu) = &icon.menu {
@@ -136,19 +122,13 @@ impl<A: Application> ApplicationState<A> {
         }
 
         let window_keys: HashSet<_> = view.windows.iter().map(|(key, _)| key.clone()).collect();
-        let removed: Vec<_> = self
-            .windows
-            .keys()
-            .filter(|key| !window_keys.contains(*key))
-            .cloned()
-            .collect();
+        let removed: Vec<_> =
+            self.windows.keys().filter(|key| !window_keys.contains(*key)).cloned().collect();
         for key in removed {
             let slot = self.windows.remove(&key).unwrap();
             self.pending_show.retain(|pending| pending != &key);
             if let Some(id) = slot.instance {
-                self.application
-                    .services
-                    .push_critical(WindowWork::Close(id));
+                self.application.services.push_critical(WindowWork::Close(id));
             }
         }
         for (key, root) in view.windows {
@@ -158,23 +138,12 @@ impl<A: Application> ApplicationState<A> {
                     self.application.services.update_input(root, id);
                 }
             } else {
-                self.windows.insert(
-                    key,
-                    WindowSlot {
-                        root,
-                        instance: None,
-                    },
-                );
+                self.windows.insert(key, WindowSlot { root, instance: None });
             }
         }
 
         let icon_keys: HashSet<_> = view.icons.iter().map(|(key, _)| key.clone()).collect();
-        let removed: Vec<_> = self
-            .icons
-            .keys()
-            .filter(|key| !icon_keys.contains(*key))
-            .cloned()
-            .collect();
+        let removed: Vec<_> = self.icons.keys().filter(|key| !icon_keys.contains(*key)).cloned().collect();
         for key in removed {
             self.dismiss_menu(&key);
             self.icons.remove(&key);
@@ -205,10 +174,7 @@ impl<A: Application> ApplicationState<A> {
                     }
                 }
                 if icon.tooltip_pending || icon.declaration.tooltip != declaration.tooltip {
-                    icon.tooltip_pending = !icon
-                        .native
-                        .set_tooltip(declaration.tooltip.as_deref())
-                        .unwrap();
+                    icon.tooltip_pending = !icon.native.set_tooltip(declaration.tooltip.as_deref()).unwrap();
                     if icon.tooltip_pending {
                         eprintln!(
                             "failed to update notification-area tooltip for {key:?}; \
@@ -229,11 +195,7 @@ impl<A: Application> ApplicationState<A> {
                     if events.len() >= WINDOW_WORK_CAPACITY {
                         return;
                     }
-                    events.push_back(IconEvent {
-                        key: event_key.clone(),
-                        generation,
-                        event,
-                    });
+                    events.push_back(IconEvent { key: event_key.clone(), generation, event });
                     drop(events);
                     wake.wake();
                 });
@@ -265,11 +227,7 @@ impl<A: Application> ApplicationState<A> {
     }
 
     fn dispatch_icon_event(&mut self, event: IconEvent) {
-        let Some(icon) = self
-            .icons
-            .get(&event.key)
-            .filter(|icon| icon.generation == event.generation)
-        else {
+        let Some(icon) = self.icons.get(&event.key).filter(|icon| icon.generation == event.generation) else {
             return;
         };
         match event.event {
@@ -283,11 +241,7 @@ impl<A: Application> ApplicationState<A> {
                     return;
                 };
                 let menu = menu.clone();
-                if self
-                    .menu_host
-                    .as_ref()
-                    .is_some_and(|host| host.handle().is_open())
-                {
+                if self.menu_host.as_ref().is_some_and(|host| host.handle().is_open()) {
                     if self.menu_owner.as_ref() == Some(&event.key) {
                         return;
                     }
@@ -297,8 +251,7 @@ impl<A: Application> ApplicationState<A> {
                 }
                 if self.menu_host.is_none() {
                     self.menu_host = Some(
-                        TransientMenuHost::new(self.application.state.borrow().dispatcher.clone())
-                            .unwrap(),
+                        TransientMenuHost::new(self.application.state.borrow().dispatcher.clone()).unwrap(),
                     );
                 }
                 self.menu_host
@@ -343,10 +296,7 @@ impl<A: Application> ApplicationState<A> {
             self.render();
         }
         let commands = std::mem::take(&mut *self.context.commands.borrow_mut());
-        if commands
-            .iter()
-            .any(|command| matches!(command, ApplicationCommand::Exit))
-        {
+        if commands.iter().any(|command| matches!(command, ApplicationCommand::Exit)) {
             self.exiting = true;
             queue_exit(&self.application.state.borrow().dispatcher);
             return;
@@ -366,10 +316,7 @@ impl<A: Application> ApplicationState<A> {
         }
         for command in commands {
             if let ApplicationCommand::Show(key) = command {
-                assert!(
-                    self.windows.contains_key(&key),
-                    "application window key {key:?} is not declared"
-                );
+                assert!(self.windows.contains_key(&key), "application window key {key:?} is not declared");
                 if !self.pending_show.contains(&key) {
                     self.pending_show.push(key);
                 }
@@ -379,34 +326,20 @@ impl<A: Application> ApplicationState<A> {
         for key in pending {
             let slot = self.windows.get_mut(&key).unwrap();
             if slot.instance.is_some_and(|id| {
-                self.application
-                    .services
-                    .pending
-                    .borrow()
-                    .iter()
-                    .any(|work| {
-                        matches!(work, WindowWork::Close(current) | WindowWork::Closed(current)
+                self.application.services.pending.borrow().iter().any(|work| {
+                    matches!(work, WindowWork::Close(current) | WindowWork::Closed(current)
                         | WindowWork::Input { window: current, .. }
                         | WindowWork::Publish { window: current, .. } if *current == id)
-                    })
+                })
             }) {
                 continue;
             }
             let instance = slot.instance.and_then(|id| {
-                self.application
-                    .state
-                    .borrow()
-                    .windows
-                    .get(&id)
-                    .map(|window| {
-                        let state = window.state.borrow();
-                        let state = state.as_ref().unwrap();
-                        (
-                            state.lifecycle.get(),
-                            state.window.clone(),
-                            state.host.has_pending_input(),
-                        )
-                    })
+                self.application.state.borrow().windows.get(&id).map(|window| {
+                    let state = window.state.borrow();
+                    let state = state.as_ref().unwrap();
+                    (state.lifecycle.get(), state.window.clone(), state.host.has_pending_input())
+                })
             });
             match instance {
                 Some((ComponentWindowLifecycle::Open, window, false)) => {
@@ -430,13 +363,7 @@ impl<A: Application> ApplicationState<A> {
         }
         let pending_messages = !self.messages.is_empty() || !self.events.borrow().is_empty();
         if pending_messages {
-            self.application
-                .state
-                .borrow()
-                .changed
-                .as_ref()
-                .unwrap()
-                .wake();
+            self.application.state.borrow().changed.as_ref().unwrap().wake();
         } else if self.icons.is_empty()
             && self.pending_show.is_empty()
             && !self.application.services.has_pending()

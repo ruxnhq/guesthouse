@@ -35,11 +35,7 @@ struct SyncState<T: Async>(Mutex<State<T>>);
 
 impl<T: Async> SyncState<T> {
     fn new() -> Self {
-        Self(Mutex::new(State {
-            result: None,
-            completed: None,
-            completed_assigned: false,
-        }))
+        Self(Mutex::new(State { result: None, completed: None, completed_assigned: false }))
     }
 
     fn status(&self) -> AsyncStatus {
@@ -257,10 +253,7 @@ impl<P: RuntimeType> IAsyncActionWithProgress_Impl<P> for ActionWithProgress_Imp
 impl<T: RuntimeType, P: RuntimeType> IAsyncOperationWithProgress_Impl<T, P>
     for OperationWithProgress_Impl<T, P>
 {
-    fn SetCompleted(
-        &self,
-        handler: Ref<AsyncOperationWithProgressCompletedHandler<T, P>>,
-    ) -> Result<()> {
+    fn SetCompleted(&self, handler: Ref<AsyncOperationWithProgressCompletedHandler<T, P>>) -> Result<()> {
         self.0.set_completed(&self.as_interface(), handler)
     }
     fn Completed(&self) -> Result<AsyncOperationWithProgressCompletedHandler<T, P>> {

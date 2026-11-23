@@ -24,13 +24,7 @@ impl AsyncWaker {
     }
 
     fn register(&self, waker: &Waker) {
-        if self
-            .0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|current| current.will_wake(waker))
-        {
+        if self.0.lock().unwrap().as_ref().is_some_and(|current| current.will_wake(waker)) {
             return;
         }
         let waker = waker.clone();
@@ -150,10 +144,7 @@ mod tests {
 
         fn wake_by_ref(self: &Arc<Self>) {
             let registration = self.registration.get().unwrap().upgrade().unwrap();
-            assert!(
-                registration.0.try_lock().is_ok(),
-                "wake held the waker lock"
-            );
+            assert!(registration.0.try_lock().is_ok(), "wake held the waker lock");
             registration.register(&Waker::from(Arc::clone(self)));
             self.calls.fetch_add(1, Ordering::Relaxed);
         }
@@ -161,14 +152,9 @@ mod tests {
 
     #[test]
     fn waker_can_register_during_wake() {
-        let wake = Arc::new(ReentrantWake {
-            registration: OnceLock::new(),
-            calls: AtomicUsize::new(0),
-        });
+        let wake = Arc::new(ReentrantWake { registration: OnceLock::new(), calls: AtomicUsize::new(0) });
         let registration = Arc::new(AsyncWaker::new(&Waker::from(wake.clone())));
-        wake.registration
-            .set(Arc::downgrade(&registration))
-            .unwrap();
+        wake.registration.set(Arc::downgrade(&registration)).unwrap();
         registration.wake();
         registration.wake();
         assert_eq!(wake.calls.load(Ordering::Relaxed), 2);
@@ -188,10 +174,7 @@ mod tests {
     impl Drop for ReentrantDrop {
         fn drop(&mut self) {
             let registration = self.registration.get().unwrap().upgrade().unwrap();
-            assert!(
-                registration.0.try_lock().is_ok(),
-                "drop held the waker lock"
-            );
+            assert!(registration.0.try_lock().is_ok(), "drop held the waker lock");
             registration.register(Waker::noop());
             self.drops.fetch_add(1, Ordering::Relaxed);
         }
@@ -201,10 +184,7 @@ mod tests {
     fn waker_can_register_during_replacement_drop() {
         let slot = Arc::new(OnceLock::new());
         let drops = Arc::new(AtomicUsize::new(0));
-        let waker = Waker::from(Arc::new(ReentrantDrop {
-            registration: slot.clone(),
-            drops: drops.clone(),
-        }));
+        let waker = Waker::from(Arc::new(ReentrantDrop { registration: slot.clone(), drops: drops.clone() }));
         let registration = Arc::new(AsyncWaker::new(&waker));
         slot.set(Arc::downgrade(&registration)).unwrap();
         drop(waker);

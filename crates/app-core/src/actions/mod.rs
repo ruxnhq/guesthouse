@@ -4,6 +4,7 @@
 mod amd_files;
 mod amd_package;
 mod amd_start;
+mod android;
 mod api_stage;
 pub(crate) mod copy_identity;
 mod desktop;
@@ -186,6 +187,7 @@ impl<'a> Task<'a> {
     }
 }
 
+pub use android::card_of as android_card_of;
 pub use macos::start_refusal as macos_start_refusal;
 
 /// The plan for this machine, in this task's slot, as things stand on the PC now.
@@ -218,6 +220,9 @@ pub fn start(task: &mut Task) -> Result<()> {
     }
     if task.machine.macos() {
         return macos::start(task);
+    }
+    if task.machine.android() {
+        return android::start(task);
     }
     let machine = task.machine.clone();
     if machine.has_gpu() {

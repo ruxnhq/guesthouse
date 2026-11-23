@@ -28,12 +28,7 @@ impl ComponentHost {
     pub(super) fn plan_virtual_work(&mut self, work: VirtualWork) -> NativeBatch {
         self.begin_batch();
         match work {
-            VirtualWork::Realize {
-                lease,
-                index,
-                view,
-                owner,
-            } => {
+            VirtualWork::Realize { lease, index, view, owner } => {
                 let view = *view;
                 if let Some(owner) = owner
                     && self.scope(owner).is_none()
@@ -41,11 +36,7 @@ impl ComponentHost {
                     return NativeBatch::default();
                 }
                 let row_key = (lease.collection, lease.key.clone());
-                if let Some(row) = self
-                    .runtime
-                    .graph()
-                    .virtual_row_key(lease.collection, lease.container)
-                {
+                if let Some(row) = self.runtime.graph().virtual_row_key(lease.collection, lease.container) {
                     self.busy_rows.push((lease.collection, row));
                 }
                 self.busy_rows.push(row_key.clone());
@@ -57,18 +48,14 @@ impl ComponentHost {
                     || self.contexts.clone(),
                     |owner| self.scope(owner).unwrap().contexts.clone(),
                 );
-                let provided_contexts = owner.map_or_else(HashSet::new, |owner| {
-                    self.scope(owner).unwrap().provided_contexts.clone()
-                });
+                let provided_contexts = owner
+                    .map_or_else(HashSet::new, |owner| self.scope(owner).unwrap().provided_contexts.clone());
                 let mut expansion = ExpansionState::default();
                 let (id, view) = if let Some(id) = existing {
                     let reference = self.scope(id).unwrap().reference.clone();
                     let view = {
                         let scope = self.scope_mut(id).unwrap();
-                        let render =
-                            scope
-                                .component
-                                .apply_input(&view, reference.clone(), &contexts);
+                        let render = scope.component.apply_input(&view, reference.clone(), &contexts);
                         let render = match render {
                             Some(render) => Some(render),
                             None if scope.dependencies_changed(&contexts) => {
@@ -109,14 +96,9 @@ impl ComponentHost {
                 let declaration = self.expand_virtual_view(id, view, &mut expansion);
                 let retired = self.unseen_scopes(&expansion.seen);
                 let publication = self.resolve_window_publication(&expansion.pending, &retired);
-                let batch = self
-                    .runtime
-                    .plan_realize_virtual(&lease, index, declaration.clone());
-                let root = self
-                    .runtime
-                    .graph()
-                    .virtual_realization(lease.collection, lease.container)
-                    .unwrap();
+                let batch = self.runtime.plan_realize_virtual(&lease, index, declaration.clone());
+                let root =
+                    self.runtime.graph().virtual_realization(lease.collection, lease.container).unwrap();
                 self.virtual_rows.insert(row_key, id);
                 self.refresh_roots_from(declaration.0.as_object(), root);
                 self.prepare_pending(expansion.pending);
@@ -137,13 +119,9 @@ impl ComponentHost {
                 self.publish_window();
                 batch
             }
-            VirtualWork::Cancel {
-                collection,
-                relation,
-                container,
-            } => self
-                .runtime
-                .plan_cancel_virtual(collection, relation, container),
+            VirtualWork::Cancel { collection, relation, container } => {
+                self.runtime.plan_cancel_virtual(collection, relation, container)
+            }
         }
     }
 
@@ -172,10 +150,7 @@ impl ComponentHost {
         expansion.seen.entry(owner).or_default();
         let contexts = self.scope(owner).unwrap().contexts.clone();
         let provided_contexts = self.scope(owner).unwrap().provided_contexts.clone();
-        let environment = ContextEnvironment {
-            contexts: &contexts,
-            provided: &provided_contexts,
-        };
+        let environment = ContextEnvironment { contexts: &contexts, provided: &provided_contexts };
         let mut path = Vec::new();
         let declaration = match view.0 {
             DeclaredNode::Object(declaration) => self
@@ -184,17 +159,13 @@ impl ComponentHost {
                     Cow::Owned(declaration),
                     &environment,
                     true,
-                    ExpansionLocation {
-                        depth: 0,
-                        path: &mut path,
-                    },
+                    ExpansionLocation { depth: 0, path: &mut path },
                     expansion,
                 )
                 .into_owned(),
             node => {
                 path.push(ComponentPathSegment::VirtualRoot);
-                self.expand_node(owner, &node, &environment, 0, expansion, &mut path)
-                    .into_owned()
+                self.expand_node(owner, &node, &environment, 0, expansion, &mut path).into_owned()
             }
         };
         View(DeclaredNode::Object(declaration))

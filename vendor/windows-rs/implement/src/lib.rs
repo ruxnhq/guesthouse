@@ -53,8 +53,7 @@ fn implement_core(
         Err(e) => return e.into_compile_error(),
     };
     if let syn::Data::Union(union) = &original_type.data {
-        return syn::Error::new_spanned(union.union_token, "expected a struct or enum")
-            .into_compile_error();
+        return syn::Error::new_spanned(union.union_token, "expected a struct or enum").into_compile_error();
     }
 
     let inputs = ImplementInputs {
@@ -168,8 +167,8 @@ struct ImplementType {
 
 impl ImplementType {
     fn to_ident(&self) -> proc_macro2::TokenStream {
-        let type_name = syn::parse_str::<proc_macro2::TokenStream>(&self.type_name)
-            .expect("Invalid token stream");
+        let type_name =
+            syn::parse_str::<proc_macro2::TokenStream>(&self.type_name).expect("Invalid token stream");
         let generics = self.generics.iter().map(|g| g.to_ident());
         quote! { #type_name<#(#generics,)*> }
     }
@@ -191,10 +190,7 @@ struct ImplementAttributes {
 
 impl syn::parse::Parse for ImplementAttributes {
     fn parse(cursor: syn::parse::ParseStream) -> syn::parse::Result<Self> {
-        let mut input = Self {
-            agile: true,
-            ..Default::default()
-        };
+        let mut input = Self { agile: true, ..Default::default() };
 
         while !cursor.is_empty() {
             input.parse_implement(cursor)?;
@@ -216,11 +212,7 @@ impl ImplementAttributes {
         Ok(())
     }
 
-    fn walk_implement(
-        &mut self,
-        tree: &UseTree2,
-        namespace: &mut String,
-    ) -> syn::parse::Result<()> {
+    fn walk_implement(&mut self, tree: &UseTree2, namespace: &mut String) -> syn::parse::Result<()> {
         match tree {
             UseTree2::Path(input) => {
                 if !namespace.is_empty() {
@@ -281,16 +273,11 @@ impl UseTree2 {
                     generics.push(g.to_element_type(&mut String::new())?);
                 }
 
-                Ok(ImplementType {
-                    type_name,
-                    generics,
-                    span,
-                })
+                Ok(ImplementType { type_name, generics, span })
             }
-            Self::Group(input) => Err(syn::parse::Error::new(
-                input.brace_token.span.join(),
-                "Syntax not supported",
-            )),
+            Self::Group(input) => {
+                Err(syn::parse::Error::new(input.brace_token.span.join(), "Syntax not supported"))
+            }
             _ => unimplemented!(),
         }
     }
@@ -319,10 +306,7 @@ impl syn::parse::Parse for UseTree2 {
             let ident = input.call(syn::Ident::parse_any)?;
             if input.peek(syn::Token![::]) {
                 input.parse::<syn::Token![::]>()?;
-                Ok(Self::Path(UsePath2 {
-                    ident,
-                    tree: Box::new(input.parse()?),
-                }))
+                Ok(Self::Path(UsePath2 { ident, tree: Box::new(input.parse()?) }))
             } else if input.peek(syn::Token![=]) {
                 if ident == "TrustLevel" {
                     input.parse::<syn::Token![=]>()?;
@@ -331,10 +315,7 @@ impl syn::parse::Parse for UseTree2 {
                     match value.to_string().as_str() {
                         "Partial" => Ok(Self::TrustLevel(1)),
                         "Full" => Ok(Self::TrustLevel(2)),
-                        _ => Err(syn::parse::Error::new(
-                            span,
-                            "`TrustLevel` must be `Partial` or `Full`",
-                        )),
+                        _ => Err(syn::parse::Error::new(span, "`TrustLevel` must be `Partial` or `Full`")),
                     }
                 } else if ident == "Agile" {
                     input.parse::<syn::Token![=]>()?;
@@ -343,10 +324,7 @@ impl syn::parse::Parse for UseTree2 {
                     match value.to_string().as_str() {
                         "true" => Ok(Self::Agile(true)),
                         "false" => Ok(Self::Agile(false)),
-                        _ => Err(syn::parse::Error::new(
-                            span,
-                            "`Agile` must be `true` or `false`",
-                        )),
+                        _ => Err(syn::parse::Error::new(span, "`Agile` must be `true` or `false`")),
                     }
                 } else if ident == "Compose" {
                     input.parse::<syn::Token![=]>()?;
@@ -355,16 +333,10 @@ impl syn::parse::Parse for UseTree2 {
                     match value.to_string().as_str() {
                         "true" => Ok(Self::Compose(true)),
                         "false" => Ok(Self::Compose(false)),
-                        _ => Err(syn::parse::Error::new(
-                            span,
-                            "`Compose` must be `true` or `false`",
-                        )),
+                        _ => Err(syn::parse::Error::new(span, "`Compose` must be `true` or `false`")),
                     }
                 } else {
-                    Err(syn::parse::Error::new(
-                        ident.span(),
-                        "Unrecognized key-value pair",
-                    ))
+                    Err(syn::parse::Error::new(ident.span(), "Unrecognized key-value pair"))
                 }
             } else {
                 let generics = if input.peek(syn::Token![<]) {
@@ -414,10 +386,7 @@ fn convert_implements_to_interface_chains(implements: Vec<ImplementType>) -> Vec
         vtable_const_string.insert_str(0, "VTABLE_");
         let vtable_const_ident = syn::Ident::new(&vtable_const_string, implement.span);
 
-        chains.push(InterfaceChain {
-            implement,
-            vtable_const_ident,
-        });
+        chains.push(InterfaceChain { implement, vtable_const_ident });
     }
 
     chains

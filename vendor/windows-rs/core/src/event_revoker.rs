@@ -30,11 +30,7 @@ impl EventRevoker {
         remove: unsafe extern "system" fn(*mut c_void, i64) -> HRESULT,
     ) -> Self {
         let source = unsafe { IUnknown::from_raw(source.into_raw()) };
-        Self {
-            source,
-            token,
-            remove,
-        }
+        Self { source, token, remove }
     }
 
     /// Consumes the revoker and returns the raw registration token without

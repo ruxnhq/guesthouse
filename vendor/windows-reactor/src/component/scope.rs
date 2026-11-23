@@ -72,8 +72,7 @@ impl<C: Component> TypedScope<C> {
             dependencies: context.dependencies,
             effects: context.effects,
             view,
-            window: (context.window != WindowPublication::default())
-                .then(|| Box::new(context.window)),
+            window: (context.window != WindowPublication::default()).then(|| Box::new(context.window)),
         }
     }
 }
@@ -118,8 +117,7 @@ impl<C: Component> ErasedComponent for TypedScope<C> {
         contexts: &HashMap<ContextId, ContextValue>,
     ) -> ComponentRender {
         let context = self.context(&self.input, reference.clone());
-        self.component
-            .update(*message.downcast::<C::Message>().unwrap(), &context);
+        self.component.update(*message.downcast::<C::Message>().unwrap(), &context);
         self.render_view(reference, contexts)
     }
 
@@ -154,16 +152,14 @@ pub(super) struct Scope {
 
 impl Scope {
     pub(super) fn dependencies_changed(&self, contexts: &HashMap<ContextId, ContextValue>) -> bool {
-        self.dependencies
-            .iter()
-            .any(|id| match (self.contexts.get(id), contexts.get(id)) {
-                (None, None) => false,
-                (Some(left), Some(right)) => {
-                    !Rc::ptr_eq(&left.value, &right.value)
-                        && !(left.equals)(left.value.as_ref(), right.value.as_ref())
-                }
-                _ => true,
-            })
+        self.dependencies.iter().any(|id| match (self.contexts.get(id), contexts.get(id)) {
+            (None, None) => false,
+            (Some(left), Some(right)) => {
+                !Rc::ptr_eq(&left.value, &right.value)
+                    && !(left.equals)(left.value.as_ref(), right.value.as_ref())
+            }
+            _ => true,
+        })
     }
 }
 
@@ -202,27 +198,15 @@ impl ComponentHost {
     ) -> (ComponentId, ComponentRender) {
         let reused = self.free_scopes.pop();
         let id = if let Some(index) = reused {
-            ComponentId {
-                index,
-                generation: self.scopes[index as usize].generation,
-            }
+            ComponentId { index, generation: self.scopes[index as usize].generation }
         } else {
-            ComponentId {
-                index: u32::try_from(self.scopes.len()).unwrap(),
-                generation: 0,
-            }
+            ComponentId { index: u32::try_from(self.scopes.len()).unwrap(), generation: 0 }
         };
         let reference = ElementRef::default();
-        let key = node
-            .key
-            .clone()
-            .expect("component scope identity must be resolved before creation");
+        let key = node.key.clone().expect("component scope identity must be resolved before creation");
         let (component, render) = node.factory.create(
             id,
-            ComponentQueues {
-                shared: Arc::clone(&self.queue),
-                local: Rc::clone(&self.local_queue),
-            },
+            ComponentQueues { shared: Arc::clone(&self.queue), local: Rc::clone(&self.local_queue) },
             reference.clone(),
             Arc::clone(&self.services),
             Rc::clone(&self.ui_services),
@@ -243,10 +227,7 @@ impl ComponentHost {
             window: None,
         };
         if id.index as usize == self.scopes.len() {
-            self.scopes.push(ScopeSlot {
-                generation: id.generation,
-                scope: Some(scope),
-            });
+            self.scopes.push(ScopeSlot { generation: id.generation, scope: Some(scope) });
         } else {
             self.scopes[id.index as usize].scope = Some(scope);
         }
@@ -275,18 +256,12 @@ impl ComponentHost {
         let view = expansion.push_render(
             id,
             render,
-            OwnedContextEnvironment {
-                contexts: contexts.clone(),
-                provided: provided_contexts.clone(),
-            },
+            OwnedContextEnvironment { contexts: contexts.clone(), provided: provided_contexts.clone() },
         );
         let view = self.expand_view(
             id,
             view,
-            &ContextEnvironment {
-                contexts: &contexts,
-                provided: &provided_contexts,
-            },
+            &ContextEnvironment { contexts: &contexts, provided: &provided_contexts },
             0,
             &mut expansion,
         );
@@ -382,10 +357,7 @@ impl ComponentHost {
         }
     }
 
-    pub(super) fn unseen_scopes(
-        &self,
-        seen: &HashMap<ComponentId, HashSet<Key>>,
-    ) -> Vec<ComponentId> {
+    pub(super) fn unseen_scopes(&self, seen: &HashMap<ComponentId, HashSet<Key>>) -> Vec<ComponentId> {
         seen.iter()
             .flat_map(|(parent, keys)| {
                 self.scope(*parent)
@@ -399,15 +371,11 @@ impl ComponentHost {
 
     pub(super) fn scope(&self, id: ComponentId) -> Option<&Scope> {
         let slot = self.scopes.get(id.index as usize)?;
-        (slot.generation == id.generation)
-            .then_some(slot.scope.as_ref())
-            .flatten()
+        (slot.generation == id.generation).then_some(slot.scope.as_ref()).flatten()
     }
 
     pub(super) fn scope_mut(&mut self, id: ComponentId) -> Option<&mut Scope> {
         let slot = self.scopes.get_mut(id.index as usize)?;
-        (slot.generation == id.generation)
-            .then_some(slot.scope.as_mut())
-            .flatten()
+        (slot.generation == id.generation).then_some(slot.scope.as_mut()).flatten()
     }
 }

@@ -22,11 +22,7 @@ impl NTSTATUS {
     /// Maps an NT error code to an HRESULT value.
     #[inline]
     pub const fn to_hresult(self) -> HRESULT {
-        HRESULT(if self.0 >= 0 {
-            self.0
-        } else {
-            self.0 | 0x1000_0000
-        })
+        HRESULT(if self.0 >= 0 { self.0 } else { self.0 | 0x1000_0000 })
     }
 
     /// Asserts that `self` is a success code.

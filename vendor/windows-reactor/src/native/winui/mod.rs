@@ -60,20 +60,14 @@ struct NativeSubscription<C> {
 
 impl<C: Clone> Clone for NativeSubscription<C> {
     fn clone(&self) -> Self {
-        Self {
-            callback: self.callback.clone(),
-            live: Rc::clone(&self.live),
-        }
+        Self { callback: self.callback.clone(), live: Rc::clone(&self.live) }
     }
 }
 
 impl<T: EventArg> NativeSubscription<Callback<T>> {
     /// The handler for an occurrence under this subscription.
     fn handler(self, value: T::Native) -> QueuedHandler {
-        QueuedHandler::Callback {
-            call: T::bind(self.callback, value),
-            live: self.live,
-        }
+        QueuedHandler::Callback { call: T::bind(self.callback, value), live: self.live }
     }
 }
 
@@ -91,10 +85,8 @@ impl<C> NativeCallbackEvent<C> {
                 if let Some(subscription) = self.subscription.take() {
                     subscription.live.set(false);
                 }
-                self.subscription = callback.map(|callback| NativeSubscription {
-                    callback,
-                    live: Rc::new(Cell::new(true)),
-                });
+                self.subscription =
+                    callback.map(|callback| NativeSubscription { callback, live: Rc::new(Cell::new(true)) });
             }
         }
     }
@@ -106,9 +98,7 @@ impl<T> NativeCallbackEvent<Callback<T>> {
     where
         T: EventArg,
     {
-        self.subscription
-            .clone()
-            .map(|subscription| subscription.handler(value))
+        self.subscription.clone().map(|subscription| subscription.handler(value))
     }
 }
 
@@ -180,9 +170,7 @@ struct PropertyChangedRevoker {
 
 impl Drop for PropertyChangedRevoker {
     fn drop(&mut self) {
-        let _ = self
-            .object
-            .UnregisterPropertyChangedCallback(&self.property, self.token);
+        let _ = self.object.UnregisterPropertyChangedCallback(&self.property, self.token);
     }
 }
 
@@ -340,31 +328,19 @@ impl From<WinUiError> for windows_core::Error {
 
 fn solid_color_brush(value: Color) -> Result<native::SolidColorBrush, WinUiError> {
     let brush = native::SolidColorBrush::new()?;
-    brush.SetColor(native::Color {
-        a: value.a,
-        r: value.r,
-        g: value.g,
-        b: value.b,
-    })?;
+    brush.SetColor(native::Color { a: value.a, r: value.r, g: value.g, b: value.b })?;
     Ok(brush)
 }
 
 fn to_native_color(value: Color) -> native::Color {
-    native::Color {
-        a: value.a,
-        r: value.r,
-        g: value.g,
-        b: value.b,
-    }
+    native::Color { a: value.a, r: value.r, g: value.g, b: value.b }
 }
 
 fn from_native_color(value: native::Color) -> Color {
     Color::argb(value.a, value.r, value.g, value.b)
 }
 
-fn navigation_view_display_mode(
-    value: native::NavigationViewDisplayMode,
-) -> NavigationViewDisplayMode {
+fn navigation_view_display_mode(value: native::NavigationViewDisplayMode) -> NavigationViewDisplayMode {
     match value {
         native::NavigationViewDisplayMode::Minimal => NavigationViewDisplayMode::Minimal,
         native::NavigationViewDisplayMode::Compact => NavigationViewDisplayMode::Compact,
@@ -377,31 +353,25 @@ pub(crate) fn validate_native_uri(value: &str) -> windows_core::Result<()> {
     native::Uri::CreateUri(value).map(drop)
 }
 
-fn set_rich_text_blocks(
-    target: &native::RichTextBlock,
-    value: Option<&RichText>,
-) -> Result<(), WinUiError> {
+fn set_rich_text_blocks(target: &native::RichTextBlock, value: Option<&RichText>) -> Result<(), WinUiError> {
     let blocks = target.Blocks()?;
     blocks.Clear()?;
     let Some(value) = value else {
         return Ok(());
     };
-    let append_run =
-        |inlines: &IVector<native::Inline>, value: &RichTextRun| -> Result<(), WinUiError> {
-            let run = native::Run::new()?;
-            run.SetText(&value.text)?;
-            if value.is_bold {
-                run.cast::<native::ITextElement>()?
-                    .SetFontWeight(native::FontWeight { weight: 700 })?;
-            }
-            if value.is_italic {
-                run.cast::<native::ITextElement>()?
-                    .SetFontStyle(native::FontStyle::Italic)?;
-            }
-            let run: native::Inline = run.cast()?;
-            inlines.Append(&run)?;
-            Ok(())
-        };
+    let append_run = |inlines: &IVector<native::Inline>, value: &RichTextRun| -> Result<(), WinUiError> {
+        let run = native::Run::new()?;
+        run.SetText(&value.text)?;
+        if value.is_bold {
+            run.cast::<native::ITextElement>()?.SetFontWeight(native::FontWeight { weight: 700 })?;
+        }
+        if value.is_italic {
+            run.cast::<native::ITextElement>()?.SetFontStyle(native::FontStyle::Italic)?;
+        }
+        let run: native::Inline = run.cast()?;
+        inlines.Append(&run)?;
+        Ok(())
+    };
     for paragraph in value.paragraphs.iter() {
         let native_paragraph = native::Paragraph::new()?;
         let inlines = native_paragraph.Inlines()?;
@@ -437,14 +407,9 @@ fn parse_path_data(value: &str) -> Result<native::Geometry, WinUiError> {
     Ok(native::XamlBindingHelper::ConvertValue(&type_name, &value)?.cast()?)
 }
 
-fn set_opacity_transition(
-    element: &native::UIElement,
-    duration: Option<Duration>,
-) -> Result<(), WinUiError> {
+fn set_opacity_transition(element: &native::UIElement, duration: Option<Duration>) -> Result<(), WinUiError> {
     let Some(duration) = duration else {
-        return element
-            .SetOpacityTransition(None::<&native::ScalarTransition>)
-            .map_err(Into::into);
+        return element.SetOpacityTransition(None::<&native::ScalarTransition>).map_err(Into::into);
     };
     let duration = TimeSpan::try_from(duration).map_err(|_| WinUiError::InvalidDuration)?;
     let transition = native::ScalarTransition::new()?;
@@ -454,11 +419,7 @@ fn set_opacity_transition(
 }
 
 fn set_scale_center(element: &native::UIElement, size: native::Size) -> windows_core::Result<()> {
-    element.SetCenterPoint(native::Vector3 {
-        x: size.width / 2.0,
-        y: size.height / 2.0,
-        z: 0.0,
-    })
+    element.SetCenterPoint(native::Vector3 { x: size.width / 2.0, y: size.height / 2.0, z: 0.0 })
 }
 
 fn set_implicit_scale(
@@ -470,27 +431,19 @@ fn set_implicit_scale(
     let mut subscription = subscription.borrow_mut();
     if subscription.is_none() {
         // Keep centering through a transition back to the default scale, until the owner is removed.
-        *subscription = Some(framework.SizeChanged(local::handler::<
-            IInspectable,
-            native::SizeChangedEventArgs,
-            _,
-        >(|sender, args| {
-            let element = sender.unwrap().cast::<native::UIElement>().unwrap();
-            set_scale_center(&element, args.unwrap().NewSize().unwrap()).unwrap();
-        }))?);
+        *subscription =
+            Some(framework.SizeChanged(local::handler::<IInspectable, native::SizeChangedEventArgs, _>(
+                |sender, args| {
+                    let element = sender.unwrap().cast::<native::UIElement>().unwrap();
+                    set_scale_center(&element, args.unwrap().NewSize().unwrap()).unwrap();
+                },
+            ))?);
     }
     set_scale_center(
         element,
-        native::Size {
-            width: framework.ActualWidth()? as f32,
-            height: framework.ActualHeight()? as f32,
-        },
+        native::Size { width: framework.ActualWidth()? as f32, height: framework.ActualHeight()? as f32 },
     )?;
-    element.SetScale(native::Vector3 {
-        x: value[0] as f32,
-        y: value[1] as f32,
-        z: 1.0,
-    })?;
+    element.SetScale(native::Vector3 { x: value[0] as f32, y: value[1] as f32, z: 1.0 })?;
     Ok(())
 }
 
@@ -503,9 +456,7 @@ fn set_translation_transition(
     Ok(())
 }
 
-fn vector_transition(
-    duration: Option<Duration>,
-) -> Result<Option<native::Vector3Transition>, WinUiError> {
+fn vector_transition(duration: Option<Duration>) -> Result<Option<native::Vector3Transition>, WinUiError> {
     let Some(duration) = duration else {
         return Ok(None);
     };
@@ -515,10 +466,7 @@ fn vector_transition(
     Ok(Some(transition))
 }
 
-fn set_scale_transition(
-    element: &native::UIElement,
-    duration: Option<Duration>,
-) -> Result<(), WinUiError> {
+fn set_scale_transition(element: &native::UIElement, duration: Option<Duration>) -> Result<(), WinUiError> {
     let transition = vector_transition(duration)?;
     element.SetScaleTransition(transition.as_ref())?;
     Ok(())
@@ -559,11 +507,7 @@ fn observe_xaml_scale(
         Err(error) => return Err(error),
     };
     callback.call(root.RasterizationScale()?);
-    changed.replace(Some(root.Changed(local::handler::<
-        native::XamlRoot,
-        _,
-        _,
-    >(move |sender, _| {
+    changed.replace(Some(root.Changed(local::handler::<native::XamlRoot, _, _>(move |sender, _| {
         callback.call(sender.as_ref().unwrap().RasterizationScale().unwrap());
     }))?));
     Ok(())
@@ -654,12 +598,8 @@ impl Drop for WinUiAdapter {
         // remoteman patch: an open dialog is hidden only while its window is still there. The
         // content of a closed window is torn down after WinUI's window has gone, and
         // ContentDialog::Hide then crashed the process in Microsoft.ui.xaml.dll.
-        let window_open = self
-            .windows
-            .borrow()
-            .iter()
-            .filter_map(Weak::upgrade)
-            .any(|window| !window.is_closed());
+        let window_open =
+            self.windows.borrow().iter().filter_map(Weak::upgrade).any(|window| !window.is_closed());
         if window_open {
             for dialog in hide {
                 _ = dialog.Hide();
@@ -691,9 +631,7 @@ impl Drop for WinUiAdapter {
             }
         }
         self.flyout_owners.clear();
-        for initialization in
-            std::mem::take(&mut *self.webview_initializations.borrow_mut()).into_values()
-        {
+        for initialization in std::mem::take(&mut *self.webview_initializations.borrow_mut()).into_values() {
             for completion in initialization.completions {
                 completion.call(Err(IntegrationError::Unavailable));
             }
@@ -720,9 +658,7 @@ fn com_identity(value: &impl Interface) -> Result<usize, WinUiError> {
 }
 
 fn index32(index: usize) -> Result<u32, WinUiError> {
-    index
-        .try_into()
-        .map_err(|_| WinUiError::IndexOverflow(index))
+    index.try_into().map_err(|_| WinUiError::IndexOverflow(index))
 }
 
 fn native_selection_index(value: Option<usize>) -> Result<i32, WinUiError> {
@@ -836,11 +772,7 @@ fn read_rich_edit_text(value: &native::RichEditBox) -> windows_core::Result<Rc<s
 }
 
 fn set_rich_edit_text(value: &native::RichEditBox, text: &str) -> Result<(), WinUiError> {
-    if read_rich_edit_text(value)
-        .map_err(WinUiError::from)?
-        .as_ref()
-        == text
-    {
+    if read_rich_edit_text(value).map_err(WinUiError::from)?.as_ref() == text {
         return Ok(());
     }
     let document = value.Document()?;
@@ -857,11 +789,7 @@ fn set_rich_edit_text(value: &native::RichEditBox, text: &str) -> Result<(), Win
         .SetText(native::TextSetOptions::None, text)
         .and_then(|()| selection.SetRange(start, end))
         .map_err(WinUiError::from);
-    let restore = if read_only {
-        value.SetIsReadOnly(true).map_err(WinUiError::from)
-    } else {
-        Ok(())
-    };
+    let restore = if read_only { value.SetIsReadOnly(true).map_err(WinUiError::from) } else { Ok(()) };
     write.and(restore)
 }
 
@@ -871,17 +799,10 @@ fn native_grid_length(length: GridLength) -> native::GridLength {
         GridLengthSize::Pixel(value) => (value, native::GridUnitType::Pixel),
         GridLengthSize::Star(value) => (value, native::GridUnitType::Star),
     };
-    native::GridLength {
-        value,
-        grid_unit_type,
-    }
+    native::GridLength { value, grid_unit_type }
 }
 
-fn set_grid_definitions(
-    grid: &native::Grid,
-    values: &[GridLength],
-    rows: bool,
-) -> Result<(), WinUiError> {
+fn set_grid_definitions(grid: &native::Grid, values: &[GridLength], rows: bool) -> Result<(), WinUiError> {
     if rows {
         let definitions = grid.RowDefinitions()?;
         definitions.Clear()?;

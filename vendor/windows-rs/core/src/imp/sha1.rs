@@ -1,10 +1,7 @@
 pub const fn sha1(data: &ConstBuffer) -> Digest {
     let state: [u32; 5] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
     let len: u64 = 0;
-    let blocks = Blocks {
-        len: 0,
-        data: [0; 64],
-    };
+    let blocks = Blocks { len: 0, data: [0; 64] };
     let (blocks, len, state) = process_blocks(blocks, data, len, state);
     digest(state, len, blocks)
 }
@@ -42,10 +39,7 @@ impl ConstBuffer {
     }
 
     pub const fn new() -> Self {
-        Self {
-            data: [0; BUFFER_SIZE],
-            head: 0,
-        }
+        Self { data: [0; BUFFER_SIZE], head: 0 }
     }
 
     pub const fn push_slice(self, slice: &[u8]) -> Self {
@@ -78,24 +72,18 @@ impl ConstBuffer {
         const fn digit(mut value: u8) -> u8 {
             value &= 0xF;
 
-            if value < 10 {
-                b'0' + value
-            } else {
-                b'a' + (value - 10)
-            }
+            if value < 10 { b'0' + value } else { b'a' + (value - 10) }
         }
 
         self.push(digit(value >> 4)).push(digit(value))
     }
 
     const fn push_hex_u16(self, value: u16) -> Self {
-        self.push_hex_u8((value >> 8) as u8)
-            .push_hex_u8((value & 0xFF) as u8)
+        self.push_hex_u8((value >> 8) as u8).push_hex_u8((value & 0xFF) as u8)
     }
 
     const fn push_hex_u32(self, value: u32) -> Self {
-        self.push_hex_u16((value >> 16) as u16)
-            .push_hex_u16((value & 0xFFFF) as u16)
+        self.push_hex_u16((value >> 16) as u16).push_hex_u16((value & 0xFFFF) as u16)
     }
 
     const fn push_amount(mut self, slice: &[u8], amount: usize) -> Self {
@@ -361,10 +349,7 @@ const fn r0(
     mut z: u32,
     i: usize,
 ) -> ([u32; 16], u32, u32) {
-    let n = ((w & (x ^ y)) ^ y)
-        .wrapping_add(block[i])
-        .wrapping_add(0x5a82_7999)
-        .wrapping_add(rol(v, 5));
+    let n = ((w & (x ^ y)) ^ y).wrapping_add(block[i]).wrapping_add(0x5a82_7999).wrapping_add(rol(v, 5));
     z = z.wrapping_add(n);
     w = rol(w, 30);
     (block, w, z)
@@ -380,10 +365,7 @@ const fn r1(
     i: usize,
 ) -> ([u32; 16], u32, u32) {
     block[i] = blk(&block, i);
-    let n = ((w & (x ^ y)) ^ y)
-        .wrapping_add(block[i])
-        .wrapping_add(0x5a82_7999)
-        .wrapping_add(rol(v, 5));
+    let n = ((w & (x ^ y)) ^ y).wrapping_add(block[i]).wrapping_add(0x5a82_7999).wrapping_add(rol(v, 5));
     z = z.wrapping_add(n);
     w = rol(w, 30);
     (block, w, z)
@@ -399,10 +381,7 @@ const fn r2(
     i: usize,
 ) -> ([u32; 16], u32, u32) {
     block[i] = blk(&block, i);
-    let n = (w ^ x ^ y)
-        .wrapping_add(block[i])
-        .wrapping_add(0x6ed9_eba1)
-        .wrapping_add(rol(v, 5));
+    let n = (w ^ x ^ y).wrapping_add(block[i]).wrapping_add(0x6ed9_eba1).wrapping_add(rol(v, 5));
     z = z.wrapping_add(n);
     w = rol(w, 30);
     (block, w, z)
@@ -418,10 +397,8 @@ const fn r3(
     i: usize,
 ) -> ([u32; 16], u32, u32) {
     block[i] = blk(&block, i);
-    let n = (((w | x) & y) | (w & x))
-        .wrapping_add(block[i])
-        .wrapping_add(0x8f1b_bcdc)
-        .wrapping_add(rol(v, 5));
+    let n =
+        (((w | x) & y) | (w & x)).wrapping_add(block[i]).wrapping_add(0x8f1b_bcdc).wrapping_add(rol(v, 5));
     z = z.wrapping_add(n);
     w = rol(w, 30);
     (block, w, z)
@@ -437,10 +414,7 @@ const fn r4(
     i: usize,
 ) -> ([u32; 16], u32, u32) {
     block[i] = blk(&block, i);
-    let n = (w ^ x ^ y)
-        .wrapping_add(block[i])
-        .wrapping_add(0xca62_c1d6)
-        .wrapping_add(rol(v, 5));
+    let n = (w ^ x ^ y).wrapping_add(block[i]).wrapping_add(0xca62_c1d6).wrapping_add(rol(v, 5));
     z = z.wrapping_add(n);
     w = rol(w, 30);
     (block, w, z)

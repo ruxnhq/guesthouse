@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    ComposeBase, DYNAMIC_CAST_IID, GUID, HRESULT, IInspectable, IUnknown, Interface, InterfaceRef,
-};
+use crate::{ComposeBase, DYNAMIC_CAST_IID, GUID, HRESULT, IInspectable, IUnknown, Interface, InterfaceRef};
 use core::any::Any;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -59,12 +57,7 @@ impl<const N: usize, B, T> ComCell<N, B, T> {
     /// any interfaces, move the object into its final heap allocation or static storage. Safe
     /// code must not gain ownership or mutable access to the enclosing object after publication.
     pub const unsafe fn new(vtables: [Vtable; N], base: B, this: T) -> Self {
-        Self(UnsafeCell::new(Layout {
-            vtables,
-            count: WeakRefCount::new(),
-            base,
-            this,
-        }))
+        Self(UnsafeCell::new(Layout { vtables, count: WeakRefCount::new(), base, this }))
     }
 
     #[inline(always)]
@@ -91,12 +84,7 @@ impl<const N: usize, B, T> ComCell<N, B, T> {
     #[inline(always)]
     pub fn interface(&self, index: usize) -> *mut c_void {
         assert!(index < N);
-        unsafe {
-            (&raw mut (*self.0.get()).vtables)
-                .cast::<Vtable>()
-                .add(index)
-                .cast()
-        }
+        unsafe { (&raw mut (*self.0.get()).vtables).cast::<Vtable>().add(index).cast() }
     }
 
     /// Returns a borrowed interface `index`.
@@ -228,18 +216,12 @@ impl<const N: usize, T> ComCell<N, ComposeBase, T> {
         identity: IUnknown,
     ) -> (IInspectable, &'a mut Option<IInspectable>) {
         const {
-            assert!(
-                Identity::INSPECTABLE,
-                "composition requires an IInspectable identity"
-            );
+            assert!(Identity::INSPECTABLE, "composition requires an IInspectable identity");
         };
 
         unsafe {
             let base = &raw mut (*Self::layout(this)).base;
-            (
-                core::mem::transmute::<IUnknown, IInspectable>(identity),
-                ComposeBase::slot(base),
-            )
+            (core::mem::transmute::<IUnknown, IInspectable>(identity), ComposeBase::slot(base))
         }
     }
 }

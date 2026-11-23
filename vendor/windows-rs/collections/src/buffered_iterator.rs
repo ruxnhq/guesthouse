@@ -34,12 +34,7 @@ impl<T: windows_core::RuntimeType + 'static> BufferedIterator<T> {
         // releases these values, so the buffer is initialized, not uninhabited.
         let mut buffer = Vec::new();
         buffer.resize_with(block::<T>(), || unsafe { core::mem::zeroed() });
-        Self {
-            iterator,
-            buffer,
-            index: 0,
-            len: 0,
-        }
+        Self { iterator, buffer, index: 0, len: 0 }
     }
 }
 

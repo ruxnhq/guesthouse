@@ -45,10 +45,7 @@ impl<M: 'static> ApplicationMessages<M> {
     pub(crate) fn new(waker: impl Fn() + Send + Sync + 'static) -> Self {
         Self {
             sender: LocalSender {
-                component: ComponentId {
-                    index: 0,
-                    generation: 0,
-                },
+                component: ComponentId { index: 0, generation: 0 },
                 queue: Rc::new(RefCell::new(VecDeque::new())),
                 wake: Arc::new(Mutex::new(MessageQueue {
                     waker: Some(Arc::new(waker)),
@@ -66,9 +63,7 @@ impl<M: 'static> ApplicationMessages<M> {
     pub(crate) fn pop(&self) -> Option<M> {
         self.sender.wake.lock().unwrap().wake_pending = false;
         self.sender.queue.borrow_mut().pop_front().map(|message| {
-            let LocalMessageValue::Message(value) = message.value else {
-                unreachable!()
-            };
+            let LocalMessageValue::Message(value) = message.value else { unreachable!() };
             *value.downcast::<M>().unwrap()
         })
     }
@@ -129,9 +124,7 @@ impl<M: 'static> LocalSender<M> {
             value: LocalMessageValue::Message(Box::new(value)),
         });
         drop(queue);
-        let wake = (!wake_queue.wake_pending)
-            .then(|| wake_queue.waker.clone())
-            .flatten();
+        let wake = (!wake_queue.wake_pending).then(|| wake_queue.waker.clone()).flatten();
         wake_queue.wake_pending |= wake.is_some();
         drop(wake_queue);
         if let Some(wake) = wake {
@@ -182,11 +175,7 @@ pub struct ComponentSender<M> {
 
 impl<M> Clone for ComponentSender<M> {
     fn clone(&self) -> Self {
-        Self {
-            component: self.component,
-            queue: Arc::clone(&self.queue),
-            marker: PhantomData,
-        }
+        Self { component: self.component, queue: Arc::clone(&self.queue), marker: PhantomData }
     }
 }
 
@@ -251,12 +240,7 @@ impl<M: 'static> ComponentSender<M> {
         }
         let sequence = queue.next_sequence;
         queue.next_sequence = queue.next_sequence.wrapping_add(1);
-        queue.messages.push_back(Message {
-            component: self.component,
-            control,
-            sequence,
-            value,
-        });
+        queue.messages.push_back(Message { component: self.component, control, sequence, value });
         let wake = (!queue.wake_pending).then(|| queue.waker.clone()).flatten();
         queue.wake_pending |= wake.is_some();
         drop(queue);
@@ -292,9 +276,6 @@ impl<M: 'static> ComponentCompletion<M> {
     /// Returns `false` if the host has closed, dropping factory captures on the submitting thread.
     #[must_use]
     pub fn complete_with(self, factory: impl FnOnce() -> M + Send + 'static) -> bool {
-        self.0.enqueue(
-            MessageValue::Local(Box::new(move || Box::new(factory()))),
-            None,
-        )
+        self.0.enqueue(MessageValue::Local(Box::new(move || Box::new(factory()))), None)
     }
 }

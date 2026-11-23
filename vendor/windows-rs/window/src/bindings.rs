@@ -8,11 +8,7 @@ windows_core::link!("user32.dll" "system" fn GetDpiForSystem() -> UINT);
 windows_core::link!("user32.dll" "system" fn GetMessageW(lpmsg : LPMSG, hwnd : HWND, wmsgfiltermin : UINT, wmsgfiltermax : UINT) -> windows_core::BOOL);
 #[cfg(target_arch = "x86")]
 windows_core::link!("user32.dll" "system" "GetWindowLongW" fn GetWindowLongPtrW(hwnd : HWND, nindex : i32) -> LONG);
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "arm64ec",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_core::link!("user32.dll" "system" fn GetWindowLongPtrW(hwnd : HWND, nindex : i32) -> LONG_PTR);
 windows_core::link!("user32.dll" "system" fn LoadCursorW(hinstance : HINSTANCE, lpcursorname : windows_core::PCWSTR) -> HCURSOR);
 windows_core::link!("user32.dll" "system" fn PeekMessageW(lpmsg : LPMSG, hwnd : HWND, wmsgfiltermin : UINT, wmsgfiltermax : UINT, wremovemsg : UINT) -> windows_core::BOOL);
@@ -22,11 +18,7 @@ windows_core::link!("user32.dll" "system" fn SendMessageW(hwnd : HWND, msg : UIN
 windows_core::link!("user32.dll" "system" fn SetProcessDpiAwarenessContext(value : DPI_AWARENESS_CONTEXT) -> windows_core::BOOL);
 #[cfg(target_arch = "x86")]
 windows_core::link!("user32.dll" "system" "SetWindowLongW" fn SetWindowLongPtrW(hwnd : HWND, nindex : i32, dwnewlong : LONG) -> LONG);
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "arm64ec",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_arch = "x86_64"))]
 windows_core::link!("user32.dll" "system" fn SetWindowLongPtrW(hwnd : HWND, nindex : i32, dwnewlong : LONG_PTR) -> LONG_PTR);
 windows_core::link!("user32.dll" "system" fn ShowWindow(hwnd : HWND, ncmdshow : i32) -> windows_core::BOOL);
 windows_core::link!("user32.dll" "system" fn TranslateMessage(lpmsg : *const MSG) -> windows_core::BOOL);
@@ -130,14 +122,8 @@ pub struct WNDCLASSW {
     pub lpszMenuName: windows_core::PCWSTR,
     pub lpszClassName: windows_core::PCWSTR,
 }
-pub type WNDPROC = Option<
-    unsafe extern "system" fn(
-        param0: HWND,
-        param1: UINT,
-        param2: WPARAM,
-        param3: LPARAM,
-    ) -> LRESULT,
->;
+pub type WNDPROC =
+    Option<unsafe extern "system" fn(param0: HWND, param1: UINT, param2: WPARAM, param3: LPARAM) -> LRESULT>;
 pub type WPARAM = usize;
 pub const WS_EX_NOREDIRECTIONBITMAP: i32 = 2097152;
 pub const WS_OVERLAPPEDWINDOW: i32 = 13565952;

@@ -69,28 +69,13 @@ pub struct WindowConstraints {
 
 impl WindowConstraints {
     fn validate(self) {
-        for value in [
-            self.min_width,
-            self.min_height,
-            self.max_width,
-            self.max_height,
-        ]
-        .into_iter()
-        .flatten()
+        for value in [self.min_width, self.min_height, self.max_width, self.max_height].into_iter().flatten()
         {
-            assert!(
-                value.is_finite() && value > 0.0,
-                "window constraints must be finite and positive"
-            );
+            assert!(value.is_finite() && value > 0.0, "window constraints must be finite and positive");
         }
         assert!(
-            self.min_width
-                .zip(self.max_width)
-                .is_none_or(|(min, max)| min <= max)
-                && self
-                    .min_height
-                    .zip(self.max_height)
-                    .is_none_or(|(min, max)| min <= max),
+            self.min_width.zip(self.max_width).is_none_or(|(min, max)| min <= max)
+                && self.min_height.zip(self.max_height).is_none_or(|(min, max)| min <= max),
             "window minimum constraints must not exceed maximum constraints"
         );
     }

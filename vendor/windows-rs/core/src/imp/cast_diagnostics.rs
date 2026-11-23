@@ -69,20 +69,9 @@ pub(crate) fn record_cast<S: Interface, T: Interface>(
 ) {
     let source = core::any::type_name::<S>();
     let target = core::any::type_name::<T>();
-    let key = (
-        location.file(),
-        location.line(),
-        location.column(),
-        source,
-        target,
-    );
+    let key = (location.file(), location.line(), location.column(), source, target);
     let mut sites = SITES.lock().unwrap();
-    let site = sites.entry(key).or_insert(Site {
-        location,
-        count: 0,
-        avoidable: false,
-        hinted: false,
-    });
+    let site = sites.entry(key).or_insert(Site { location, count: 0, avoidable: false, hinted: false });
     site.count += 1;
 
     let source_size = size_of::<S::Vtable>();

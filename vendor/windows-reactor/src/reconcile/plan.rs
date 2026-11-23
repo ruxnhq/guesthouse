@@ -2,16 +2,9 @@ use super::*;
 
 impl Planner<'_> {
     pub(super) fn replace_object(&mut self, object: ObjectId, declaration: &Declaration) {
-        if self
-            .retained
-            .get_mut(object)
-            .window_title_bar
-            .take()
-            .is_some()
-        {
+        if self.retained.get_mut(object).window_title_bar.take().is_some() {
             self.retained.clear_window_title_bar(object);
-            self.mutations
-                .push(Mutation::ClearWindowTitleBar { object });
+            self.mutations.push(Mutation::ClearWindowTitleBar { object });
         }
         let previous_attachments = self.take_attachments(object);
         self.detach_attachments(object, &previous_attachments);
@@ -19,11 +12,7 @@ impl Planner<'_> {
         for relation in previous {
             match relation.value {
                 RetainedRelationValue::One(Some(child)) => {
-                    self.mutations.push(Mutation::Detach {
-                        parent: object,
-                        relation: relation.id,
-                        child,
-                    });
+                    self.mutations.push(Mutation::Detach { parent: object, relation: relation.id, child });
                     self.retire(child);
                 }
                 RetainedRelationValue::Many(children) => {
@@ -43,8 +32,7 @@ impl Planner<'_> {
         let retained = self.retained.get_mut(object);
         let key = retained.key.take();
         if let Some(reference) = retained.reference.take() {
-            self.references
-                .push(ReferenceChange::Clear { reference, object });
+            self.references.push(ReferenceChange::Clear { reference, object });
         }
         // Ending the replaced control's subscriptions drops its pending occurrences, which would
         // otherwise reach the replacement through the preserved ID.
@@ -56,10 +44,7 @@ impl Planner<'_> {
             });
         }
         if let Some(reference) = &declaration.reference {
-            self.references.push(ReferenceChange::Set {
-                reference: reference.clone(),
-                object,
-            });
+            self.references.push(ReferenceChange::Set { reference: reference.clone(), object });
         }
         let virtual_items = virtualization::retain_virtual_items(declaration);
         *self.retained.get_mut(object) = RetainedObject {
@@ -83,17 +68,10 @@ impl Planner<'_> {
                 .collect(),
             virtual_items,
         };
-        self.mutations.push(Mutation::Replace {
-            object,
-            kind: declaration.kind,
-        });
+        self.mutations.push(Mutation::Replace { object, kind: declaration.kind });
         let set = properties_before_relations(declaration.kind, declaration.properties.as_slice());
         if !set.is_empty() {
-            self.mutations.push(Mutation::SetProperties {
-                object,
-                set,
-                clear: Rc::from([]),
-            });
+            self.mutations.push(Mutation::SetProperties { object, set, clear: Rc::from([]) });
         }
         if !declaration.events.as_slice().is_empty() {
             self.mutations.push(Mutation::SetEvents {
@@ -115,15 +93,9 @@ impl Planner<'_> {
         self.apply_index(object, declaration, None, false);
         if let Some(height) = declaration.window_title_bar {
             self.retained.set_window_title_bar(object, height);
-            self.mutations
-                .push(Mutation::SetWindowTitleBar { object, height });
+            self.mutations.push(Mutation::SetWindowTitleBar { object, height });
         }
-        self.reconcile_attachments(
-            object,
-            previous_attachments,
-            declaration.attachments.as_deref(),
-            true,
-        );
+        self.reconcile_attachments(object, previous_attachments, declaration.attachments.as_deref(), true);
     }
 
     pub(super) fn mount(&mut self, declaration: &Declaration) -> ObjectId {
@@ -153,22 +125,12 @@ impl Planner<'_> {
             self.retained.set_window_title_bar(object, height);
         }
         if let Some(reference) = &declaration.reference {
-            self.references.push(ReferenceChange::Set {
-                reference: reference.clone(),
-                object,
-            });
+            self.references.push(ReferenceChange::Set { reference: reference.clone(), object });
         }
-        self.mutations.push(Mutation::Create {
-            object,
-            kind: declaration.kind,
-        });
+        self.mutations.push(Mutation::Create { object, kind: declaration.kind });
         let set = properties_before_relations(declaration.kind, declaration.properties.as_slice());
         if !set.is_empty() {
-            self.mutations.push(Mutation::SetProperties {
-                object,
-                set,
-                clear: Rc::from([]),
-            });
+            self.mutations.push(Mutation::SetProperties { object, set, clear: Rc::from([]) });
         }
         if self.retained.get(object).unwrap().events.is_some() {
             self.mutations.push(Mutation::SetEvents {
@@ -189,8 +151,7 @@ impl Planner<'_> {
         }
         self.apply_index(object, declaration, None, false);
         if let Some(height) = declaration.window_title_bar {
-            self.mutations
-                .push(Mutation::SetWindowTitleBar { object, height });
+            self.mutations.push(Mutation::SetWindowTitleBar { object, height });
         }
         self.reconcile_attachments(
             object,
@@ -201,66 +162,42 @@ impl Planner<'_> {
         object
     }
 
-    pub(super) fn reconcile_object(
-        &mut self,
-        object: ObjectId,
-        declaration: &Declaration,
-    ) -> ObjectId {
+    pub(super) fn reconcile_object(&mut self, object: ObjectId, declaration: &Declaration) -> ObjectId {
         debug_assert_eq!(self.retained.get(object).unwrap().kind, declaration.kind);
         if self.retained.get(object).unwrap().reference != declaration.reference {
             if let Some(reference) = self.retained.get_mut(object).reference.take() {
-                self.references
-                    .push(ReferenceChange::Clear { reference, object });
+                self.references.push(ReferenceChange::Clear { reference, object });
             }
             if let Some(reference) = &declaration.reference {
-                self.references.push(ReferenceChange::Set {
-                    reference: reference.clone(),
-                    object,
-                });
+                self.references.push(ReferenceChange::Set { reference: reference.clone(), object });
             }
-            self.retained
-                .get_mut(object)
-                .reference
-                .clone_from(&declaration.reference);
+            self.retained.get_mut(object).reference.clone_from(&declaration.reference);
         }
         let previous_title_bar = self.retained.get(object).unwrap().window_title_bar;
         if previous_title_bar != declaration.window_title_bar {
             match (previous_title_bar, declaration.window_title_bar) {
                 (Some(_), None) => {
                     self.retained.clear_window_title_bar(object);
-                    self.mutations
-                        .push(Mutation::ClearWindowTitleBar { object });
+                    self.mutations.push(Mutation::ClearWindowTitleBar { object });
                 }
                 (_, Some(height)) => {
                     self.retained.set_window_title_bar(object, height);
-                    self.mutations
-                        .push(Mutation::SetWindowTitleBar { object, height });
+                    self.mutations.push(Mutation::SetWindowTitleBar { object, height });
                 }
                 (None, None) => {}
             }
             self.retained.get_mut(object).window_title_bar = declaration.window_title_bar;
         }
-        if self.retained.get(object).unwrap().attachments.is_some()
-            || declaration.attachments.is_some()
-        {
+        if self.retained.get(object).unwrap().attachments.is_some() || declaration.attachments.is_some() {
             let previous = self.take_attachments(object);
             self.reconcile_attachments(object, previous, declaration.attachments.as_deref(), false);
         }
         {
-            let RetainedObject {
-                properties: previous,
-                baselines,
-                ..
-            } = self.retained.get_mut(object);
+            let RetainedObject { properties: previous, baselines, .. } = self.retained.get_mut(object);
             if !baselines.is_empty() {
                 baselines.retain(|baseline| {
-                    !previous
-                        .iter()
-                        .any(|property| property.id == baseline.property.id)
-                        && !declaration
-                            .properties
-                            .iter()
-                            .any(|property| property.id == baseline.property.id)
+                    !previous.iter().any(|property| property.id == baseline.property.id)
+                        && !declaration.properties.iter().any(|property| property.id == baseline.property.id)
                 });
             }
         }
@@ -268,12 +205,8 @@ impl Planner<'_> {
         let index = index_contract(declaration.kind);
         let (previous_index, items_property_changed) = {
             let previous = &self.retained.get(object).unwrap().properties;
-            let find = |properties: &[Property], id| {
-                properties
-                    .iter()
-                    .find(|property| property.id == id)
-                    .cloned()
-            };
+            let find =
+                |properties: &[Property], id| properties.iter().find(|property| property.id == id).cloned();
             match index {
                 Some(contract) => (
                     find(previous.as_slice(), contract.property),
@@ -296,8 +229,7 @@ impl Planner<'_> {
             let clear = previous
                 .iter()
                 .filter(|property| {
-                    Some(property.id) != index
-                        && !properties.iter().any(|current| current.id == property.id)
+                    Some(property.id) != index && !properties.iter().any(|current| current.id == property.id)
                 })
                 .map(|property| property.id)
                 .collect::<Rc<[_]>>();
@@ -313,15 +245,13 @@ impl Planner<'_> {
             let set = properties
                 .iter()
                 .filter(|property| {
-                    Some(property.id) != index
-                        && (changed(property) || coerced.contains(&property.id))
+                    Some(property.id) != index && (changed(property) || coerced.contains(&property.id))
                 })
                 .cloned()
                 .collect::<Rc<[_]>>();
             self.retained.get_mut(object).properties = declaration.properties.clone();
             if !set.is_empty() || !clear.is_empty() {
-                self.mutations
-                    .push(Mutation::SetProperties { object, set, clear });
+                self.mutations.push(Mutation::SetProperties { object, set, clear });
             }
         }
         let events = declaration.events.as_slice();
@@ -330,10 +260,7 @@ impl Planner<'_> {
             let set = events
                 .iter()
                 .filter(|event| {
-                    retained_events(&previous)
-                        .iter()
-                        .find(|current| current.id == event.id)
-                        != Some(*event)
+                    retained_events(&previous).iter().find(|current| current.id == event.id) != Some(*event)
                 })
                 .cloned()
                 .collect::<Rc<[_]>>();
@@ -343,8 +270,7 @@ impl Planner<'_> {
                 .map(|event| event.id)
                 .collect::<Rc<[_]>>();
             self.retained.get_mut(object).events = retain_events(&declaration.events);
-            self.mutations
-                .push(Mutation::SetEvents { object, set, clear });
+            self.mutations.push(Mutation::SetEvents { object, set, clear });
         }
         self.reconcile_virtual_items(object, declaration);
         let start = self.mutations.len();
@@ -353,20 +279,14 @@ impl Planner<'_> {
         }
         let items_changed = items_property_changed
             || index_contract(declaration.kind).is_some_and(|contract| {
-                self.mutations[start..]
-                    .iter()
-                    .any(|mutation| match mutation {
-                        Mutation::Insert {
-                            parent, relation, ..
-                        }
-                        | Mutation::Remove {
-                            parent, relation, ..
-                        }
-                        | Mutation::Reorder {
-                            parent, relation, ..
-                        } => *parent == object && contract.items == IndexItems::Relation(*relation),
-                        _ => false,
-                    })
+                self.mutations[start..].iter().any(|mutation| match mutation {
+                    Mutation::Insert { parent, relation, .. }
+                    | Mutation::Remove { parent, relation, .. }
+                    | Mutation::Reorder { parent, relation, .. } => {
+                        *parent == object && contract.items == IndexItems::Relation(*relation)
+                    }
+                    _ => false,
+                })
             });
         self.apply_index(object, declaration, previous_index.as_ref(), items_changed);
         object

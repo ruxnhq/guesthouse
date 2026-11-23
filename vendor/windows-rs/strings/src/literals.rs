@@ -128,8 +128,7 @@ pub const fn decode_utf8_char(bytes: &[u8], mut pos: usize) -> Option<(u32, usiz
         if (ch2 & 0xc0) != 0x80 || (ch3 & 0xc0) != 0x80 || (ch4 & 0xc0) != 0x80 {
             return None;
         }
-        let result =
-            ((ch & 0x07) << 18) | ((ch2 & 0x3f) << 12) | ((ch3 & 0x3f) << 6) | (ch4 & 0x3f);
+        let result = ((ch & 0x07) << 18) | ((ch2 & 0x3f) << 12) | ((ch3 & 0x3f) << 6) | (ch4 & 0x3f);
         if result <= 0xffff || 0x10ffff < result {
             return None;
         }

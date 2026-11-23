@@ -42,11 +42,7 @@ impl HRESULT {
     /// Converts the [`HRESULT`] to [`Result<()>`][Result<_>].
     #[inline]
     pub fn ok(self) -> Result<()> {
-        if self.is_ok() {
-            Ok(())
-        } else {
-            Err(self.into())
-        }
+        if self.is_ok() { Ok(()) } else { Err(self.into()) }
     }
 
     /// Calls `op` if `self` is a success code, otherwise returns [`HRESULT`]
@@ -79,9 +75,8 @@ impl HRESULT {
             let mut code = self.0;
             let mut module = core::ptr::null_mut();
 
-            let mut flags = FORMAT_MESSAGE_ALLOCATE_BUFFER
-                | FORMAT_MESSAGE_FROM_SYSTEM
-                | FORMAT_MESSAGE_IGNORE_INSERTS;
+            let mut flags =
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
 
             unsafe {
                 if self.0 & 0x1000_0000 == 0x1000_0000 {

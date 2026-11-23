@@ -41,44 +41,32 @@ impl TimeSpan {
 
     /// Constructs a `TimeSpan` from a number of microseconds, saturating on overflow.
     pub const fn from_micros(micros: i64) -> Self {
-        Self {
-            duration: micros.saturating_mul(TICKS_PER_MICROSECOND),
-        }
+        Self { duration: micros.saturating_mul(TICKS_PER_MICROSECOND) }
     }
 
     /// Constructs a `TimeSpan` from a number of milliseconds, saturating on overflow.
     pub const fn from_millis(millis: i64) -> Self {
-        Self {
-            duration: millis.saturating_mul(TICKS_PER_MILLISECOND),
-        }
+        Self { duration: millis.saturating_mul(TICKS_PER_MILLISECOND) }
     }
 
     /// Constructs a `TimeSpan` from a number of seconds, saturating on overflow.
     pub const fn from_seconds(seconds: i64) -> Self {
-        Self {
-            duration: seconds.saturating_mul(TICKS_PER_SECOND),
-        }
+        Self { duration: seconds.saturating_mul(TICKS_PER_SECOND) }
     }
 
     /// Constructs a `TimeSpan` from a number of minutes, saturating on overflow.
     pub const fn from_minutes(minutes: i64) -> Self {
-        Self {
-            duration: minutes.saturating_mul(TICKS_PER_MINUTE),
-        }
+        Self { duration: minutes.saturating_mul(TICKS_PER_MINUTE) }
     }
 
     /// Constructs a `TimeSpan` from a number of hours, saturating on overflow.
     pub const fn from_hours(hours: i64) -> Self {
-        Self {
-            duration: hours.saturating_mul(TICKS_PER_HOUR),
-        }
+        Self { duration: hours.saturating_mul(TICKS_PER_HOUR) }
     }
 
     /// Constructs a `TimeSpan` from a number of days, saturating on overflow.
     pub const fn from_days(days: i64) -> Self {
-        Self {
-            duration: days.saturating_mul(TICKS_PER_DAY),
-        }
+        Self { duration: days.saturating_mul(TICKS_PER_DAY) }
     }
 
     /// Returns the count of 100-nanosecond ticks in this `TimeSpan`.
@@ -139,9 +127,7 @@ impl TimeSpan {
     /// Returns the absolute value of this `TimeSpan`, saturating at `MAX` when
     /// applied to `MIN`.
     pub const fn abs(self) -> Self {
-        Self {
-            duration: self.duration.saturating_abs(),
-        }
+        Self { duration: self.duration.saturating_abs() }
     }
 
     /// Returns the sign of this `TimeSpan`: `-1`, `0`, or `1`.
@@ -192,16 +178,12 @@ impl TimeSpan {
 
     /// Saturating addition.
     pub const fn saturating_add(self, rhs: Self) -> Self {
-        Self {
-            duration: self.duration.saturating_add(rhs.duration),
-        }
+        Self { duration: self.duration.saturating_add(rhs.duration) }
     }
 
     /// Saturating subtraction.
     pub const fn saturating_sub(self, rhs: Self) -> Self {
-        Self {
-            duration: self.duration.saturating_sub(rhs.duration),
-        }
+        Self { duration: self.duration.saturating_sub(rhs.duration) }
     }
 
     /// Saturating negation.
@@ -236,50 +218,42 @@ impl core::hash::Hash for TimeSpan {
 impl core::ops::Add for TimeSpan {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        self.checked_add(rhs)
-            .expect("overflow when adding TimeSpan values")
+        self.checked_add(rhs).expect("overflow when adding TimeSpan values")
     }
 }
 
 impl core::ops::Sub for TimeSpan {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        self.checked_sub(rhs)
-            .expect("overflow when subtracting TimeSpan values")
+        self.checked_sub(rhs).expect("overflow when subtracting TimeSpan values")
     }
 }
 
 impl core::ops::Neg for TimeSpan {
     type Output = Self;
     fn neg(self) -> Self {
-        self.checked_neg()
-            .expect("overflow when negating TimeSpan value")
+        self.checked_neg().expect("overflow when negating TimeSpan value")
     }
 }
 
 impl core::ops::AddAssign for TimeSpan {
     fn add_assign(&mut self, rhs: Self) {
-        self.duration = self
-            .duration
-            .checked_add(rhs.duration)
-            .expect("overflow when adding TimeSpan values");
+        self.duration =
+            self.duration.checked_add(rhs.duration).expect("overflow when adding TimeSpan values");
     }
 }
 
 impl core::ops::SubAssign for TimeSpan {
     fn sub_assign(&mut self, rhs: Self) {
-        self.duration = self
-            .duration
-            .checked_sub(rhs.duration)
-            .expect("overflow when subtracting TimeSpan values");
+        self.duration =
+            self.duration.checked_sub(rhs.duration).expect("overflow when subtracting TimeSpan values");
     }
 }
 
 impl core::ops::Mul<i64> for TimeSpan {
     type Output = Self;
     fn mul(self, rhs: i64) -> Self {
-        self.checked_mul(rhs)
-            .expect("overflow when multiplying TimeSpan value")
+        self.checked_mul(rhs).expect("overflow when multiplying TimeSpan value")
     }
 }
 
@@ -381,9 +355,7 @@ impl TryFrom<core::time::Duration> for TimeSpan {
         if ticks > i64::MAX as u128 {
             return Err(TimeRangeError);
         }
-        Ok(Self {
-            duration: ticks as i64,
-        })
+        Ok(Self { duration: ticks as i64 })
     }
 }
 

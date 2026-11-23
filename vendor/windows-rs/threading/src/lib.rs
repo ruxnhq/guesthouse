@@ -20,10 +20,7 @@ use core::time::Duration;
 /// This uses `TrySubmitThreadpoolCallback` and reuses worker threads.
 pub fn submit<F: FnOnce() + Send + 'static>(f: F) {
     // SAFETY: the closure has `'static` lifetime.
-    assert!(
-        unsafe { submit_with_environment(core::ptr::null(), f) },
-        "allocation failed"
-    );
+    assert!(unsafe { submit_with_environment(core::ptr::null(), f) }, "allocation failed");
 }
 
 /// The order in which the thread pool runs queued callbacks.
@@ -58,10 +55,7 @@ pub fn submit_with_priority<F: FnOnce() + Send + 'static>(priority: Priority, f:
     let environment = environment(core::ptr::null_mut(), core::ptr::null_mut(), priority);
 
     // SAFETY: the closure has `'static` lifetime, and the thread pool copies the environment.
-    assert!(
-        unsafe { submit_with_environment(&environment, f) },
-        "allocation failed"
-    );
+    assert!(unsafe { submit_with_environment(&environment, f) }, "allocation failed");
 }
 
 /// Submits a closure to the default thread pool to run once `delay` has elapsed.
@@ -103,8 +97,7 @@ pub fn submit_after<F: FnOnce() + Send + 'static>(delay: Duration, f: F) {
         deadline: duration_to_ticks(delay).and_then(|ticks| counter().checked_add(ticks)),
         f,
     }));
-    let timer =
-        unsafe { CreateThreadpoolTimer(Some(callback::<F>), context as _, core::ptr::null_mut()) };
+    let timer = unsafe { CreateThreadpoolTimer(Some(callback::<F>), context as _, core::ptr::null_mut()) };
 
     if timer.is_null() {
         // SAFETY: the thread pool did not take ownership of the closure.
@@ -119,10 +112,7 @@ fn set_timer(timer: PTP_TIMER, delay: Duration) {
     // A negative due time is relative to now, in 100-nanosecond units.
     let ticks = delay.as_nanos().div_ceil(100).min(i64::MAX as u128) as i64;
     let due = (-ticks) as u64;
-    let mut due = FILETIME {
-        dwLowDateTime: due as u32,
-        dwHighDateTime: (due >> 32) as u32,
-    };
+    let mut due = FILETIME { dwLowDateTime: due as u32, dwHighDateTime: (due >> 32) as u32 };
 
     unsafe { SetThreadpoolTimer(timer, &mut due, 0, 0) };
 }
@@ -217,19 +207,14 @@ unsafe fn submit_with_environment<F: FnOnce() + Send>(
     environment: *const TP_CALLBACK_ENVIRON_V3,
     f: F,
 ) -> bool {
-    unsafe extern "system" fn callback<F: FnOnce() + Send>(
-        _: PTP_CALLBACK_INSTANCE,
-        callback: *mut c_void,
-    ) {
+    unsafe extern "system" fn callback<F: FnOnce() + Send>(_: PTP_CALLBACK_INSTANCE, callback: *mut c_void) {
         unsafe {
             Box::from_raw(callback as *mut F)();
         }
     }
 
     let context = Box::into_raw(Box::new(f));
-    if unsafe {
-        TrySubmitThreadpoolCallback(Some(callback::<F>), context as _, environment.cast_mut())
-    } != 0
+    if unsafe { TrySubmitThreadpoolCallback(Some(callback::<F>), context as _, environment.cast_mut()) } != 0
     {
         true
     } else {

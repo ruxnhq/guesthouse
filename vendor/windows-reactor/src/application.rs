@@ -66,20 +66,13 @@ impl<A: Application> ApplicationContext<A> {
     /// declaration is committed. An unknown key is ignored. The title is cut to 63 UTF-16
     /// units and the text to 255.
     pub fn notify(&self, icon: impl Into<Key>, title: impl Into<String>, text: impl Into<String>) {
-        self.commands.borrow_mut().push(ApplicationCommand::Notify(
-            icon.into(),
-            title.into(),
-            text.into(),
-        ));
+        self.commands.borrow_mut().push(ApplicationCommand::Notify(icon.into(), title.into(), text.into()));
     }
 
     /// Exits the application, closing its windows, menus, and notification icons.
     pub fn exit(&self) {
         let mut commands = self.commands.borrow_mut();
-        if !commands
-            .iter()
-            .any(|command| matches!(command, ApplicationCommand::Exit))
-        {
+        if !commands.iter().any(|command| matches!(command, ApplicationCommand::Exit)) {
             commands.push(ApplicationCommand::Exit);
         }
     }
@@ -163,12 +156,7 @@ impl NotifyIcon {
     /// and the failure is logged. The latest path is retried on the next application render;
     /// rejection does not schedule a render.
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            tooltip: None,
-            on_activate: None,
-            menu: None,
-        }
+        Self { path: path.into(), tooltip: None, on_activate: None, menu: None }
     }
 
     /// Sets the standard tooltip. Invalid text panics when the declaration is applied.
@@ -249,10 +237,8 @@ mod tests {
     #[test]
     fn application_commands_coalesce_without_mutating_declarations() {
         let messages = ApplicationMessages::new(|| {});
-        let context = ApplicationContext::<TestApp> {
-            sender: messages.sender(),
-            commands: RefCell::new(Vec::new()),
-        };
+        let context =
+            ApplicationContext::<TestApp> { sender: messages.sender(), commands: RefCell::new(Vec::new()) };
         context.show_window("main");
         context.show_window("other");
         context.show_window("main");
@@ -261,18 +247,14 @@ mod tests {
         let commands = context.commands.borrow();
         assert_eq!(commands.len(), 3);
         assert!(matches!(&commands[0], ApplicationCommand::Show(key) if *key == Key::from("main")));
-        assert!(
-            matches!(&commands[1], ApplicationCommand::Show(key) if *key == Key::from("other"))
-        );
+        assert!(matches!(&commands[1], ApplicationCommand::Show(key) if *key == Key::from("other")));
         assert!(matches!(&commands[2], ApplicationCommand::Exit));
     }
 
     #[test]
     fn application_callbacks_preserve_identity_and_retire_with_the_root() {
         let messages = ApplicationMessages::new(|| {});
-        let context = ApplicationViewContext::<TestApp> {
-            sender: messages.sender(),
-        };
+        let context = ApplicationViewContext::<TestApp> { sender: messages.sender() };
         fn callback(context: &ApplicationViewContext<TestApp>) -> Callback<()> {
             context.callback(|()| true)
         }

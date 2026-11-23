@@ -5,11 +5,7 @@ windows_core::imp::define_winrt_interface!(
     0x4bd682dd_7554_40e9_9a9b_82654ede7e62,
     b"Windows.Foundation.IPropertyValue"
 );
-windows_core::imp::interface_hierarchy!(
-    IPropertyValue,
-    windows_core::IUnknown,
-    windows_core::IInspectable
-);
+windows_core::imp::interface_hierarchy!(IPropertyValue, windows_core::IUnknown, windows_core::IInspectable);
 impl windows_core::RuntimeName for IPropertyValue {
     const NAME: &'static str = "Windows.Foundation.IPropertyValue";
 }
@@ -53,10 +49,7 @@ pub trait IPropertyValue_Impl: windows_core::IUnknownImpl {
         &self,
         value: &mut windows_core::Array<windows_core::IInspectable>,
     ) -> windows_core::Result<()>;
-    fn GetGuidArray(
-        &self,
-        value: &mut windows_core::Array<windows_core::GUID>,
-    ) -> windows_core::Result<()>;
+    fn GetGuidArray(&self, value: &mut windows_core::Array<windows_core::GUID>) -> windows_core::Result<()>;
     fn GetDateTimeArray(
         &self,
         value: &mut windows_core::Array<windows_time::DateTime>,
@@ -76,8 +69,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut PropertyType,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::Type(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -90,16 +82,12 @@ impl IPropertyValue_Vtbl {
                 }
             }
         }
-        unsafe extern "system" fn IsNumericScalar<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn IsNumericScalar<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             result__: *mut bool,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::IsNumericScalar(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -117,8 +105,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut u8,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetUInt8(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -136,8 +123,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut i16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetInt16(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -155,8 +141,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut u16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetUInt16(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -174,8 +159,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut i32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetInt32(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -193,8 +177,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut u32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetUInt32(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -212,8 +195,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut i64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetInt64(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -231,8 +213,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut u64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetUInt64(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -250,8 +231,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut f32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetSingle(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -269,8 +249,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut f64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetDouble(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -288,8 +267,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut u16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetChar16(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -307,8 +285,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut bool,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetBoolean(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -326,8 +303,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut *mut core::ffi::c_void,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetString(this) {
                     Ok(ok__) => {
                         core::ptr::write(result__.cast(), ok__);
@@ -345,8 +321,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut windows_core::GUID,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetGuid(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -359,16 +334,12 @@ impl IPropertyValue_Vtbl {
                 }
             }
         }
-        unsafe extern "system" fn GetDateTime<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetDateTime<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             result__: *mut windows_time::DateTime,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetDateTime(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -381,16 +352,12 @@ impl IPropertyValue_Vtbl {
                 }
             }
         }
-        unsafe extern "system" fn GetTimeSpan<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetTimeSpan<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             result__: *mut windows_time::TimeSpan,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetTimeSpan(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -408,8 +375,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut Point,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetPoint(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -427,8 +393,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut Size,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetSize(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -446,8 +411,7 @@ impl IPropertyValue_Vtbl {
             result__: *mut Rect,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IPropertyValue_Impl::GetRect(this) {
                     Ok(ok__) => {
                         result__.write(ok__);
@@ -460,401 +424,268 @@ impl IPropertyValue_Vtbl {
                 }
             }
         }
-        unsafe extern "system" fn GetUInt8Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetUInt8Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut u8,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetUInt8Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetInt16Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetInt16Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut i16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetInt16Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetUInt16Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetUInt16Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut u16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetUInt16Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetInt32Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetInt32Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut i32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetInt32Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetUInt32Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetUInt32Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut u32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetUInt32Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetInt64Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetInt64Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut i64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetInt64Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetUInt64Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetUInt64Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut u64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetUInt64Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetSingleArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetSingleArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut f32,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetSingleArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetDoubleArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetDoubleArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut f64,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetDoubleArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetChar16Array<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetChar16Array<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut u16,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetChar16Array(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetBooleanArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetBooleanArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut bool,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetBooleanArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetStringArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetStringArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut windows_core::HSTRING,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetStringArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetInspectableArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetInspectableArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut windows_core::IInspectable,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetInspectableArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetGuidArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetGuidArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut windows_core::GUID,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetGuidArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetDateTimeArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetDateTimeArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut windows_time::DateTime,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetDateTimeArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetTimeSpanArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetTimeSpanArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut windows_time::TimeSpan,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetTimeSpanArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetPointArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetPointArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut Point,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetPointArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetSizeArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetSizeArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut Size,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetSizeArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
         }
-        unsafe extern "system" fn GetRectArray<
-            Identity: IPropertyValue_Impl,
-            const OFFSET: isize,
-        >(
+        unsafe extern "system" fn GetRectArray<Identity: IPropertyValue_Impl, const OFFSET: isize>(
             this: *mut core::ffi::c_void,
             value_array_size: *mut u32,
             value: *mut *mut Rect,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 IPropertyValue_Impl::GetRectArray(
                     this,
-                    &mut windows_core::imp::array_proxy(
-                        core::mem::transmute_copy(&value),
-                        value_array_size,
-                    ),
+                    &mut windows_core::imp::array_proxy(core::mem::transmute_copy(&value), value_array_size),
                 )
                 .into()
             }
@@ -909,42 +740,26 @@ impl IPropertyValue_Vtbl {
 #[repr(C)]
 pub struct IPropertyValue_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
-    pub Type: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut PropertyType,
-    ) -> windows_core::HRESULT,
+    pub Type: unsafe extern "system" fn(*mut core::ffi::c_void, *mut PropertyType) -> windows_core::HRESULT,
     pub IsNumericScalar:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
-    pub GetUInt8:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u8) -> windows_core::HRESULT,
-    pub GetInt16:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i16) -> windows_core::HRESULT,
-    pub GetUInt16:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_core::HRESULT,
-    pub GetInt32:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_core::HRESULT,
-    pub GetUInt32:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32) -> windows_core::HRESULT,
-    pub GetInt64:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut i64) -> windows_core::HRESULT,
-    pub GetUInt64:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_core::HRESULT,
-    pub GetSingle:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_core::HRESULT,
-    pub GetDouble:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
-    pub GetChar16:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_core::HRESULT,
-    pub GetBoolean:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
+    pub GetUInt8: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u8) -> windows_core::HRESULT,
+    pub GetInt16: unsafe extern "system" fn(*mut core::ffi::c_void, *mut i16) -> windows_core::HRESULT,
+    pub GetUInt16: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_core::HRESULT,
+    pub GetInt32: unsafe extern "system" fn(*mut core::ffi::c_void, *mut i32) -> windows_core::HRESULT,
+    pub GetUInt32: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32) -> windows_core::HRESULT,
+    pub GetInt64: unsafe extern "system" fn(*mut core::ffi::c_void, *mut i64) -> windows_core::HRESULT,
+    pub GetUInt64: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_core::HRESULT,
+    pub GetSingle: unsafe extern "system" fn(*mut core::ffi::c_void, *mut f32) -> windows_core::HRESULT,
+    pub GetDouble: unsafe extern "system" fn(*mut core::ffi::c_void, *mut f64) -> windows_core::HRESULT,
+    pub GetChar16: unsafe extern "system" fn(*mut core::ffi::c_void, *mut u16) -> windows_core::HRESULT,
+    pub GetBoolean: unsafe extern "system" fn(*mut core::ffi::c_void, *mut bool) -> windows_core::HRESULT,
     pub GetString: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
-    pub GetGuid: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut windows_core::GUID,
-    ) -> windows_core::HRESULT,
+    pub GetGuid:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut windows_core::GUID) -> windows_core::HRESULT,
     pub GetDateTime: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut windows_time::DateTime,
@@ -953,67 +768,31 @@ pub struct IPropertyValue_Vtbl {
         *mut core::ffi::c_void,
         *mut windows_time::TimeSpan,
     ) -> windows_core::HRESULT,
-    pub GetPoint:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_core::HRESULT,
-    pub GetSize:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_core::HRESULT,
-    pub GetRect:
-        unsafe extern "system" fn(*mut core::ffi::c_void, *mut Rect) -> windows_core::HRESULT,
-    pub GetUInt8Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut u8,
-    ) -> windows_core::HRESULT,
-    pub GetInt16Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut i16,
-    ) -> windows_core::HRESULT,
-    pub GetUInt16Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut u16,
-    ) -> windows_core::HRESULT,
-    pub GetInt32Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut i32,
-    ) -> windows_core::HRESULT,
-    pub GetUInt32Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut u32,
-    ) -> windows_core::HRESULT,
-    pub GetInt64Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut i64,
-    ) -> windows_core::HRESULT,
-    pub GetUInt64Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut u64,
-    ) -> windows_core::HRESULT,
-    pub GetSingleArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut f32,
-    ) -> windows_core::HRESULT,
-    pub GetDoubleArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut f64,
-    ) -> windows_core::HRESULT,
-    pub GetChar16Array: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut u16,
-    ) -> windows_core::HRESULT,
-    pub GetBooleanArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut bool,
-    ) -> windows_core::HRESULT,
+    pub GetPoint: unsafe extern "system" fn(*mut core::ffi::c_void, *mut Point) -> windows_core::HRESULT,
+    pub GetSize: unsafe extern "system" fn(*mut core::ffi::c_void, *mut Size) -> windows_core::HRESULT,
+    pub GetRect: unsafe extern "system" fn(*mut core::ffi::c_void, *mut Rect) -> windows_core::HRESULT,
+    pub GetUInt8Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut u8) -> windows_core::HRESULT,
+    pub GetInt16Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut i16) -> windows_core::HRESULT,
+    pub GetUInt16Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut u16) -> windows_core::HRESULT,
+    pub GetInt32Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut i32) -> windows_core::HRESULT,
+    pub GetUInt32Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut u32) -> windows_core::HRESULT,
+    pub GetInt64Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut i64) -> windows_core::HRESULT,
+    pub GetUInt64Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut u64) -> windows_core::HRESULT,
+    pub GetSingleArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut f32) -> windows_core::HRESULT,
+    pub GetDoubleArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut f64) -> windows_core::HRESULT,
+    pub GetChar16Array:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut u16) -> windows_core::HRESULT,
+    pub GetBooleanArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut bool) -> windows_core::HRESULT,
     pub GetStringArray: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut u32,
@@ -1039,33 +818,21 @@ pub struct IPropertyValue_Vtbl {
         *mut u32,
         *mut *mut windows_time::TimeSpan,
     ) -> windows_core::HRESULT,
-    pub GetPointArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut Point,
-    ) -> windows_core::HRESULT,
-    pub GetSizeArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut Size,
-    ) -> windows_core::HRESULT,
-    pub GetRectArray: unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *mut u32,
-        *mut *mut Rect,
-    ) -> windows_core::HRESULT,
+    pub GetPointArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut Point) -> windows_core::HRESULT,
+    pub GetSizeArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut Size) -> windows_core::HRESULT,
+    pub GetRectArray:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u32, *mut *mut Rect) -> windows_core::HRESULT,
 }
 windows_core::imp::define_winrt_interface!(IReference < T >, IReference_Vtbl < T, >, 0x61c17706_2d65_11e0_9ae8_d48564015472, b"Windows.Foundation.IReference`1");
-impl<T: windows_core::RuntimeType + 'static> windows_core::imp::CanInto<IPropertyValue>
-    for IReference<T>
-{
+impl<T: windows_core::RuntimeType + 'static> windows_core::imp::CanInto<IPropertyValue> for IReference<T> {
     const QUERY: bool = true;
 }
 impl<T: windows_core::RuntimeType + 'static> IReference<T> {
     pub fn Value(&self) -> windows_core::Result<T> {
         unsafe {
-            let mut result__ =
-                core::mem::MaybeUninit::<<T as windows_core::imp::Type>::Default>::zeroed();
+            let mut result__ = core::mem::MaybeUninit::<<T as windows_core::imp::Type>::Default>::zeroed();
             (windows_core::Interface::vtable(self).Value)(
                 windows_core::Interface::as_raw(self),
                 result__.as_mut_ptr().cast(),
@@ -1076,8 +843,7 @@ impl<T: windows_core::RuntimeType + 'static> IReference<T> {
 }
 impl<T: windows_core::RuntimeType + 'static> windows_core::RuntimeName for IReference<T> {
     const NAME: &'static str = "Windows.Foundation.IReference";
-    const RUNTIME_CLASS_NAME: windows_core::imp::ConstBuffer =
-        <Self as windows_core::RuntimeType>::NAME;
+    const RUNTIME_CLASS_NAME: windows_core::imp::ConstBuffer = <Self as windows_core::RuntimeType>::NAME;
 }
 pub trait IReference_Impl<T>: IPropertyValue_Impl
 where
@@ -1096,8 +862,7 @@ impl<T: windows_core::RuntimeType + 'static> IReference_Vtbl<T> {
             result__: *mut windows_core::imp::AbiType<T>,
         ) -> windows_core::HRESULT {
             unsafe {
-                let this: &Identity =
-                    &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
                 match IReference_Impl::Value(this) {
                     Ok(ok__) => {
                         core::ptr::write(result__.cast(), ok__);

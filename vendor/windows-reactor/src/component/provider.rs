@@ -13,10 +13,7 @@ pub struct Context<T> {
 
 impl<T> Context<T> {
     pub fn new(default: T) -> Self {
-        Self {
-            default,
-            id: ContextId(NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed)),
-        }
+        Self { default, id: ContextId(NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed)) }
     }
 }
 
@@ -50,17 +47,13 @@ impl ContextProvision {
 
 impl fmt::Debug for ContextProvision {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("ContextProvision")
-            .field(&self.id)
-            .finish()
+        formatter.debug_tuple("ContextProvision").field(&self.id).finish()
     }
 }
 
 impl PartialEq for ContextProvision {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && (self.value.equals)(self.value.value.as_ref(), other.value.value.as_ref())
+        self.id == other.id && (self.value.equals)(self.value.value.as_ref(), other.value.value.as_ref())
     }
 }
 

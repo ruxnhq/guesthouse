@@ -28,10 +28,7 @@ where
     /// Releases the previous owned value before borrowing the output storage.
     fn from(from: &'a mut T::Default) -> Self {
         // The pointer borrows the caller's storage, not the local reference.
-        Self(
-            unsafe { OutParam::<T>::borrow_mut(&from) }.0,
-            core::marker::PhantomData,
-        )
+        Self(unsafe { OutParam::<T>::borrow_mut(&from) }.0, core::marker::PhantomData)
     }
 }
 

@@ -93,13 +93,7 @@ impl syn::parse::Parse for Interface {
         while !content.is_empty() {
             methods.push(content.parse::<InterfaceMethod>()?);
         }
-        Ok(Self {
-            visibility,
-            methods,
-            name,
-            parent,
-            docs,
-        })
+        Ok(Self { visibility, methods, name, parent, docs })
     }
 }
 
@@ -124,10 +118,7 @@ impl syn::parse::Parse for InterfaceMethod {
         }
         // Reject default method bodies.
         if let Some(i) = &method.default {
-            return Err(syn::Error::new(
-                i.span(),
-                "unexpected default method implementation",
-            ));
+            return Err(syn::Error::new(i.span(), "unexpected default method implementation"));
         }
 
         let sig = method.sig;
@@ -162,22 +153,11 @@ impl syn::parse::Parse for InterfaceMethod {
                 syn::FnArg::Receiver(_) => None,
                 syn::FnArg::Typed(p) => Some(p),
             })
-            .map(|p| {
-                Ok(InterfaceMethodArg {
-                    ty: p.ty,
-                    pat: p.pat,
-                })
-            })
+            .map(|p| Ok(InterfaceMethodArg { ty: p.ty, pat: p.pat }))
             .collect::<Result<Vec<InterfaceMethodArg>, syn::Error>>()?;
 
         let ret = sig.output;
-        Ok(Self {
-            name: sig.ident,
-            visibility,
-            args,
-            ret,
-            docs,
-        })
+        Ok(Self { name: sig.ident, visibility, args, ret, docs })
     }
 }
 

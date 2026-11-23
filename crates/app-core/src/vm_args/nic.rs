@@ -218,6 +218,13 @@ impl VmPlan {
         words(&["-netdev", &format!("{kind},id=net0,{settings}"), "-device", &card])
     }
 
+    /// The first NIC of an Android guest, which has a driver for virtio's card and not Intel's.
+    pub(super) fn android_nic(&self) -> Vec<String> {
+        let (kind, settings) = self.first_backend();
+        let comma = if settings.is_empty() { "" } else { "," };
+        words(&["-nic", &format!("{kind},model={MACOS_CARD}{}{comma}{settings}", self.mac_word())])
+    }
+
     /// The second NIC goes last, in a slot of its own, so that nothing the guest knows about moves.
     pub(super) fn second_nic(&self) -> Vec<String> {
         let wanted = self.network.mode == Mode::Bridged || self.network.passt;

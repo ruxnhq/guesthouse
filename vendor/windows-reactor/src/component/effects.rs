@@ -49,9 +49,7 @@ impl EffectDraft {
         D: PartialEq + 'static,
     {
         assert!(
-            self.registrations
-                .iter()
-                .all(|registration| registration.key != key),
+            self.registrations.iter().all(|registration| registration.key != key),
             "effect {key:?} declared more than once"
         );
         self.registrations.push(EffectRegistration {
@@ -70,22 +68,17 @@ impl EffectDraft {
         let mut previous = std::mem::take(slots);
         let mut prepared = Vec::with_capacity(self.registrations.len());
         for registration in self.registrations {
-            let retained = previous
-                .iter()
-                .position(|slot| slot.key == registration.key)
-                .and_then(|index| {
-                    (previous[index].equals)(
-                        previous[index].dependency.as_ref(),
-                        registration.dependency.as_ref(),
-                    )
-                    .then(|| previous.remove(index))
-                });
+            let retained = previous.iter().position(|slot| slot.key == registration.key).and_then(|index| {
+                (previous[index].equals)(
+                    previous[index].dependency.as_ref(),
+                    registration.dependency.as_ref(),
+                )
+                .then(|| previous.remove(index))
+            });
             if let Some(slot) = retained {
                 prepared.push(PreparedEffect::Retained(slot));
             } else {
-                if let Some(index) = previous
-                    .iter()
-                    .position(|slot| slot.key == registration.key)
+                if let Some(index) = previous.iter().position(|slot| slot.key == registration.key)
                     && let Some(cleanup) = previous.remove(index).cleanup
                 {
                     cleanup();

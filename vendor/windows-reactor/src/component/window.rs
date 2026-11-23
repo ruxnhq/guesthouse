@@ -7,10 +7,7 @@ pub struct WindowHandle<'a> {
 
 impl WindowHandle<'_> {
     pub(super) fn new(raw: *mut core::ffi::c_void) -> Self {
-        Self {
-            raw,
-            marker: PhantomData,
-        }
+        Self { raw, marker: PhantomData }
     }
 
     pub fn as_raw(&self) -> *mut core::ffi::c_void {
@@ -42,11 +39,7 @@ pub(super) struct WindowObserverLifetime<T> {
 
 impl<T> Default for WindowObserverLifetime<T> {
     fn default() -> Self {
-        Self {
-            owner: None,
-            generation: 0,
-            callback: None,
-        }
+        Self { owner: None, generation: 0, callback: None }
     }
 }
 
@@ -64,17 +57,12 @@ impl<T> WindowObserverLifetime<T> {
     }
 
     fn callback(&self, generation: u64) -> Option<Callback<T>> {
-        (self.generation == generation)
-            .then(|| self.callback.clone())
-            .flatten()
+        (self.generation == generation).then(|| self.callback.clone()).flatten()
     }
 }
 
 impl ComponentHost {
-    pub(crate) fn window_color_scheme_callback(
-        &self,
-        generation: u64,
-    ) -> Option<Callback<ColorScheme>> {
+    pub(crate) fn window_color_scheme_callback(&self, generation: u64) -> Option<Callback<ColorScheme>> {
         self.window_color_scheme.callback(generation)
     }
 
@@ -82,10 +70,7 @@ impl ComponentHost {
         self.window_size.callback(generation)
     }
 
-    pub(crate) fn window_placement_callback(
-        &self,
-        generation: u64,
-    ) -> Option<Callback<WindowPlacement>> {
+    pub(crate) fn window_placement_callback(&self, generation: u64) -> Option<Callback<WindowPlacement>> {
         self.window_placement.callback(generation)
     }
 
@@ -99,10 +84,7 @@ impl ComponentHost {
             let Some(scope) = &slot.scope else {
                 continue;
             };
-            let id = ComponentId {
-                index: u32::try_from(index).unwrap(),
-                generation: slot.generation,
-            };
+            let id = ComponentId { index: u32::try_from(index).unwrap(), generation: slot.generation };
             if retired.iter().any(|retired| self.owns_scope(*retired, id)) {
                 continue;
             }
@@ -114,10 +96,7 @@ impl ComponentHost {
                 continue;
             };
             if let Some(on_color_scheme) = &window.on_color_scheme
-                && publication
-                    .on_color_scheme
-                    .replace(on_color_scheme.clone())
-                    .is_some()
+                && publication.on_color_scheme.replace(on_color_scheme.clone()).is_some()
             {
                 panic!("color scheme observer declared by more than one component");
             }
@@ -127,10 +106,7 @@ impl ComponentHost {
                 panic!("window size observer declared by more than one component");
             }
             if let Some(on_placement) = &window.on_placement
-                && publication
-                    .on_placement
-                    .replace(on_placement.clone())
-                    .is_some()
+                && publication.on_placement.replace(on_placement.clone()).is_some()
             {
                 panic!("window placement observer declared by more than one component");
             }
@@ -150,8 +126,7 @@ impl ComponentHost {
 
     pub(super) fn publish_committed_window(&mut self, mut publication: WindowPublication) {
         // Record lifetime transitions before the native queue can coalesce publications.
-        self.window_color_scheme
-            .commit(&mut publication.on_color_scheme);
+        self.window_color_scheme.commit(&mut publication.on_color_scheme);
         self.window_size.commit(&mut publication.on_size);
         self.window_placement.commit(&mut publication.on_placement);
         self.ui_services.publish_window(publication);

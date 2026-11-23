@@ -274,6 +274,14 @@ pub struct Machine {
     /// reims-vgpu's device. Left out of the file when empty, so an older build can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub opencore: String,
+    /// The data disk of a plain machine that holds Android for VMs, the second of its two. Its system
+    /// disk is the machine's own. Left out of the file when empty, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub android_data: String,
+    /// The card an Android guest draws on, by its PCI address. Empty is the first NVIDIA card, or else
+    /// the first AMD or Intel one. Left out of the file when empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub android_gpu: String,
     /// A snapshot before a start that changes Windows: see [`crate::auto_snapshot`]. Nothing here is
     /// what [`crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON`] says, and the user's choice is written.
     /// Left out of the file until then, so an older build can still read it.
@@ -335,6 +343,8 @@ impl Machine {
             disk_folder: String::new(),
             nvme: false,
             opencore: String::new(),
+            android_data: String::new(),
+            android_gpu: String::new(),
             auto_snapshot: None,
             throwaway: false,
         }
@@ -429,6 +439,11 @@ impl Machine {
         self.kind == Kind::Plain && self.linux_gpu
     }
 
+    /// Whether this plain machine holds Android.
+    pub fn android(&self) -> bool {
+        self.kind == Kind::Plain && !self.android_data.is_empty()
+    }
+
     /// Whether this plain machine holds macOS.
     pub fn macos(&self) -> bool {
         self.kind == Kind::Plain && !self.opencore.is_empty()
@@ -507,6 +522,9 @@ impl Machine {
         let summary = match self.kind {
             Kind::Plain if self.macos() => {
                 format!("macOS, {cores} cores, {ram} GiB, {}, GPU preview", self.screen)
+            }
+            Kind::Plain if self.android() => {
+                format!("Android, {cores} cores, {ram} GiB, {}, GPU preview", self.screen)
             }
             Kind::Plain if self.linux_gpu => format!("{kind}, {cores} cores, {ram} GiB, Linux GPU preview"),
             Kind::Plain => format!("{kind}, {cores} cores, {ram} GiB, no GPU acceleration"),

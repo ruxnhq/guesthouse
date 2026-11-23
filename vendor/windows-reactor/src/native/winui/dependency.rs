@@ -85,15 +85,9 @@ fn box_property_value(
         (PropertyValue::DateTime(value), _) => boxed(*value),
         (PropertyValue::OptionalBool(value), _) => value.map_or(Ok(None), boxed),
         (PropertyValue::OptionalDateTime(value), _) => value.map_or(Ok(None), boxed),
-        (PropertyValue::OptionalF64(value), Conversion::NumberBox) => {
-            boxed(native_number_box_value(*value))
-        }
-        (PropertyValue::OptionalF64(value), Conversion::Rating) => {
-            boxed(native_rating_value(*value))
-        }
-        (PropertyValue::FontWeight(value), _) => boxed(native::FontWeight {
-            weight: value.value(),
-        }),
+        (PropertyValue::OptionalF64(value), Conversion::NumberBox) => boxed(native_number_box_value(*value)),
+        (PropertyValue::OptionalF64(value), Conversion::Rating) => boxed(native_rating_value(*value)),
+        (PropertyValue::FontWeight(value), _) => boxed(native::FontWeight { weight: value.value() }),
         (PropertyValue::CornerRadius(value), _) => boxed(native::CornerRadius {
             top_left: value.top_left,
             top_right: value.top_right,
@@ -120,9 +114,7 @@ fn box_property_value(
             object(Ok(values))
         }
         (PropertyValue::ThemeTransitions(values), _) => theme_transitions(values),
-        (PropertyValue::Enum { kind, variant }, _) => {
-            Ok(Some(GeneratedHandle::box_enum(kind, variant)))
-        }
+        (PropertyValue::Enum { kind, variant }, _) => Ok(Some(GeneratedHandle::box_enum(kind, variant))),
         _ => return None,
     })
 }

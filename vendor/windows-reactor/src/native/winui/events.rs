@@ -10,14 +10,10 @@ impl WinUiAdapter {
     ) -> bool {
         let subscription = event.borrow().subscription.clone();
         match subscription {
-            Some(NativeSubscription {
-                callback: PointerCallback::Routed(callback),
-                ..
-            }) => callback.call(value),
-            Some(NativeSubscription {
-                callback: PointerCallback::Queued(callback),
-                live,
-            }) => {
+            Some(NativeSubscription { callback: PointerCallback::Routed(callback), .. }) => {
+                callback.call(value)
+            }
+            Some(NativeSubscription { callback: PointerCallback::Queued(callback), live }) => {
                 event_queue.queue(
                     None,
                     Some(QueuedEvent {
@@ -40,11 +36,8 @@ impl WinUiAdapter {
         observation: Option<Observation>,
         value: T::Native,
     ) {
-        let queued = event.borrow().handler(value).map(|handler| QueuedEvent {
-            object,
-            event: event_id,
-            handler,
-        });
+        let queued =
+            event.borrow().handler(value).map(|handler| QueuedEvent { object, event: event_id, handler });
         event_queue.queue(observation, queued);
     }
 
@@ -95,22 +88,11 @@ impl WinUiAdapter {
         } else {
             DragKind::Unsupported
         };
-        let action = policy
-            .borrow()
-            .as_ref()
-            .and_then(|policy| policy.action(kind))
-            .cloned();
+        let action = policy.borrow().as_ref().and_then(|policy| policy.action(kind)).cloned();
         let Some(action) = action else {
             args.SetAcceptedOperation(native::DataPackageOperation::None)?;
             deferral.Complete()?;
-            Self::dispatch(
-                event,
-                event_queue,
-                object,
-                event_id,
-                observation,
-                DroppedData::Unsupported,
-            );
+            Self::dispatch(event, event_queue, object, event_id, observation, DroppedData::Unsupported);
             return Ok(());
         };
         args.SetAcceptedOperation(Self::native_drag_operation(action.operation))?;
@@ -121,20 +103,12 @@ impl WinUiAdapter {
         let deferral_for_handler = deferral.clone();
         let callback = UiCallback::once(move || {
             // The drag source owns the data and can fail or disconnect before it is read.
-            let value = result_for_handler
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .unwrap_or(DroppedData::Unsupported);
+            let value =
+                result_for_handler.lock().unwrap().take().unwrap().unwrap_or(DroppedData::Unsupported);
             if let Some(subscription) = subscription {
                 event_queue.queue(
                     observation,
-                    Some(QueuedEvent {
-                        object,
-                        event: event_id,
-                        handler: subscription.handler(value),
-                    }),
+                    Some(QueuedEvent { object, event: event_id, handler: subscription.handler(value) }),
                 );
             }
             _ = deferral_for_handler.Complete();
@@ -149,10 +123,7 @@ impl WinUiAdapter {
                         let mut dropped = Vec::with_capacity(items.Size()? as usize);
                         for index in 0..items.Size()? {
                             let item = items.GetAt(index)?;
-                            dropped.push(DroppedStorageItem {
-                                name: item.Name()?,
-                                path: item.Path()?,
-                            });
+                            dropped.push(DroppedStorageItem { name: item.Name()?, path: item.Path()? });
                         }
                         Ok(DroppedData::StorageItems(dropped))
                     });
@@ -208,9 +179,8 @@ impl WinUiAdapter {
             Err(error) if error.code().is_ok() => None,
             Err(error) => panic!("{error:?}"),
         };
-        let selected_object = selected
-            .as_ref()
-            .and_then(|selected| event_queue.item_object(object, selected));
+        let selected_object =
+            selected.as_ref().and_then(|selected| event_queue.item_object(object, selected));
         let observation = Observation::SetSelection {
             object,
             selected: match (&selected, selected_object) {
@@ -222,20 +192,13 @@ impl WinUiAdapter {
         if !event_queue.reports(object, event_id) {
             return;
         }
-        let value = selected.as_ref().and_then(|selected| {
-            GeneratedHandle::selection_payload(payload_property, selected).unwrap()
-        });
-        let handler = event.borrow().handler(SelectionChange {
-            item: selected_object,
-            value,
-        });
+        let value = selected
+            .as_ref()
+            .and_then(|selected| GeneratedHandle::selection_payload(payload_property, selected).unwrap());
+        let handler = event.borrow().handler(SelectionChange { item: selected_object, value });
         event_queue.queue(
             Some(observation),
-            handler.map(|handler| QueuedEvent {
-                object,
-                event: event_id,
-                handler,
-            }),
+            handler.map(|handler| QueuedEvent { object, event: event_id, handler }),
         );
     }
 
@@ -273,9 +236,7 @@ impl WinUiAdapter {
             let element = element.clone();
             let pending_focus_states = Rc::clone(pending_focus_states);
             let handler = native::DispatcherQueueHandler::new(local::task(move || {
-                pending_focus_states
-                    .borrow_mut()
-                    .insert(object, ElementFocusState::Pointer);
+                pending_focus_states.borrow_mut().insert(object, ElementFocusState::Pointer);
                 if !element.Focus(native::FocusState::Pointer).unwrap() {
                     pending_focus_states.borrow_mut().remove(&object);
                     return;
@@ -352,9 +313,7 @@ impl WinUiAdapter {
         }
     }
 
-    pub(super) fn input_modifiers_from_virtual_keys(
-        value: native::VirtualKeyModifiers,
-    ) -> InputModifiers {
+    pub(super) fn input_modifiers_from_virtual_keys(value: native::VirtualKeyModifiers) -> InputModifiers {
         let mut modifiers = InputModifiers::NONE;
         if value.contains(native::VirtualKeyModifiers::Shift) {
             modifiers |= InputModifiers::SHIFT;
@@ -371,9 +330,7 @@ impl WinUiAdapter {
         modifiers
     }
 
-    pub(super) fn key_event_info(
-        args: &native::KeyRoutedEventArgs,
-    ) -> Result<KeyEventInfo, WinUiError> {
+    pub(super) fn key_event_info(args: &native::KeyRoutedEventArgs) -> Result<KeyEventInfo, WinUiError> {
         Ok(KeyEventInfo {
             key: VirtualKey(args.Key()?.0 as u32),
             original_key: VirtualKey(args.OriginalKey()?.0 as u32),
@@ -405,14 +362,12 @@ impl WinUiAdapter {
         let original_identity: &windows_core::IUnknown = (&original).into();
         let is_direct = element_identity == original_identity;
         let state = if got_focus {
-            pending_focus_states.borrow_mut().remove(&object).unwrap_or(
-                match element.FocusState()? {
-                    native::FocusState::Pointer => ElementFocusState::Pointer,
-                    native::FocusState::Keyboard => ElementFocusState::Keyboard,
-                    native::FocusState::Programmatic => ElementFocusState::Programmatic,
-                    _ => ElementFocusState::Unfocused,
-                },
-            )
+            pending_focus_states.borrow_mut().remove(&object).unwrap_or(match element.FocusState()? {
+                native::FocusState::Pointer => ElementFocusState::Pointer,
+                native::FocusState::Keyboard => ElementFocusState::Keyboard,
+                native::FocusState::Programmatic => ElementFocusState::Programmatic,
+                _ => ElementFocusState::Unfocused,
+            })
         } else {
             ElementFocusState::Unfocused
         };
@@ -430,15 +385,9 @@ impl WinUiAdapter {
         set: &[Event],
         clear: &[EventId],
     ) -> Result<(), WinUiError> {
-        let context = EventContext {
-            event_queue: &self.event_queue,
-            pending_focus_states: &self.pending_focus_states,
-        };
-        match self
-            .handles
-            .get_mut(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        let context =
+            EventContext { event_queue: &self.event_queue, pending_focus_states: &self.pending_focus_states };
+        match self.handles.get_mut(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::Generated(value) => {
                 return value
                     .set_events(object, set, clear, context)

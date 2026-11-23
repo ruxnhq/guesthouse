@@ -18,12 +18,8 @@ impl BSTR {
             return Self::new();
         }
 
-        let result = unsafe {
-            Self(bindings::SysAllocStringLen(
-                value.as_ptr(),
-                value.len().try_into().unwrap(),
-            ))
-        };
+        let result =
+            unsafe { Self(bindings::SysAllocStringLen(value.as_ptr(), value.len().try_into().unwrap())) };
 
         assert!(!result.is_empty(), "allocation failed");
 
@@ -56,11 +52,7 @@ impl Deref for BSTR {
     type Target = [u16];
 
     fn deref(&self) -> &[u16] {
-        let len = if self.0.is_null() {
-            0
-        } else {
-            unsafe { bindings::SysStringLen(self.0) as usize }
-        };
+        let len = if self.0.is_null() { 0 } else { unsafe { bindings::SysStringLen(self.0) as usize } };
 
         if len > 0 {
             unsafe { core::slice::from_raw_parts(self.0, len) }

@@ -44,22 +44,12 @@ impl OwnedIcon {
                 LR_LOADFROMFILE as u32,
             )
         };
-        if icon.is_null() {
-            Err(Error::from_thread())
-        } else {
-            Ok(Self {
-                handle: icon,
-                owned: true,
-            })
-        }
+        if icon.is_null() { Err(Error::from_thread()) } else { Ok(Self { handle: icon, owned: true }) }
     }
 
     #[cfg(test)]
     fn borrowed(handle: usize) -> Self {
-        Self {
-            handle: handle as _,
-            owned: false,
-        }
+        Self { handle: handle as _, owned: false }
     }
 }
 
@@ -97,16 +87,12 @@ impl Registration {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd.cast(),
             uID: ICON_ID,
-            Anonymous: NOTIFYICONDATAW_0 {
-                uVersion: NOTIFYICON_VERSION_4 as u32,
-            },
+            Anonymous: NOTIFYICONDATAW_0 { uVersion: NOTIFYICON_VERSION_4 as u32 },
             ..Default::default()
         };
         if !notify(NIM_SETVERSION as u32, &version) {
             _ = notify(NIM_DELETE as u32, &data);
-            return Err(shell_error(
-                "failed to enable notification-area icon version 4",
-            ));
+            return Err(shell_error("failed to enable notification-area icon version 4"));
         }
         Ok(())
     }
@@ -141,12 +127,7 @@ impl Registration {
         _ = notify(NIM_DELETE as u32, &data);
     }
 
-    fn replace_icon_with<F>(
-        &mut self,
-        icon: OwnedIcon,
-        hwnd: *mut core::ffi::c_void,
-        notify: &mut F,
-    ) -> bool
+    fn replace_icon_with<F>(&mut self, icon: OwnedIcon, hwnd: *mut core::ffi::c_void, notify: &mut F) -> bool
     where
         F: FnMut(u32, &NOTIFYICONDATAW) -> bool,
     {
@@ -202,11 +183,7 @@ impl NotifyIcon {
     /// Begins configuring a notification-area icon loaded from an `.ico` file.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(path: impl Into<PathBuf>) -> NotifyIconBuilder {
-        NotifyIconBuilder {
-            handler: None,
-            icon: path.into(),
-            tooltip: None,
-        }
+        NotifyIconBuilder { handler: None, icon: path.into(), tooltip: None }
     }
 
     /// Replaces the icon using an `.ico` file.
@@ -214,11 +191,7 @@ impl NotifyIcon {
     /// Returns `false` if the Shell rejects the update, retaining the last applied image.
     pub fn set_icon(&mut self, path: impl AsRef<Path>) -> Result<bool> {
         let icon = OwnedIcon::load(path.as_ref())?;
-        Ok(self.registration.replace_icon_with(
-            icon,
-            self.callback_window.hwnd(),
-            &mut shell_notify,
-        ))
+        Ok(self.registration.replace_icon_with(icon, self.callback_window.hwnd(), &mut shell_notify))
     }
 
     /// Sets or clears the standard tooltip.
@@ -226,11 +199,7 @@ impl NotifyIcon {
     /// Returns `false` if the Shell rejects the update, retaining the last applied tooltip.
     pub fn set_tooltip(&mut self, tooltip: Option<&str>) -> Result<bool> {
         let tooltip = tooltip.map(tooltip_text).transpose()?;
-        Ok(self.registration.set_tooltip_with(
-            tooltip,
-            self.callback_window.hwnd(),
-            &mut shell_notify,
-        ))
+        Ok(self.registration.set_tooltip_with(tooltip, self.callback_window.hwnd(), &mut shell_notify))
     }
 
     pub fn recover(&self) -> Result<()> {
@@ -294,19 +263,13 @@ impl NotifyIconBuilder {
         allow_message(callback_window.hwnd(), CALLBACK_MESSAGE)?;
         allow_message(callback_window.hwnd(), taskbar_created)?;
         registration.add(callback_window.hwnd())?;
-        Ok(NotifyIcon {
-            callback_window,
-            registration,
-        })
+        Ok(NotifyIcon { callback_window, registration })
     }
 }
 
 fn callback_window(handler: Option<EventHandler>, taskbar_created: u32) -> WindowBuilder {
-    Window::new("windows-notifyicon")
-        .style(0)
-        .visible(false)
-        .quit_on_close(false)
-        .on_message(move |_, message, wparam, lparam| {
+    Window::new("windows-notifyicon").style(0).visible(false).quit_on_close(false).on_message(
+        move |_, message, wparam, lparam| {
             let event = if message == taskbar_created {
                 Some(NotifyIconEvent::Recover)
             } else if message == CALLBACK_MESSAGE {
@@ -320,17 +283,13 @@ fn callback_window(handler: Option<EventHandler>, taskbar_created: u32) -> Windo
                 handler(event);
             }
             Some(0)
-        })
+        },
+    )
 }
 
 fn allow_message(hwnd: *mut core::ffi::c_void, message: u32) -> Result<()> {
     if unsafe {
-        ChangeWindowMessageFilterEx(
-            hwnd.cast(),
-            message,
-            MSGFLT_ALLOW as u32,
-            core::ptr::null_mut(),
-        )
+        ChangeWindowMessageFilterEx(hwnd.cast(), message, MSGFLT_ALLOW as u32, core::ptr::null_mut())
     }
     .as_bool()
     {
@@ -338,9 +297,7 @@ fn allow_message(hwnd: *mut core::ffi::c_void, message: u32) -> Result<()> {
     } else {
         let error = Error::from_thread();
         if error.code().is_ok() {
-            Err(shell_error(
-                "failed to allow a notification-area window message",
-            ))
+            Err(shell_error("failed to allow a notification-area window message"))
         } else {
             Err(error)
         }
@@ -349,10 +306,7 @@ fn allow_message(hwnd: *mut core::ffi::c_void, message: u32) -> Result<()> {
 
 fn decode_event(wparam: usize, lparam: isize) -> Option<NotifyIconEvent> {
     let event = lparam as u16 as u32;
-    let position = Point {
-        x: wparam as u16 as i16 as i32,
-        y: (wparam >> 16) as u16 as i16 as i32,
-    };
+    let position = Point { x: wparam as u16 as i16 as i32, y: (wparam >> 16) as u16 as i16 as i32 };
     match event as i32 {
         NIN_SELECT | NIN_KEYSELECT => Some(NotifyIconEvent::Activate { position }),
         WM_CONTEXTMENU => Some(NotifyIconEvent::ContextMenu { position }),
@@ -363,11 +317,7 @@ fn decode_event(wparam: usize, lparam: isize) -> Option<NotifyIconEvent> {
 fn register_taskbar_created() -> Result<u32> {
     let name = wide("TaskbarCreated");
     let message = unsafe { RegisterWindowMessageW(PCWSTR(name.as_ptr())) };
-    if message == 0 {
-        Err(Error::from_thread())
-    } else {
-        Ok(message)
-    }
+    if message == 0 { Err(Error::from_thread()) } else { Ok(message) }
 }
 
 fn shell_notify(message: u32, data: &NOTIFYICONDATAW) -> bool {
@@ -377,10 +327,7 @@ fn shell_notify(message: u32, data: &NOTIFYICONDATAW) -> bool {
 fn wide_path(value: &Path) -> Result<Vec<u16>> {
     let mut value = value.as_os_str().encode_wide().collect::<Vec<_>>();
     if value.contains(&0) {
-        return Err(Error::new(
-            E_INVALIDARG,
-            "icon path contains a null character",
-        ));
+        return Err(Error::new(E_INVALIDARG, "icon path contains a null character"));
     }
     value.push(0);
     Ok(value)
@@ -389,16 +336,10 @@ fn wide_path(value: &Path) -> Result<Vec<u16>> {
 fn tooltip_text(value: &str) -> Result<[u16; 128]> {
     let value = value.encode_utf16().collect::<Vec<_>>();
     if value.contains(&0) {
-        return Err(Error::new(
-            E_INVALIDARG,
-            "notification-area tooltip contains a null character",
-        ));
+        return Err(Error::new(E_INVALIDARG, "notification-area tooltip contains a null character"));
     }
     if value.len() >= 128 {
-        return Err(Error::new(
-            E_INVALIDARG,
-            "notification-area tooltip exceeds 127 UTF-16 code units",
-        ));
+        return Err(Error::new(E_INVALIDARG, "notification-area tooltip exceeds 127 UTF-16 code units"));
     }
     let mut result = [0; 128];
     result[..value.len()].copy_from_slice(&value);
@@ -431,23 +372,16 @@ mod tests {
 
     #[test]
     fn builder_accepts_the_public_configuration() {
-        let _builder =
-            NotifyIcon::new("icon.ico")
-                .tooltip("Example")
-                .on_event(|event| match event {
-                    NotifyIconEvent::Activate { position }
-                    | NotifyIconEvent::ContextMenu { position } => {
-                        let _ = position;
-                    }
-                    NotifyIconEvent::Recover => {}
-                });
+        let _builder = NotifyIcon::new("icon.ico").tooltip("Example").on_event(|event| match event {
+            NotifyIconEvent::Activate { position } | NotifyIconEvent::ContextMenu { position } => {
+                let _ = position;
+            }
+            NotifyIconEvent::Recover => {}
+        });
     }
 
     fn registration(icon: usize) -> Registration {
-        Registration {
-            icon: OwnedIcon::borrowed(icon),
-            tooltip: None,
-        }
+        Registration { icon: OwnedIcon::borrowed(icon), tooltip: None }
     }
 
     #[test]
@@ -455,15 +389,11 @@ mod tests {
         let position = ((-20_i16 as u16 as usize) << 16) | (-10_i16 as u16 as usize);
         assert_eq!(
             decode_event(position, NIN_SELECT as isize),
-            Some(NotifyIconEvent::Activate {
-                position: Point { x: -10, y: -20 }
-            })
+            Some(NotifyIconEvent::Activate { position: Point { x: -10, y: -20 } })
         );
         assert_eq!(
             decode_event(position, WM_CONTEXTMENU as isize),
-            Some(NotifyIconEvent::ContextMenu {
-                position: Point { x: -10, y: -20 }
-            })
+            Some(NotifyIconEvent::ContextMenu { position: Point { x: -10, y: -20 } })
         );
         assert_eq!(decode_event(position, 0), None);
     }
@@ -471,17 +401,7 @@ mod tests {
     #[test]
     fn validates_and_terminates_tooltips() {
         let value = tooltip_text("hello").unwrap();
-        assert_eq!(
-            &value[..6],
-            &[
-                b'h' as u16,
-                b'e' as u16,
-                b'l' as u16,
-                b'l' as u16,
-                b'o' as u16,
-                0
-            ]
-        );
+        assert_eq!(&value[..6], &[b'h' as u16, b'e' as u16, b'l' as u16, b'l' as u16, b'o' as u16, 0]);
         assert!(tooltip_text("before\0after").is_err());
         assert!(tooltip_text(&"x".repeat(128)).is_err());
     }
@@ -515,16 +435,7 @@ mod tests {
         assert_ne!(payloads[0].1 & NIF_TIP as u32, 0);
         assert_eq!(
             &payloads[0].2[..8],
-            &[
-                b'u' as u16,
-                b'p' as u16,
-                b'd' as u16,
-                b'a' as u16,
-                b't' as u16,
-                b'e' as u16,
-                b'd' as u16,
-                0,
-            ]
+            &[b'u' as u16, b'p' as u16, b'd' as u16, b'a' as u16, b't' as u16, b'e' as u16, b'd' as u16, 0,]
         );
         assert_eq!(payloads[1].0, NIM_MODIFY as u32);
         assert!(payloads[1].2.iter().all(|value| *value == 0));
@@ -570,33 +481,14 @@ mod tests {
             results.next().unwrap()
         };
 
-        assert!(!registration.replace_icon_with(
-            OwnedIcon::borrowed(2),
-            core::ptr::null_mut(),
-            &mut notify,
-        ));
+        assert!(!registration.replace_icon_with(OwnedIcon::borrowed(2), core::ptr::null_mut(), &mut notify,));
         assert_eq!(registration.icon.handle as usize, 1);
-        assert!(!registration.replace_icon_with(
-            OwnedIcon::borrowed(3),
-            core::ptr::null_mut(),
-            &mut notify,
-        ));
+        assert!(!registration.replace_icon_with(OwnedIcon::borrowed(3), core::ptr::null_mut(), &mut notify,));
         assert_eq!(registration.icon.handle as usize, 1);
-        assert!(registration.replace_icon_with(
-            OwnedIcon::borrowed(3),
-            core::ptr::null_mut(),
-            &mut notify,
-        ));
+        assert!(registration.replace_icon_with(OwnedIcon::borrowed(3), core::ptr::null_mut(), &mut notify,));
         assert_eq!(registration.icon.handle as usize, 3);
         assert_eq!(registration.tooltip, Some(tooltip));
-        assert_eq!(
-            payloads,
-            [
-                (NIM_MODIFY as u32, 2),
-                (NIM_MODIFY as u32, 3),
-                (NIM_MODIFY as u32, 3)
-            ]
-        );
+        assert_eq!(payloads, [(NIM_MODIFY as u32, 2), (NIM_MODIFY as u32, 3), (NIM_MODIFY as u32, 3)]);
     }
 
     #[test]
@@ -609,15 +501,8 @@ mod tests {
             results.next().unwrap()
         };
 
-        assert!(
-            registration
-                .add_with(core::ptr::null_mut(), &mut notify)
-                .is_err()
-        );
-        assert_eq!(
-            calls,
-            [NIM_ADD as u32, NIM_SETVERSION as u32, NIM_DELETE as u32]
-        );
+        assert!(registration.add_with(core::ptr::null_mut(), &mut notify).is_err());
+        assert_eq!(calls, [NIM_ADD as u32, NIM_SETVERSION as u32, NIM_DELETE as u32]);
     }
 
     #[test]
@@ -629,12 +514,7 @@ mod tests {
             true
         };
 
-        registration
-            .recover_with(core::ptr::null_mut(), &mut notify)
-            .unwrap();
-        assert_eq!(
-            calls,
-            [NIM_DELETE as u32, NIM_ADD as u32, NIM_SETVERSION as u32]
-        );
+        registration.recover_with(core::ptr::null_mut(), &mut notify).unwrap();
+        assert_eq!(calls, [NIM_DELETE as u32, NIM_ADD as u32, NIM_SETVERSION as u32]);
     }
 }

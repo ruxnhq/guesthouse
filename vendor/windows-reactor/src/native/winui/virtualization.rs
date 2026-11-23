@@ -41,19 +41,10 @@ impl NativeVirtualItems {
         let source_interface: IObservableVector<IInspectable> = source.to_interface();
         repeater.SetItemTemplate(&factory)?;
         repeater.SetItemsSource(&source_interface)?;
-        Ok(Self {
-            _factory: factory,
-            source,
-            source_revision,
-            shells,
-        })
+        Ok(Self { _factory: factory, source, source_revision, shells })
     }
 
-    pub(super) fn reset(
-        &self,
-        keys: &Arc<Vec<u64>>,
-        source_revision: u64,
-    ) -> windows_core::Result<()> {
+    pub(super) fn reset(&self, keys: &Arc<Vec<u64>>, source_revision: u64) -> windows_core::Result<()> {
         self.source_revision.set(source_revision);
         self.source.set_keys(Arc::clone(keys))
     }
@@ -101,11 +92,8 @@ struct KeyList {
 
 impl KeyList {
     fn new(keys: Arc<Vec<u64>>) -> Arc<Self> {
-        let positions: HashMap<u64, usize> = keys
-            .iter()
-            .enumerate()
-            .map(|(index, &key)| (key, index))
-            .collect();
+        let positions: HashMap<u64, usize> =
+            keys.iter().enumerate().map(|(index, &key)| (key, index)).collect();
         debug_assert_eq!(positions.len(), keys.len());
         Arc::new(Self { keys, positions })
     }
@@ -126,19 +114,11 @@ struct Keys {
 
 impl Keys {
     fn new(keys: Arc<KeyList>) -> Self {
-        Self {
-            head_len: keys.keys.len(),
-            head: keys,
-            tail: Arc::default(),
-            tail_start: 0,
-        }
+        Self { head_len: keys.keys.len(), head: keys, tail: Arc::default(), tail_start: 0 }
     }
 
     fn iter(&self) -> impl Iterator<Item = u64> + '_ {
-        self.head.keys[..self.head_len]
-            .iter()
-            .chain(&self.tail.keys[self.tail_start..])
-            .copied()
+        self.head.keys[..self.head_len].iter().chain(&self.tail.keys[self.tail_start..]).copied()
     }
 
     fn len(&self) -> usize {
@@ -149,10 +129,7 @@ impl Keys {
         if index < self.head_len {
             Some(self.head.keys[index])
         } else {
-            self.tail
-                .keys
-                .get(self.tail_start + index - self.head_len)
-                .copied()
+            self.tail.keys.get(self.tail_start + index - self.head_len).copied()
         }
     }
 
@@ -180,10 +157,7 @@ impl Keys {
 impl NativeVirtualSource {
     pub(super) fn new(keys: Arc<Vec<u64>>) -> windows_core::Result<Self> {
         virtual_item_count(keys.len())?;
-        Ok(Self {
-            keys: Mutex::new(Keys::new(KeyList::new(keys))),
-            handlers: WinEvent::new(),
-        })
+        Ok(Self { keys: Mutex::new(Keys::new(KeyList::new(keys))), handlers: WinEvent::new() })
     }
 }
 
@@ -202,20 +176,13 @@ impl NativeVirtualSource_Impl {
     }
 
     fn index_of(&self, value: Ref<IInspectable>, result: &mut u32) -> windows_core::Result<bool> {
-        let key = value
-            .ok()?
-            .cast::<windows_reference::IReference<u64>>()?
-            .Value()?;
+        let key = value.ok()?.cast::<windows_reference::IReference<u64>>()?.Value()?;
         let index = self.position(key);
         *result = index.map_or(0, |index| index.try_into().unwrap());
         Ok(index.is_some())
     }
 
-    fn get_many(
-        &self,
-        start_index: u32,
-        items: &mut [Option<IInspectable>],
-    ) -> windows_core::Result<u32> {
+    fn get_many(&self, start_index: u32, items: &mut [Option<IInspectable>]) -> windows_core::Result<u32> {
         let keys = self.keys.lock().unwrap();
         let mut count = 0;
         for (item, key) in items.iter_mut().zip(keys.iter().skip(start_index as usize)) {
@@ -236,19 +203,9 @@ impl NativeVirtualSource_Impl {
         virtual_item_count(keys.len())?;
         let previous = self.keys.lock().unwrap().current();
         let keys = KeyList::new(keys);
-        let survivors = KeyList::new(Arc::new(
-            previous
-                .keys
-                .iter()
-                .copied()
-                .filter(|&key| keys.contains(key))
-                .collect(),
-        ));
-        let ordered = keys
-            .keys
-            .iter()
-            .filter(|&&key| survivors.contains(key))
-            .eq(survivors.keys.iter());
+        let survivors =
+            KeyList::new(Arc::new(previous.keys.iter().copied().filter(|&key| keys.contains(key)).collect()));
+        let ordered = keys.keys.iter().filter(|&&key| survivors.contains(key)).eq(survivors.keys.iter());
         if survivors.keys.is_empty() || !ordered {
             *self.keys.lock().unwrap() = Keys::new(keys);
             return self.notify(CollectionChange::Reset, 0);
@@ -289,20 +246,17 @@ impl NativeVirtualSource_Impl {
     }
     fn notify(&self, change: CollectionChange, index: usize) -> windows_core::Result<()> {
         let source: IObservableVector<IInspectable> = self.to_object().into_interface();
-        let args: IVectorChangedEventArgs = ComObject::new(NativeVirtualChangedEventArgs {
-            change,
-            index: index.try_into().unwrap(),
-        })
-        .into_interface();
+        let args: IVectorChangedEventArgs =
+            ComObject::new(NativeVirtualChangedEventArgs { change, index: index.try_into().unwrap() })
+                .into_interface();
         let mut result = Ok(());
-        self.handlers
-            .call(|handler: &VectorChangedEventHandler<IInspectable>| {
-                let invoked = handler.Invoke(&source, &args);
-                if let (Ok(()), Err(error)) = (&result, &invoked) {
-                    result = Err(error.clone());
-                }
-                invoked
-            });
+        self.handlers.call(|handler: &VectorChangedEventHandler<IInspectable>| {
+            let invoked = handler.Invoke(&source, &args);
+            if let (Ok(()), Err(error)) = (&result, &invoked) {
+                result = Err(error.clone());
+            }
+            invoked
+        });
         result
     }
 }
@@ -325,9 +279,7 @@ impl native::IKeyIndexMapping_Impl for NativeVirtualSource_Impl {
         if text != token.to_string() {
             return Ok(-1);
         }
-        Ok(self
-            .position(token)
-            .map_or(-1, |index| index.try_into().unwrap()))
+        Ok(self.position(token).map_or(-1, |index| index.try_into().unwrap()))
     }
 }
 
@@ -396,11 +348,7 @@ impl IVector_Impl<IInspectable> for NativeVirtualSource_Impl {
         Err(Self::read_only_error())
     }
 
-    fn GetMany(
-        &self,
-        start_index: u32,
-        items: &mut [Option<IInspectable>],
-    ) -> windows_core::Result<u32> {
+    fn GetMany(&self, start_index: u32, items: &mut [Option<IInspectable>]) -> windows_core::Result<u32> {
         self.get_many(start_index, items)
     }
 
@@ -422,11 +370,7 @@ impl IVectorView_Impl<IInspectable> for NativeVirtualSource_Impl {
         self.index_of(value, result)
     }
 
-    fn GetMany(
-        &self,
-        start_index: u32,
-        items: &mut [Option<IInspectable>],
-    ) -> windows_core::Result<u32> {
+    fn GetMany(&self, start_index: u32, items: &mut [Option<IInspectable>]) -> windows_core::Result<u32> {
         self.get_many(start_index, items)
     }
 }
@@ -463,8 +407,7 @@ impl IIterator_Impl<IInspectable> for NativeVirtualSourceIterator_Impl {
     fn GetMany(&self, items: &mut [Option<IInspectable>]) -> windows_core::Result<u32> {
         let current = self.current.load(Ordering::Acquire);
         let actual = self.source.get_many(current, items)?;
-        self.current
-            .store(current.saturating_add(actual), Ordering::Release);
+        self.current.store(current.saturating_add(actual), Ordering::Release);
         Ok(actual)
     }
 }
@@ -508,10 +451,9 @@ impl RealizedShell {
         let control = native::ContentControl::new()?;
         let alignment: IInspectable =
             windows_reference::IReference::from(native::HorizontalAlignment::Stretch).into();
-        control.cast::<native::IDependencyObject>()?.SetValue(
-            &native::Control::HorizontalContentAlignmentProperty()?,
-            &alignment,
-        )?;
+        control
+            .cast::<native::IDependencyObject>()?
+            .SetValue(&native::Control::HorizontalContentAlignmentProperty()?, &alignment)?;
         let identity = com_identity(&control)?;
         Ok(Self { control, identity })
     }
@@ -526,12 +468,7 @@ pub(super) struct ShellPool<T> {
 
 impl<T> Default for ShellPool<T> {
     fn default() -> Self {
-        Self {
-            available: Vec::new(),
-            next: 0,
-            retired: HashSet::new(),
-            shells: HashMap::new(),
-        }
+        Self { available: Vec::new(), next: 0, retired: HashSet::new(), shells: HashMap::new() }
     }
 }
 
@@ -541,14 +478,11 @@ impl<T: Clone> ShellPool<T> {
         create: impl FnOnce() -> Result<T, windows_core::Error>,
     ) -> Result<(RealizedContainer, T), windows_core::Error> {
         let container = RealizedContainer(self.next);
-        self.next = self.next.checked_add(1).ok_or_else(|| {
-            windows_core::Error::new(native::E_FAIL, "container identity exhausted")
-        })?;
-        let shell = if let Some(shell) = self.available.pop() {
-            shell
-        } else {
-            create()?
-        };
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or_else(|| windows_core::Error::new(native::E_FAIL, "container identity exhausted"))?;
+        let shell = if let Some(shell) = self.available.pop() { shell } else { create()? };
         self.shells.insert(container, shell.clone());
         Ok((container, shell))
     }
@@ -580,10 +514,7 @@ impl ShellPool<RealizedShell> {
         };
         shell.SetContent(None::<&IInspectable>)?;
         if !self.retire(container) {
-            return Err(windows_core::Error::new(
-                native::E_FAIL,
-                "realized container retired twice",
-            ));
+            return Err(windows_core::Error::new(native::E_FAIL, "realized container retired twice"));
         }
         Ok(Some(container))
     }
@@ -595,10 +526,7 @@ impl RealizedShells {
         Ok((container, shell.control.cast()?))
     }
 
-    fn recycle(
-        &self,
-        element: &native::UIElement,
-    ) -> Result<Option<RealizedContainer>, windows_core::Error> {
+    fn recycle(&self, element: &native::UIElement) -> Result<Option<RealizedContainer>, windows_core::Error> {
         self.pool.borrow_mut().recycle(element)
     }
 
@@ -612,10 +540,7 @@ impl RealizedShells {
             return if content.is_none() && pool.retired.contains(&container) {
                 Ok(())
             } else {
-                Err(windows_core::Error::new(
-                    native::E_FAIL,
-                    "missing realized container",
-                ))
+                Err(windows_core::Error::new(native::E_FAIL, "missing realized container"))
             };
         };
         if let Some(content) = content {
@@ -639,30 +564,22 @@ impl native::IElementFactory_Impl for NativeElementFactory_Impl {
         &self,
         args: Ref<native::ElementFactoryGetArgs>,
     ) -> windows_core::Result<native::UIElement> {
-        let token = args
-            .ok()?
-            .Data()?
-            .cast::<windows_reference::IReference<u64>>()?
-            .Value()?;
+        let token = args.ok()?.Data()?.cast::<windows_reference::IReference<u64>>()?.Value()?;
         let index = self.source.position(token).ok_or_else(|| {
             windows_core::Error::new(native::E_FAIL, "element factory received an unknown item")
         })?;
         let (container, element) = self.shells.take()?;
-        self.queue
-            .queue_realization(RealizationRequest::RealizeKey {
-                collection: self.collection,
-                container,
-                index,
-                token,
-            });
+        self.queue.queue_realization(RealizationRequest::RealizeKey {
+            collection: self.collection,
+            container,
+            index,
+            token,
+        });
         self.queue.realize_now();
         Ok(element)
     }
 
-    fn RecycleElement(
-        &self,
-        args: Ref<native::ElementFactoryRecycleArgs>,
-    ) -> windows_core::Result<()> {
+    fn RecycleElement(&self, args: Ref<native::ElementFactoryRecycleArgs>) -> windows_core::Result<()> {
         let element = args.ok()?.Element()?;
         let container = self.shells.recycle(&element)?.ok_or_else(|| {
             windows_core::Error::new(native::E_FAIL, "element factory received an unknown shell")
@@ -679,14 +596,9 @@ impl native::IElementFactory_Impl for NativeElementFactory_Impl {
 pub(super) fn virtual_item_count(item_count: usize) -> windows_core::Result<u32> {
     let max_count = i32::MAX as usize + 1;
     if item_count > max_count {
-        return Err(windows_core::Error::new(
-            native::E_FAIL,
-            "item count exceeds i32 index range",
-        ));
+        return Err(windows_core::Error::new(native::E_FAIL, "item count exceeds i32 index range"));
     }
-    item_count
-        .try_into()
-        .map_err(|_| windows_core::Error::new(native::E_FAIL, "item count exceeds u32"))
+    item_count.try_into().map_err(|_| windows_core::Error::new(native::E_FAIL, "item count exceeds u32"))
 }
 
 pub(super) fn virtual_item_value(key: u64) -> IInspectable {

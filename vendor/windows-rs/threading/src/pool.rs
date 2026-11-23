@@ -10,11 +10,7 @@ pub struct Pool(Box<TP_CALLBACK_ENVIRON_V3>);
 impl Pool {
     /// Creates a new `Pool` object.
     pub fn new() -> Self {
-        let mut e = environment(
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            Priority::Normal,
-        );
+        let mut e = environment(core::ptr::null_mut(), core::ptr::null_mut(), Priority::Normal);
 
         unsafe {
             e.Pool = check_ptr(CreateThreadpool(core::ptr::null_mut()));
@@ -49,10 +45,7 @@ impl Pool {
         // SAFETY: the closure has `'static` lifetime, and the boxed callback environment
         // (`self.0`) is kept alive until `Pool::drop` calls `join` to ensure all callbacks
         // have finished using it.
-        assert!(
-            unsafe { submit_with_environment(&*self.0, f) },
-            "allocation failed"
-        );
+        assert!(unsafe { submit_with_environment(&*self.0, f) }, "allocation failed");
     }
 
     /// Submits a closure to the thread pool with the given priority.
@@ -61,10 +54,7 @@ impl Pool {
     pub fn submit_with_priority<F: FnOnce() + Send + 'static>(&self, priority: Priority, f: F) {
         // SAFETY: as for `submit`. The thread pool copies the environment, and the pool and
         // cleanup group it refers to live until `Pool::drop` calls `join`.
-        assert!(
-            unsafe { submit_with_environment(&self.environment(priority), f) },
-            "allocation failed"
-        );
+        assert!(unsafe { submit_with_environment(&self.environment(priority), f) }, "allocation failed");
     }
 
     fn environment(&self, priority: Priority) -> TP_CALLBACK_ENVIRON_V3 {
@@ -89,11 +79,7 @@ impl Pool {
         }
         // Ensure that we always join the pool before returning.
         let _guard = DropGuard(self);
-        let scope = Scope {
-            pool: self,
-            env: PhantomData,
-            scope: PhantomData,
-        };
+        let scope = Scope { pool: self, env: PhantomData, scope: PhantomData };
         f(&scope);
     }
 
@@ -143,24 +129,14 @@ impl<'scope, 'env> Scope<'scope, 'env> {
     ///
     /// The closure cannot outlive the `Scope` it's run in.
     pub fn submit<F: FnOnce() + Send + 'scope>(&'scope self, f: F) {
-        assert!(
-            unsafe { submit_with_environment(&*self.pool.0, f) },
-            "allocation failed"
-        );
+        assert!(unsafe { submit_with_environment(&*self.pool.0, f) }, "allocation failed");
     }
 
     /// Submits the closure to run on the `Pool` with the given priority.
     ///
     /// The closure cannot outlive the `Scope` it's run in.
-    pub fn submit_with_priority<F: FnOnce() + Send + 'scope>(
-        &'scope self,
-        priority: Priority,
-        f: F,
-    ) {
-        assert!(
-            unsafe { submit_with_environment(&self.pool.environment(priority), f) },
-            "allocation failed"
-        );
+    pub fn submit_with_priority<F: FnOnce() + Send + 'scope>(&'scope self, priority: Priority, f: F) {
+        assert!(unsafe { submit_with_environment(&self.pool.environment(priority), f) }, "allocation failed");
     }
 }
 

@@ -79,13 +79,7 @@ pub unsafe trait Interface: Sized + Clone {
     /// `raw` must remain valid and point to the vtable for `Self`, beginning with `IUnknown`.
     #[inline(always)]
     unsafe fn from_raw_borrowed(raw: &*mut c_void) -> Option<&Self> {
-        unsafe {
-            if raw.is_null() {
-                None
-            } else {
-                Some(transmute_copy(&raw))
-            }
-        }
+        unsafe { if raw.is_null() { None } else { Some(transmute_copy(&raw)) } }
     }
 
     /// Borrows this interface as `T` without calling `QueryInterface` or `AddRef`.
@@ -133,11 +127,7 @@ pub unsafe trait Interface: Sized + Clone {
             hr.ok()?;
 
             // `query()` succeeded; still double-check that the output pointer is non-null.
-            if let Some(obj) = result.assume_init() {
-                Ok(obj)
-            } else {
-                Err(imp::E_POINTER.into())
-            }
+            if let Some(obj) = result.assume_init() { Ok(obj) } else { Err(imp::E_POINTER.into()) }
         }
     }
 
@@ -166,11 +156,7 @@ pub unsafe trait Interface: Sized + Clone {
     {
         unsafe {
             let mut any_ref_arg: MaybeUninit<&dyn Any> = MaybeUninit::zeroed();
-            self.query(
-                &DYNAMIC_CAST_IID,
-                any_ref_arg.as_mut_ptr() as *mut *mut c_void,
-            )
-            .ok()?;
+            self.query(&DYNAMIC_CAST_IID, any_ref_arg.as_mut_ptr() as *mut *mut c_void).ok()?;
             Ok(any_ref_arg.assume_init())
         }
     }
@@ -185,11 +171,7 @@ pub unsafe trait Interface: Sized + Clone {
         T: ComObjectInner,
         T::Outer: Any + 'static + IUnknownImpl<Impl = T>,
     {
-        if let Ok(any) = self.cast_to_any::<T>() {
-            any.is::<T::Outer>()
-        } else {
-            false
-        }
+        if let Ok(any) = self.cast_to_any::<T>() { any.is::<T::Outer>() } else { false }
     }
 
     /// Returns a borrowed reference to the generated outer Rust implementation.
@@ -233,8 +215,7 @@ pub unsafe trait Interface: Sized + Clone {
 
     /// Attempts to create a [`Weak`] reference to this object.
     fn downgrade(&self) -> Result<Weak<Self>> {
-        self.cast::<imp::IWeakReferenceSource>()
-            .map(|source| Weak::downgrade(&source))
+        self.cast::<imp::IWeakReferenceSource>().map(|source| Weak::downgrade(&source))
     }
 
     /// Calls `QueryInterface`.

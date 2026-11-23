@@ -34,33 +34,20 @@ impl GUID {
             Ok(guid)
         } else {
             // Map the Win32/RPC error code to an HRESULT (HRESULT_FROM_WIN32).
-            let hresult = if status <= 0 {
-                status
-            } else {
-                ((status as u32 & 0x0000_FFFF) | 0x8007_0000) as i32
-            };
+            let hresult =
+                if status <= 0 { status } else { ((status as u32 & 0x0000_FFFF) | 0x8007_0000) as i32 };
             Err(Error::from_hresult(HRESULT(hresult)))
         }
     }
 
     /// Creates a `GUID` represented by the all-zero byte-pattern.
     pub const fn zeroed() -> Self {
-        Self {
-            data1: 0,
-            data2: 0,
-            data3: 0,
-            data4: [0, 0, 0, 0, 0, 0, 0, 0],
-        }
+        Self { data1: 0, data2: 0, data3: 0, data4: [0, 0, 0, 0, 0, 0, 0, 0] }
     }
 
     /// Creates a `GUID` with the given constant values.
     pub const fn from_values(data1: u32, data2: u16, data3: u16, data4: [u8; 8]) -> Self {
-        Self {
-            data1,
-            data2,
-            data3,
-            data4,
-        }
+        Self { data1, data2, data3, data4 }
     }
 
     /// Creates a `GUID` from a `u128` value.
@@ -84,8 +71,7 @@ impl GUID {
     /// Creates a `GUID` for a "generic" WinRT type.
     pub const fn from_signature(signature: imp::ConstBuffer) -> Self {
         let data = imp::ConstBuffer::from_slice(&[
-            0x11, 0xf4, 0x7a, 0xd5, 0x7b, 0x73, 0x42, 0xc0, 0xab, 0xae, 0x87, 0x8b, 0x1e, 0x16,
-            0xad, 0xee,
+            0x11, 0xf4, 0x7a, 0xd5, 0x7b, 0x73, 0x42, 0xc0, 0xab, 0xae, 0x87, 0x8b, 0x1e, 0x16, 0xad, 0xee,
         ]);
 
         let data = data.push_other(signature);
@@ -102,9 +88,7 @@ impl GUID {
             first,
             second,
             third,
-            [
-                fourth, bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-            ],
+            [fourth, bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]],
         )
     }
 }
@@ -186,15 +170,11 @@ fn try_u32(bytes: &mut core::str::Bytes, delimiter: bool) -> Result<u32> {
 }
 
 fn try_u16(bytes: &mut core::str::Bytes, delimiter: bool) -> Result<u16> {
-    next(bytes, 4, delimiter)
-        .map(|value| value as u16)
-        .ok_or_else(invalid_guid)
+    next(bytes, 4, delimiter).map(|value| value as u16).ok_or_else(invalid_guid)
 }
 
 fn try_u8(bytes: &mut core::str::Bytes, delimiter: bool) -> Result<u8> {
-    next(bytes, 2, delimiter)
-        .map(|value| value as u8)
-        .ok_or_else(invalid_guid)
+    next(bytes, 2, delimiter).map(|value| value as u8).ok_or_else(invalid_guid)
 }
 
 fn next(bytes: &mut core::str::Bytes, len: usize, delimiter: bool) -> Option<u32> {
@@ -211,9 +191,5 @@ fn next(bytes: &mut core::str::Bytes, len: usize, delimiter: bool) -> Option<u32
         }
     }
 
-    if delimiter && bytes.next() != Some(b'-') {
-        None
-    } else {
-        Some(value)
-    }
+    if delimiter && bytes.next() != Some(b'-') { None } else { Some(value) }
 }

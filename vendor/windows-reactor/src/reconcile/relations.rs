@@ -12,10 +12,7 @@ impl Planner<'_> {
         {
             return;
         }
-        let relation = declaration
-            .relations
-            .iter()
-            .find(|relation| relation.id == contract.id);
+        let relation = declaration.relations.iter().find(|relation| relation.id == contract.id);
         match contract.cardinality {
             Cardinality::One => {
                 let child = relation
@@ -25,14 +22,9 @@ impl Planner<'_> {
                     })
                     .map(|child| self.mount(child.as_object()));
                 if let Some(child) = child {
-                    self.mutations.push(Mutation::Attach {
-                        parent: object,
-                        relation: contract.id,
-                        child,
-                    });
+                    self.mutations.push(Mutation::Attach { parent: object, relation: contract.id, child });
                 }
-                self.retained.relation_mut(object, contract.id).value =
-                    RetainedRelationValue::One(child);
+                self.retained.relation_mut(object, contract.id).value = RetainedRelationValue::One(child);
             }
             Cardinality::Many => {
                 let children = relation
@@ -52,8 +44,7 @@ impl Planner<'_> {
                     });
                     retained.push(child);
                 }
-                self.retained.relation_mut(object, contract.id).value =
-                    RetainedRelationValue::Many(retained);
+                self.retained.relation_mut(object, contract.id).value = RetainedRelationValue::Many(retained);
             }
         }
     }
@@ -72,43 +63,30 @@ impl Planner<'_> {
         let Some(contract) = index_contract(declaration.kind) else {
             return;
         };
-        let declared = declaration
-            .properties
-            .as_slice()
-            .iter()
-            .find(|property| property.id == contract.property);
+        let declared =
+            declaration.properties.as_slice().iter().find(|property| property.id == contract.property);
         let (set, clear): (Rc<[Property]>, Rc<[PropertyId]>) = match declared {
             Some(declared) if items_changed || Some(declared) != previous => {
                 let len = match contract.items {
-                    IndexItems::Relation(relation) => self
-                        .retained
-                        .children(object, relation)
-                        .map_or(0, <[_]>::len),
+                    IndexItems::Relation(relation) => {
+                        self.retained.children(object, relation).map_or(0, <[_]>::len)
+                    }
                     IndexItems::Property(items) => declaration
                         .properties
                         .as_slice()
                         .iter()
                         .find_map(|property| match &property.value {
-                            PropertyValue::StringList(values) if property.id == items => {
-                                Some(values.len())
-                            }
+                            PropertyValue::StringList(values) if property.id == items => Some(values.len()),
                             _ => None,
                         })
                         .unwrap_or(0),
                 };
                 let value = match declared.value {
-                    PropertyValue::SelectionIndex(Some(index)) if index < len => {
-                        declared.value.clone()
-                    }
-                    _ if contract.requires_selection && len > 0 => {
-                        PropertyValue::SelectionIndex(Some(0))
-                    }
+                    PropertyValue::SelectionIndex(Some(index)) if index < len => declared.value.clone(),
+                    _ if contract.requires_selection && len > 0 => PropertyValue::SelectionIndex(Some(0)),
                     _ => PropertyValue::SelectionIndex(None),
                 };
-                let property = Property {
-                    id: contract.property,
-                    value,
-                };
+                let property = Property { id: contract.property, value };
                 (Rc::from([property]), Rc::from([]))
             }
             None if previous.is_some() && !contract.requires_selection => {
@@ -116,8 +94,7 @@ impl Planner<'_> {
             }
             _ => return,
         };
-        self.mutations
-            .push(Mutation::SetProperties { object, set, clear });
+        self.mutations.push(Mutation::SetProperties { object, set, clear });
     }
 
     pub(super) fn reconcile_relation(
@@ -131,10 +108,7 @@ impl Planner<'_> {
         {
             return;
         }
-        let relation = declaration
-            .relations
-            .iter()
-            .find(|relation| relation.id == contract.id);
+        let relation = declaration.relations.iter().find(|relation| relation.id == contract.id);
         match contract.cardinality {
             Cardinality::One => {
                 let RetainedRelationValue::One(previous) =
@@ -174,8 +148,7 @@ impl Planner<'_> {
                     }
                 };
                 if previous != next {
-                    self.retained.relation_mut(object, contract.id).value =
-                        RetainedRelationValue::One(next);
+                    self.retained.relation_mut(object, contract.id).value = RetainedRelationValue::One(next);
                 }
             }
             Cardinality::Many => match contract.identity {
@@ -226,20 +199,14 @@ impl Planner<'_> {
             }
             return;
         }
-        let desired = desired
-            .iter()
-            .map(DeclaredNode::as_object)
-            .collect::<Vec<_>>();
+        let desired = desired.iter().map(DeclaredNode::as_object).collect::<Vec<_>>();
         let previous = match &self.retained.relation(object, relation_id).unwrap().value {
             RetainedRelationValue::Many(children) => children.clone(),
             _ => unreachable!(),
         };
         let mut by_key = HashMap::with_capacity(previous.len());
         for (index, child) in previous.iter().enumerate() {
-            by_key.insert(
-                self.retained.get(*child).unwrap().key.clone().unwrap(),
-                (*child, index),
-            );
+            by_key.insert(self.retained.get(*child).unwrap().key.clone().unwrap(), (*child, index));
         }
 
         let mut matched = Vec::with_capacity(desired.len());
@@ -247,9 +214,7 @@ impl Planner<'_> {
         for desired in desired.iter().copied() {
             let key = desired.key.clone().unwrap();
             let previous = match by_key.remove(&key) {
-                Some((previous, _))
-                    if self.retained.get(previous).unwrap().kind == desired.kind =>
-                {
+                Some((previous, _)) if self.retained.get(previous).unwrap().kind == desired.kind => {
                     Some(previous)
                 }
                 Some(previous) => {
@@ -274,12 +239,7 @@ impl Planner<'_> {
             } else {
                 let child = self.mount(desired);
                 native.insert(index, child);
-                self.mutations.push(Mutation::Insert {
-                    parent: object,
-                    relation: relation_id,
-                    child,
-                    index,
-                });
+                self.mutations.push(Mutation::Insert { parent: object, relation: relation_id, child, index });
                 child
             };
             next.push(child);
@@ -294,8 +254,7 @@ impl Planner<'_> {
             });
         }
         if previous != next {
-            self.retained.relation_mut(object, relation_id).value =
-                RetainedRelationValue::Many(next);
+            self.retained.relation_mut(object, relation_id).value = RetainedRelationValue::Many(next);
         }
     }
 
@@ -334,10 +293,7 @@ impl Planner<'_> {
             }
             return;
         }
-        let desired = desired
-            .iter()
-            .map(DeclaredNode::as_object)
-            .collect::<Vec<_>>();
+        let desired = desired.iter().map(DeclaredNode::as_object).collect::<Vec<_>>();
         let previous = match &self.retained.relation(object, relation_id).unwrap().value {
             RetainedRelationValue::Many(children) => children.clone(),
             _ => unreachable!(),
@@ -363,28 +319,18 @@ impl Planner<'_> {
             } else {
                 let child = self.mount(desired);
                 native.insert(index, child);
-                self.mutations.push(Mutation::Insert {
-                    parent: object,
-                    relation: relation_id,
-                    child,
-                    index,
-                });
+                self.mutations.push(Mutation::Insert { parent: object, relation: relation_id, child, index });
                 child
             };
             next.push(child);
         }
-        for (index, child) in previous
-            .iter()
-            .enumerate()
-            .skip(desired.len())
-            .rev()
-            .map(|(index, child)| (index, *child))
+        for (index, child) in
+            previous.iter().enumerate().skip(desired.len()).rev().map(|(index, child)| (index, *child))
         {
             self.remove_child(object, relation_id, &mut native, index, child);
         }
         if previous != next {
-            self.retained.relation_mut(object, relation_id).value =
-                RetainedRelationValue::Many(next);
+            self.retained.relation_mut(object, relation_id).value = RetainedRelationValue::Many(next);
         }
     }
 
@@ -397,12 +343,7 @@ impl Planner<'_> {
         child: ObjectId,
     ) {
         assert_eq!(native.remove(index), child);
-        self.mutations.push(Mutation::Remove {
-            parent: object,
-            relation,
-            child,
-            index,
-        });
+        self.mutations.push(Mutation::Remove { parent: object, relation, child, index });
         self.retire(child);
     }
 }
@@ -414,19 +355,13 @@ fn reorder_moves(previous: &[ObjectId], next: &[ObjectId]) -> Vec<Move> {
     if previous == next {
         return Vec::new();
     }
-    let previous_indices = previous
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, child)| (child, index))
-        .collect::<HashMap<_, _>>();
+    let previous_indices =
+        previous.iter().copied().enumerate().map(|(index, child)| (child, index)).collect::<HashMap<_, _>>();
     let retained = next
         .iter()
         .enumerate()
         .filter_map(|(next_index, child)| {
-            previous_indices
-                .get(child)
-                .map(|previous_index| (next_index, *previous_index))
+            previous_indices.get(child).map(|previous_index| (next_index, *previous_index))
         })
         .collect::<Vec<_>>();
     let stable = longest_increasing_positions(&retained, next.len());
@@ -436,10 +371,7 @@ fn reorder_moves(previous: &[ObjectId], next: &[ObjectId]) -> Vec<Move> {
             continue;
         }
         let child = next[next_index];
-        moves.push(Move {
-            child,
-            before: next.get(next_index + 1).copied(),
-        });
+        moves.push(Move { child, before: next.get(next_index + 1).copied() });
     }
     moves
 }

@@ -16,18 +16,12 @@ enum EncodedImageBytes {
 impl EncodedImage {
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
         let bytes = bytes.into();
-        assert!(
-            bytes.len() <= u32::MAX as usize,
-            "encoded image data cannot exceed 4 GiB"
-        );
+        assert!(bytes.len() <= u32::MAX as usize, "encoded image data cannot exceed 4 GiB");
         Self(EncodedImageBytes::Shared(bytes))
     }
 
     pub fn from_static(bytes: &'static [u8]) -> Self {
-        assert!(
-            bytes.len() <= u32::MAX as usize,
-            "encoded image data cannot exceed 4 GiB"
-        );
+        assert!(bytes.len() <= u32::MAX as usize, "encoded image data cannot exceed 4 GiB");
         Self(EncodedImageBytes::Static(bytes))
     }
 
@@ -49,10 +43,7 @@ impl EncodedImage {
 
 impl fmt::Debug for EncodedImage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EncodedImage")
-            .field("len", &self.as_bytes().len())
-            .finish()
+        formatter.debug_struct("EncodedImage").field("len", &self.as_bytes().len()).finish()
     }
 }
 
@@ -116,10 +107,7 @@ pub struct Icon(IconValue);
 pub(crate) enum IconValue {
     Symbol(Symbol),
     Font(Rc<str>),
-    Bitmap {
-        uri: Rc<str>,
-        show_as_monochrome: bool,
-    },
+    Bitmap { uri: Rc<str>, show_as_monochrome: bool },
     Image(ImageSource),
     Path(Rc<str>),
 }
@@ -136,10 +124,7 @@ impl Icon {
     pub fn bitmap(uri: impl Into<Rc<str>>, show_as_monochrome: bool) -> windows_core::Result<Self> {
         let uri = uri.into();
         validate_uri(&uri)?;
-        Ok(Self(IconValue::Bitmap {
-            uri,
-            show_as_monochrome,
-        }))
+        Ok(Self(IconValue::Bitmap { uri, show_as_monochrome }))
     }
 
     pub fn image(source: ImageSource) -> Self {
@@ -212,11 +197,7 @@ fn file_uri(path: &Path) -> windows_core::Result<String> {
 }
 
 fn canonical_rich_edit_text(value: Rc<str>) -> Rc<str> {
-    if value.contains('\r') {
-        Rc::from(value.replace("\r\n", "\n").replace('\r', "\n"))
-    } else {
-        value
-    }
+    if value.contains('\r') { Rc::from(value.replace("\r\n", "\n").replace('\r', "\n")) } else { value }
 }
 
 /// A brush resolved from the active WinUI theme resources.
@@ -482,11 +463,7 @@ impl KeyAccelerator {
         modifiers: AcceleratorModifiers,
         callback: impl IntoUnitCallback,
     ) -> Self {
-        Self {
-            key,
-            modifiers,
-            callback: callback.into_unit_callback(),
-        }
+        Self { key, modifiers, callback: callback.into_unit_callback() }
     }
 }
 
@@ -533,9 +510,7 @@ pub struct RichText {
 
 impl RichText {
     pub fn new(paragraphs: impl IntoIterator<Item = RichTextParagraph>) -> Self {
-        Self {
-            paragraphs: Rc::new(paragraphs.into_iter().collect()),
-        }
+        Self { paragraphs: Rc::new(paragraphs.into_iter().collect()) }
     }
 
     pub fn single_paragraph(inlines: impl IntoIterator<Item = RichTextInline>) -> Self {
@@ -550,9 +525,7 @@ pub struct RichTextParagraph {
 
 impl RichTextParagraph {
     pub fn new(inlines: impl IntoIterator<Item = RichTextInline>) -> Self {
-        Self {
-            inlines: inlines.into_iter().collect(),
-        }
+        Self { inlines: inlines.into_iter().collect() }
     }
 }
 
@@ -572,10 +545,7 @@ pub struct RichTextRun {
 
 impl RichTextRun {
     pub fn plain(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            ..Self::default()
-        }
+        Self { text: text.into(), ..Self::default() }
     }
 }
 
@@ -595,12 +565,7 @@ pub struct CornerRadius {
 
 impl CornerRadius {
     pub const fn new(top_left: f64, top_right: f64, bottom_right: f64, bottom_left: f64) -> Self {
-        Self {
-            top_left,
-            top_right,
-            bottom_right,
-            bottom_left,
-        }
+        Self { top_left, top_right, bottom_right, bottom_left }
     }
 
     pub const fn uniform(value: f64) -> Self {
@@ -608,14 +573,9 @@ impl CornerRadius {
     }
 
     pub fn is_finite_non_negative(self) -> bool {
-        [
-            self.top_left,
-            self.top_right,
-            self.bottom_right,
-            self.bottom_left,
-        ]
-        .into_iter()
-        .all(|value| value.is_finite() && value >= 0.0)
+        [self.top_left, self.top_right, self.bottom_right, self.bottom_left]
+            .into_iter()
+            .all(|value| value.is_finite() && value >= 0.0)
     }
 }
 
@@ -635,12 +595,7 @@ pub struct Thickness {
 
 impl Thickness {
     pub const fn new(left: f64, top: f64, right: f64, bottom: f64) -> Self {
-        Self {
-            left,
-            top,
-            right,
-            bottom,
-        }
+        Self { left, top, right, bottom }
     }
 
     pub const fn uniform(value: f64) -> Self {
@@ -652,9 +607,7 @@ impl Thickness {
     }
 
     pub fn is_finite(self) -> bool {
-        [self.left, self.top, self.right, self.bottom]
-            .into_iter()
-            .all(f64::is_finite)
+        [self.left, self.top, self.right, self.bottom].into_iter().all(f64::is_finite)
     }
 
     pub fn is_finite_non_negative(self) -> bool {
@@ -729,10 +682,7 @@ impl Tooltip {
     }
 
     pub fn rich(content: impl Into<View>) -> Self {
-        Self {
-            content: Box::new(content.into()),
-            placement: TooltipPlacement::Top,
-        }
+        Self { content: Box::new(content.into()), placement: TooltipPlacement::Top }
     }
 
     pub fn placement(mut self, placement: TooltipPlacement) -> Self {
@@ -753,10 +703,7 @@ impl Flyout {
     }
 
     pub fn rich(content: impl Into<View>) -> Self {
-        Self {
-            content: Box::new(content.into()),
-            placement: FlyoutPlacement::Top,
-        }
+        Self { content: Box::new(content.into()), placement: FlyoutPlacement::Top }
     }
 
     pub fn placement(mut self, placement: FlyoutPlacement) -> Self {
@@ -811,12 +758,7 @@ pub enum MenuItem {
 // remoteman patch (VENDORED.md, patch 6).
 impl MenuItem {
     pub fn check(key: impl Into<Key>, label: impl Into<Rc<str>>, checked: bool) -> Self {
-        Self::Check {
-            key: key.into(),
-            label: label.into(),
-            enabled: true,
-            checked,
-        }
+        Self::Check { key: key.into(), label: label.into(), enabled: true, checked }
     }
 
     pub fn radio(
@@ -825,19 +767,15 @@ impl MenuItem {
         group: impl Into<Rc<str>>,
         checked: bool,
     ) -> Self {
-        Self::Radio {
-            key: key.into(),
-            label: label.into(),
-            enabled: true,
-            checked,
-            group: group.into(),
-        }
+        Self::Radio { key: key.into(), label: label.into(), enabled: true, checked, group: group.into() }
     }
 
     /// Greys an item, check item or radio item out (or not).
     pub fn enabled(mut self, on: bool) -> Self {
         match &mut self {
-            Self::Item { enabled, .. } | Self::Check { enabled, .. } | Self::Radio { enabled, .. } => *enabled = on,
+            Self::Item { enabled, .. } | Self::Check { enabled, .. } | Self::Radio { enabled, .. } => {
+                *enabled = on
+            }
             Self::Dressed { item, .. } => *item = Rc::new((**item).clone().enabled(on)),
             Self::Separator { .. } | Self::Submenu { .. } => {}
         }
@@ -881,7 +819,11 @@ impl MenuItem {
     /// The key a click on this entry reports.
     pub fn key(&self) -> &Key {
         match self {
-            Self::Item { key, .. } | Self::Separator { key } | Self::Submenu { key, .. } | Self::Check { key, .. } | Self::Radio { key, .. } => key,
+            Self::Item { key, .. }
+            | Self::Separator { key }
+            | Self::Submenu { key, .. }
+            | Self::Check { key, .. }
+            | Self::Radio { key, .. } => key,
             Self::Dressed { item, .. } => item.key(),
         }
     }
@@ -889,19 +831,11 @@ impl MenuItem {
 
 impl MenuItem {
     pub fn item(key: impl Into<Key>, label: impl Into<Rc<str>>) -> Self {
-        Self::Item {
-            key: key.into(),
-            label: label.into(),
-            enabled: true,
-        }
+        Self::Item { key: key.into(), label: label.into(), enabled: true }
     }
 
     pub fn disabled(key: impl Into<Key>, label: impl Into<Rc<str>>) -> Self {
-        Self::Item {
-            key: key.into(),
-            label: label.into(),
-            enabled: false,
-        }
+        Self::Item { key: key.into(), label: label.into(), enabled: false }
     }
 
     pub fn separator(key: impl Into<Key>) -> Self {
@@ -913,11 +847,7 @@ impl MenuItem {
         label: impl Into<Rc<str>>,
         items: impl IntoIterator<Item = Self>,
     ) -> Self {
-        Self::Submenu {
-            key: key.into(),
-            label: label.into(),
-            items: Rc::new(items.into_iter().collect()),
-        }
+        Self::Submenu { key: key.into(), label: label.into(), items: Rc::new(items.into_iter().collect()) }
     }
 }
 
@@ -932,60 +862,28 @@ impl Menu {
         self.items == other.items
     }
 
-    pub fn new(
-        items: impl IntoIterator<Item = MenuItem>,
-        on_click: impl IntoPayloadCallback<Key>,
-    ) -> Self {
-        Self {
-            items: Rc::new(items.into_iter().collect()),
-            on_click: on_click.into_payload_callback(),
-        }
+    pub fn new(items: impl IntoIterator<Item = MenuItem>, on_click: impl IntoPayloadCallback<Key>) -> Self {
+        Self { items: Rc::new(items.into_iter().collect()), on_click: on_click.into_payload_callback() }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandBarCommand {
-    Button {
-        key: Key,
-        label: Rc<str>,
-        icon: Option<Icon>,
-        enabled: bool,
-    },
-    Separator {
-        key: Key,
-    },
+    Button { key: Key, label: Rc<str>, icon: Option<Icon>, enabled: bool },
+    Separator { key: Key },
 }
 
 impl CommandBarCommand {
     pub fn button(key: impl Into<Key>, label: impl Into<Rc<str>>) -> Self {
-        Self::Button {
-            key: key.into(),
-            label: label.into(),
-            icon: None,
-            enabled: true,
-        }
+        Self::Button { key: key.into(), label: label.into(), icon: None, enabled: true }
     }
 
-    pub fn button_with_icon(
-        key: impl Into<Key>,
-        label: impl Into<Rc<str>>,
-        icon: impl Into<Icon>,
-    ) -> Self {
-        Self::Button {
-            key: key.into(),
-            label: label.into(),
-            icon: Some(icon.into()),
-            enabled: true,
-        }
+    pub fn button_with_icon(key: impl Into<Key>, label: impl Into<Rc<str>>, icon: impl Into<Icon>) -> Self {
+        Self::Button { key: key.into(), label: label.into(), icon: Some(icon.into()), enabled: true }
     }
 
     pub fn disabled(key: impl Into<Key>, label: impl Into<Rc<str>>) -> Self {
-        Self::Button {
-            key: key.into(),
-            label: label.into(),
-            icon: None,
-            enabled: false,
-        }
+        Self::Button { key: key.into(), label: label.into(), icon: None, enabled: false }
     }
 
     pub fn separator(key: impl Into<Key>) -> Self {
@@ -994,12 +892,7 @@ impl CommandBarCommand {
 
     fn into_keyed_visual(self, on_click: &Callback<Key>) -> KeyedView {
         match self {
-            Self::Button {
-                key,
-                label,
-                icon,
-                enabled,
-            } => {
+            Self::Button { key, label, icon, enabled } => {
                 let callback = on_click.clone();
                 let clicked = key.clone();
                 let button = AppBarButton::new()
@@ -1025,16 +918,10 @@ impl CommandBar {
         on_click: impl IntoPayloadCallback<Key>,
     ) -> Self {
         let on_click = on_click.into_payload_callback();
-        self.keyed_primary_commands(
-            primary
-                .into_iter()
-                .map(|command| command.into_keyed_visual(&on_click)),
-        )
-        .keyed_secondary_commands(
-            secondary
-                .into_iter()
-                .map(|command| command.into_keyed_visual(&on_click)),
-        )
+        self.keyed_primary_commands(primary.into_iter().map(|command| command.into_keyed_visual(&on_click)))
+            .keyed_secondary_commands(
+                secondary.into_iter().map(|command| command.into_keyed_visual(&on_click)),
+            )
     }
 }
 
@@ -1080,11 +967,7 @@ impl FontWeight {
     pub const THIN: Self = Self(100);
 
     pub const fn new(weight: u16) -> Option<Self> {
-        if weight >= 1 && weight <= 999 {
-            Some(Self(weight))
-        } else {
-            None
-        }
+        if weight >= 1 && weight <= 999 { Some(Self(weight)) } else { None }
     }
 
     pub const fn get(self) -> u16 {
@@ -1116,11 +999,7 @@ impl GridLength {
     pub const STAR: Self = Self::new(GridLengthSize::Star(1.0));
 
     const fn new(size: GridLengthSize) -> Self {
-        Self {
-            size,
-            min: None,
-            max: None,
-        }
+        Self { size, min: None, max: None }
     }
 
     pub const fn Pixel(value: f64) -> Self {
@@ -1244,10 +1123,7 @@ pub enum PropertyValue {
     ThemeTransitions(Rc<[ThemeTransition]>),
     Thickness(Thickness),
     Vector2([f64; 2]),
-    Enum {
-        kind: &'static str,
-        variant: &'static str,
-    },
+    Enum { kind: &'static str, variant: &'static str },
 }
 
 // Floats compare by bits so that an unchanged NaN, such as a disabled anchor ratio, is not
@@ -1324,20 +1200,11 @@ impl<T> Clone for Callback<T> {
 
 impl<T> Callback<T> {
     pub fn new(callback: impl Fn(T) + 'static) -> Self {
-        Self(Rc::new(CallbackInner {
-            callback: Box::new(callback),
-            identity: None,
-        }))
+        Self(Rc::new(CallbackInner { callback: Box::new(callback), identity: None }))
     }
 
-    pub(crate) fn new_identified(
-        identity: CallbackIdentity,
-        callback: impl Fn(T) + 'static,
-    ) -> Self {
-        Self(Rc::new(CallbackInner {
-            callback: Box::new(callback),
-            identity: Some(identity),
-        }))
+    pub(crate) fn new_identified(identity: CallbackIdentity, callback: impl Fn(T) + 'static) -> Self {
+        Self(Rc::new(CallbackInner { callback: Box::new(callback), identity: Some(identity) }))
     }
 
     pub fn call(&self, value: T) {
@@ -1523,10 +1390,7 @@ pub struct DragDropAction {
 
 impl DragDropAction {
     pub fn new(operation: DragDropOperation) -> Self {
-        Self {
-            operation,
-            caption: None,
-        }
+        Self { operation, caption: None }
     }
 
     pub fn caption(mut self, caption: impl Into<String>) -> Self {
@@ -1685,10 +1549,7 @@ pub enum EventCall {
     OptionalDateTime(Callback<Option<DateTime>>, Option<DateTime>),
     OptionalF64(Callback<Option<f64>>, Option<f64>),
     OptionalTimeSpan(Callback<Option<TimeSpan>>, Option<TimeSpan>),
-    NavigationViewDisplayMode(
-        Callback<NavigationViewDisplayMode>,
-        NavigationViewDisplayMode,
-    ),
+    NavigationViewDisplayMode(Callback<NavigationViewDisplayMode>, NavigationViewDisplayMode),
     PointerEventInfo(Callback<PointerEventInfo>, PointerEventInfo),
     /// A menu or command bar item's key, or the key resolved from `Item`.
     Key(Callback<Key>, Key),
@@ -1898,10 +1759,8 @@ pub(crate) struct DeclaredTooltip {
 
 impl DeclaredTooltip {
     pub(crate) fn declaration(&self) -> Declaration {
-        Declaration::new(ObjectType::ToolTip).relation(
-            RelationId::Content,
-            RelationValue::One(Some(Rc::new(self.content.as_ref().clone()))),
-        )
+        Declaration::new(ObjectType::ToolTip)
+            .relation(RelationId::Content, RelationValue::One(Some(Rc::new(self.content.as_ref().clone()))))
     }
 }
 
@@ -1943,13 +1802,8 @@ pub(crate) struct DeclaredAttachments {
 }
 
 impl DeclaredAttachments {
-    pub(crate) const EMPTY: Self = Self {
-        tooltip: None,
-        flyout: None,
-        menu: None,
-        command_bar_flyout: None,
-        content_dialog: None,
-    };
+    pub(crate) const EMPTY: Self =
+        Self { tooltip: None, flyout: None, menu: None, command_bar_flyout: None, content_dialog: None };
 }
 
 #[derive(Debug, PartialEq)]
@@ -2029,12 +1883,7 @@ impl<T> FromIterator<T> for SharedList<T> {
         let Some(second) = values.next() else {
             return Self::One(first);
         };
-        Self::Many(Rc::new(
-            std::iter::once(first)
-                .chain(std::iter::once(second))
-                .chain(values)
-                .collect(),
-        ))
+        Self::Many(Rc::new(std::iter::once(first).chain(std::iter::once(second)).chain(values).collect()))
     }
 }
 
@@ -2106,11 +1955,7 @@ impl fmt::Debug for DeclaredNode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Object(value) => value.fmt(formatter),
-            Self::Component {
-                node,
-                relation_key,
-                attachments,
-            } => formatter
+            Self::Component { node, relation_key, attachments } => formatter
                 .debug_struct("Component")
                 .field("key", &node.key)
                 .field("relation_key", relation_key)
@@ -2130,16 +1975,8 @@ impl PartialEq for DeclaredNode {
         match (self, other) {
             (Self::Object(left), Self::Object(right)) => left == right,
             (
-                Self::Component {
-                    node: left,
-                    relation_key: left_key,
-                    attachments: left_attachments,
-                },
-                Self::Component {
-                    node: right,
-                    relation_key: right_key,
-                    attachments: right_attachments,
-                },
+                Self::Component { node: left, relation_key: left_key, attachments: left_attachments },
+                Self::Component { node: right, relation_key: right_key, attachments: right_attachments },
             ) => left == right && left_key == right_key && left_attachments == right_attachments,
             (Self::Provider(left), Self::Provider(right)) => {
                 left.provision == right.provision && left.child == right.child
@@ -2162,13 +1999,9 @@ impl DeclaredNode {
         let key = key.into();
         match self {
             Self::Object(value) => Self::Object(value.key(key)),
-            Self::Component {
-                node, attachments, ..
-            } => Self::Component {
-                node,
-                relation_key: Some(RelationKey::Explicit(key)),
-                attachments,
-            },
+            Self::Component { node, attachments, .. } => {
+                Self::Component { node, relation_key: Some(RelationKey::Explicit(key)), attachments }
+            }
             Self::Provider(provider) => Self::Provider(Box::new(DeclaredProvider {
                 provision: provider.provision,
                 child: provider.child.key(key),
@@ -2180,13 +2013,9 @@ impl DeclaredNode {
         let key = key.into();
         match self {
             Self::Object(value) => Self::Object(value.key(key)),
-            Self::Component {
-                node, attachments, ..
-            } => Self::Component {
-                node,
-                relation_key: Some(RelationKey::Positional(key)),
-                attachments,
-            },
+            Self::Component { node, attachments, .. } => {
+                Self::Component { node, relation_key: Some(RelationKey::Positional(key)), attachments }
+            }
             Self::Provider(provider) => Self::Provider(Box::new(DeclaredProvider {
                 provision: provider.provision,
                 child: provider.child.positional_key(key),
@@ -2216,14 +2045,8 @@ impl DeclaredNode {
                 };
                 key
             }
-            Self::Component {
-                node, relation_key, ..
-            } => relation_key.as_ref().map_or_else(
-                || {
-                    node.key
-                        .as_ref()
-                        .expect("unkeyed components require owning relation identity")
-                },
+            Self::Component { node, relation_key, .. } => relation_key.as_ref().map_or_else(
+                || node.key.as_ref().expect("unkeyed components require owning relation identity"),
                 RelationKey::key,
             ),
             Self::Provider(provider) => provider.child.key_ref(),
@@ -2233,11 +2056,9 @@ impl DeclaredNode {
     pub(crate) fn relation_identity(&self, index: usize) -> Key {
         match self {
             Self::Object(value) => value.key.clone().unwrap_or_else(|| index.into()),
-            Self::Component { relation_key, .. } => relation_key
-                .as_ref()
-                .map(RelationKey::key)
-                .cloned()
-                .unwrap_or_else(|| index.into()),
+            Self::Component { relation_key, .. } => {
+                relation_key.as_ref().map(RelationKey::key).cloned().unwrap_or_else(|| index.into())
+            }
             Self::Provider(provider) => provider.child.relation_identity(index),
         }
     }
@@ -2245,10 +2066,7 @@ impl DeclaredNode {
 
 impl Declaration {
     // Expansion replaces attachments without copying the ones it would immediately discard.
-    pub(crate) fn clone_with_attachments(
-        &self,
-        attachments: Option<Box<DeclaredAttachments>>,
-    ) -> Self {
+    pub(crate) fn clone_with_attachments(&self, attachments: Option<Box<DeclaredAttachments>>) -> Self {
         Self {
             kind: self.kind,
             key: self.key.clone(),
@@ -2284,10 +2102,8 @@ impl Declaration {
     }
 
     fn property(mut self, id: PropertyId, value: PropertyValue) -> Self {
-        self.properties
-            .upsert(|property| property.id == id, Property { id, value });
-        self.properties
-            .sort_by_key(|property| property_order(self.kind, property.id));
+        self.properties.upsert(|property| property.id == id, Property { id, value });
+        self.properties.sort_by_key(|property| property_order(self.kind, property.id));
         self
     }
 
@@ -2297,17 +2113,12 @@ impl Declaration {
     }
 
     pub(crate) fn relation(mut self, id: RelationId, value: RelationValue) -> Self {
-        self.relations
-            .upsert(|relation| relation.id == id, DeclaredRelation { id, value });
+        self.relations.upsert(|relation| relation.id == id, DeclaredRelation { id, value });
         self
     }
 
     pub(crate) fn virtual_items(mut self, relation: RelationId, items: VirtualItems) -> Self {
-        self.virtual_items = Some(Box::new(DeclaredVirtualItems {
-            relation,
-            owner: None,
-            items,
-        }));
+        self.virtual_items = Some(Box::new(DeclaredVirtualItems { relation, owner: None, items }));
         self
     }
 
@@ -2325,12 +2136,7 @@ impl Declaration {
                     } if *current == relation
                 ) =>
             {
-                let DeclaredVirtualItems {
-                    owner,
-                    items: VirtualItems::Eager(items),
-                    ..
-                } = *items
-                else {
+                let DeclaredVirtualItems { owner, items: VirtualItems::Eager(items), .. } = *items else {
                     unreachable!()
                 };
                 let mut items = items.as_ref().clone();
@@ -2344,17 +2150,13 @@ impl Declaration {
             }
             _ => Rc::new(vec![item]),
         };
-        self.virtual_items = Some(Box::new(DeclaredVirtualItems {
-            relation,
-            owner: None,
-            items: VirtualItems::Eager(items),
-        }));
+        self.virtual_items =
+            Some(Box::new(DeclaredVirtualItems { relation, owner: None, items: VirtualItems::Eager(items) }));
         self
     }
 
     fn event(mut self, id: EventId, value: EventValue) -> Self {
-        self.events
-            .upsert(|event| event.id == id, Event { id, value });
+        self.events.upsert(|event| event.id == id, Event { id, value });
         self
     }
 
@@ -2385,13 +2187,8 @@ impl Declaration {
 
     fn queue_declaration(declaration: &mut Self, pending: &mut Vec<DropFrame>) {
         if let Some(attachments) = declaration.attachments.take() {
-            let DeclaredAttachments {
-                tooltip,
-                flyout,
-                menu: _,
-                command_bar_flyout: _,
-                content_dialog,
-            } = *attachments;
+            let DeclaredAttachments { tooltip, flyout, menu: _, command_bar_flyout: _, content_dialog } =
+                *attachments;
             if let Some(tooltip) = tooltip {
                 pending.push(DropFrame::One(Some(*tooltip.content)));
             }
@@ -2444,15 +2241,8 @@ pub trait TooltipExt: Into<View> + Sized {
 
     fn tooltip_with(self, tooltip: Tooltip) -> View {
         let mut visual = self.into();
-        let tooltip = DeclaredTooltip {
-            content: Box::new(tooltip.content.0),
-            placement: tooltip.placement,
-        };
-        visual
-            .0
-            .attachments_mut()
-            .get_or_insert_with(Default::default)
-            .tooltip = Some(tooltip);
+        let tooltip = DeclaredTooltip { content: Box::new(tooltip.content.0), placement: tooltip.placement };
+        visual.0.attachments_mut().get_or_insert_with(Default::default).tooltip = Some(tooltip);
         visual
     }
 }
@@ -2468,15 +2258,8 @@ pub trait FlyoutExt: Into<View> + Sized {
     /// Attaches a flyout to a [`Button`], [`DropDownButton`], or [`SplitButton`].
     fn flyout_with(self, flyout: Flyout) -> View {
         let mut visual = self.into();
-        let flyout = DeclaredFlyout {
-            content: Box::new(flyout.content.0),
-            placement: flyout.placement,
-        };
-        visual
-            .0
-            .attachments_mut()
-            .get_or_insert_with(Default::default)
-            .flyout = Some(flyout);
+        let flyout = DeclaredFlyout { content: Box::new(flyout.content.0), placement: flyout.placement };
+        visual.0.attachments_mut().get_or_insert_with(Default::default).flyout = Some(flyout);
         visual
     }
 }
@@ -2491,11 +2274,7 @@ pub trait MenuExt: Into<View> + Sized {
     fn menu(self, menu: Menu) -> View {
         let mut visual = self.into();
         let menu = DeclaredMenu { menu };
-        visual
-            .0
-            .attachments_mut()
-            .get_or_insert_with(Default::default)
-            .menu = Some(menu);
+        visual.0.attachments_mut().get_or_insert_with(Default::default).menu = Some(menu);
         visual
     }
 }
@@ -2506,11 +2285,7 @@ pub trait CommandBarFlyoutExt: Into<View> + Sized {
     fn command_bar_flyout(self, flyout: CommandBarFlyout) -> View {
         let mut visual = self.into();
         let flyout = DeclaredCommandBarFlyout { flyout };
-        visual
-            .0
-            .attachments_mut()
-            .get_or_insert_with(Default::default)
-            .command_bar_flyout = Some(flyout);
+        visual.0.attachments_mut().get_or_insert_with(Default::default).command_bar_flyout = Some(flyout);
         visual
     }
 }
@@ -2520,15 +2295,8 @@ impl<T> CommandBarFlyoutExt for T where T: Into<View> {}
 pub trait ContentDialogExt: Into<View> + Sized {
     fn content_dialog(self, dialog: ContentDialog) -> View {
         let mut visual = self.into();
-        let dialog = DeclaredContentDialog {
-            declaration: dialog.0,
-            open: dialog.1,
-        };
-        visual
-            .0
-            .attachments_mut()
-            .get_or_insert_with(Default::default)
-            .content_dialog = Some(dialog);
+        let dialog = DeclaredContentDialog { declaration: dialog.0, open: dialog.1 };
+        visual.0.attachments_mut().get_or_insert_with(Default::default).content_dialog = Some(dialog);
         visual
     }
 }
@@ -2651,9 +2419,7 @@ impl_into_visuals_tuple!(
 macro_rules! enabled_methods {
     () => {
         pub fn is_enabled(mut self, is_enabled: bool) -> Self {
-            self.0 = self
-                .0
-                .property(PropertyId::IsEnabled, PropertyValue::Bool(is_enabled));
+            self.0 = self.0.property(PropertyId::IsEnabled, PropertyValue::Bool(is_enabled));
             self
         }
     };
@@ -2683,10 +2449,7 @@ macro_rules! window_title_bar_methods {
 macro_rules! image_uri_methods {
     ($name:ident, $optional:ident, $file:ident, $data:ident, $svg:ident, $id:ident) => {
         pub fn $name(mut self, value: impl Into<Rc<str>>) -> windows_core::Result<Self> {
-            self.0 = self.0.property(
-                PropertyId::$id,
-                PropertyValue::ImageSource(ImageSource::uri(value)?),
-            );
+            self.0 = self.0.property(PropertyId::$id, PropertyValue::ImageSource(ImageSource::uri(value)?));
             Ok(self)
         }
         pub fn $optional<T>(mut self, value: Option<T>) -> windows_core::Result<Self>
@@ -2694,32 +2457,22 @@ macro_rules! image_uri_methods {
             T: Into<Rc<str>>,
         {
             if let Some(value) = value {
-                self.0 = self.0.property(
-                    PropertyId::$id,
-                    PropertyValue::ImageSource(ImageSource::uri(value)?),
-                );
+                self.0 =
+                    self.0.property(PropertyId::$id, PropertyValue::ImageSource(ImageSource::uri(value)?));
             }
             Ok(self)
         }
         pub fn $file(mut self, path: impl AsRef<Path>) -> windows_core::Result<Self> {
-            self.0 = self.0.property(
-                PropertyId::$id,
-                PropertyValue::ImageSource(ImageSource::file(path)?),
-            );
+            self.0 = self.0.property(PropertyId::$id, PropertyValue::ImageSource(ImageSource::file(path)?));
             Ok(self)
         }
         pub fn $data(mut self, value: EncodedImage) -> Self {
-            self.0 = self.0.property(
-                PropertyId::$id,
-                PropertyValue::ImageSource(ImageSource::encoded(value)),
-            );
+            self.0 =
+                self.0.property(PropertyId::$id, PropertyValue::ImageSource(ImageSource::encoded(value)));
             self
         }
         pub fn $svg(mut self, value: EncodedImage) -> Self {
-            self.0 = self.0.property(
-                PropertyId::$id,
-                PropertyValue::ImageSource(ImageSource::svg(value)),
-            );
+            self.0 = self.0.property(PropertyId::$id, PropertyValue::ImageSource(ImageSource::svg(value)));
             self
         }
     };
@@ -2730,9 +2483,7 @@ macro_rules! uri_methods {
         pub fn $name(mut self, value: impl Into<Rc<str>>) -> windows_core::Result<Self> {
             let value = value.into();
             validate_uri(&value)?;
-            self.0 = self
-                .0
-                .property(PropertyId::$id, PropertyValue::String(value));
+            self.0 = self.0.property(PropertyId::$id, PropertyValue::String(value));
             Ok(self)
         }
         pub fn $optional<T>(mut self, value: Option<T>) -> windows_core::Result<Self>
@@ -2742,9 +2493,7 @@ macro_rules! uri_methods {
             if let Some(value) = value {
                 let value = value.into();
                 validate_uri(&value)?;
-                self.0 = self
-                    .0
-                    .property(PropertyId::$id, PropertyValue::String(value));
+                self.0 = self.0.property(PropertyId::$id, PropertyValue::String(value));
             }
             Ok(self)
         }

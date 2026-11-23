@@ -42,19 +42,12 @@ pub struct ComponentNode {
 }
 
 pub fn component<C: Component>(key: impl Into<Key>, input: C::Input) -> ComponentNode {
-    ComponentNode {
-        key: Some(key.into()),
-        factory: Rc::new(TypedFactory::<C> { input }),
-    }
+    ComponentNode { key: Some(key.into()), factory: Rc::new(TypedFactory::<C> { input }) }
 }
 
 impl View {
     pub fn component<C: Component>(input: C::Input) -> Self {
-        ComponentNode {
-            key: None,
-            factory: Rc::new(TypedFactory::<C> { input }),
-        }
-        .into()
+        ComponentNode { key: None, factory: Rc::new(TypedFactory::<C> { input }) }.into()
     }
 }
 
@@ -100,11 +93,7 @@ impl<C: Component> ErasedFactory for TypedFactory<C> {
         ui_services: Rc<WindowServices>,
         contexts: &HashMap<ContextId, ContextValue>,
     ) -> (Box<dyn ErasedComponent>, ComponentRender) {
-        let sender = ComponentSender {
-            component: id,
-            queue: queues.shared,
-            marker: PhantomData,
-        };
+        let sender = ComponentSender { component: id, queue: queues.shared, marker: PhantomData };
         let local_sender = LocalSender {
             component: id,
             queue: queues.local,
@@ -143,10 +132,7 @@ impl<C: Component> ErasedFactory for TypedFactory<C> {
 
 impl Clone for ComponentNode {
     fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            factory: Rc::clone(&self.factory),
-        }
+        Self { key: self.key.clone(), factory: Rc::clone(&self.factory) }
     }
 }
 
@@ -158,11 +144,7 @@ impl PartialEq for ComponentNode {
 
 impl From<ComponentNode> for View {
     fn from(node: ComponentNode) -> Self {
-        Self(DeclaredNode::Component {
-            node,
-            relation_key: None,
-            attachments: None,
-        })
+        Self(DeclaredNode::Component { node, relation_key: None, attachments: None })
     }
 }
 
@@ -261,11 +243,7 @@ impl ComponentHost {
                 .and_then(|index| local.remove(index));
             let sequence = queue.next_sequence;
             queue.next_sequence = sequence.wrapping_add(1);
-            local.push_back(LocalMessage {
-                component: id,
-                sequence,
-                value: LocalMessageValue::Input(node),
-            });
+            local.push_back(LocalMessage { component: id, sequence, value: LocalMessageValue::Input(node) });
             retired
         };
         drop(retired);
@@ -273,10 +251,7 @@ impl ComponentHost {
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {
-        self.local_queue
-            .borrow()
-            .iter()
-            .any(|message| matches!(message.value, LocalMessageValue::Input(_)))
+        self.local_queue.borrow().iter().any(|message| matches!(message.value, LocalMessageValue::Input(_)))
     }
 
     pub(crate) fn mount_with_all_services(
@@ -311,10 +286,7 @@ impl ComponentHost {
         let mut keys = HashSet::new();
         let mut expansion = ExpansionState::default();
         for node in components {
-            let key = node
-                .key
-                .clone()
-                .expect("component roots require explicit keys");
+            let key = node.key.clone().expect("component roots require explicit keys");
             assert!(keys.insert(key.clone()), "duplicate key {key:?}");
             let contexts = host.contexts.clone();
             let (id, render) = host.create_scope(None, node, contexts.clone(), HashSet::new());
@@ -323,19 +295,13 @@ impl ComponentHost {
             let view = expansion.push_render(
                 id,
                 render,
-                OwnedContextEnvironment {
-                    contexts: contexts.clone(),
-                    provided: HashSet::new(),
-                },
+                OwnedContextEnvironment { contexts: contexts.clone(), provided: HashSet::new() },
             );
             let provided = HashSet::new();
             let view = host.expand_view(
                 id,
                 view,
-                &ContextEnvironment {
-                    contexts: &contexts,
-                    provided: &provided,
-                },
+                &ContextEnvironment { contexts: &contexts, provided: &provided },
                 0,
                 &mut expansion,
             );
@@ -351,9 +317,7 @@ impl ComponentHost {
             host.scope_mut(pending.id).unwrap().contexts = environment.contexts;
             host.scope_mut(pending.id).unwrap().provided_contexts = environment.provided;
             host.scope_mut(pending.id).unwrap().dependencies = pending.dependencies;
-            pending
-                .effects
-                .commit(&mut host.scope_mut(pending.id).unwrap().effects);
+            pending.effects.commit(&mut host.scope_mut(pending.id).unwrap().effects);
         }
         host.publish_committed_window(publication);
         host
@@ -375,8 +339,8 @@ impl ComponentHost {
         }
         let wake = drain.clone();
         queue.waker = Some(Arc::new(move || wake.wake()));
-        let wake = (!queue.messages.is_empty() || !self.local_queue.borrow().is_empty())
-            && !queue.wake_pending;
+        let wake =
+            (!queue.messages.is_empty() || !self.local_queue.borrow().is_empty()) && !queue.wake_pending;
         queue.wake_pending |= wake;
         drop(queue);
         if wake {
@@ -386,12 +350,7 @@ impl ComponentHost {
 
     pub(crate) fn begin_drain(&mut self, limit: usize) -> DrainState {
         self.queue.lock().unwrap().wake_pending = false;
-        DrainState {
-            report: ComponentDrain::default(),
-            processed: 0,
-            active_event: None,
-            limit,
-        }
+        DrainState { report: ComponentDrain::default(), processed: 0, active_event: None, limit }
     }
 
     /// Runs drain work until it plans a batch for the caller to apply, or until the drain ends.
@@ -414,9 +373,7 @@ impl ComponentHost {
                         _ => false,
                     };
                     if take_local {
-                        local_queue
-                            .pop_front()
-                            .map(|message| (message.component, None, message.value))
+                        local_queue.pop_front().map(|message| (message.component, None, message.value))
                     } else {
                         queue.messages.pop_front().map(|message| {
                             let value = match message.value {
@@ -456,9 +413,7 @@ impl ComponentHost {
                         Some(scope.component.dispatch(factory(), reference, &contexts))
                     }
                     LocalMessageValue::Input(node) => {
-                        scope
-                            .component
-                            .apply_input(node.factory.input(), reference, &contexts)
+                        scope.component.apply_input(node.factory.input(), reference, &contexts)
                     }
                 };
                 state.report.dispatched += 1;
@@ -526,11 +481,7 @@ impl ComponentHost {
     pub(super) fn pending_rows(&self) -> Vec<(ObjectId, Key)> {
         self.virtual_rows
             .iter()
-            .filter(|(_, row)| {
-                self.prepared_effects
-                    .iter()
-                    .any(|(id, _)| self.owns_scope(**row, *id))
-            })
+            .filter(|(_, row)| self.prepared_effects.iter().any(|(id, _)| self.owns_scope(**row, *id)))
             .map(|(row, _)| row.clone())
             .collect()
     }
@@ -570,10 +521,7 @@ impl ComponentHost {
         self.free_scopes.clear();
         drop(local_messages);
         drop(waker);
-        let controls = messages
-            .into_iter()
-            .filter_map(|message| message.control)
-            .collect::<Vec<_>>();
+        let controls = messages.into_iter().filter_map(|message| message.control).collect::<Vec<_>>();
         let mut scopes = Vec::new();
         for (index, slot) in self.scopes.iter_mut().enumerate().rev() {
             let Some(mut scope) = slot.scope.take() else {

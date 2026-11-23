@@ -23,11 +23,8 @@ where
     T::Default: PartialEq,
 {
     fn First(&self) -> Result<IIterator<T>> {
-        Ok(ComObject::new(StockVectorIterator {
-            owner: self.to_object(),
-            current: 0.into(),
-        })
-        .into_interface())
+        Ok(ComObject::new(StockVectorIterator { owner: self.to_object(), current: 0.into() })
+            .into_interface())
     }
 }
 
@@ -38,9 +35,7 @@ where
 {
     fn GetAt(&self, index: u32) -> Result<T> {
         let values = self.values.read().unwrap();
-        let item = values
-            .get(index as usize)
-            .ok_or_else(|| Error::from(E_BOUNDS))?;
+        let item = values.get(index as usize).ok_or_else(|| Error::from(E_BOUNDS))?;
         T::from_default(item)
     }
 
@@ -55,10 +50,7 @@ where
 
     fn IndexOf(&self, value: Ref<T>, result: &mut u32) -> Result<bool> {
         let values = self.values.read().unwrap();
-        if let Some(index) = values
-            .iter()
-            .position(|element| element == ref_as_default::<T>(&value))
-        {
+        if let Some(index) = values.iter().position(|element| element == ref_as_default::<T>(&value)) {
             *result = index as u32;
             Ok(true)
         } else {
@@ -69,9 +61,7 @@ where
 
     fn SetAt(&self, index: u32, value: Ref<T>) -> Result<()> {
         let mut values = self.values.write().unwrap();
-        let item = values
-            .get_mut(index as usize)
-            .ok_or_else(|| Error::from(E_BOUNDS))?;
+        let item = values.get_mut(index as usize).ok_or_else(|| Error::from(E_BOUNDS))?;
         *item = ref_as_default::<T>(&value).clone();
         Ok(())
     }
@@ -96,10 +86,7 @@ where
     }
 
     fn Append(&self, value: Ref<T>) -> Result<()> {
-        self.values
-            .write()
-            .unwrap()
-            .push(ref_as_default::<T>(&value).clone());
+        self.values.write().unwrap().push(ref_as_default::<T>(&value).clone());
         Ok(())
     }
 
@@ -164,11 +151,7 @@ where
         let current = self.current.load(std::sync::atomic::Ordering::Relaxed);
         let values = self.owner.values.read().unwrap();
 
-        if let Some(item) = values.get(current) {
-            T::from_default(item)
-        } else {
-            Err(Error::from(E_BOUNDS))
-        }
+        if let Some(item) = values.get(current) { T::from_default(item) } else { Err(Error::from(E_BOUNDS)) }
     }
 
     fn HasCurrent(&self) -> Result<bool> {
@@ -184,8 +167,7 @@ where
         drop(values);
 
         if current < len {
-            self.current
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.current.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(len > current + 1)
@@ -203,8 +185,7 @@ where
         let (items, _) = items.split_at_mut(actual);
         items.clone_from_slice(&values[current..current + actual]);
 
-        self.current
-            .fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
+        self.current.fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
 
         Ok(actual as u32)
     }
@@ -217,9 +198,6 @@ where
 {
     /// Creates a mutable `IVector<T>` containing the given values.
     fn from(values: Vec<T::Default>) -> Self {
-        ComObject::new(StockVector {
-            values: std::sync::RwLock::new(values),
-        })
-        .into_interface()
+        ComObject::new(StockVector { values: std::sync::RwLock::new(values) }).into_interface()
     }
 }

@@ -1,6 +1,7 @@
 //! How a VM starts and stops. Everything that knows how the VM and the daemon are brought up is behind
 //! [`VmHost`], as the daemon's start-up is changing. Machines with and without a GPU both go through it.
 
+mod android_stop;
 mod local;
 mod macos_stop;
 

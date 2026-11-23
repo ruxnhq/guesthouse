@@ -149,12 +149,7 @@ impl From<&std::path::Path> for HSTRING {
 #[cfg(all(feature = "std", windows))]
 impl From<&std::ffi::OsStr> for HSTRING {
     fn from(value: &std::ffi::OsStr) -> Self {
-        unsafe {
-            Self::from_wide_iter(
-                std::os::windows::ffi::OsStrExt::encode_wide(value),
-                value.len(),
-            )
-        }
+        unsafe { Self::from_wide_iter(std::os::windows::ffi::OsStrExt::encode_wide(value), value.len()) }
     }
 }
 
@@ -294,9 +289,7 @@ impl PartialEq<&std::ffi::OsString> for HSTRING {
 #[cfg(all(feature = "std", windows))]
 impl PartialEq<std::ffi::OsStr> for HSTRING {
     fn eq(&self, other: &std::ffi::OsStr) -> bool {
-        self.iter()
-            .copied()
-            .eq(std::os::windows::ffi::OsStrExt::encode_wide(other))
+        self.iter().copied().eq(std::os::windows::ffi::OsStrExt::encode_wide(other))
     }
 }
 

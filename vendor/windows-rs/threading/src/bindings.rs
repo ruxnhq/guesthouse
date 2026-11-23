@@ -57,9 +57,8 @@ pub type PTP_POOL = *mut _TP_POOL;
 pub type PTP_SIMPLE_CALLBACK =
     Option<unsafe extern "system" fn(instance: PTP_CALLBACK_INSTANCE, context: PVOID)>;
 pub type PTP_TIMER = *mut _TP_TIMER;
-pub type PTP_TIMER_CALLBACK = Option<
-    unsafe extern "system" fn(instance: PTP_CALLBACK_INSTANCE, context: PVOID, timer: PTP_TIMER),
->;
+pub type PTP_TIMER_CALLBACK =
+    Option<unsafe extern "system" fn(instance: PTP_CALLBACK_INSTANCE, context: PVOID, timer: PTP_TIMER)>;
 pub type PVOID = *mut core::ffi::c_void;
 #[repr(C)]
 #[derive(Clone, Copy)]

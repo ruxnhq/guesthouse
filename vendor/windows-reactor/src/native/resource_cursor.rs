@@ -19,7 +19,12 @@ windows_core::imp::define_winrt_interface!(
 pub struct IInputDesktopResourceCursorStatics_Vtbl {
     pub base__: windows_core::IInspectable_Vtbl,
     _Create: usize,
-    pub CreateFromModule: unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void, u32, *mut *mut core::ffi::c_void) -> windows_core::HRESULT,
+    pub CreateFromModule: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        u32,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
 }
 
 struct InputDesktopResourceCursor;
@@ -30,14 +35,22 @@ impl windows_core::RuntimeName for InputDesktopResourceCursor {
 
 /// The cursor resource numbered `id` in the running exe, as a WinUI cursor.
 pub(crate) fn from_resource(id: u32) -> windows_core::Result<InputCursor> {
-    let statics: IInputDesktopResourceCursorStatics = windows_core::factory::<InputDesktopResourceCursor, _>()?;
-    let exe = std::env::current_exe().map_err(|_| windows_core::Error::from_hresult(windows_core::HRESULT(0x80004005u32 as i32)))?;
+    let statics: IInputDesktopResourceCursorStatics =
+        windows_core::factory::<InputDesktopResourceCursor, _>()?;
+    let exe = std::env::current_exe()
+        .map_err(|_| windows_core::Error::from_hresult(windows_core::HRESULT(0x80004005u32 as i32)))?;
     let name = windows_core::HSTRING::from(exe.as_os_str());
     let mut made = core::ptr::null_mut();
     // SAFETY: the factory's CreateFromModule, as the metadata declares it (an HSTRING passed
     // borrowed); the result is owned once returned.
     unsafe {
-        (statics.vtable().CreateFromModule)(statics.as_raw(), core::mem::transmute_copy(&name), id, &mut made).ok()?;
+        (statics.vtable().CreateFromModule)(
+            statics.as_raw(),
+            core::mem::transmute_copy(&name),
+            id,
+            &mut made,
+        )
+        .ok()?;
         windows_core::IInspectable::from_raw(made).cast()
     }
 }

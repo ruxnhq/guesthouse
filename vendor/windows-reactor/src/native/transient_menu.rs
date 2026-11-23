@@ -84,13 +84,9 @@ impl TransientMenuHost {
 
         let source = DesktopWindowXamlSource::new()?;
         source.Initialize(WindowId { value: hwnd as u64 })?;
-        source
-            .cast::<IDesktopWindowXamlSource2>()?
-            .SetShouldConstrainPopupsToWorkArea(false)?;
+        source.cast::<IDesktopWindowXamlSource2>()?.SetShouldConstrainPopupsToWorkArea(false)?;
         source.SetContent(&root)?;
-        source
-            .SiteBridge()?
-            .SetResizePolicy(ContentSizePolicy::ResizeContentToParentWindow)?;
+        source.SiteBridge()?.SetResizePolicy(ContentSizePolicy::ResizeContentToParentWindow)?;
 
         let state = Rc::new(RefCell::new(TransientMenuState {
             theme,
@@ -111,16 +107,11 @@ impl TransientMenuHost {
             show_pending(&state).unwrap();
         }))?;
 
-        Ok(Self {
-            state,
-            _loaded: loaded,
-        })
+        Ok(Self { state, _loaded: loaded })
     }
 
     pub(super) fn handle(&self) -> TransientMenuHandle {
-        TransientMenuHandle {
-            state: Rc::downgrade(&self.state),
-        }
+        TransientMenuHandle { state: Rc::downgrade(&self.state) }
     }
 }
 
@@ -143,11 +134,7 @@ fn system_theme() -> windows_core::Result<ElementTheme> {
 
 fn theme_preference(status: i32, value: u32) -> windows_core::Result<ElementTheme> {
     match status {
-        0 => Ok(if value == 0 {
-            ElementTheme::Dark
-        } else {
-            ElementTheme::Light
-        }),
+        0 => Ok(if value == 0 { ElementTheme::Dark } else { ElementTheme::Light }),
         ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(ElementTheme::Default),
         _ => Err(windows_core::WIN32_ERROR(status as u32).into()),
     }
@@ -223,16 +210,14 @@ impl TransientMenuHandle {
 
     pub(super) fn show(&self, position: ScreenPoint, menu: Menu) -> windows_core::Result<()> {
         validate_menu_items(&menu.items, &mut HashSet::new());
-        let state = self.state.upgrade().ok_or_else(|| {
-            windows_core::Error::new(E_FAIL, "the application menu host is unavailable")
-        })?;
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| windows_core::Error::new(E_FAIL, "the application menu host is unavailable"))?;
         {
             let mut state = state.borrow_mut();
             if state.pending.is_some() || state.menu.is_some() {
-                return Err(windows_core::Error::new(
-                    E_FAIL,
-                    "an application menu is already open",
-                ));
+                return Err(windows_core::Error::new(E_FAIL, "an application menu is already open"));
             }
             position_host(&state.host, position)?;
             state.generation = state.generation.wrapping_add(1);
@@ -246,16 +231,8 @@ fn position_host(host: &windows_window::Window, position: ScreenPoint) -> window
     let _coordinates = PhysicalCoordinates::enter()?;
     let hwnd: HWND = host.hwnd().cast();
     unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            position.x,
-            position.y,
-            HOST_SIZE,
-            HOST_SIZE,
-            SWP_NOACTIVATE as u32,
-        )
-        .ok()
+        SetWindowPos(hwnd, HWND_TOPMOST, position.x, position.y, HOST_SIZE, HOST_SIZE, SWP_NOACTIVATE as u32)
+            .ok()
     }
 }
 
@@ -322,13 +299,7 @@ fn show_pending(state: &Rc<RefCell<TransientMenuState>>) -> windows_core::Result
         let Some(menu) = state.pending.take() else {
             return Ok(());
         };
-        (
-            Rc::clone(&state.theme),
-            state.dispatcher.clone(),
-            state.host.hwnd().cast(),
-            menu,
-            state.generation,
-        )
+        (Rc::clone(&state.theme), state.dispatcher.clone(), state.host.hwnd().cast(), menu, state.generation)
     };
 
     let result = (|| {
@@ -369,17 +340,11 @@ fn show_pending(state: &Rc<RefCell<TransientMenuState>>) -> windows_core::Result
                 state.menu = None;
             }));
             // A dispatcher that is shutting down rejects the cleanup and drops the menu itself.
-            dispatcher
-                .TryEnqueueWithPriority(DispatcherQueuePriority::Normal, &cleanup)
-                .unwrap();
+            dispatcher.TryEnqueueWithPriority(DispatcherQueuePriority::Normal, &cleanup).unwrap();
         }))?);
 
-        state.borrow_mut().menu = Some(ActiveMenu {
-            flyout: flyout_base.clone(),
-            _revokers: revokers,
-            callback,
-            live,
-        });
+        state.borrow_mut().menu =
+            Some(ActiveMenu { flyout: flyout_base.clone(), _revokers: revokers, callback, live });
         flyout_base.ShowAt(anchor)
     })();
     if result.is_err() {

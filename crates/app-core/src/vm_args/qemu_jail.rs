@@ -184,6 +184,7 @@ impl VmPlan {
         self.grant_forwarding(&mut plan, devices);
         self.grant_amd(&mut plan);
         self.grant_macos(&mut plan);
+        self.grant_android(&mut plan);
         if let Some(folder) = self.shared_folder() {
             plan.grant(Grant::Run, &self.share_program).grant(Grant::Own, folder);
         }

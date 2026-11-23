@@ -19,9 +19,7 @@ mod ref_count;
 mod sha1;
 mod weak_ref_count;
 
-pub use crate::r#type::{
-    AbiType, CloneType, CopyType, InterfaceType, Type, TypeKind, ref_as_default,
-};
+pub use crate::r#type::{AbiType, CloneType, CopyType, InterfaceType, Type, TypeKind, ref_as_default};
 pub use agile::*;
 pub use array_slice::*;
 pub use bindings::*;
@@ -42,11 +40,7 @@ pub use weak_ref_count::*;
 ///
 /// A non-null `raw` must satisfy [`crate::Interface::from_raw`]'s safety requirements for `T`.
 pub unsafe fn from_abi<T: crate::Interface>(raw: *mut core::ffi::c_void) -> crate::Result<T> {
-    if raw.is_null() {
-        Err(crate::Error::empty())
-    } else {
-        Ok(unsafe { T::from_raw(raw) })
-    }
+    if raw.is_null() { Err(crate::Error::empty()) } else { Ok(unsafe { T::from_raw(raw) }) }
 }
 
 /// Returns an opaque, process-specific encoding of a pointer suitable for use

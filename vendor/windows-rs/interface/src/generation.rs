@@ -350,26 +350,16 @@ impl Interface {
     }
 
     fn parent_vtable(&self) -> Option<proc_macro2::TokenStream> {
-        self.parent
-            .as_ref()
-            .map(|parent| quote! { <#parent as ::windows_core::Interface>::Vtable })
+        self.parent.as_ref().map(|parent| quote! { <#parent as ::windows_core::Interface>::Vtable })
     }
 
     fn parent_is_iunknown(&self) -> bool {
-        if let Some(ident) = self.parent_path().last() {
-            ident == "IUnknown"
-        } else {
-            false
-        }
+        if let Some(ident) = self.parent_path().last() { ident == "IUnknown" } else { false }
     }
 
     fn parent_path(&self) -> Vec<syn::Ident> {
         if let Some(parent) = &self.parent {
-            parent
-                .segments
-                .iter()
-                .map(|segment| segment.ident.clone())
-                .collect()
+            parent.segments.iter().map(|segment| segment.ident.clone()).collect()
         } else {
             vec![]
         }

@@ -9,19 +9,13 @@ const UNIX_EPOCH_TICKS: i64 = UNIX_EPOCH_DIFFERENCE_SECS * TICKS_PER_SECOND;
 
 impl DateTime {
     /// The `DateTime` value corresponding to 1970-01-01 00:00:00 UTC.
-    pub const UNIX_EPOCH: Self = Self {
-        universal_time: UNIX_EPOCH_TICKS,
-    };
+    pub const UNIX_EPOCH: Self = Self { universal_time: UNIX_EPOCH_TICKS };
 
     /// The minimum representable `DateTime` (`i64::MIN` ticks).
-    pub const MIN: Self = Self {
-        universal_time: i64::MIN,
-    };
+    pub const MIN: Self = Self { universal_time: i64::MIN };
 
     /// The maximum representable `DateTime` (`i64::MAX` ticks).
-    pub const MAX: Self = Self {
-        universal_time: i64::MAX,
-    };
+    pub const MAX: Self = Self { universal_time: i64::MAX };
 
     /// The number of 100-nanosecond ticks per second (matches
     /// [`TimeSpan::TICKS_PER_SECOND`]).
@@ -30,18 +24,14 @@ impl DateTime {
     /// Constructs a `DateTime` from a raw count of 100-nanosecond ticks since
     /// 1601-01-01 00:00:00 UTC.
     pub const fn from_ticks(ticks: i64) -> Self {
-        Self {
-            universal_time: ticks,
-        }
+        Self { universal_time: ticks }
     }
 
     /// Constructs a `DateTime` from a number of whole seconds since the Unix
     /// epoch, saturating on overflow.
     pub const fn from_unix_secs(secs: i64) -> Self {
         let total = secs.saturating_add(UNIX_EPOCH_DIFFERENCE_SECS);
-        Self {
-            universal_time: total.saturating_mul(TICKS_PER_SECOND),
-        }
+        Self { universal_time: total.saturating_mul(TICKS_PER_SECOND) }
     }
 
     /// Constructs a `DateTime` from a number of whole milliseconds since the
@@ -50,9 +40,7 @@ impl DateTime {
         // (millis * 10_000) ticks since Unix epoch + offset
         let unix_ticks = millis.saturating_mul(10_000);
         let offset_ticks = UNIX_EPOCH_DIFFERENCE_SECS.saturating_mul(TICKS_PER_SECOND);
-        Self {
-            universal_time: unix_ticks.saturating_add(offset_ticks),
-        }
+        Self { universal_time: unix_ticks.saturating_add(offset_ticks) }
     }
 
     /// Returns the raw count of 100-nanosecond ticks since 1601-01-01 UTC.
@@ -105,16 +93,12 @@ impl DateTime {
 
     /// Saturating addition of a `TimeSpan`.
     pub const fn saturating_add(self, rhs: TimeSpan) -> Self {
-        Self {
-            universal_time: self.universal_time.saturating_add(rhs.duration),
-        }
+        Self { universal_time: self.universal_time.saturating_add(rhs.duration) }
     }
 
     /// Saturating subtraction of a `TimeSpan`.
     pub const fn saturating_sub(self, rhs: TimeSpan) -> Self {
-        Self {
-            universal_time: self.universal_time.saturating_sub(rhs.duration),
-        }
+        Self { universal_time: self.universal_time.saturating_sub(rhs.duration) }
     }
 
     /// Returns the current `DateTime` from the system clock.
@@ -142,10 +126,7 @@ impl DateTime {
     /// ```
     pub fn to_local(self) -> Self {
         let ticks = self.universal_time as u64;
-        let utc = FILETIME {
-            dwLowDateTime: ticks as u32,
-            dwHighDateTime: (ticks >> 32) as u32,
-        };
+        let utc = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
         let mut local = FILETIME::default();
         // SAFETY: Both pointers are valid, aligned FILETIME values on the stack.
         // FileTimeToLocalFileTime cannot fail with valid pointers.
@@ -153,8 +134,7 @@ impl DateTime {
             _ = FileTimeToLocalFileTime(&utc, &mut local);
         }
         Self {
-            universal_time: local.dwLowDateTime as u64 as i64
-                | (local.dwHighDateTime as u64 as i64) << 32,
+            universal_time: local.dwLowDateTime as u64 as i64 | (local.dwHighDateTime as u64 as i64) << 32,
         }
     }
 
@@ -241,33 +221,28 @@ impl core::hash::Hash for DateTime {
 impl core::ops::Add<TimeSpan> for DateTime {
     type Output = Self;
     fn add(self, rhs: TimeSpan) -> Self {
-        self.checked_add(rhs)
-            .expect("overflow when adding TimeSpan to DateTime")
+        self.checked_add(rhs).expect("overflow when adding TimeSpan to DateTime")
     }
 }
 
 impl core::ops::Sub<TimeSpan> for DateTime {
     type Output = Self;
     fn sub(self, rhs: TimeSpan) -> Self {
-        self.checked_sub(rhs)
-            .expect("overflow when subtracting TimeSpan from DateTime")
+        self.checked_sub(rhs).expect("overflow when subtracting TimeSpan from DateTime")
     }
 }
 
 impl core::ops::Sub<Self> for DateTime {
     type Output = TimeSpan;
     fn sub(self, rhs: Self) -> TimeSpan {
-        self.checked_duration_since(rhs)
-            .expect("overflow when subtracting DateTime values")
+        self.checked_duration_since(rhs).expect("overflow when subtracting DateTime values")
     }
 }
 
 impl core::ops::AddAssign<TimeSpan> for DateTime {
     fn add_assign(&mut self, rhs: TimeSpan) {
-        self.universal_time = self
-            .universal_time
-            .checked_add(rhs.duration)
-            .expect("overflow when adding TimeSpan to DateTime");
+        self.universal_time =
+            self.universal_time.checked_add(rhs.duration).expect("overflow when adding TimeSpan to DateTime");
     }
 }
 
@@ -365,9 +340,7 @@ impl TryFrom<std::time::SystemTime> for DateTime {
                 if ticks > (i64::MAX as u128) - (UNIX_EPOCH_TICKS as u128) {
                     return Err(TimeRangeError);
                 }
-                Ok(Self {
-                    universal_time: ticks as i64 + UNIX_EPOCH_TICKS,
-                })
+                Ok(Self { universal_time: ticks as i64 + UNIX_EPOCH_TICKS })
             }
             Err(e) => {
                 // Negative: value is before Unix epoch
@@ -376,9 +349,7 @@ impl TryFrom<std::time::SystemTime> for DateTime {
                 if ticks > UNIX_EPOCH_TICKS as u128 {
                     return Err(TimeRangeError);
                 }
-                Ok(Self {
-                    universal_time: UNIX_EPOCH_TICKS - ticks as i64,
-                })
+                Ok(Self { universal_time: UNIX_EPOCH_TICKS - ticks as i64 })
             }
         }
     }
@@ -395,17 +366,13 @@ impl TryFrom<DateTime> for std::time::SystemTime {
             let nanos = unix_ticks as u128 * 100;
             let secs = (nanos / 1_000_000_000) as u64;
             let subsec = (nanos % 1_000_000_000) as u32;
-            Self::UNIX_EPOCH
-                .checked_add(std::time::Duration::new(secs, subsec))
-                .ok_or(TimeRangeError)
+            Self::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, subsec)).ok_or(TimeRangeError)
         } else {
             let abs_ticks = (-unix_ticks) as u128;
             let nanos = abs_ticks * 100;
             let secs = (nanos / 1_000_000_000) as u64;
             let subsec = (nanos % 1_000_000_000) as u32;
-            Self::UNIX_EPOCH
-                .checked_sub(std::time::Duration::new(secs, subsec))
-                .ok_or(TimeRangeError)
+            Self::UNIX_EPOCH.checked_sub(std::time::Duration::new(secs, subsec)).ok_or(TimeRangeError)
         }
     }
 }

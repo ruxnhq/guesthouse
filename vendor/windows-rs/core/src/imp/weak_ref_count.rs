@@ -32,16 +32,14 @@ impl WeakRefCount {
     }
 
     pub fn add_ref(&self) -> u32 {
-        match self
-            .0
-            .try_update(Ordering::Relaxed, Ordering::Acquire, |value| {
-                count(value).map(|count| {
-                    if count >= RefCount::MAX as usize {
-                        RefCount::ref_count_overflow();
-                    }
-                    encode(count + 1)
-                })
-            }) {
+        match self.0.try_update(Ordering::Relaxed, Ordering::Acquire, |value| {
+            count(value).map(|count| {
+                if count >= RefCount::MAX as usize {
+                    RefCount::ref_count_overflow();
+                }
+                encode(count + 1)
+            })
+        }) {
             Ok(previous) => (previous.addr() >> 1) as u32 + 1,
             Err(tear_off) => unsafe { (*tear_off.cast::<TearOff>()).strong_count.add_ref() },
         }
@@ -53,14 +51,12 @@ impl WeakRefCount {
     }
 
     pub fn release(&self) -> u32 {
-        match self
-            .0
-            .try_update(Ordering::Release, Ordering::Acquire, |value| {
-                count(value).map(|count| {
-                    assert!(count != 0, "Object has been over-released.");
-                    encode(count - 1)
-                })
-            }) {
+        match self.0.try_update(Ordering::Release, Ordering::Acquire, |value| {
+            count(value).map(|count| {
+                assert!(count != 0, "Object has been over-released.");
+                encode(count - 1)
+            })
+        }) {
             Ok(previous) => {
                 let remaining = (previous.addr() >> 1) as u32 - 1;
 
@@ -255,9 +251,7 @@ impl TearOff {
             }
 
             // The weak reference has its own COM identity and does not delegate to the object.
-            *interface = if *iid == IWeakReference::IID
-                || *iid == IUnknown::IID
-                || *iid == IAgileObject::IID
+            *interface = if *iid == IWeakReference::IID || *iid == IUnknown::IID || *iid == IAgileObject::IID
             {
                 ptr
             } else {
@@ -300,10 +294,7 @@ impl TearOff {
         unsafe { Self::release_weak(Self::from_weak(ptr)) }
     }
 
-    unsafe extern "system" fn StrongDowngrade(
-        ptr: *mut c_void,
-        interface: *mut *mut c_void,
-    ) -> HRESULT {
+    unsafe extern "system" fn StrongDowngrade(ptr: *mut c_void, interface: *mut *mut c_void) -> HRESULT {
         unsafe {
             // A strong reference implies a weak reference, so this cannot fail.
             let this = Self::from_strong(ptr);
@@ -389,11 +380,7 @@ mod tests {
 
         for case in ["inline", "tear_off_or_delegate", "upgrade"] {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "imp::weak_ref_count::tests::count_overflow_aborts",
-                    "--nocapture",
-                ])
+                .args(["--exact", "imp::weak_ref_count::tests::count_overflow_aborts", "--nocapture"])
                 .env(CHILD, case)
                 .output()
                 .unwrap();

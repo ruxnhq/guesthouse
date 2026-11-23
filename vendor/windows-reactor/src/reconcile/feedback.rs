@@ -49,9 +49,8 @@ impl Observation {
 
 /// The controlled event that reports a property, directly or through the property it coerces.
 pub(crate) fn reporting_event(kind: ObjectType, property: PropertyId) -> Option<EventId> {
-    controlled_event(kind, property).or_else(|| {
-        coerced_property(kind, property).and_then(|coerced| controlled_event(kind, coerced))
-    })
+    controlled_event(kind, property)
+        .or_else(|| coerced_property(kind, property).and_then(|coerced| controlled_event(kind, coerced)))
 }
 
 /// Native notifications dropped while Reactor writes the state they report.
@@ -90,11 +89,7 @@ pub struct EventDispatch {
 
 impl EventDispatch {
     pub fn new(object: ObjectId, event: EventId, call: EventCall) -> Self {
-        Self {
-            object,
-            event,
-            call,
-        }
+        Self { object, event, call }
     }
 }
 
@@ -177,11 +172,7 @@ impl RetainedGraph {
                         })
                 })
             }
-            Observation::Reorder {
-                object,
-                relation,
-                children,
-            } => {
+            Observation::Reorder { object, relation, children } => {
                 let Some(owner) = self.get(*object) else {
                     return false;
                 };
@@ -190,8 +181,7 @@ impl RetainedGraph {
                     "invalid relation {relation:?} for {:?}",
                     owner.kind
                 );
-                self.reordered_children(*object, *relation, children)
-                    .is_some()
+                self.reordered_children(*object, *relation, children).is_some()
             }
         }
     }
@@ -205,11 +195,7 @@ impl RetainedGraph {
         native: &[ObjectId],
     ) -> Option<Vec<ObjectId>> {
         let retained = self.children(object, relation).unwrap_or_default();
-        let children = native
-            .iter()
-            .copied()
-            .filter(|child| self.get(*child).is_some())
-            .collect::<Vec<_>>();
+        let children = native.iter().copied().filter(|child| self.get(*child).is_some()).collect::<Vec<_>>();
         let unique = children.iter().collect::<HashSet<_>>();
         (children.len() == retained.len()
             && unique.len() == children.len()
@@ -230,16 +216,11 @@ impl RetainedGraph {
             Observation::SetProperty { object, property } => {
                 let retained = self.get_mut(object);
                 let property_id = property.id;
-                let baseline = retained
-                    .baselines
-                    .iter()
-                    .position(|baseline| baseline.property.id == property_id);
+                let baseline =
+                    retained.baselines.iter().position(|baseline| baseline.property.id == property_id);
                 // Observing a native value does not make the declaration own that property.
-                let Some(current) = retained
-                    .properties
-                    .iter()
-                    .find(|current| current.id == property_id)
-                    .cloned()
+                let Some(current) =
+                    retained.properties.iter().find(|current| current.id == property_id).cloned()
                 else {
                     match baseline {
                         Some(index) if retained.baselines[index].property == property => {
@@ -249,10 +230,9 @@ impl RetainedGraph {
                         Some(index) => {
                             retained.baselines.swap_remove(index);
                         }
-                        None if record => retained.baselines.push(PropertyBaseline {
-                            property,
-                            applied: None,
-                        }),
+                        None if record => {
+                            retained.baselines.push(PropertyBaseline { property, applied: None })
+                        }
                         None => {}
                     }
                     return true;
@@ -273,9 +253,7 @@ impl RetainedGraph {
                         }
                         None => {}
                     }
-                    retained
-                        .properties
-                        .upsert(|current| current.id == property_id, property);
+                    retained.properties.upsert(|current| current.id == property_id, property);
                     return false;
                 }
                 // Native state that matches the declaration is settled, whichever write or
@@ -286,24 +264,17 @@ impl RetainedGraph {
                         retained.baselines.swap_remove(index);
                         true
                     }
-                    Some(index)
-                        if retained.baselines[index].applied.as_ref() == Some(&property.value) =>
-                    {
+                    Some(index) if retained.baselines[index].applied.as_ref() == Some(&property.value) => {
                         true
                     }
                     Some(_) => false,
                     None if current == property => return false,
                     None => {
-                        retained.baselines.push(PropertyBaseline {
-                            property: current,
-                            applied: None,
-                        });
+                        retained.baselines.push(PropertyBaseline { property: current, applied: None });
                         false
                     }
                 };
-                retained
-                    .properties
-                    .upsert(|current| current.id == property_id, property);
+                retained.properties.upsert(|current| current.id == property_id, property);
                 if settled {
                     return false;
                 }
@@ -313,12 +284,7 @@ impl RetainedGraph {
                 let children = contract
                     .relations
                     .iter()
-                    .flat_map(|relation| {
-                        self.children(object, *relation)
-                            .unwrap_or_default()
-                            .iter()
-                            .copied()
-                    })
+                    .flat_map(|relation| self.children(object, *relation).unwrap_or_default().iter().copied())
                     .collect::<Vec<_>>();
                 let item = selected.item();
                 let matches_retained = selected != ObservedSelection::Untracked
@@ -348,19 +314,10 @@ impl RetainedGraph {
                     }
                 }
             }
-            Observation::Reorder {
-                object,
-                relation,
-                children,
-            } => {
-                let children = self
-                    .reordered_children(object, relation, &children)
-                    .unwrap();
-                if let Some(retained) = self
-                    .get_mut(object)
-                    .relations
-                    .iter_mut()
-                    .find(|retained| retained.id == relation)
+            Observation::Reorder { object, relation, children } => {
+                let children = self.reordered_children(object, relation, &children).unwrap();
+                if let Some(retained) =
+                    self.get_mut(object).relations.iter_mut().find(|retained| retained.id == relation)
                 {
                     if matches!(&retained.value, RetainedRelationValue::Many(current) if *current == children)
                     {
@@ -376,25 +333,15 @@ impl RetainedGraph {
     /// Validates a native event dispatch and resolves native items to keys. Returns `None` when
     /// the occurrence no longer applies.
     pub(super) fn validate_event_dispatch(&self, dispatch: EventDispatch) -> Option<EventCall> {
-        let EventDispatch {
-            object: id,
-            event,
-            call,
-        } = dispatch;
+        let EventDispatch { object: id, event, call } = dispatch;
         let object = self.get(id)?;
         let attachments = object.attachments.as_ref();
         let current = match event {
-            EventId::MenuItemInvoked => Some(
-                &attachments
-                    .and_then(|attachments| attachments.menu.as_ref())?
-                    .menu
-                    .on_click,
-            ),
+            EventId::MenuItemInvoked => {
+                Some(&attachments.and_then(|attachments| attachments.menu.as_ref())?.menu.on_click)
+            }
             EventId::CommandInvoked => Some(
-                &attachments
-                    .and_then(|attachments| attachments.command_bar_flyout.as_ref())?
-                    .flyout
-                    .on_click,
+                &attachments.and_then(|attachments| attachments.command_bar_flyout.as_ref())?.flyout.on_click,
             ),
             _ => None,
         };
@@ -404,16 +351,10 @@ impl RetainedGraph {
             };
             return (callback == current).then_some(call);
         }
-        let Some(contract) = event_contracts(object.kind)
-            .iter()
-            .find(|contract| contract.id == event)
-        else {
+        let Some(contract) = event_contracts(object.kind).iter().find(|contract| contract.id == event) else {
             panic!("invalid event {event:?} for {:?}", object.kind);
         };
-        assert!(
-            call.value_type() == Some(contract.value),
-            "invalid payload for event {event:?}"
-        );
+        assert!(call.value_type() == Some(contract.value), "invalid payload for event {event:?}");
         let call = match call {
             EventCall::Item(callback, item) => {
                 let child = object.relations.iter().any(|relation| {
@@ -425,9 +366,8 @@ impl RetainedGraph {
                 EventCall::Key(callback, self.get(item)?.key.clone()?)
             }
             EventCall::Items(callback, items) => {
-                let Some(contract) = reorder_contracts(object.kind)
-                    .iter()
-                    .find(|contract| contract.event == event)
+                let Some(contract) =
+                    reorder_contracts(object.kind).iter().find(|contract| contract.event == event)
                 else {
                     panic!("invalid payload for event {event:?}");
                 };
@@ -441,18 +381,12 @@ impl RetainedGraph {
                     .collect::<Option<Vec<_>>>()?;
                 EventCall::Keys(callback, keys)
             }
-            EventCall::Selection(
-                _,
-                SelectionChange {
-                    item: Some(item), ..
-                },
-            ) => {
+            EventCall::Selection(_, SelectionChange { item: Some(item), .. }) => {
                 let Some(contract) = selection_contract(object.kind) else {
                     panic!("{:?} does not support selection", object.kind);
                 };
                 let current = contract.relations.iter().any(|relation| {
-                    self.children(id, *relation)
-                        .is_some_and(|children| children.contains(&item))
+                    self.children(id, *relation).is_some_and(|children| children.contains(&item))
                 });
                 if !current {
                     return None;
@@ -463,12 +397,7 @@ impl RetainedGraph {
         };
         // An occurrence reaches the callback subscribed when it fired, even if a render has since
         // replaced that callback. Removing the subscription drops occurrences still queued.
-        let subscribed = object
-            .events
-            .as_deref()
-            .into_iter()
-            .flatten()
-            .any(|retained| retained.id == event);
+        let subscribed = object.events.as_deref().into_iter().flatten().any(|retained| retained.id == event);
         subscribed.then_some(call)
     }
 }

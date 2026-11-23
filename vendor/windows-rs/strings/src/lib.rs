@@ -1,8 +1,5 @@
 #![doc = include_str!("../readme.md")]
-#![cfg_attr(
-    windows,
-    debugger_visualizer(natvis_file = "../windows-strings.natvis")
-)]
+#![cfg_attr(windows, debugger_visualizer(natvis_file = "../windows-strings.natvis"))]
 #![cfg_attr(all(not(feature = "std")), no_std)]
 
 // `HSTRING` and its supporting types are cross-platform: the only Win32 dependency is the

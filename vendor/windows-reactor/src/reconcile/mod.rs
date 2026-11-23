@@ -20,10 +20,7 @@ pub struct ObjectId {
 #[cfg(test)]
 impl ObjectId {
     pub(crate) const fn test(index: u32) -> Self {
-        Self {
-            index,
-            generation: 0,
-        }
+        Self { index, generation: 0 }
     }
 }
 
@@ -168,9 +165,7 @@ pub struct UpdateStats {
 
 impl UpdateStats {
     fn capture(mutations: &[Mutation]) -> Self {
-        Self {
-            mutations: mutations.len(),
-        }
+        Self { mutations: mutations.len() }
     }
 }
 
@@ -228,20 +223,9 @@ pub enum RealizationRequest {
 
 #[derive(Clone)]
 pub(crate) enum VirtualWork {
-    Realize {
-        lease: RealizationLease,
-        index: usize,
-        view: Box<View>,
-        owner: Option<ComponentId>,
-    },
-    Recycle {
-        lease: RealizationLease,
-    },
-    Cancel {
-        collection: ObjectId,
-        relation: RelationId,
-        container: RealizedContainer,
-    },
+    Realize { lease: RealizationLease, index: usize, view: Box<View>, owner: Option<ComponentId> },
+    Recycle { lease: RealizationLease },
+    Cancel { collection: ObjectId, relation: RelationId, container: RealizedContainer },
 }
 
 pub(crate) enum NativeWork {
@@ -304,10 +288,7 @@ pub struct NativeEventDispatch {
 
 impl NativeEventDispatch {
     fn new(event: EventCall, active: Rc<Cell<bool>>) -> Self {
-        Self {
-            event: Some(event),
-            active,
-        }
+        Self { event: Some(event), active }
     }
 
     pub fn invoke(&mut self) {
@@ -370,13 +351,8 @@ struct RetainedAttachments {
 }
 
 impl RetainedAttachments {
-    const EMPTY: Self = Self {
-        tooltip: None,
-        flyout: None,
-        menu: None,
-        command_bar_flyout: None,
-        content_dialog: None,
-    };
+    const EMPTY: Self =
+        Self { tooltip: None, flyout: None, menu: None, command_bar_flyout: None, content_dialog: None };
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -430,11 +406,7 @@ fn retain_events(events: &SharedList<Event>) -> Option<Rc<Vec<Event>>> {
 /// A new object's properties, except an index property that waits for the children it indexes.
 fn properties_before_relations(kind: ObjectType, properties: &[Property]) -> Rc<[Property]> {
     let index = index_contract(kind).map(|contract| contract.property);
-    properties
-        .iter()
-        .filter(|property| Some(property.id) != index)
-        .cloned()
-        .collect()
+    properties.iter().filter(|property| Some(property.id) != index).cloned().collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -477,14 +449,8 @@ struct Planner<'a> {
 }
 
 enum ReferenceChange {
-    Clear {
-        reference: ElementRef,
-        object: ObjectId,
-    },
-    Set {
-        reference: ElementRef,
-        object: ObjectId,
-    },
+    Clear { reference: ElementRef, object: ObjectId },
+    Set { reference: ElementRef, object: ObjectId },
 }
 
 fn apply_reference_changes(endpoint: &ReferenceEndpoint, changes: Vec<ReferenceChange>) {

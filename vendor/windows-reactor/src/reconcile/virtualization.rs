@@ -4,40 +4,30 @@ fn virtual_relation(kind: ObjectType) -> Option<RelationId> {
     relation_contracts(kind)
         .iter()
         .find(|contract| {
-            contract.realization == Realization::Container
-                && contract.child == ObjectCategory::Visual
+            contract.realization == Realization::Container && contract.child == ObjectCategory::Visual
         })
         .map(|contract| contract.id)
 }
 
 fn virtual_keys(items: &VirtualItems) -> Vec<Key> {
-    (0..items.len())
-        .map(|index| items.key(index).unwrap())
-        .collect()
+    (0..items.len()).map(|index| items.key(index).unwrap()).collect()
 }
 
 fn virtual_key_indices(keys: &[Key]) -> HashMap<&Key, usize> {
     let mut indices = HashMap::with_capacity(keys.len());
     for (index, key) in keys.iter().enumerate() {
-        assert!(
-            indices.insert(key, index).is_none(),
-            "duplicate key {key:?}"
-        );
+        assert!(indices.insert(key, index).is_none(), "duplicate key {key:?}");
     }
     indices
 }
 
 pub(super) fn retain_virtual_items(declaration: &Declaration) -> Option<Box<RetainedVirtualItems>> {
     let relation = virtual_relation(declaration.kind)?;
-    let declared = declaration
-        .virtual_items
-        .as_deref()
-        .cloned()
-        .unwrap_or(DeclaredVirtualItems {
-            relation,
-            owner: declaration.component,
-            items: VirtualItems::Eager(Rc::default()),
-        });
+    let declared = declaration.virtual_items.as_deref().cloned().unwrap_or(DeclaredVirtualItems {
+        relation,
+        owner: declaration.component,
+        items: VirtualItems::Eager(Rc::default()),
+    });
     assert!(
         declared.relation == relation,
         "invalid relation {:?} for {:?}",
@@ -62,27 +52,15 @@ pub(super) fn retain_virtual_items(declaration: &Declaration) -> Option<Box<Reta
 }
 
 impl RetainedGraph {
-    fn resolve_realization_request(
-        &self,
-        request: RealizationRequest,
-    ) -> Option<RealizationRequest> {
-        let RealizationRequest::RealizeKey {
-            collection,
-            container,
-            index,
-            token,
-        } = request
-        else {
+    fn resolve_realization_request(&self, request: RealizationRequest) -> Option<RealizationRequest> {
+        let RealizationRequest::RealizeKey { collection, container, index, token } = request else {
             return Some(request);
         };
         let items = self.get(collection)?.virtual_items.as_ref()?;
         let index = if items.tokens.get(index) == Some(&token) {
             index
         } else {
-            items
-                .tokens
-                .iter()
-                .position(|candidate| *candidate == token)?
+            items.tokens.iter().position(|candidate| *candidate == token)?
         };
         Some(RealizationRequest::Realize {
             collection,
@@ -97,20 +75,11 @@ impl RetainedGraph {
         collection: ObjectId,
         container: RealizedContainer,
     ) -> Option<ObjectId> {
-        self.get(collection)?
-            .virtual_items
-            .as_ref()?
-            .containers
-            .get(&container)?
-            .child
+        self.get(collection)?.virtual_items.as_ref()?.containers.get(&container)?.child
     }
 
     /// Returns the key of the row a container currently holds.
-    pub(crate) fn virtual_row_key(
-        &self,
-        collection: ObjectId,
-        container: RealizedContainer,
-    ) -> Option<Key> {
+    pub(crate) fn virtual_row_key(&self, collection: ObjectId, container: RealizedContainer) -> Option<Key> {
         self.get(collection)?
             .virtual_items
             .as_ref()?
@@ -133,59 +102,33 @@ impl RetainedGraph {
         };
         let (collection, container, index) = match request {
             RealizationRequest::RealizeKey { .. } => unreachable!(),
-            RealizationRequest::Realize {
-                collection,
-                container,
-                index,
-                ..
-            } => (collection, container, Some(index)),
-            RealizationRequest::Recycle {
-                collection,
-                container,
-                ..
+            RealizationRequest::Realize { collection, container, index, .. } => {
+                (collection, container, Some(index))
             }
-            | RealizationRequest::Cancel {
-                collection,
-                container,
-                ..
-            } => (collection, container, None),
+            RealizationRequest::Recycle { collection, container, .. }
+            | RealizationRequest::Cancel { collection, container, .. } => (collection, container, None),
         };
-        let Some(items) = self
-            .get(collection)
-            .and_then(|object| object.virtual_items.as_ref())
-        else {
+        let Some(items) = self.get(collection).and_then(|object| object.virtual_items.as_ref()) else {
             return false;
         };
         let contains = |rows: &[(ObjectId, Key)], key: Option<&Key>| {
             key.is_some_and(|key| rows.iter().any(|row| row.0 == collection && row.1 == *key))
         };
         let rendered = index.and_then(|index| items.keys.get(index));
-        let contained = items
-            .containers
-            .get(&container)
-            .map(|realization| &realization.key);
+        let contained = items.containers.get(&container).map(|realization| &realization.key);
         contains(applying, rendered) || contains(applying, contained) || contains(pending, rendered)
     }
 
     fn validate_realization_request(&self, request: RealizationRequest) -> bool {
         let (collection, source_revision, index) = match request {
             RealizationRequest::RealizeKey { .. } => unreachable!(),
-            RealizationRequest::Realize {
-                collection,
-                source_revision,
-                index,
-                ..
-            } => (collection, source_revision, Some(index)),
-            RealizationRequest::Recycle {
-                collection,
-                source_revision,
-                ..
+            RealizationRequest::Realize { collection, source_revision, index, .. } => {
+                (collection, source_revision, Some(index))
             }
-            | RealizationRequest::Cancel {
-                collection,
-                source_revision,
-                ..
-            } => (collection, source_revision, None),
+            RealizationRequest::Recycle { collection, source_revision, .. }
+            | RealizationRequest::Cancel { collection, source_revision, .. } => {
+                (collection, source_revision, None)
+            }
         };
         let Some(object) = self.get(collection) else {
             return false;
@@ -198,10 +141,7 @@ impl RetainedGraph {
             if items.source_revision != source_revision {
                 return false;
             }
-            assert!(
-                index < items.keys.len(),
-                "invalid realization {index} for {collection:?}"
-            );
+            assert!(index < items.keys.len(), "invalid realization {index} for {collection:?}");
         }
         true
     }
@@ -213,46 +153,22 @@ impl RetainedGraph {
         }
         match request {
             RealizationRequest::RealizeKey { .. } => unreachable!(),
-            RealizationRequest::Realize {
-                collection,
-                container,
-                index,
-                ..
-            } => {
-                let items = self
-                    .get(collection)
-                    .unwrap()
-                    .virtual_items
-                    .as_ref()
-                    .unwrap();
+            RealizationRequest::Realize { collection, container, index, .. } => {
+                let items = self.get(collection).unwrap().virtual_items.as_ref().unwrap();
                 let key = items.keys[index].clone();
                 let revision = match items.active.get(&key) {
                     Some((revision, _)) => *revision,
                     None => items.lease_revision.checked_add(1).unwrap(),
                 };
                 Some(VirtualWork::Realize {
-                    lease: RealizationLease {
-                        collection,
-                        container,
-                        key,
-                        revision,
-                    },
+                    lease: RealizationLease { collection, container, key, revision },
                     index,
                     view: Box::new(items.items.view(index).unwrap()),
                     owner: items.owner,
                 })
             }
-            RealizationRequest::Recycle {
-                collection,
-                container,
-                ..
-            } => {
-                let items = self
-                    .get(collection)
-                    .unwrap()
-                    .virtual_items
-                    .as_ref()
-                    .unwrap();
+            RealizationRequest::Recycle { collection, container, .. } => {
+                let items = self.get(collection).unwrap().virtual_items.as_ref().unwrap();
                 Some(match items.containers.get(&container) {
                     Some(realization) => VirtualWork::Recycle {
                         lease: RealizationLease {
@@ -262,30 +178,12 @@ impl RetainedGraph {
                             revision: realization.revision,
                         },
                     },
-                    None => VirtualWork::Cancel {
-                        collection,
-                        relation: items.relation,
-                        container,
-                    },
+                    None => VirtualWork::Cancel { collection, relation: items.relation, container },
                 })
             }
-            RealizationRequest::Cancel {
-                collection,
-                container,
-                ..
-            } => {
-                let relation = self
-                    .get(collection)
-                    .unwrap()
-                    .virtual_items
-                    .as_ref()
-                    .unwrap()
-                    .relation;
-                Some(VirtualWork::Cancel {
-                    collection,
-                    relation,
-                    container,
-                })
+            RealizationRequest::Cancel { collection, container, .. } => {
+                let relation = self.get(collection).unwrap().virtual_items.as_ref().unwrap().relation;
+                Some(VirtualWork::Cancel { collection, relation, container })
             }
         }
     }
@@ -333,11 +231,8 @@ impl Runtime {
         let mut declaration = root.into().0.object();
         declaration.key = Some(lease.key.clone());
         self.validator.validate(&declaration);
-        let items = self
-            .graph
-            .get(lease.collection)
-            .and_then(|object| object.virtual_items.as_ref())
-            .unwrap();
+        let items =
+            self.graph.get(lease.collection).and_then(|object| object.virtual_items.as_ref()).unwrap();
         assert!(
             items.keys.get(index) == Some(&lease.key),
             "invalid realization {index} for {:?}",
@@ -372,15 +267,8 @@ impl Runtime {
             lease.collection
         );
         let moved_container = match items.active.get(&lease.key) {
-            Some((_, container)) => (*container != lease.container).then(|| {
-                (
-                    *container,
-                    items
-                        .containers
-                        .get(container)
-                        .and_then(|active| active.child),
-                )
-            }),
+            Some((_, container)) => (*container != lease.container)
+                .then(|| (*container, items.containers.get(container).and_then(|active| active.child))),
             None => None,
         };
         let mut references = Vec::new();
@@ -458,18 +346,11 @@ impl Runtime {
             };
             planner.mount(&declaration)
         };
-        let items = self
-            .graph
-            .get_mut(lease.collection)
-            .virtual_items
-            .as_mut()
-            .unwrap();
+        let items = self.graph.get_mut(lease.collection).virtual_items.as_mut().unwrap();
         if !items.active.contains_key(&lease.key) {
             items.lease_revision = lease.revision;
         }
-        if let Some((_, previous)) = items
-            .active
-            .insert(lease.key.clone(), (lease.revision, lease.container))
+        if let Some((_, previous)) = items.active.insert(lease.key.clone(), (lease.revision, lease.container))
         {
             items.containers.remove(&previous);
         }
@@ -511,11 +392,8 @@ impl Runtime {
 
     pub(crate) fn plan_recycle_virtual(&mut self, lease: &RealizationLease) -> NativeBatch {
         self.mutations.clear();
-        let items = self
-            .graph
-            .get(lease.collection)
-            .and_then(|object| object.virtual_items.as_ref())
-            .unwrap();
+        let items =
+            self.graph.get(lease.collection).and_then(|object| object.virtual_items.as_ref()).unwrap();
         let mut references = Vec::new();
         if let Some(realization) = items.containers.get(&lease.container)
             && realization.key == lease.key
@@ -529,18 +407,9 @@ impl Runtime {
                 container: lease.container,
                 child,
             });
-            let items = self
-                .graph
-                .get_mut(lease.collection)
-                .virtual_items
-                .as_mut()
-                .unwrap();
+            let items = self.graph.get_mut(lease.collection).virtual_items.as_mut().unwrap();
             items.containers.remove(&lease.container);
-            if items
-                .active
-                .get(&lease.key)
-                .is_some_and(|(_, container)| *container == lease.container)
-            {
+            if items.active.get(&lease.key).is_some_and(|(_, container)| *container == lease.container) {
                 items.active.remove(&lease.key);
             }
             if let Some(child) = child {
@@ -568,12 +437,7 @@ impl Runtime {
         container: RealizedContainer,
     ) -> NativeBatch {
         self.mutations.clear();
-        self.mutations.push(Mutation::Recycle {
-            parent: collection,
-            relation,
-            container,
-            child: None,
-        });
+        self.mutations.push(Mutation::Recycle { parent: collection, relation, container, child: None });
         self.take_batch(Vec::new())
     }
 
@@ -590,16 +454,11 @@ impl Planner<'_> {
         let Some(previous) = self.retained.get(object).unwrap().virtual_items.clone() else {
             return;
         };
-        let declared =
-            declaration
-                .virtual_items
-                .as_deref()
-                .cloned()
-                .unwrap_or(DeclaredVirtualItems {
-                    relation: previous.relation,
-                    owner: declaration.component,
-                    items: VirtualItems::Eager(Rc::default()),
-                });
+        let declared = declaration.virtual_items.as_deref().cloned().unwrap_or(DeclaredVirtualItems {
+            relation: previous.relation,
+            owner: declaration.component,
+            items: VirtualItems::Eager(Rc::default()),
+        });
         assert!(
             declared.relation == previous.relation,
             "invalid relation {:?} for {:?}",
@@ -650,12 +509,11 @@ impl Planner<'_> {
         let mut containers = HashMap::with_capacity(previous.containers.len());
         let mut active = HashMap::with_capacity(previous.active.len());
         let mut previous_containers = previous.containers.iter().collect::<Vec<_>>();
-        previous_containers
-            .sort_unstable_by_key(|(container, realization)| (realization.index, container.0));
+        previous_containers.sort_unstable_by_key(|(container, realization)| (realization.index, container.0));
         for (container, current) in previous_containers {
-            let Some(index) = indices.as_ref().map_or(Some(current.index), |indices| {
-                indices.get(&current.key).copied()
-            }) else {
+            let Some(index) =
+                indices.as_ref().map_or(Some(current.index), |indices| indices.get(&current.key).copied())
+            else {
                 self.mutations.push(Mutation::Recycle {
                     parent: object,
                     relation: previous.relation,
@@ -668,13 +526,7 @@ impl Planner<'_> {
                 continue;
             };
             // WinUI's keyed reset keeps each surviving shell with its item, not its old index.
-            containers.insert(
-                *container,
-                RetainedRealization {
-                    index,
-                    ..current.clone()
-                },
-            );
+            containers.insert(*container, RetainedRealization { index, ..current.clone() });
             active.insert(current.key.clone(), (current.revision, *container));
         }
         let children = {
@@ -690,12 +542,7 @@ impl Planner<'_> {
             unreachable!();
         };
         *retained_children = children;
-        let retained = self
-            .retained
-            .get_mut(object)
-            .virtual_items
-            .as_mut()
-            .unwrap();
+        let retained = self.retained.get_mut(object).virtual_items.as_mut().unwrap();
         retained.owner = declared.owner.or(declaration.component);
         retained.items = declared.items;
         retained.keys = keys;
@@ -715,8 +562,7 @@ impl Planner<'_> {
             && let Some(refreshes) = self.virtual_refreshes.as_mut()
         {
             let mut containers = retained.containers.iter().collect::<Vec<_>>();
-            containers
-                .sort_unstable_by_key(|(container, realization)| (realization.index, container.0));
+            containers.sort_unstable_by_key(|(container, realization)| (realization.index, container.0));
             refreshes.extend(containers.into_iter().map(|(container, realization)| {
                 RealizationRequest::Realize {
                     collection: object,

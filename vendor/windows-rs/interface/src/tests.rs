@@ -104,10 +104,7 @@ fn com_interface_with_parent() {
         ],
     );
     // The IID should contain the parsed GUID values.
-    assert!(
-        output.contains("0x094d70d6"),
-        "output does not contain expected GUID data1"
-    );
+    assert!(output.contains("0x094d70d6"), "output does not contain expected GUID data1");
 }
 
 #[test]
@@ -170,10 +167,7 @@ fn non_com_interface() {
         ],
     );
     // Non-COM interface should NOT emit a `matches` function (no QueryInterface).
-    assert!(
-        !output.contains("pub fn matches"),
-        "non_com_interface output unexpectedly contains `matches`"
-    );
+    assert!(!output.contains("pub fn matches"), "non_com_interface output unexpectedly contains `matches`");
 }
 
 #[test]
@@ -185,14 +179,7 @@ fn interface_no_guid() {
             unsafe trait INoGuid: IUnknown {}
         },
     );
-    check(
-        &output,
-        &[
-            "struct INoGuid",
-            "::windows_core::GUID::zeroed()",
-            "trait INoGuid_Impl",
-        ],
-    );
+    check(&output, &["struct INoGuid", "::windows_core::GUID::zeroed()", "trait INoGuid_Impl"]);
 }
 
 #[test]

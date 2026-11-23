@@ -20,11 +20,7 @@ pub struct LiveObjects {
 
 /// Returns the number of heap objects currently alive in this process.
 pub fn live_objects() -> LiveObjects {
-    LiveObjects {
-        objects: OBJECTS.get(),
-        delegates: DELEGATES.get(),
-        weak_references: WEAK_REFERENCES.get(),
-    }
+    LiveObjects { objects: OBJECTS.get(), delegates: DELEGATES.get(), weak_references: WEAK_REFERENCES.get() }
 }
 
 pub(crate) struct Counter(AtomicUsize);

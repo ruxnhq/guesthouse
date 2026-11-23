@@ -25,16 +25,9 @@ where
     K::Default: Ord,
 {
     fn First(&self) -> Result<IIterator<IKeyValuePair<K, V>>> {
-        let snapshot: Vec<(K::Default, V::Default)> = self
-            .map
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        Ok(ComObject::new(StockMapViewIterator::<K, V> {
-            snapshot,
-            current: 0.into(),
-        })
-        .into_interface())
+        let snapshot: Vec<(K::Default, V::Default)> =
+            self.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        Ok(ComObject::new(StockMapViewIterator::<K, V> { snapshot, current: 0.into() }).into_interface())
     }
 }
 
@@ -45,10 +38,7 @@ where
     K::Default: Ord,
 {
     fn Lookup(&self, key: Ref<K>) -> Result<V> {
-        let value = self
-            .map
-            .get(ref_as_default::<K>(&key))
-            .ok_or_else(|| Error::from(E_BOUNDS))?;
+        let value = self.map.get(ref_as_default::<K>(&key)).ok_or_else(|| Error::from(E_BOUNDS))?;
 
         V::from_default(value)
     }
@@ -94,11 +84,8 @@ where
     fn Current(&self) -> Result<IKeyValuePair<K, V>> {
         let current = self.current.load(std::sync::atomic::Ordering::Relaxed);
         if let Some((key, value)) = self.snapshot.get(current) {
-            Ok(ComObject::new(key_value_pair::StockKeyValuePair {
-                key: key.clone(),
-                value: value.clone(),
-            })
-            .into_interface())
+            Ok(ComObject::new(key_value_pair::StockKeyValuePair { key: key.clone(), value: value.clone() })
+                .into_interface())
         } else {
             Err(Error::from(E_BOUNDS))
         }
@@ -114,8 +101,7 @@ where
         let len = self.snapshot.len();
 
         if current < len {
-            self.current
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.current.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         Ok(len > current + 1)
@@ -133,16 +119,12 @@ where
 
         for (pair, (key, value)) in pairs.iter_mut().zip(self.snapshot[current..].iter()) {
             *pair = Some(
-                ComObject::new(key_value_pair::StockKeyValuePair {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .into_interface(),
+                ComObject::new(key_value_pair::StockKeyValuePair { key: key.clone(), value: value.clone() })
+                    .into_interface(),
             );
         }
 
-        self.current
-            .fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
+        self.current.fetch_add(actual, std::sync::atomic::Ordering::Relaxed);
 
         Ok(actual as u32)
     }

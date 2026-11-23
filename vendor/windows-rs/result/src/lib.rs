@@ -1,21 +1,13 @@
 #![doc = include_str!("../readme.md")]
 #![debugger_visualizer(natvis_file = "../windows-result.natvis")]
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
-#![expect(
-    non_upper_case_globals,
-    non_snake_case,
-    non_camel_case_types,
-    clippy::upper_case_acronyms
-)]
+#![expect(non_upper_case_globals, non_snake_case, non_camel_case_types, clippy::upper_case_acronyms)]
 
 extern crate alloc;
 
 use alloc::string::String;
 
-#[expect(
-    dead_code,
-    reason = "IErrorInfo's generated IID accompanies the vtable but is not needed"
-)]
+#[expect(dead_code, reason = "IErrorInfo's generated IID accompanies the vtable but is not needed")]
 mod bindings;
 use bindings::*;
 

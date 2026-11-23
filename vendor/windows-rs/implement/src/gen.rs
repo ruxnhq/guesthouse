@@ -265,12 +265,7 @@ fn gen_impl_compose(inputs: &ImplementInputs) -> syn::Item {
     let constraints = &inputs.constraints;
     let identity_type = identity_type(inputs);
     let mut lifetime = syn::Lifetime::new("'a", proc_macro2::Span::call_site());
-    while inputs
-        .original_type
-        .generics
-        .lifetimes()
-        .any(|param| param.lifetime.ident == lifetime.ident)
-    {
+    while inputs.original_type.generics.lifetimes().any(|param| param.lifetime.ident == lifetime.ident) {
         lifetime.ident = quote::format_ident!("{}_", lifetime.ident);
     }
 
@@ -291,23 +286,19 @@ fn gen_impl_compose(inputs: &ImplementInputs) -> syn::Item {
 
 /// Generates the `query_interface` method.
 fn gen_query_interface(inputs: &ImplementInputs) -> syn::ImplItemFn {
-    let queries = inputs
-        .interface_chains
-        .iter()
-        .enumerate()
-        .map(|(index, interface_chain)| {
-            let chain_ty = interface_chain.implement.to_vtbl_ident();
-            let interface_ty = interface_chain.implement.to_ident();
-            quote_spanned! {
-                interface_chain.implement.span =>
-                if #chain_ty::matches(iid)
-                    || (<#interface_ty as ::windows_core::Interface>::INSPECTABLE
-                        && *iid == <::windows_core::IInspectable as ::windows_core::Interface>::IID)
-                {
-                    return ::core::option::Option::Some(#index);
-                }
+    let queries = inputs.interface_chains.iter().enumerate().map(|(index, interface_chain)| {
+        let chain_ty = interface_chain.implement.to_vtbl_ident();
+        let interface_ty = interface_chain.implement.to_ident();
+        quote_spanned! {
+            interface_chain.implement.span =>
+            if #chain_ty::matches(iid)
+                || (<#interface_ty as ::windows_core::Interface>::INSPECTABLE
+                    && *iid == <::windows_core::IInspectable as ::windows_core::Interface>::IID)
+            {
+                return ::core::option::Option::Some(#index);
             }
-        });
+        }
+    });
 
     // Dynamic casting requires that the object not contain non-static lifetimes.
     let any = if inputs.original_type.generics.lifetimes().count() == 0 {
@@ -379,11 +370,7 @@ fn gen_into_outer(inputs: &ImplementInputs) -> syn::ImplItem {
     };
 
     // If the type is generic then into_outer() cannot be a const fn.
-    let maybe_const = if inputs.is_generic {
-        quote!()
-    } else {
-        quote!(const)
-    };
+    let maybe_const = if inputs.is_generic { quote!() } else { quote!(const) };
 
     parse_quote! {
         // Builds the outer object. Internal only: app code must never own a `Foo_Impl`,

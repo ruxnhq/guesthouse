@@ -27,10 +27,7 @@ impl Runtime {
     pub(super) fn take_batch(&mut self, references: Vec<ReferenceChange>) -> NativeBatch {
         let mut mutations = std::mem::take(&mut self.mutations);
         defer_window_title_bar_sets(&mut mutations);
-        NativeBatch {
-            mutations,
-            references,
-        }
+        NativeBatch { mutations, references }
     }
 
     pub(crate) fn apply_batch(&mut self, batch: NativeBatch) -> UpdateStats {
@@ -63,8 +60,7 @@ impl Runtime {
             return false;
         };
         let available = self.graph.kind(queued.object).is_some()
-            && (matches!(queued.request, ImperativeRequest::RevokeObservation { .. })
-                || queued.is_current());
+            && (matches!(queued.request, ImperativeRequest::RevokeObservation { .. }) || queued.is_current());
         if available {
             self.adapter.imperative(queued.request);
         } else {
@@ -84,16 +80,8 @@ impl Runtime {
                 return Some(NativeWork::Maintenance);
             }
             NativeEvent::Realization(request) => {
-                if let RealizationRequest::Recycle {
-                    collection,
-                    container,
-                    ..
-                }
-                | RealizationRequest::Cancel {
-                    collection,
-                    container,
-                    ..
-                } = request
+                if let RealizationRequest::Recycle { collection, container, .. }
+                | RealizationRequest::Cancel { collection, container, .. } = request
                 {
                     self.virtual_refreshes.retain(|refresh| {
                         !matches!(
@@ -137,9 +125,8 @@ impl Runtime {
             return Some(NativeWork::Maintenance);
         }
         let action = report == Some(false);
-        let dispatch = observation
-            .is_none_or(|observation| self.graph.apply_observation(observation, false))
-            || action;
+        let dispatch =
+            observation.is_none_or(|observation| self.graph.apply_observation(observation, false)) || action;
         if !dispatch {
             return Some(NativeWork::Maintenance);
         }
@@ -147,17 +134,11 @@ impl Runtime {
             return Some(NativeWork::Maintenance);
         };
         self.native_event_active.set(true);
-        Some(NativeWork::Event(NativeEventDispatch::new(
-            dispatch,
-            Rc::clone(&self.native_event_active),
-        )))
+        Some(NativeWork::Event(NativeEventDispatch::new(dispatch, Rc::clone(&self.native_event_active))))
     }
 
     pub(crate) fn next_native_work(&mut self) -> Option<NativeWork> {
-        assert!(
-            !self.native_event_active.get(),
-            "native event dispatch is in progress"
-        );
+        assert!(!self.native_event_active.get(), "native event dispatch is in progress");
         if let Some(work) = self.pop_native_work() {
             return Some(work);
         }
@@ -174,9 +155,7 @@ impl Runtime {
     }
 
     fn realization_work(&mut self, request: RealizationRequest) -> NativeWork {
-        self.graph
-            .virtual_work(request)
-            .map_or(NativeWork::Maintenance, NativeWork::Virtual)
+        self.graph.virtual_work(request).map_or(NativeWork::Maintenance, NativeWork::Virtual)
     }
 
     /// Applies queued native observations. Returns `false` while a native callback or virtual
@@ -189,10 +168,7 @@ impl Runtime {
             return false;
         }
         while let Some(next) = self.adapter.peek_native_event() {
-            if matches!(
-                next,
-                NativeEvent::Event { .. } | NativeEvent::Realization(_)
-            ) {
+            if matches!(next, NativeEvent::Event { .. } | NativeEvent::Realization(_)) {
                 return false;
             }
             self.pop_native_work();
@@ -210,10 +186,7 @@ impl Runtime {
         let declaration = root.into().0.object();
         if let Some(root) = self.graph.root {
             let mut remaining = MAX_OBJECTS;
-            if self
-                .graph
-                .matches_declaration(root, &declaration, &mut remaining)
-            {
+            if self.graph.matches_declaration(root, &declaration, &mut remaining) {
                 return UpdateStats::default();
             }
         }
@@ -224,10 +197,7 @@ impl Runtime {
         if let Some(current) = self.graph.root {
             let previous = self.graph.get(current).unwrap().kind;
             let next = declaration.kind;
-            assert!(
-                previous == next,
-                "root type changed from {previous:?} to {next:?}"
-            );
+            assert!(previous == next, "root type changed from {previous:?} to {next:?}");
         }
         let mut references = Vec::new();
         let mut virtual_refreshes = Vec::new();
@@ -247,11 +217,7 @@ impl Runtime {
         self.apply_batch(batch)
     }
 
-    pub(crate) fn plan_subtree_update(
-        &mut self,
-        object: ObjectId,
-        root: impl Into<View>,
-    ) -> NativeBatch {
+    pub(crate) fn plan_subtree_update(&mut self, object: ObjectId, root: impl Into<View>) -> NativeBatch {
         self.plan_subtree(object, root.into(), None)
     }
 
@@ -271,38 +237,25 @@ impl Runtime {
         if previous != declaration.kind {
             let owner = owner.or_else(|| self.graph.owner(object));
             let Some((parent, relation)) = owner else {
-                panic!(
-                    "root type changed from {previous:?} to {:?}",
-                    declaration.kind
-                );
+                panic!("root type changed from {previous:?} to {:?}", declaration.kind);
             };
-            let owns_object =
-                self.graph
-                    .relation(parent, relation)
-                    .is_some_and(|owned| match &owned.value {
-                        RetainedRelationValue::One(child) => *child == Some(object),
-                        RetainedRelationValue::Many(children) => children.contains(&object),
-                    });
-            assert!(
-                owns_object,
-                "{object:?} is not a child of relation {relation:?}"
-            );
+            let owns_object = self.graph.relation(parent, relation).is_some_and(|owned| match &owned.value {
+                RetainedRelationValue::One(child) => *child == Some(object),
+                RetainedRelationValue::Many(children) => children.contains(&object),
+            });
+            assert!(owns_object, "{object:?} is not a child of relation {relation:?}");
             let contract = relation_contracts(self.graph.kind(parent).unwrap())
                 .iter()
                 .find(|contract| contract.id == relation)
                 .unwrap();
             assert!(
-                contract.realization == Realization::Owned
-                    && relation_accepts(contract, declaration.kind),
+                contract.realization == Realization::Owned && relation_accepts(contract, declaration.kind),
                 "{:?} is not a valid child of relation {relation:?}",
                 declaration.kind
             );
         }
         let mut remaining = MAX_OBJECTS;
-        if self
-            .graph
-            .matches_subtree_declaration(object, &declaration, &mut remaining)
-        {
+        if self.graph.matches_subtree_declaration(object, &declaration, &mut remaining) {
             return NativeBatch::default();
         }
         let mut references = Vec::new();

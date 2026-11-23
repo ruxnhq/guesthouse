@@ -10,10 +10,7 @@ impl WinUiAdapter {
         if self.owners.contains_key(&child) {
             return Err(WinUiError::StillOwned(child));
         }
-        if matches!(
-            self.kind(child)?,
-            ObjectType::ToolTip | ObjectType::ContentDialog
-        ) {
+        if matches!(self.kind(child)?, ObjectType::ToolTip | ObjectType::ContentDialog) {
             return Err(WinUiError::InvalidObject(child));
         }
         let child_element = self.ui_element(child)?;
@@ -51,13 +48,10 @@ impl WinUiAdapter {
         let data_content_key = self.data_content_key.clone();
         match (self.handle(parent)?, relation) {
             (Handle::Generated(value), relation) => {
-                value
-                    .set_content(relation, None)
-                    .ok_or(WinUiError::InvalidRelation(parent, relation))??;
+                value.set_content(relation, None).ok_or(WinUiError::InvalidRelation(parent, relation))??;
             }
             (Handle::TreeNode(parent), RelationId::Content) => {
-                let content: IInspectable =
-                    windows_reference::IReference::from(parent.text.clone()).into();
+                let content: IInspectable = windows_reference::IReference::from(parent.text.clone()).into();
                 parent.value.SetContent(&content)?;
                 parent.content = None;
             }
@@ -82,31 +76,22 @@ impl WinUiAdapter {
         if self.owners.contains_key(&child) {
             return Err(WinUiError::StillOwned(child));
         }
-        if matches!(
-            self.kind(child)?,
-            ObjectType::ToolTip | ObjectType::ContentDialog
-        ) {
+        if matches!(self.kind(child)?, ObjectType::ToolTip | ObjectType::ContentDialog) {
             return Err(WinUiError::InvalidObject(child));
         }
         let selection = selection_for_relation(self.kind(parent)?, relation);
-        let selected = selection
-            .map(|selection| self.read_selected_item(parent, selection))
-            .transpose()?
-            .flatten();
+        let selected =
+            selection.map(|selection| self.read_selected_item(parent, selection)).transpose()?.flatten();
         let selection_item =
             selection.filter(|selection| self.kind(child).is_ok_and(|kind| kind == selection.item));
-        let child_value = selection_item
-            .map(|_| self.ui_element(child).map(IInspectable::from))
-            .transpose()?;
+        let child_value =
+            selection_item.map(|_| self.ui_element(child).map(IInspectable::from)).transpose()?;
         let child_selected = selection_item
             .map(|selection| self.selection_item_is_selected(child, selection))
             .transpose()?
             .unwrap_or(false);
-        let tracked =
-            selection_item.is_some() || reorder_event(self.kind(parent)?, relation).is_some();
-        let identity = tracked
-            .then(|| self.item_identity(parent, relation, child))
-            .transpose()?;
+        let tracked = selection_item.is_some() || reorder_event(self.kind(parent)?, relation).is_some();
+        let identity = tracked.then(|| self.item_identity(parent, relation, child)).transpose()?;
         let feedback = self.suppress_selection(parent, relation, selection)?;
         let result = (|| {
             match relation_contract(self.kind(parent)?, relation)?.realization {
@@ -115,23 +100,15 @@ impl WinUiAdapter {
                         .insert_at(index32(index)?, &self.ui_element(child)?)?;
                 }
                 Realization::Structural => {
-                    self.tree_nodes(parent)?
-                        .InsertAt(index32(index)?, &self.tree_node(child)?)?;
+                    self.tree_nodes(parent)?.InsertAt(index32(index)?, &self.tree_node(child)?)?;
                 }
                 Realization::Container => {
-                    self.items(parent)?
-                        .InsertAt(index32(index)?, &self.inspectable(child)?)?;
+                    self.items(parent)?.InsertAt(index32(index)?, &self.inspectable(child)?)?;
                 }
             }
             self.owners.insert(child, (parent, relation));
             if let Some(identity) = identity {
-                self.event_queue.items.borrow_mut().insert(
-                    child,
-                    NativeItem {
-                        owner: parent,
-                        identity,
-                    },
-                );
+                self.event_queue.items.borrow_mut().insert(child, NativeItem { owner: parent, identity });
             }
             if let (Some(selection), Some(value)) = (selection_item, child_value.as_ref()) {
                 if child_selected {
@@ -157,15 +134,12 @@ impl WinUiAdapter {
             return Err(WinUiError::ChildNotFound(child));
         }
         let selection = selection_for_relation(self.kind(parent)?, relation);
-        let selected = selection
-            .map(|selection| self.read_selected_item(parent, selection))
-            .transpose()?
-            .flatten();
+        let selected =
+            selection.map(|selection| self.read_selected_item(parent, selection)).transpose()?.flatten();
         let selection_item =
             selection.filter(|selection| self.kind(child).is_ok_and(|kind| kind == selection.item));
-        let child_value = selection_item
-            .map(|_| self.ui_element(child).map(IInspectable::from))
-            .transpose()?;
+        let child_value =
+            selection_item.map(|_| self.ui_element(child).map(IInspectable::from)).transpose()?;
         let feedback = self.suppress_selection(parent, relation, selection)?;
         let result = (|| {
             match relation_contract(self.kind(parent)?, relation)?.realization {
@@ -213,10 +187,8 @@ impl WinUiAdapter {
         children: &[ObjectId],
     ) -> Result<(), WinUiError> {
         let selection = selection_for_relation(self.kind(parent)?, relation);
-        let mut selected = selection
-            .map(|selection| self.read_selected_item(parent, selection))
-            .transpose()?
-            .flatten();
+        let mut selected =
+            selection.map(|selection| self.read_selected_item(parent, selection)).transpose()?.flatten();
         let feedback = self.suppress_selection(parent, relation, selection)?;
         let result = (|| {
             match relation_contract(self.kind(parent)?, relation)?.realization {
@@ -224,9 +196,8 @@ impl WinUiAdapter {
                     let values = self.owned_collection(parent, relation)?;
                     for movement in moves {
                         let child = self.ui_element(movement.child)?;
-                        let previous = values
-                            .index_of(&child)?
-                            .ok_or(WinUiError::ChildNotFound(movement.child))?;
+                        let previous =
+                            values.index_of(&child)?.ok_or(WinUiError::ChildNotFound(movement.child))?;
                         values.remove_at(previous)?;
                         let index = if let Some(before) = movement.before {
                             values
@@ -303,15 +274,9 @@ impl WinUiAdapter {
         self.release_selection(parent, feedback);
         result?;
         debug_assert!(
-            children
-                .iter()
-                .all(|child| self.owners.get(child) == Some(&(parent, relation)))
+            children.iter().all(|child| self.owners.get(child) == Some(&(parent, relation)))
                 && children.len()
-                    == self
-                        .owners
-                        .values()
-                        .filter(|owner| **owner == (parent, relation))
-                        .count()
+                    == self.owners.values().filter(|owner| **owner == (parent, relation)).count()
         );
         Ok(())
     }
@@ -324,10 +289,8 @@ impl WinUiAdapter {
         let Some((owner, relation)) = self.owners.get(&object).copied() else {
             return Ok(None);
         };
-        Ok(
-            selection_for_item_property(self.kind(owner)?, relation, self.kind(object)?, property)
-                .map(|selection| (owner, selection.event)),
-        )
+        Ok(selection_for_item_property(self.kind(owner)?, relation, self.kind(object)?, property)
+            .map(|selection| (owner, selection.event)))
     }
 
     /// Drops the owner's selection notifications while Reactor mutates a relation whose children
@@ -343,10 +306,7 @@ impl WinUiAdapter {
             None => self.index_event(owner, IndexItems::Relation(relation))?,
         };
         if let Some(event) = event {
-            self.event_queue
-                .feedback
-                .borrow_mut()
-                .suppress(owner, event);
+            self.event_queue.feedback.borrow_mut().suppress(owner, event);
         }
         Ok(event)
     }
@@ -389,9 +349,7 @@ impl WinUiAdapter {
         let Some(Handle::Generated(handle)) = self.handles.get(&object) else {
             return Err(WinUiError::InvalidObject(object));
         };
-        handle
-            .selected_item(selection.event)
-            .unwrap_or(Err(WinUiError::InvalidObject(object)))
+        handle.selected_item(selection.event).unwrap_or(Err(WinUiError::InvalidObject(object)))
     }
 
     fn write_selected_item(
@@ -403,9 +361,7 @@ impl WinUiAdapter {
         let Some(Handle::Generated(handle)) = self.handles.get(&object) else {
             return Err(WinUiError::InvalidObject(object));
         };
-        handle
-            .set_selected_item(selection.event, selected)
-            .unwrap_or(Err(WinUiError::InvalidObject(object)))
+        handle.set_selected_item(selection.event, selected).unwrap_or(Err(WinUiError::InvalidObject(object)))
     }
 
     fn selection_item_is_selected(
@@ -422,32 +378,20 @@ impl WinUiAdapter {
     }
 
     pub(super) fn handle(&mut self, object: ObjectId) -> Result<&mut Handle, WinUiError> {
-        self.handles
-            .get_mut(&object)
-            .ok_or(WinUiError::MissingObject(object))
+        self.handles.get_mut(&object).ok_or(WinUiError::MissingObject(object))
     }
 
     pub(super) fn kind(&self, object: ObjectId) -> Result<ObjectType, WinUiError> {
-        Ok(
-            match self
-                .handles
-                .get(&object)
-                .ok_or(WinUiError::MissingObject(object))?
-            {
-                Handle::Generated(value) => value.kind(),
-                Handle::TreeView(_) => ObjectType::TreeView,
-                Handle::TreeNode(_) => ObjectType::TreeNode,
-                Handle::Data(_) => ObjectType::DataItem,
-            },
-        )
+        Ok(match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
+            Handle::Generated(value) => value.kind(),
+            Handle::TreeView(_) => ObjectType::TreeView,
+            Handle::TreeNode(_) => ObjectType::TreeNode,
+            Handle::Data(_) => ObjectType::DataItem,
+        })
     }
 
     pub(super) fn ui_element(&self, object: ObjectId) -> Result<native::UIElement, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::Generated(value) => value.ui_element(),
             Handle::TreeView(value) => Ok(value.value.cast()?),
             Handle::TreeNode(_) | Handle::Data(_) => Err(WinUiError::InvalidObject(object)),
@@ -478,22 +422,14 @@ impl WinUiAdapter {
     }
 
     fn inspectable(&self, object: ObjectId) -> Result<IInspectable, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::Data(value) => Ok(value.clone().into()),
             _ => Err(WinUiError::InvalidObject(object)),
         }
     }
 
     fn tree_node(&self, object: ObjectId) -> Result<native::TreeViewNode, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::TreeNode(value) => Ok(value.value.clone()),
             _ => Err(WinUiError::InvalidObject(object)),
         }
@@ -504,24 +440,16 @@ impl WinUiAdapter {
         object: ObjectId,
         relation: RelationId,
     ) -> Result<GeneratedCollection, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
-            Handle::Generated(value) => value
-                .owned_collection(relation)
-                .unwrap_or(Err(WinUiError::InvalidObject(object))),
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
+            Handle::Generated(value) => {
+                value.owned_collection(relation).unwrap_or(Err(WinUiError::InvalidObject(object)))
+            }
             _ => Err(WinUiError::InvalidObject(object)),
         }
     }
 
     fn tree_nodes(&self, object: ObjectId) -> Result<IVector<native::TreeViewNode>, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::TreeView(value) => Ok(value.value.RootNodes()?),
             Handle::TreeNode(value) => Ok(value.value.Children()?),
             _ => Err(WinUiError::InvalidObject(object)),
@@ -529,11 +457,7 @@ impl WinUiAdapter {
     }
 
     fn items(&self, object: ObjectId) -> Result<native::ItemCollection, WinUiError> {
-        match self
-            .handles
-            .get(&object)
-            .ok_or(WinUiError::MissingObject(object))?
-        {
+        match self.handles.get(&object).ok_or(WinUiError::MissingObject(object))? {
             Handle::Generated(GeneratedHandle::ListView(value)) => {
                 Ok(value.value.cast::<native::IItemsControl>()?.Items()?)
             }
@@ -598,12 +522,7 @@ impl WinUiAdapter {
         // notifications from replaying an order that a later render has already replaced.
         let mut observation = observation.cloned();
         let mut native_order = None;
-        if let Some(Observation::Reorder {
-            object,
-            relation,
-            children,
-        }) = &mut observation
-        {
+        if let Some(Observation::Reorder { object, relation, children }) = &mut observation {
             if !self.handles.contains_key(object) {
                 return None;
             }
@@ -638,11 +557,7 @@ impl WinUiAdapter {
     }
 
     /// Returns the registered children of a reorderable relation in native order.
-    fn native_children(
-        &self,
-        object: ObjectId,
-        relation: RelationId,
-    ) -> Result<Vec<ObjectId>, WinUiError> {
+    fn native_children(&self, object: ObjectId, relation: RelationId) -> Result<Vec<ObjectId>, WinUiError> {
         let identities = match relation_contract(self.kind(object)?, relation)?.realization {
             Realization::Owned => {
                 let values = self.owned_collection(object, relation)?;
@@ -664,10 +579,7 @@ impl WinUiAdapter {
             .filter(|(_, item)| item.owner == object)
             .map(|(child, item)| (item.identity, *child))
             .collect::<HashMap<_, _>>();
-        Ok(identities
-            .iter()
-            .filter_map(|identity| registered.get(identity).copied())
-            .collect())
+        Ok(identities.iter().filter_map(|identity| registered.get(identity).copied()).collect())
     }
 }
 

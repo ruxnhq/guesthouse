@@ -12,8 +12,5 @@ pub(crate) fn assert_panics(expected: &str, f: impl FnOnce()) {
         .map(String::as_str)
         .or_else(|| payload.downcast_ref::<&str>().copied())
         .unwrap();
-    assert!(
-        message.contains(expected),
-        "panic {message:?} does not contain {expected:?}"
-    );
+    assert!(message.contains(expected), "panic {message:?} does not contain {expected:?}");
 }

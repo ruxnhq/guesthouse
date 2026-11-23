@@ -223,7 +223,7 @@ impl VmPlan {
                 "ide-cd,bus=ahci.2,drive=cd1",
             ]),
             Boot::Gpu => self.gpu_arguments(),
-            Boot::UbuntuInstall(_) | Boot::Ubuntu(_) | Boot::Macos(_) => Vec::new(),
+            Boot::UbuntuInstall(_) | Boot::Ubuntu(_) | Boot::Macos(_) | Boot::Android(_) => Vec::new(),
         }
     }
 
@@ -244,6 +244,9 @@ impl VmPlan {
             return arguments;
         }
         if let Some(arguments) = self.macos_arguments() {
+            return arguments;
+        }
+        if let Some(arguments) = self.android_arguments() {
             return arguments;
         }
         let mut arguments = self.qemu_files_arguments();
@@ -290,6 +293,7 @@ impl VmPlan {
         environment.extend(self.share.iter().map(|folder| ("SHARE".to_owned(), folder.clone())));
         environment.extend(self.amd_environment());
         environment.extend(self.macos_environment());
+        environment.extend(self.android_environment());
         environment
     }
 

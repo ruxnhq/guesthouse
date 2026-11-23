@@ -3,19 +3,11 @@ use super::*;
 impl Planner<'_> {
     pub(super) fn retire(&mut self, object: ObjectId) {
         if let Some(reference) = self.retained.get_mut(object).reference.take() {
-            self.references
-                .push(ReferenceChange::Clear { reference, object });
+            self.references.push(ReferenceChange::Clear { reference, object });
         }
-        if self
-            .retained
-            .get_mut(object)
-            .window_title_bar
-            .take()
-            .is_some()
-        {
+        if self.retained.get_mut(object).window_title_bar.take().is_some() {
             self.retained.clear_window_title_bar(object);
-            self.mutations
-                .push(Mutation::ClearWindowTitleBar { object });
+            self.mutations.push(Mutation::ClearWindowTitleBar { object });
         }
         self.clear_attachments(object);
         let virtual_items = self.retained.get_mut(object).virtual_items.take();
@@ -23,17 +15,11 @@ impl Planner<'_> {
         for relation in relations {
             match relation.value {
                 RetainedRelationValue::One(Some(child)) => {
-                    self.mutations.push(Mutation::Detach {
-                        parent: object,
-                        relation: relation.id,
-                        child,
-                    });
+                    self.mutations.push(Mutation::Detach { parent: object, relation: relation.id, child });
                     self.retire(child);
                 }
                 RetainedRelationValue::Many(children) => {
-                    if let Some(items) = virtual_items
-                        .as_ref()
-                        .filter(|items| items.relation == relation.id)
+                    if let Some(items) = virtual_items.as_ref().filter(|items| items.relation == relation.id)
                     {
                         let mut containers = items.containers.iter().collect::<Vec<_>>();
                         containers.sort_unstable_by_key(|(container, realization)| {

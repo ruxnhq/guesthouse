@@ -16,11 +16,7 @@ impl BOOL {
     /// Converts the [`BOOL`] to [`Result<()>`][Result<_>].
     #[inline]
     pub fn ok(self) -> Result<()> {
-        if self.as_bool() {
-            Ok(())
-        } else {
-            Err(Error::from_thread())
-        }
+        if self.as_bool() { Ok(()) } else { Err(Error::from_thread()) }
     }
 
     /// Asserts that `self` is a success code.

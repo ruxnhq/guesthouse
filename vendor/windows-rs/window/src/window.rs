@@ -62,11 +62,7 @@ impl Window {
     /// Returns the raw window handle for interop with other Windows APIs, or null after the native
     /// window is destroyed.
     pub fn hwnd(&self) -> *mut core::ffi::c_void {
-        if self.live.get() {
-            self.hwnd.cast()
-        } else {
-            core::ptr::null_mut()
-        }
+        if self.live.get() { self.hwnd.cast() } else { core::ptr::null_mut() }
     }
 
     /// Returns the current client-area size in pixels as `(width, height)`.
@@ -227,19 +223,9 @@ impl WindowBuilder {
             title.push(0);
 
             let (width, height) = if self.client_size {
-                let mut rect = RECT {
-                    right: self.width,
-                    bottom: self.height,
-                    ..Default::default()
-                };
-                if !AdjustWindowRectExForDpi(
-                    &mut rect,
-                    style,
-                    false.into(),
-                    self.ex_style,
-                    GetDpiForSystem(),
-                )
-                .as_bool()
+                let mut rect = RECT { right: self.width, bottom: self.height, ..Default::default() };
+                if !AdjustWindowRectExForDpi(&mut rect, style, false.into(), self.ex_style, GetDpiForSystem())
+                    .as_bool()
                 {
                     return Err(Error::from_thread());
                 }
@@ -314,9 +300,7 @@ where
         let mut animating = true;
         loop {
             if animating {
-                while PeekMessageW(&mut message, core::ptr::null_mut(), 0, 0, PM_REMOVE as u32)
-                    .as_bool()
-                {
+                while PeekMessageW(&mut message, core::ptr::null_mut(), 0, 0, PM_REMOVE as u32).as_bool() {
                     if message.message == WM_QUIT as u32 {
                         return Ok(());
                     }
@@ -366,9 +350,7 @@ pub fn pump() -> bool {
 fn class_name() -> PCWSTR {
     static NAME: OnceLock<Vec<u16>> = OnceLock::new();
     let name = NAME.get_or_init(|| {
-        concat!("windows-window.Window.", env!("CARGO_PKG_VERSION"), "\0")
-            .encode_utf16()
-            .collect()
+        concat!("windows-window.Window.", env!("CARGO_PKG_VERSION"), "\0").encode_utf16().collect()
     });
     PCWSTR(name.as_ptr())
 }
@@ -390,12 +372,7 @@ unsafe fn register_class() {
     });
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn wndproc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         let mut state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State;
         let mut handled = None;
@@ -479,8 +456,7 @@ unsafe extern "system" fn wndproc(
             }
 
             (*state).dispatching = false;
-            replay_close =
-                std::mem::take(&mut (*state).deferred_close) && message != WM_CLOSE as u32;
+            replay_close = std::mem::take(&mut (*state).deferred_close) && message != WM_CLOSE as u32;
             (*state).message = message_handler;
             (*state).resize = resize_handler;
             (*state).moved = move_handler;

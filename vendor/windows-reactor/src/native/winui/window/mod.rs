@@ -44,10 +44,7 @@ impl NativeWindowState {
     }
 
     fn initialize_focus(&self) -> windows_core::Result<()> {
-        if !self.shown.get()
-            || self.closed.get()
-            || self.initial_focus.borrow_mut().take().is_none()
-        {
+        if !self.shown.get() || self.closed.get() || self.initial_focus.borrow_mut().take().is_none() {
             return Ok(());
         }
         let surface = self.surface.cast::<native::UIElement>()?;
@@ -83,11 +80,7 @@ impl NativeWindowState {
         let Some(callback) = self.placement_callback.borrow().clone() else {
             return Ok(());
         };
-        let hwnd = unsafe {
-            self.window
-                .cast::<native::IWindowNative>()?
-                .WindowHandle()?
-        };
+        let hwnd = unsafe { self.window.cast::<native::IWindowNative>()?.WindowHandle()? };
         if let Some(placement) = placement::read_placement(hwnd)?
             && self.last_placement.replace(Some(placement)) != Some(placement)
         {
@@ -130,12 +123,7 @@ impl Clone for NativeWindow {
 
 impl NativeWindow {
     pub fn raw_handle(&self) -> Result<*mut core::ffi::c_void, WinUiError> {
-        let handle = unsafe {
-            self.state
-                .window
-                .cast::<native::IWindowNative>()?
-                .WindowHandle()?
-        };
+        let handle = unsafe { self.state.window.cast::<native::IWindowNative>()?.WindowHandle()? };
         Ok(handle.cast())
     }
 
@@ -188,23 +176,21 @@ impl NativeWindow {
                     .AppWindow()?
                     .cast::<native::IAppWindow2>()?;
                 let hwnd = self.raw_handle()?;
-                self.state.root_element.SizeChanged(local::handler::<
-                    _,
-                    native::SizeChangedEventArgs,
-                    _,
-                >(move |_, args| {
-                    if args.as_ref().is_none() {
-                        return;
-                    }
-                    // Root layout can exclude a border pixel from the native client area.
-                    let size = window.ClientSize().unwrap();
-                    let dpi = unsafe { native::GetDpiForWindow(hwnd.cast()) }.max(96);
-                    let dips = 96.0 / f64::from(dpi);
-                    observer(WindowSize {
-                        width: f64::from(size.width) * dips,
-                        height: f64::from(size.height) * dips,
-                    });
-                }))
+                self.state.root_element.SizeChanged(local::handler::<_, native::SizeChangedEventArgs, _>(
+                    move |_, args| {
+                        if args.as_ref().is_none() {
+                            return;
+                        }
+                        // Root layout can exclude a border pixel from the native client area.
+                        let size = window.ClientSize().unwrap();
+                        let dpi = unsafe { native::GetDpiForWindow(hwnd.cast()) }.max(96);
+                        let dips = 96.0 / f64::from(dpi);
+                        observer(WindowSize {
+                            width: f64::from(size.width) * dips,
+                            height: f64::from(size.height) * dips,
+                        });
+                    },
+                ))
             })
             .transpose()?;
         Ok(())
@@ -223,22 +209,20 @@ impl NativeWindow {
                 };
                 let last = Cell::new(initial);
                 observer(initial);
-                self.state.root_element.ActualThemeChanged(local::handler::<
-                    native::FrameworkElement,
-                    _,
-                    _,
-                >(move |sender, _| {
-                    let Some(sender) = sender.as_ref() else {
-                        return;
-                    };
-                    let scheme = match sender.ActualTheme().unwrap() {
-                        native::ElementTheme::Dark => ColorScheme::Dark,
-                        _ => ColorScheme::Light,
-                    };
-                    if last.replace(scheme) != scheme {
-                        observer(scheme);
-                    }
-                }))
+                self.state.root_element.ActualThemeChanged(local::handler::<native::FrameworkElement, _, _>(
+                    move |sender, _| {
+                        let Some(sender) = sender.as_ref() else {
+                            return;
+                        };
+                        let scheme = match sender.ActualTheme().unwrap() {
+                            native::ElementTheme::Dark => ColorScheme::Dark,
+                            _ => ColorScheme::Light,
+                        };
+                        if last.replace(scheme) != scheme {
+                            observer(scheme);
+                        }
+                    },
+                ))
             })
             .transpose()?;
 
@@ -274,35 +258,29 @@ impl NativeWindow {
                     visuals.theme,
                 )?);
             }
-            self.state
-                .surface
-                .cast::<native::FrameworkElement>()?
-                .SetStyle(
-                    (visuals.backdrop == WindowBackdrop::None)
-                        .then_some(&self.state.background_style),
-                )?;
+            self.state.surface.cast::<native::FrameworkElement>()?.SetStyle(
+                (visuals.backdrop == WindowBackdrop::None).then_some(&self.state.background_style),
+            )?;
         }
 
         if changes.theme {
             if let Some(backdrop) = self.state.active_backdrop.borrow().as_ref() {
                 backdrop.set_theme(visuals.theme)?;
             }
-            app_window
-                .TitleBar()?
-                .cast::<native::IAppWindowTitleBar3>()?
-                .SetPreferredTheme(match visuals.theme {
-                    WindowTheme::System => native::TitleBarTheme::UseDefaultAppMode,
-                    WindowTheme::Light => native::TitleBarTheme::Light,
-                    WindowTheme::Dark => native::TitleBarTheme::Dark,
-                })?;
-            self.state
-                .surface
-                .cast::<native::FrameworkElement>()?
-                .SetRequestedTheme(match visuals.theme {
+            app_window.TitleBar()?.cast::<native::IAppWindowTitleBar3>()?.SetPreferredTheme(match visuals
+                .theme
+            {
+                WindowTheme::System => native::TitleBarTheme::UseDefaultAppMode,
+                WindowTheme::Light => native::TitleBarTheme::Light,
+                WindowTheme::Dark => native::TitleBarTheme::Dark,
+            })?;
+            self.state.surface.cast::<native::FrameworkElement>()?.SetRequestedTheme(
+                match visuals.theme {
                     WindowTheme::System => native::ElementTheme::Default,
                     WindowTheme::Light => native::ElementTheme::Light,
                     WindowTheme::Dark => native::ElementTheme::Dark,
-                })?;
+                },
+            )?;
         }
 
         if changes.icon {
@@ -314,9 +292,7 @@ impl NativeWindow {
         }
 
         if changes.always_on_top || changes.minimizable {
-            let presenter = app_window
-                .Presenter()?
-                .cast::<native::IOverlappedPresenter>()?;
+            let presenter = app_window.Presenter()?.cast::<native::IOverlappedPresenter>()?;
             if changes.always_on_top {
                 presenter.SetIsAlwaysOnTop(visuals.always_on_top)?;
             }
@@ -326,9 +302,7 @@ impl NativeWindow {
         }
 
         if changes.constraints || initial {
-            let presenter = app_window
-                .Presenter()?
-                .cast::<native::IOverlappedPresenter3>()?;
+            let presenter = app_window.Presenter()?.cast::<native::IOverlappedPresenter3>()?;
             let (min_width, min_height, max_width, max_height) =
                 if let Some(constraints) = visuals.constraints {
                     let dpi = unsafe { native::GetDpiForWindow(window_handle()?.cast()) }.max(96);
@@ -339,18 +313,10 @@ impl NativeWindow {
                     let non_client_width = outer.width.saturating_sub(inner.width);
                     let non_client_height = outer.height.saturating_sub(inner.height);
                     (
-                        constraints
-                            .min_width
-                            .map(|value| pixels(value).saturating_add(non_client_width)),
-                        constraints
-                            .min_height
-                            .map(|value| pixels(value).saturating_add(non_client_height)),
-                        constraints
-                            .max_width
-                            .map(|value| pixels(value).saturating_add(non_client_width)),
-                        constraints
-                            .max_height
-                            .map(|value| pixels(value).saturating_add(non_client_height)),
+                        constraints.min_width.map(|value| pixels(value).saturating_add(non_client_width)),
+                        constraints.min_height.map(|value| pixels(value).saturating_add(non_client_height)),
+                        constraints.max_width.map(|value| pixels(value).saturating_add(non_client_width)),
+                        constraints.max_height.map(|value| pixels(value).saturating_add(non_client_height)),
                     )
                 } else {
                     (None, None, None, None)
@@ -369,10 +335,7 @@ impl NativeWindow {
             let pixels = |dips: f64| (dips * f64::from(dpi) / 96.0).round() as i32;
             resize_window_client(
                 &app_window,
-                native::SizeInt32 {
-                    width: pixels(width),
-                    height: pixels(height),
-                },
+                native::SizeInt32 { width: pixels(width), height: pixels(height) },
             )?;
         }
 
@@ -386,12 +349,7 @@ impl NativeWindow {
         }
         self.state.window.Activate()?;
         self.state.shown.set(true);
-        if self
-            .state
-            .surface
-            .cast::<native::IFrameworkElement>()?
-            .IsLoaded()?
-        {
+        if self.state.surface.cast::<native::IFrameworkElement>()?.IsLoaded()? {
             self.state.initialize_focus()?;
         }
         self.state.observe_placement()?;
@@ -417,17 +375,14 @@ impl NativeWindow {
         *self.state.placement_callback.borrow_mut() = observer;
         if self.state.placement_callback.borrow().is_some() {
             let state = Rc::downgrade(&self.state);
-            self.placement_changed = Some(
-                self.state
-                    .window
-                    .cast::<native::IWindow2>()?
-                    .AppWindow()?
-                    .Changed(local::handler(move |_, _| {
+            self.placement_changed =
+                Some(self.state.window.cast::<native::IWindow2>()?.AppWindow()?.Changed(local::handler(
+                    move |_, _| {
                         if let Some(state) = state.upgrade() {
                             state.observe_placement().unwrap();
                         }
-                    }))?,
-            );
+                    },
+                ))?);
             self.state.observe_placement()?;
         }
         Ok(())
@@ -449,20 +404,13 @@ impl NativeWindow {
     }
 }
 
-fn resize_window_client(
-    window: &native::AppWindow,
-    size: native::SizeInt32,
-) -> windows_core::Result<()> {
+fn resize_window_client(window: &native::AppWindow, size: native::SizeInt32) -> windows_core::Result<()> {
     // ResizeClient includes the native caption even when XAML extends into the title bar.
     let outer = window.Size()?;
     let inner = window.cast::<native::IAppWindow2>()?.ClientSize()?;
     window.Resize(native::SizeInt32 {
-        width: size
-            .width
-            .saturating_add(outer.width.saturating_sub(inner.width)),
-        height: size
-            .height
-            .saturating_add(outer.height.saturating_sub(inner.height)),
+        width: size.width.saturating_add(outer.width.saturating_sub(inner.width)),
+        height: size.height.saturating_add(outer.height.saturating_sub(inner.height)),
     })
 }
 
@@ -489,10 +437,7 @@ impl WindowVisualChanges {
     }
 }
 
-pub(super) fn window_visual_changes(
-    previous: &WindowVisuals,
-    next: &WindowVisuals,
-) -> WindowVisualChanges {
+pub(super) fn window_visual_changes(previous: &WindowVisuals, next: &WindowVisuals) -> WindowVisualChanges {
     WindowVisualChanges {
         backdrop: previous.backdrop != next.backdrop,
         client_size: previous.client_size != next.client_size,
@@ -527,11 +472,7 @@ impl WinUiAdapter {
         root_object: ObjectId,
         policy: &WindowPolicy,
     ) -> Result<NativeWindow, WinUiError> {
-        if self
-            .live_windows()
-            .iter()
-            .any(|window| window.root == root_object)
-        {
+        if self.live_windows().iter().any(|window| window.root == root_object) {
             return Err(WinUiError::DuplicateWindowRoot(root_object));
         }
         let window = native::Window::new()?;
@@ -544,9 +485,7 @@ impl WinUiAdapter {
              Value='{ThemeResource SystemControlBackgroundAltHighBrush}'/></Style>",
         )?
         .cast::<native::Style>()?;
-        surface
-            .cast::<native::FrameworkElement>()?
-            .SetStyle(&background_style)?;
+        surface.cast::<native::FrameworkElement>()?.SetStyle(&background_style)?;
         surface.SetChild(&root)?;
         window.SetContent(&surface)?;
         let state = Rc::new(NativeWindowState {
@@ -566,14 +505,11 @@ impl WinUiAdapter {
         });
         let weak = Rc::downgrade(&state);
         *state.initial_focus.borrow_mut() = Some(
-            state
-                .surface
-                .cast::<native::IFrameworkElement>()?
-                .Loading(local::handler(move |_, _| {
-                    if let Some(state) = weak.upgrade() {
-                        state.initialize_focus().unwrap();
-                    }
-                }))?,
+            state.surface.cast::<native::IFrameworkElement>()?.Loading(local::handler(move |_, _| {
+                if let Some(state) = weak.upgrade() {
+                    state.initialize_focus().unwrap();
+                }
+            }))?,
         );
         if let Some((object, height)) = self.window_title_bar
             && self.owns(state.root, object)
@@ -592,13 +528,11 @@ impl WinUiAdapter {
             placement_changed: None,
             visuals: WindowVisuals {
                 client_size: policy.client_size,
-                constraints: policy
-                    .minimum_client_size
-                    .map(|(width, height)| WindowConstraints {
-                        min_width: Some(width),
-                        min_height: Some(height),
-                        ..Default::default()
-                    }),
+                constraints: policy.minimum_client_size.map(|(width, height)| WindowConstraints {
+                    min_width: Some(width),
+                    min_height: Some(height),
+                    ..Default::default()
+                }),
                 theme: policy.theme,
                 ..Default::default()
             },
@@ -635,9 +569,7 @@ impl WinUiAdapter {
         }
         let element = self.ui_element(object)?;
         element.SetIsTabStop(false)?;
-        element
-            .cast::<native::ITitleBar2>()?
-            .SetAutoRefreshDragRegions(true)?;
+        element.cast::<native::ITitleBar2>()?.SetAutoRefreshDragRegions(true)?;
         state.window.SetExtendsContentIntoTitleBar(true)?;
         state.window.SetTitleBar(&element)?;
         state
@@ -655,15 +587,8 @@ impl WinUiAdapter {
         Ok(())
     }
 
-    fn clear_title_bar_from_window(
-        state: &NativeWindowState,
-        object: ObjectId,
-    ) -> Result<(), WinUiError> {
-        if !state
-            .title_bar
-            .get()
-            .is_some_and(|(current, _)| current == object)
-        {
+    fn clear_title_bar_from_window(state: &NativeWindowState, object: ObjectId) -> Result<(), WinUiError> {
+        if !state.title_bar.get().is_some_and(|(current, _)| current == object) {
             return Ok(());
         }
         state
@@ -695,10 +620,7 @@ impl WinUiAdapter {
         for window in self.live_windows() {
             Self::clear_title_bar_from_window(&window, object)?;
         }
-        if self
-            .window_title_bar
-            .is_some_and(|(current, _)| current == object)
-        {
+        if self.window_title_bar.is_some_and(|(current, _)| current == object) {
             self.window_title_bar = None;
         }
         Ok(())
@@ -706,9 +628,7 @@ impl WinUiAdapter {
 
     pub(super) fn sync_window_title_bars(&self) -> Result<(), WinUiError> {
         for window in self.live_windows() {
-            let desired = self
-                .window_title_bar
-                .filter(|(object, _)| self.owns(window.root, *object));
+            let desired = self.window_title_bar.filter(|(object, _)| self.owns(window.root, *object));
             if window.title_bar.get() == desired {
                 continue;
             }
@@ -735,19 +655,16 @@ impl WinUiAdapter {
         let window_2 = window.cast::<native::IWindow2>()?;
         let app_window = window_2.AppWindow()?;
         let title_bar = app_window.TitleBar()?;
-        title_bar
-            .cast::<native::IAppWindowTitleBar3>()?
-            .SetPreferredTheme(match policy.theme {
-                WindowTheme::System => native::TitleBarTheme::UseDefaultAppMode,
-                WindowTheme::Light => native::TitleBarTheme::Light,
-                WindowTheme::Dark => native::TitleBarTheme::Dark,
-            })?;
-        root.cast::<native::FrameworkElement>()?
-            .SetRequestedTheme(match policy.theme {
-                WindowTheme::System => native::ElementTheme::Default,
-                WindowTheme::Light => native::ElementTheme::Light,
-                WindowTheme::Dark => native::ElementTheme::Dark,
-            })?;
+        title_bar.cast::<native::IAppWindowTitleBar3>()?.SetPreferredTheme(match policy.theme {
+            WindowTheme::System => native::TitleBarTheme::UseDefaultAppMode,
+            WindowTheme::Light => native::TitleBarTheme::Light,
+            WindowTheme::Dark => native::TitleBarTheme::Dark,
+        })?;
+        root.cast::<native::FrameworkElement>()?.SetRequestedTheme(match policy.theme {
+            WindowTheme::System => native::ElementTheme::Default,
+            WindowTheme::Light => native::ElementTheme::Light,
+            WindowTheme::Dark => native::ElementTheme::Dark,
+        })?;
 
         let needs_metrics = policy.client_size.is_some() || policy.minimum_client_size.is_some();
         if needs_metrics {
@@ -761,24 +678,16 @@ impl WinUiAdapter {
                 let inner = client_window.ClientSize()?;
                 let non_client_width = outer.width.saturating_sub(inner.width);
                 let non_client_height = outer.height.saturating_sub(inner.height);
-                let presenter = app_window
-                    .Presenter()?
-                    .cast::<native::IOverlappedPresenter3>()?;
-                presenter.SetPreferredMinimumWidth(Some(
-                    pixels(width).saturating_add(non_client_width),
-                ))?;
-                presenter.SetPreferredMinimumHeight(Some(
-                    pixels(height).saturating_add(non_client_height),
-                ))?;
+                let presenter = app_window.Presenter()?.cast::<native::IOverlappedPresenter3>()?;
+                presenter.SetPreferredMinimumWidth(Some(pixels(width).saturating_add(non_client_width)))?;
+                presenter
+                    .SetPreferredMinimumHeight(Some(pixels(height).saturating_add(non_client_height)))?;
             }
 
             if let Some((width, height)) = policy.client_size {
                 resize_window_client(
                     &app_window,
-                    native::SizeInt32 {
-                        width: pixels(width),
-                        height: pixels(height),
-                    },
+                    native::SizeInt32 { width: pixels(width), height: pixels(height) },
                 )?;
             }
         }

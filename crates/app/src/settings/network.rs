@@ -1,4 +1,4 @@
-//! The network's mode, MAC address and bridge. Port forwards have their own group.
+//! The network's mode, the interface a NAT machine is held to, MAC address and bridge. Port forwards have their own group.
 
 use super::forwards::Forwards;
 use super::{Shared, is_off};
@@ -9,7 +9,10 @@ use guesthouse_app_core::bridge;
 use guesthouse_app_core::library::unused_mac;
 use guesthouse_app_core::machine::Kind;
 use guesthouse_app_core::network::{self, DEFAULT_MAC, InUse, Mode};
-use guesthouse_app_core::network_settings::{network_in_use, set_bridge, set_mac, set_network};
+use guesthouse_app_core::network_settings::{
+    network_in_use, set_bridge, set_dns, set_mac, set_network, set_only_through,
+};
+use guesthouse_app_core::only_through::interface_names;
 use guesthouse_app_core::tasks::{State, Status};
 use guesthouse_app_core::vm_args::passt_installed;
 use std::cell::{Cell, RefCell};
@@ -20,6 +23,10 @@ struct Parts {
     group: adw::PreferencesGroup,
     mode: adw::ComboRow,
     passt: adw::SwitchRow,
+    through: adw::ComboRow,
+    /// The names the rows of `through` stand for, after "Any".
+    through_names: Vec<String>,
+    dns: adw::EntryRow,
     bridge: adw::EntryRow,
     bridge_state: adw::ActionRow,
     bridge_help: gtk::Button,
@@ -28,6 +35,20 @@ struct Parts {
     in_use: Cell<Option<InUse>>,
     mac_problem: RefCell<Option<String>>,
     off: Cell<bool>,
+    /// The page is changing a row to match the machine, which isn't the user's change.
+    syncing: Cell<bool>,
+}
+
+/// The row that means no interface in particular.
+const ANY_INTERFACE: &str = "Any";
+
+/// The host's interfaces, and the saved one if the host doesn't have it now: a VPN that isn't connected.
+fn interfaces_with(saved: &str) -> Vec<String> {
+    let mut names = interface_names();
+    if !saved.is_empty() && !names.iter().any(|name| name == saved) {
+        names.push(saved.to_owned());
+    }
+    names
 }
 
 #[derive(Clone)]
@@ -49,6 +70,24 @@ impl Network {
         group.add(&mode);
         let passt = adw::SwitchRow::builder().title("NAT through passt").active(machine.passt).build();
         group.add(&passt);
+        let through_names = interfaces_with(&machine.only_through);
+        let shown: Vec<&str> =
+            std::iter::once(ANY_INTERFACE).chain(through_names.iter().map(String::as_str)).collect();
+        let through = choice_row("Only through", &shown);
+        through.set_subtitle(
+            "All of the guest's traffic goes out through this interface, such as a VPN's, and nothing else. \
+             If it goes away, the guest has no network until the machine is started again.",
+        );
+        through.set_subtitle_lines(0);
+        let chosen = through_names.iter().position(|name| *name == machine.only_through);
+        through.set_selected(chosen.map_or(0, |at| at as u32 + 1));
+        group.add(&through);
+        let dns = adw::EntryRow::builder()
+            .title("DNS server, empty for automatic")
+            .text(&machine.dns)
+            .show_apply_button(true)
+            .build();
+        group.add(&dns);
         let bridge =
             adw::EntryRow::builder().title("Bridge").text(&machine.bridge).show_apply_button(true).build();
         group.add(&bridge);
@@ -67,6 +106,9 @@ impl Network {
             group,
             mode,
             passt,
+            through,
+            through_names,
+            dns,
             bridge,
             bridge_state,
             bridge_help,
@@ -75,6 +117,7 @@ impl Network {
             in_use: Cell::new(None),
             mac_problem: RefCell::default(),
             off: Cell::new(true),
+            syncing: Cell::new(false),
         }));
         this.connect(&new_mac);
         this.show();
@@ -87,8 +130,19 @@ impl Network {
         parts.mode.connect_selected_notify(move |row| this.on_mode(Mode::ALL[row.selected() as usize]));
         let this = self.clone();
         parts.passt.connect_active_notify(move |row| {
+            if this.0.syncing.get() {
+                return;
+            }
             this.0.shared.machine.borrow_mut().passt = row.is_active();
             this.0.shared.save();
+            this.show();
+        });
+        let this = self.clone();
+        parts.through.connect_selected_notify(move |row| this.on_through(row.selected() as usize));
+        let this = self.clone();
+        parts.dns.connect_apply(move |row| {
+            let shared = &this.0.shared;
+            shared.change(|machine| set_dns(&shared.window.context(), machine, &row.text()));
             this.show();
         });
         let this = self.clone();
@@ -120,6 +174,14 @@ impl Network {
         shared.change(|machine| set_network(&shared.window.context(), machine, mode));
         let mac = shared.machine.borrow().mac.clone();
         self.0.mac.set_text(if mac.is_empty() { DEFAULT_MAC } else { &mac });
+        self.show();
+    }
+
+    fn on_through(&self, row: usize) {
+        let shared = &self.0.shared;
+        let name =
+            row.checked_sub(1).and_then(|at| self.0.through_names.get(at)).cloned().unwrap_or_default();
+        shared.change(|machine| set_only_through(&shared.window.context(), machine, &name));
         self.show();
     }
 
@@ -166,7 +228,12 @@ impl Network {
         let off = parts.off.get();
         let installed = passt_installed();
         let bridged = machine.network_mode == Mode::Bridged;
-        parts.mode.set_subtitle(&network::describe(machine.network_mode, machine.passt, installed));
+        parts.mode.set_subtitle(&network::describe(
+            machine.network_mode,
+            machine.passt,
+            installed,
+            &machine.only_through,
+        ));
         let notes = if off {
             parts.mac_problem.borrow().clone().unwrap_or_default()
         } else {
@@ -177,9 +244,25 @@ impl Network {
         parts.mode.set_sensitive(off);
         parts.bridge.set_sensitive(off);
         parts.mac.set_sensitive(off);
-        parts.passt.set_visible(machine.network_mode == Mode::Nat);
-        parts.passt.set_sensitive(off && installed);
-        parts.passt.set_subtitle(if installed { "Needs no root." } else { "passt is not installed." });
+        let nat = machine.network_mode == Mode::Nat;
+        let held = !machine.only_through.is_empty();
+        parts.passt.set_visible(nat);
+        // Held to an interface, a machine always has passt, which nothing else can bind to one.
+        parts.passt.set_sensitive(off && installed && !held);
+        parts.passt.set_subtitle(if held {
+            "Always on while an interface is chosen below."
+        } else if installed {
+            "Needs no root."
+        } else {
+            "passt is not installed."
+        });
+        parts.syncing.set(true);
+        parts.passt.set_active(machine.passt || held);
+        parts.syncing.set(false);
+        parts.through.set_visible(nat);
+        parts.through.set_sensitive(off);
+        parts.dns.set_visible(nat && held);
+        parts.dns.set_sensitive(off);
         parts.bridge.set_visible(bridged);
         parts.bridge_state.set_visible(bridged);
         if bridged {

@@ -12,7 +12,7 @@ use super::{Boot, QemuJail, VmPlan};
 use crate::disk_image::backing::backing_files;
 use crate::failure::{Failure, Result};
 use crate::network::{Mode, Protocol, bridge_helper};
-use guesthouse_jail::launch::{Launch, Passt, Tap, UnixSocket};
+use guesthouse_jail::launch::{self, Launch, Passt, Tap, UnixSocket};
 use guesthouse_jail::{Grant, Network, Plan, Ports, system};
 use std::path::{Path, PathBuf};
 
@@ -217,6 +217,10 @@ impl VmPlan {
             fd: PASST_FD,
             pid_file: self.run_folder.join(super::PASST_PID_FILE),
             words: self.passt_words(),
+            only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
+                interface: through.interface.clone(),
+                cut_file: self.run_folder.join(launch::CUT_FILE),
+            }),
         })
     }
 
@@ -259,13 +263,34 @@ impl VmPlan {
         words
     }
 
+    /// What goes in front of QEMU with no jail: nothing, but for a machine held to one interface, whose
+    /// passt the launcher starts and guards, as it opens passt and runs QEMU as it is.
+    fn unjailed_words(&self, before_jail: &[String]) -> Vec<String> {
+        let Some(passt) = self.network.only_through.as_ref().and_then(|_| self.passt()) else {
+            return before_jail.to_vec();
+        };
+        let opening = Launch {
+            plan: None,
+            passt: Some(passt),
+            tap: None,
+            unix_sockets: Vec::new(),
+            no_new_unix_sockets: false,
+            reads_own_memory: false,
+            program: Vec::new(),
+        };
+        let mut words = vec![self.launcher.display().to_string()];
+        words.extend(opening.words());
+        words.extend(before_jail.iter().cloned());
+        words
+    }
+
     /// What goes in front of QEMU for a jailed GPU machine, up to the program's own words, with
     /// `before_jail` right before the launcher that jails it. In namespaces, passt and a bridged
     /// network's helper go before bubblewrap: passt has a sandbox of its own, and the helper has to
     /// gain its privileges, which it can't inside. So the launcher runs twice, once to start those
     /// and once inside to jail QEMU.
     pub(super) fn jail_words(&self, before_jail: &[String]) -> Vec<String> {
-        let Some(jail) = &self.jail else { return before_jail.to_vec() };
+        let Some(jail) = &self.jail else { return self.unjailed_words(before_jail) };
         let plan = self.qemu_jail_plan(jail);
         let mut jailing = Launch {
             plan: Some(plan.clone()),

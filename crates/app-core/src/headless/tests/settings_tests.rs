@@ -166,6 +166,43 @@ fn dlss_is_on_until_set_off_and_only_an_nvidia_windows_machine_has_it() {
 }
 
 #[test]
+fn the_one_interface_and_its_dns_server_are_set_and_listed() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    assert_eq!(said(&context, "set work only-through wg0").0, "only-through is now wg0.\n");
+    assert_eq!(said(&context, "set work dns 10.64.0.1").1, Ok(()));
+    let machine = load(&context, "work").unwrap();
+    assert_eq!((machine.only_through.as_str(), machine.dns.as_str()), ("wg0", "10.64.0.1"));
+    let listing = said(&context, "show work").0;
+    assert!(listing.contains("only-through wg0\ndns       10.64.0.1\n"), "{listing}");
+    assert_eq!(said(&context, "set work only-through OFF").1, Ok(()));
+    assert_eq!(said(&context, "set work dns auto").1, Ok(()));
+    let machine = load(&context, "work").unwrap();
+    assert_eq!((machine.only_through.as_str(), machine.dns.as_str()), ("", ""));
+}
+
+#[test]
+fn the_one_interface_is_refused_where_it_cannot_work_or_is_not_a_name() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    make(&context, "desk", "Desk", Kind::Linux);
+    assert!(refused(&context, "set work only-through wg/0").contains("up to 15"));
+    assert!(refused(&context, "set work dns fc00::1").contains("IPv4"));
+    assert_eq!(
+        refused(&context, "set desk only-through wg0"),
+        "An Ubuntu machine's network is fixed, with its SSH port forwarded."
+    );
+    assert_eq!(said(&context, "set work network none").1, Ok(()));
+    assert_eq!(refused(&context, "set work only-through wg0"), "only-through is for the NAT network.");
+    let machine = make(&context, "busy", "Busy", Kind::Plain);
+    running(&context, &machine, 41);
+    assert_eq!(refused(&context, "set busy only-through wg0"), "The VM must be off to change this.");
+    assert_eq!(refused(&context, "set busy dns 10.0.0.1"), "The VM must be off to change this.");
+}
+
+#[test]
 fn show_lists_what_the_kind_of_machine_has() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);
@@ -174,7 +211,8 @@ fn show_lists_what_the_kind_of_machine_has() {
     let plain = said(&context, "show work").0;
     assert!(plain.starts_with("name      Office PC\nid        work\nfolder    "), "{plain}");
     assert!(
-        plain.contains("network   NAT\npasst     off\nshare     none\n") && !plain.contains("vram"),
+        plain.contains("network   NAT\npasst     off\nonly-through off\ndns       auto\nshare     none\n")
+            && !plain.contains("vram"),
         "{plain}"
     );
     let windows = said(&context, "show win").0;

@@ -195,6 +195,15 @@ pub struct Machine {
     pub mac: String,
     #[serde(default = "default_bridge")]
     pub bridge: String,
+    /// NAT only: the name of one host interface, a VPN's, that all of the guest's traffic goes out
+    /// through and nothing else. Empty is off. Left out of the file when empty, so an older build can
+    /// still read it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub only_through: String,
+    /// The DNS server the guest's names are asked of while `only_through` is on, as an IPv4 address.
+    /// Empty finds one. Left out of the file when empty, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dns: String,
     #[serde(default)]
     pub forwards: Vec<Forward>,
     /// Ubuntu's GPU, which is a preview. Off, the guest gets the plain screen.
@@ -298,6 +307,8 @@ impl Machine {
             passt: false,
             mac: String::new(),
             bridge: default_bridge(),
+            only_through: String::new(),
+            dns: String::new(),
             forwards: Vec::new(),
             gpu_preview: true,
             start_without_jail: false,
@@ -546,6 +557,8 @@ impl Machine {
         } else if self.network_mode == Mode::Bridged && self.mac.is_empty() {
             found.push("A bridged machine needs its own MAC address.".to_owned());
         }
+        found.extend(network::interface_name_problem(&self.only_through));
+        found.extend(network::dns_problem(&self.dns));
         found
     }
 
@@ -1020,6 +1033,7 @@ mod tests {
         let old = load(&context, "old").unwrap();
         assert!(old.kind == Kind::Windows && old.has_gpu() && !old.tpm && !old.overlay && !old.clipboard);
         assert_eq!((old.network_mode, old.passt, old.mac.as_str()), (Mode::Nat, false, ""));
+        assert_eq!((old.only_through.as_str(), old.dns.as_str()), ("", ""));
         assert_eq!(old.vram_gib, 0);
         assert!(old.forwards.is_empty());
     }
@@ -1233,6 +1247,7 @@ mod tests {
         assert_eq!(machine.windows_maker(), Some(GpuMaker::Intel));
         assert_eq!(machine.windows_card_address(), Some("0000:03:00.0"));
         assert!(machine.window_speed() && machine.disk_folder.is_empty() && machine.drives.is_empty());
+        assert!(machine.only_through.is_empty() && machine.dns.is_empty());
     }
 
     #[test]
@@ -1243,6 +1258,18 @@ mod tests {
         assert!(!machine.window_speed());
         assert_eq!(machine.drives, [Drive { id: "ata-SOME_DISK_SERIAL".into() }]);
         assert_eq!(machine.forwards.len(), 1);
+        assert!(machine.only_through.is_empty() && machine.dns.is_empty());
+    }
+
+    #[test]
+    fn only_through_and_its_dns_server_are_kept_and_left_out_when_empty() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("only_through") && !text.contains("dns"), "{text}");
+        let through = Machine { only_through: "wg0".into(), dns: "10.64.0.1".into(), ..sample() };
+        let read: Machine = serde_json::from_str(&serde_json::to_string(&through).unwrap()).unwrap();
+        assert_eq!((read.only_through.as_str(), read.dns.as_str()), ("wg0", "10.64.0.1"));
+        let bad = Machine { only_through: "wg0,x".into(), dns: "nobody".into(), ..sample() };
+        assert_eq!(bad.network_problems().len(), 2);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use super::*;
 use crate::machine::Machine;
 use crate::network::Forward;
+use crate::only_through::OnlyThrough;
 use crate::slots;
 use crate::testing::{Scratch, scratch_context};
 use crate::vm_args::PASST_PID_FILE;
@@ -187,6 +188,61 @@ fn on_passt_qemu_only_has_the_private_link() {
     assert_eq!(network.tcp_connect, Ports::none());
     assert_eq!(network.udp_send, Ports::Any, "for the UDP forward's replies");
     assert_eq!(network.tcp_bind, Ports::Only(vec![plan.agent_port, plan.files_port.unwrap(), 8080]));
+}
+
+fn held_to_wg0(machine: Machine, jailed_too: bool) -> (Scratch, VmPlan) {
+    let (scratch, plan) = jailed(machine, false);
+    let through = OnlyThrough { interface: "wg0".into(), ipv6: false };
+    let network = NetworkPlan { passt: true, only_through: Some(through), ..plan.network.clone() };
+    let jail = plan.jail.clone().filter(|_| jailed_too);
+    (scratch, VmPlan { network, jail, ..plan })
+}
+
+#[test]
+fn without_a_jail_a_machine_held_to_an_interface_still_has_the_launcher_start_passt() {
+    let (_scratch, plan) = held_to_wg0(windows(), false);
+    let command = plan.qemu_command();
+    assert_eq!(command[..2], [plan.launcher.display().to_string(), "--open-only".to_owned()]);
+    let passt = command.iter().position(|word| word == "--passt").unwrap();
+    assert_eq!(command[passt + 2], PASST_FD.to_string());
+    let words: Vec<&str> =
+        command.windows(2).filter(|two| two[0] == "--passt-word").map(|two| two[1].as_str()).collect();
+    assert!(words.contains(&"--outbound-if4") && words.contains(&"wg0"), "{words:?}");
+    let end = command.iter().position(|word| word == "--").unwrap();
+    assert!(end > passt && command[end + 1..].contains(&"/usr/bin/qemu-system-x86_64".to_owned()));
+    assert!(!plan.clears_environment(), "QEMU runs as it is");
+    assert!(plan.qemu_arguments().iter().any(|word| *word == format!("socket,model=e1000e,fd={PASST_FD}")));
+}
+
+#[test]
+fn a_machine_held_to_an_interface_has_the_launcher_guard_its_passt_with_or_without_a_jail() {
+    for jailed_too in [false, true] {
+        let (_scratch, plan) = held_to_wg0(windows(), jailed_too);
+        let command = plan.qemu_command();
+        let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
+        let cut_file = plan.run_folder.join("network-cut").display().to_string();
+        assert_eq!(command[guard + 1..guard + 3], ["wg0".to_owned(), cut_file]);
+    }
+    let (_scratch, plan) = on_passt(windows(), true);
+    assert!(!plan.qemu_command().contains(&"--passt-only-through".to_owned()), "passt alone has no guard");
+}
+
+#[test]
+fn without_a_jail_a_machine_on_passt_alone_has_no_launcher() {
+    let (_scratch, plan) = held_to_wg0(windows(), false);
+    let plan = VmPlan { network: NetworkPlan { only_through: None, ..plan.network.clone() }, ..plan };
+    assert_eq!(plan.qemu_command()[0], "/usr/bin/qemu-system-x86_64");
+}
+
+#[test]
+fn in_a_jail_the_interface_is_in_the_launchers_passt_words() {
+    let (_scratch, plan) = held_to_wg0(windows(), true);
+    let command = plan.qemu_command();
+    let words: Vec<&str> =
+        command.windows(2).filter(|two| two[0] == "--passt-word").map(|two| two[1].as_str()).collect();
+    assert!(words.windows(2).any(|two| two == ["--outbound-if4", "wg0"]), "{words:?}");
+    assert!(words.contains(&"--ipv4-only"), "{words:?}");
+    assert_eq!(plan.passt().unwrap().words.len(), words.len());
 }
 
 #[test]

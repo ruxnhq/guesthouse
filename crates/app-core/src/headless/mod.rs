@@ -15,6 +15,8 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::log::read_log;
 use crate::machine::{Kind, Machine, load_all};
+use crate::network::{self, InUse};
+use crate::network_settings::network_in_use;
 use crate::setup::checks::machine_gpu_warning;
 use crate::slots;
 use crate::tasks::{State, Status, launch, status, still_working};
@@ -49,8 +51,10 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
 
   show MACHINE               its settings
-  set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, sound, share,
-                             window-speed, dlss, start-unjailed, remote-desktop, ssh
+  set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
+                             dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh
+                             only-through is an interface's name, such as wg0, or off. dns is an
+                             IPv4 address, or auto
   forward MACHINE add|remove tcp|udp HOST GUEST
                              a port on this PC that reaches a port in the guest
 
@@ -168,6 +172,11 @@ fn show_status(context: &Context, machine: &Machine, out: &mut dyn Write) -> Res
     ];
     for note in notes.into_iter().filter(|note| !note.is_empty()) {
         writeln!(out, "{note}")?;
+    }
+    // A machine held to one interface that has gone still runs, with no network.
+    let in_use = found.slot.and_then(|_| network_in_use(context, machine));
+    if in_use == Some(InUse::Cut) {
+        writeln!(out, "{}", network::in_use_text(in_use))?;
     }
     Ok(())
 }

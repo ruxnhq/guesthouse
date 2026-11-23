@@ -133,6 +133,7 @@ pub fn set_mac(context: &Context, machine: &mut Machine, text: &str) -> Result<(
 fn only_through_problems(
     machine: &Machine,
     passt_installed: bool,
+    passt_too_old: impl Fn() -> Option<String>,
     dns: impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
     let interface = machine.only_through.trim();
@@ -145,6 +146,8 @@ fn only_through_problems(
             "passt is not installed, and {interface} is the only way out for this machine. \
              Install passt, or choose Any in the machine's network settings."
         ));
+    } else if let Some(problem) = passt_too_old() {
+        found.push(problem);
     }
     if !only_through::interface_exists(interface) {
         found.push(format!("{interface} is not there. Connect the VPN first."));
@@ -172,9 +175,12 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
             ));
         }
     }
-    found.extend(only_through_problems(machine, passt_installed(), |interface| {
-        only_through::dns_now(&machine.dns, interface)
-    }));
+    found.extend(only_through_problems(
+        machine,
+        passt_installed(),
+        only_through::passt_too_old_now,
+        |interface| only_through::dns_now(&machine.dns, interface),
+    ));
     for item in &machine.forwards {
         let taken = || {
             let host = u16::try_from(item.host).ok()?;
@@ -273,36 +279,48 @@ mod tests {
         }
     }
 
+    fn current() -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn a_passt_too_old_to_bind_udp_is_a_problem() {
+        let old = || only_through::passt_too_old("passt 2024_02_20.1e6f92b\n");
+        let found = only_through_problems(&held_to("lo", "10.64.0.1"), true, old, found_dns);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("2025_04_15"), "{found:?}");
+    }
+
     #[test]
     fn a_machine_that_is_not_held_has_no_such_problems() {
-        assert!(only_through_problems(&held_to("", ""), false, no_dns).is_empty());
+        assert!(only_through_problems(&held_to("", ""), false, current, no_dns).is_empty());
         let bridged = Machine { network_mode: Mode::Bridged, ..held_to("no-such0", "") };
-        assert!(only_through_problems(&bridged, false, no_dns).is_empty());
+        assert!(only_through_problems(&bridged, false, current, no_dns).is_empty());
         let ubuntu = Machine { kind: Kind::Linux, ..held_to("no-such0", "") };
-        assert!(only_through_problems(&ubuntu, false, no_dns).is_empty());
+        assert!(only_through_problems(&ubuntu, false, current, no_dns).is_empty());
     }
 
     #[test]
     fn an_interface_that_is_not_there_says_to_connect_the_vpn() {
-        let found = only_through_problems(&held_to("no-such0", "10.64.0.1"), true, no_dns);
+        let found = only_through_problems(&held_to("no-such0", "10.64.0.1"), true, current, no_dns);
         assert_eq!(found, ["no-such0 is not there. Connect the VPN first."]);
     }
 
     #[test]
     fn no_passt_is_a_problem_and_never_a_fallback() {
-        let found = only_through_problems(&held_to("lo", "10.64.0.1"), false, found_dns);
+        let found = only_through_problems(&held_to("lo", "10.64.0.1"), false, current, found_dns);
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("passt is not installed") && found[0].contains("lo"), "{found:?}");
     }
 
     #[test]
     fn a_server_that_is_found_leaves_nothing_to_say() {
-        assert!(only_through_problems(&held_to("lo", ""), true, found_dns).is_empty());
+        assert!(only_through_problems(&held_to("lo", ""), true, current, found_dns).is_empty());
     }
 
     #[test]
     fn no_server_to_use_says_to_set_one_in_the_settings() {
-        let found = only_through_problems(&held_to("lo", ""), true, no_dns);
+        let found = only_through_problems(&held_to("lo", ""), true, current, no_dns);
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("lo") && found[0].contains("network settings"), "{found:?}");
     }

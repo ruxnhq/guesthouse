@@ -77,6 +77,45 @@ pub fn link_dns(resolvectl_output: &str) -> Option<String> {
     })
 }
 
+/// The oldest passt a machine held to an interface may use. Before 2024_05_10 passt doesn't bind
+/// UDP to the interface at all (2024_02_20, Ubuntu 24.04's, sends it out the normal link), and the
+/// app's own words need `--map-host-loopback none`, which works from this one on.
+pub const PASST_FLOOR: u32 = 20_250_415;
+const PASST_FLOOR_TEXT: &str = "2025_04_15";
+
+/// The date in `passt --version`'s first line: `passt 2024_10_30.ee7d0b6` from upstream's tags, or
+/// `passt 0.0~git20250503.587980c-2` as Debian builds it.
+pub fn passt_date(version_output: &str) -> Option<u32> {
+    let line = version_output.lines().find(|line| line.starts_with("passt") || line.starts_with("pasta"))?;
+    let word = line.split_whitespace().nth(1)?;
+    let digits: String = word
+        .trim_start_matches("0.0~git")
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '_')
+        .filter(char::is_ascii_digit)
+        .collect();
+    (digits.len() == 8).then(|| digits.parse().ok()).flatten()
+}
+
+/// What to say when this PC's passt is older than [`PASST_FLOOR`]. A version that can't be read says
+/// nothing: passt itself then refuses the words it doesn't know, and the machine doesn't start.
+pub fn passt_too_old(version_output: &str) -> Option<String> {
+    let date = passt_date(version_output)?;
+    (date < PASST_FLOOR).then(|| {
+        let line = version_output.lines().find(|line| line.starts_with("pas")).unwrap_or("").trim();
+        format!(
+            "This PC's passt ({line}) is too old to hold a machine to one interface. It needs \
+             passt {PASST_FLOOR_TEXT} or newer."
+        )
+    })
+}
+
+/// [`passt_too_old`] for the passt this PC has now.
+pub fn passt_too_old_now() -> Option<String> {
+    let output = Command::new("passt").arg("--version").output().ok()?;
+    passt_too_old(&String::from_utf8_lossy(&output.stdout))
+}
+
 /// The first IPv4 address `nmcli -g IP4.DNS device show LINK` prints, as in `10.64.0.1 | 10.64.0.2`.
 /// NetworkManager without systemd-resolved (Arch's default) keeps a link's servers only there.
 pub fn network_manager_dns(nmcli_output: &str) -> Option<String> {
@@ -168,6 +207,25 @@ fc000000000000000000000000000002 07 80 00 80    wg0
         assert_eq!(network_manager_dns("10.64.0.1 | 10.64.0.2\n").as_deref(), Some("10.64.0.1"));
         assert_eq!(network_manager_dns("\n"), None);
         assert_eq!(network_manager_dns(""), None);
+    }
+
+    #[test]
+    fn passts_date_is_read_from_upstreams_and_debians_versions() {
+        assert_eq!(passt_date("passt 2024_10_30.ee7d0b6\nCopyright\n"), Some(20_241_030));
+        assert_eq!(passt_date("passt 0.0~git20250503.587980c-2+deb13u1\n"), Some(20_250_503));
+        assert_eq!(passt_date("passt 2024_02_20.1e6f92b\n"), Some(20_240_220));
+        assert_eq!(passt_date("passt unknown\n"), None);
+        assert_eq!(passt_date(""), None);
+    }
+
+    #[test]
+    fn only_a_passt_older_than_the_floor_is_too_old() {
+        let old = passt_too_old("passt 2024_02_20.1e6f92b\n").unwrap();
+        assert!(old.contains("2024_02_20.1e6f92b") && old.contains("2025_04_15"), "{old}");
+        assert!(passt_too_old("passt 2024_10_30.ee7d0b6\n").is_some());
+        assert_eq!(passt_too_old("passt 2025_04_15.2340bbf\n"), None);
+        assert_eq!(passt_too_old("passt 0.0~git20250503.587980c-2\n"), None);
+        assert_eq!(passt_too_old("passt unknown\n"), None);
     }
 
     #[test]

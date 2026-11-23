@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 24] = [
+const SENT_TO_THE_GUEST: [&str; 25] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "api-check.ps1",
@@ -20,6 +20,7 @@ const SENT_TO_THE_GUEST: [&str; 24] = [
     "files-start.ps1",
     "files.ps1",
     "finish.ps1",
+    "helper-stop.ps1",
     "nv-files.ps1",
     "nv-profiles.ps1",
     "nvme-ready.ps1",
@@ -69,6 +70,24 @@ fn the_files_helper_only_answers_the_host() {
     assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
     assert!(helper.contains("RemoteEndPoint).Address.ToString() != HostAddress) return;"));
     assert!(helper.contains("words[0] != token) return;"));
+}
+
+/// A helper's task runs conhost, and stopping the task leaves the PowerShell under it holding the
+/// helper's port. The next helper then can't listen, and a loop that went on would keep a core busy.
+#[test]
+fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
+    let stop = fs::read_to_string(guest_file("helper-stop.ps1")).unwrap();
+    assert!(stop.contains("Stop-ScheduledTask -TaskName \"gpupv-$helperName\""), "{stop}");
+    assert!(stop.contains("C:\\gpupv\\$helperName.ps1") && stop.contains("Stop-Process"), "{stop}");
+    for helper in ["clipboard.ps1", "window-size.ps1"] {
+        let text = fs::read_to_string(guest_file(helper)).unwrap();
+        assert!(text.contains("try { $listener.Start() } catch { exit 1 }"), "{helper}");
+        assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
+    }
+    for name in ["clipboard", "files", "window-size"] {
+        let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();
+        assert!(start.contains(&format!("-File C:\\gpupv\\{name}.ps1")), "the stop finds it by this: {name}");
+    }
 }
 
 #[test]

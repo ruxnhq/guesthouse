@@ -121,9 +121,11 @@ function Size-Screen([int]$width, [int]$height, [int]$rate, [string]$modes) {
 }
 $token = (Get-Content C:\gpupv\token.txt -Raw).Trim()
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8768)
-$listener.Start()
+# With the port taken or the listener gone there is nothing to wait for, and a loop that went on
+# would only keep a core busy.
+try { $listener.Start() } catch { exit 1 }
 while ($true) {
-    $client = $listener.AcceptTcpClient()
+    try { $client = $listener.AcceptTcpClient() } catch { exit 1 }
     try {
         $stream = $client.GetStream()
         $parts = [System.IO.StreamReader]::new($stream).ReadLine().Split(' ')

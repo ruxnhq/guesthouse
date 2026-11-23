@@ -33,6 +33,11 @@ const SIZE_SET: &str = "set";
 const SIZE_HELD: &str = "held";
 /// The first start on a machine also opens the helper's port in Windows' firewall.
 const FILES_START_SECONDS: u64 = 30;
+/// The helpers in the user's session, by the name their file, start script and task share.
+const CLIPBOARD_HELPER: &str = "clipboard";
+const FILES_HELPER: &str = "files";
+const WINDOW_SIZE_HELPER: &str = "window-size";
+const HELPER_STOP_SCRIPT: &str = "helper-stop.ps1";
 
 pub trait GuestAgent: Send + Sync {
     /// Runs PowerShell in the guest, and returns what it said. Nothing if the agent isn't up yet.
@@ -138,27 +143,44 @@ impl Context {
     }
 }
 
+/// What ends a helper in the guest: its task, and the PowerShell the task's console left running.
+fn helper_stop(context: &Context, name: &str) -> Result<String> {
+    Ok(format!("$helperName = '{name}'\n{}", guest_script(context, HELPER_STOP_SCRIPT)?))
+}
+
+/// What starts a helper: the helper's own file in Base64, and its start script. Any helper of the
+/// same name is ended first, as one left by an earlier viewer holds the port the new one needs.
+fn helper_start(context: &Context, name: &str) -> Result<String> {
+    let helper = base64_encode(&fs::read(context.paths.guest_files().join(format!("{name}.ps1")))?);
+    let start = guest_script(context, &format!("{name}-start.ps1"))?;
+    Ok(format!("{}\n$helper = '{helper}'\n{start}", helper_stop(context, name)?))
+}
+
+fn stop_helper(context: &Context, machine: &Machine, slot: Option<Slot>, name: &str) {
+    if let Ok(script) = helper_stop(context, name) {
+        context.ask_guest(machine, &script, QUICK_SECONDS, slot);
+    }
+}
+
 /// Says whether the helper is running in the user's session.
 pub fn start_guest_clipboard(context: &Context, machine: &Machine, slot: Option<Slot>) -> Result<bool> {
-    let helper = base64_encode(&fs::read(context.paths.guest_files().join("clipboard.ps1"))?);
-    let script = format!("$helper = '{helper}'\n{}", guest_script(context, "clipboard-start.ps1")?);
+    let script = helper_start(context, CLIPBOARD_HELPER)?;
     Ok(context.ask_guest(machine, &script, CLIPBOARD_START_SECONDS, slot).contains("started"))
 }
 
 pub fn stop_guest_clipboard(context: &Context, machine: &Machine, slot: Option<Slot>) {
-    context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-clipboard", QUICK_SECONDS, slot);
+    stop_helper(context, machine, slot, CLIPBOARD_HELPER);
 }
 
 /// Says whether the helper for dropped and dragged files was started in the user's session. It
 /// takes a moment more to listen: [`Helper::answers`] says when it does.
 pub fn start_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>) -> Result<bool> {
-    let helper = base64_encode(&fs::read(context.paths.guest_files().join("files.ps1"))?);
-    let script = format!("$helper = '{helper}'\n{}", guest_script(context, "files-start.ps1")?);
+    let script = helper_start(context, FILES_HELPER)?;
     Ok(context.ask_guest(machine, &script, FILES_START_SECONDS, slot).contains("started"))
 }
 
 pub fn stop_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>) {
-    context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-files", QUICK_SECONDS, slot);
+    stop_helper(context, machine, slot, FILES_HELPER);
 }
 
 /// The way to the machine's files helper. `None` for a machine with no token, which has no agent
@@ -185,13 +207,12 @@ fn ask_guest_clipboard(
 
 /// Says whether the helper that sizes the screen is running in the user's session.
 pub fn start_guest_window_size(context: &Context, machine: &Machine, slot: Option<Slot>) -> Result<bool> {
-    let helper = base64_encode(&fs::read(context.paths.guest_files().join("window-size.ps1"))?);
-    let script = format!("$helper = '{helper}'\n{}", guest_script(context, "window-size-start.ps1")?);
+    let script = helper_start(context, WINDOW_SIZE_HELPER)?;
     Ok(context.ask_guest(machine, &script, WINDOW_SIZE_START_SECONDS, slot).contains("started"))
 }
 
 pub fn stop_guest_window_size(context: &Context, machine: &Machine, slot: Option<Slot>) {
-    context.ask_guest(machine, "Stop-ScheduledTask -TaskName gpupv-window-size", QUICK_SECONDS, slot);
+    stop_helper(context, machine, slot, WINDOW_SIZE_HELPER);
 }
 
 /// What became of a size the guest's screen was asked to take.
@@ -303,6 +324,18 @@ mod tests {
         scratch.write("program/guest/clipboard.ps1", "the helper");
         scratch.write("program/guest/clipboard-start.ps1", "start it");
         scratch.write("program/guest/clipboard-ask.ps1", "ask it");
+        scratch.write("program/guest/helper-stop.ps1", "stop it");
+    }
+
+    #[test]
+    fn a_helper_is_ended_by_name_and_a_start_ends_the_one_before_it() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        with_guest_files(&scratch);
+        assert_eq!(helper_stop(&context, CLIPBOARD_HELPER).unwrap(), "$helperName = 'clipboard'\nstop it");
+        let start = helper_start(&context, CLIPBOARD_HELPER).unwrap();
+        let helper = base64_encode(b"the helper");
+        assert_eq!(start, format!("$helperName = 'clipboard'\nstop it\n$helper = '{helper}'\nstart it"));
     }
 
     fn answering_with(reply: impl FnOnce(TcpStream) + Send + 'static) -> u16 {
@@ -492,7 +525,8 @@ mod tests {
         let requests = agent.requests.lock().unwrap();
         assert!(requests[0].2.starts_with("$request = 'get'\n"));
         assert!(requests[4].2.contains(&format!("$request = '{encoded}'\n")));
-        let helper = requests[6].2.strip_prefix("$helper = '").unwrap().split('\'').next().unwrap();
+        let start = requests[6].2.strip_prefix("$helperName = 'clipboard'\nstop it\n").unwrap();
+        let helper = start.strip_prefix("$helper = '").unwrap().split('\'').next().unwrap();
         assert_eq!(base64_decode(helper).unwrap(), b"the helper");
     }
 }

@@ -24,9 +24,11 @@ pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
 use crate::context::Context;
 use crate::firmware::Firmware;
 use crate::gpu_identity::{PciIdentity, shown_identity};
+use crate::jailing::LAUNCHER;
 use crate::linux::card::ForwardedCard;
 use crate::machine::{Drive, Machine};
 use crate::network::{Forward, Mode};
+use crate::only_through::{OnlyThrough, dns_now};
 use guesthouse_daemon::memory_files::MemoryFiles;
 use guesthouse_daemon::slot::Slot;
 use std::fs;
@@ -97,8 +99,12 @@ pub struct NetworkPlan {
     pub bridge: String,
     pub mac: String,
     pub forwards: Vec<Forward>,
-    /// The host's DNS server, which passt passes on.
+    /// The DNS server passt passes the guest's names on to: the host's, or while the guest goes out
+    /// through one interface, one that works there.
     pub resolver: Option<String>,
+    /// NAT only: the one interface all of the guest's traffic goes through. It takes passt, whatever
+    /// `passt` says, and passt must be started by the jail's launcher, which guards its connections.
+    pub only_through: Option<OnlyThrough>,
 }
 
 /// Everything QEMU's arguments are built from.
@@ -132,6 +138,9 @@ pub struct VmPlan {
     /// [`crate::host_drives::OpenDrives`].
     pub drives: Vec<Drive>,
     pub share_program: PathBuf,
+    /// The jail's launcher, which also starts passt for a machine held to one interface that has no
+    /// jail around QEMU.
+    pub launcher: PathBuf,
     /// The cap on video memory, as `8G`. The daemon reads it, and QEMU has no use for it.
     pub vram: Option<String>,
     /// A relative USB mouse beside the tablet, for games.
@@ -183,7 +192,16 @@ impl VmPlan {
         let run_folder = context.paths.run_folder(slot);
         let drives = Self::drives_for(machine, &boot);
         let tools = context.paths.store.join("iso/tools.iso");
-        let passt = machine.network_mode == Mode::Nat && machine.passt && passt_installed();
+        let nat = machine.network_mode == Mode::Nat;
+        let only_through = if nat { OnlyThrough::read(&machine.only_through) } else { None };
+        // Held to one interface, a machine never falls back to QEMU's own NAT, which has no such
+        // thing. If passt isn't there, the start is refused: see `network_start_problems`.
+        let passt = nat && (only_through.is_some() || (machine.passt && passt_installed()));
+        let resolver = match &only_through {
+            Some(through) => dns_now(&machine.dns, &through.interface),
+            None if passt => host_resolver(),
+            None => None,
+        };
         Self {
             boot,
             slot,
@@ -205,6 +223,7 @@ impl VmPlan {
             share: Some(machine.share.clone()).filter(|share| !share.is_empty()),
             drives,
             share_program: context.paths.binary(SHARE_PROGRAM),
+            launcher: context.paths.binary(LAUNCHER),
             vram: (vram_gib > 0).then(|| format!("{vram_gib}G")),
             mouse: machine.has_gpu(),
             render_identity: shown_identity(context, machine),
@@ -214,7 +233,8 @@ impl VmPlan {
                 bridge: machine.bridge.clone(),
                 mac: machine.mac.clone(),
                 forwards: machine.forwards.clone(),
-                resolver: if passt { host_resolver() } else { None },
+                resolver,
+                only_through,
             },
             tools_disc: tools.is_file().then_some(tools),
             sound: None,

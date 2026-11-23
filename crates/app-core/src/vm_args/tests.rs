@@ -205,6 +205,61 @@ fn passt_has_its_own_addresses_and_the_private_link() {
     assert!(words.windows(2).any(|two| two == ["--map-host-loopback", "none"]), "{words:?}");
 }
 
+fn held_to(interface: &str, ipv6: bool) -> NetworkPlan {
+    let through = OnlyThrough { interface: interface.into(), ipv6 };
+    NetworkPlan { passt: true, only_through: Some(through), ..plan(&windows(), Boot::Gpu).1.network }
+}
+
+#[test]
+fn an_interface_with_ipv6_binds_both_families_to_it() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let plan = VmPlan { network: held_to("wg0", true), ..plan };
+    let words = plan.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--outbound-if4", "wg0"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--outbound-if6", "wg0"]), "{words:?}");
+    assert!(!words.contains(&"--ipv4-only".to_owned()));
+}
+
+#[test]
+fn an_interface_without_ipv6_makes_the_guest_ipv4_only() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let plan = VmPlan { network: held_to("tun0", false), ..plan };
+    let words = plan.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--outbound-if4", "tun0"]), "{words:?}");
+    assert!(words.contains(&"--ipv4-only".to_owned()));
+    assert!(!words.contains(&"--outbound-if6".to_owned()));
+}
+
+#[test]
+fn a_machine_that_is_not_held_to_an_interface_has_none_of_these_words() {
+    let (_scratch, mut plan) = plan(&windows(), Boot::Gpu);
+    plan.network.passt = true;
+    let words = plan.passt_words();
+    assert!(!words.iter().any(|word| word.starts_with("--outbound") || word == "--ipv4-only"), "{words:?}");
+}
+
+#[test]
+fn the_setting_takes_passt_whatever_the_switch_says_and_only_in_nat() {
+    let held = Machine { only_through: "wg0".into(), dns: "10.64.0.1".into(), ..windows() };
+    let (_scratch, nat) = plan(&held, Boot::Gpu);
+    assert!(nat.network.passt, "the switch is off");
+    assert_eq!(nat.network.only_through.as_ref().map(|found| found.interface.as_str()), Some("wg0"));
+    assert_eq!(nat.network.resolver.as_deref(), Some("10.64.0.1"), "the typed server is the guest's");
+    let bridged = Machine { network_mode: Mode::Bridged, ..held };
+    let (_scratch, bridged) = plan(&bridged, Boot::Gpu);
+    assert_eq!(bridged.network.only_through, None);
+    assert!(!bridged.network.passt);
+}
+
+#[test]
+fn the_launchers_passt_is_never_swapped_for_qemus_own_network() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let plan = VmPlan { jail: None, network: held_to("wg0", true), ..plan };
+    let arguments = plan.qemu_arguments();
+    let nic = value_after(&arguments, "-nic");
+    assert_eq!(nic, format!("socket,model=e1000e,fd={PASST_FD}"));
+}
+
 #[test]
 fn the_disk_is_on_nvme_only_for_a_machine_on_it_and_the_cds_stay_on_sata() {
     let (_scratch, on_nvme) = plan(&Machine { nvme: true, ..windows() }, Boot::Gpu);

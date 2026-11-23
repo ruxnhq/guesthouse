@@ -19,6 +19,12 @@ const PASST_NETWORK: [(&str, &str); 7] = [
 ];
 /// passt tells nothing but what goes wrong.
 const PASST_QUIET: &str = "--quiet";
+/// passt's words for sending out through one interface. IPv4 is bound whatever the interface has.
+const PASST_OUT_IF4: &str = "--outbound-if4";
+const PASST_OUT_IF6: &str = "--outbound-if6";
+/// For an interface with no IPv6 address, where binding IPv6 to it makes passt refuse to start and
+/// leaving it unbound would let IPv6 out the normal link.
+const PASST_IPV4_ONLY: &str = "--ipv4-only";
 /// Where the jail's launcher notes passt's pid and start time, in the run folder, so it can be found
 /// like QEMU.
 pub const PASST_PID_FILE: &str = "passt.pid";
@@ -43,7 +49,29 @@ impl VmPlan {
         for (name, value) in self.passt_settings() {
             words.extend([format!("--{name}"), value]);
         }
+        words.extend(self.only_through_words());
         words
+    }
+
+    /// What binds passt's connections to the one interface. Only the launcher's passt has these:
+    /// QEMU's own passt network doesn't take them, and a machine held to an interface never gets it.
+    fn only_through_words(&self) -> Vec<String> {
+        let Some(through) = &self.network.only_through else { return Vec::new() };
+        let interface = through.interface.clone();
+        let mut words = vec![PASST_OUT_IF4.to_owned(), interface.clone()];
+        if through.ipv6 {
+            words.extend([PASST_OUT_IF6.to_owned(), interface]);
+        } else {
+            words.push(PASST_IPV4_ONLY.to_owned());
+        }
+        words
+    }
+
+    /// Whether the jail's launcher starts passt and QEMU only has its end of the connection. It does
+    /// in a jail, and for a machine held to one interface also without one, where the launcher only
+    /// opens passt.
+    pub(super) fn launcher_starts_passt(&self) -> bool {
+        self.jail.is_some() || self.network.only_through.is_some()
     }
 
     /// The agent, the files helper, the share and any forwards always go through QEMU's user network, as nothing else
@@ -81,7 +109,7 @@ impl VmPlan {
         let link = self.private_link();
         match (self.network.mode, self.network.passt) {
             // The jail's launcher started passt, and QEMU has its end of the connection.
-            (Mode::Nat, true) if self.jail.is_some() => ("socket", format!("fd={PASST_FD}")),
+            (Mode::Nat, true) if self.launcher_starts_passt() => ("socket", format!("fd={PASST_FD}")),
             (Mode::Nat, true) => {
                 let settings = self.passt_settings();
                 let settings: Vec<String> =

@@ -6,11 +6,13 @@
 //! What reads the card, and when, is the reader's own business and lives elsewhere.
 //!
 //! [`guest_use`] is the same kind of file for one guest: the video memory its daemon's books say it
-//! holds, kept in its run folder for the app's share panel.
+//! holds, kept in its run folder for the app's share panel. [`card_processes`] is each process's part
+//! of one card, for a driver that counts that per process.
 
 // Linux only: it uses mmap, flock and getuid. Other systems get an empty crate.
 #![cfg(target_os = "linux")]
 
+pub mod card_processes;
 pub mod guest_use;
 mod shared;
 pub mod words;

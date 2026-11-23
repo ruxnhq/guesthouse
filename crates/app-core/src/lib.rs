@@ -48,6 +48,7 @@ pub mod intel_desktop;
 pub mod iso;
 pub mod jailing;
 pub mod kept_logs;
+pub mod lean;
 pub mod library;
 pub mod limits;
 pub mod linux;

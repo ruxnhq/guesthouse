@@ -5,7 +5,8 @@ use guesthouse_app_core::network::Mode;
 use guesthouse_app_core::slots;
 use guesthouse_app_core::testing::{Scratch, scratch_context};
 use guesthouse_app_core::vm_args::{
-    Boot, NetworkPlan, PASST_FD, PASST_PID_FILE, QemuJail, TAP_FD, UbuntuBoot, VmPlan, passt_installed,
+    Boot, NetworkPlan, PASST_FD, PASST_PID_FILE, PasstAge, QemuJail, TAP_FD, UbuntuBoot, VmPlan,
+    passt_age_now, passt_installed,
 };
 use guesthouse_jail::Support;
 use std::env;
@@ -266,7 +267,8 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     // A real VM may hold the slot's own port.
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };
-    let network = NetworkPlan { passt, mode, bridge: "br7".into(), ..plan.network.clone() };
+    let passt_age = if passt { passt_age_now().unwrap_or_default() } else { PasstAge::default() };
+    let network = NetworkPlan { passt, mode, bridge: "br7".into(), passt_age, ..plan.network.clone() };
     let plan = VmPlan {
         qemu,
         qemu_files: None,

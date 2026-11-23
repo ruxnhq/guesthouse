@@ -435,6 +435,7 @@ fn build(
         let _ = fs::remove_file(next_token_file_at(&token_file));
     }
     plan_token_change_at(&token_file)?;
+    crate::actions::copy_identity::plan_at(&staging.folder(), copy.kind)?;
     if let Some(problem) = copy.problems(max_vram_gib_for(context, copy)).into_iter().next() {
         return Err(Failure(problem));
     }

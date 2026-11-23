@@ -73,6 +73,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     super::recipe::reset(task);
     // A new install is a new guest, with host keys of its own.
     task.machine.forget_guest_host_key(context);
+    super::copy_identity::forget(context, &task.machine);
     let iso = task.machine.iso.clone();
     let listing = isoinfo_files(&iso)?;
     let package = listing.lines().find_map(kernel_package).map(str::to_owned);
@@ -237,6 +238,8 @@ pub fn start(task: &mut Task) -> Result<()> {
         let plan = start_vm(task)?;
         wait_for_guest(task, &plan);
     }
+    // Last, once the start has the guest going: a copy's guest restarts after it.
+    super::copy_identity::renew_if_owed(task);
     Ok(())
 }
 

@@ -372,6 +372,7 @@ fn make(
         crate::throwaway::keep_notes(&folder)?;
     }
     plan_token_change_at(&folder.join(TOKEN_FILE))?;
+    crate::actions::copy_identity::plan_at(&folder, machine.kind)?;
     if let Some(problem) = machine.problems(max_vram_gib_for(context, machine)).into_iter().next() {
         return Err(Failure(problem));
     }

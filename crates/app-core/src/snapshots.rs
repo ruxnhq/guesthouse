@@ -192,6 +192,7 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
     let saved = snapshot_file(context, &machine, tag, ".json");
     snapshot_state::restore_disk_place(context, &mut task.machine, saved)?;
     auto_snapshot::record::went_back(context, &task.machine, tag, &snapshot.name);
+    crate::actions::copy_identity::went_back(context, &task.machine);
     Ok(())
 }
 

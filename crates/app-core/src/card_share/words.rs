@@ -124,6 +124,10 @@ pub fn card_note(card: &CardShare) -> Option<&'static str> {
              memory is first what the guest has allocated, which its cap holds, then what the driver \
              charges its processes with, the daemon's own work included, which is what the card gives it.",
         ),
+        GpuMaker::Nvidia if card.whole.load_percent.is_none() => Some(
+            "Each machine's GPU time isn't read on this card now. It comes from the driver, through the \
+             daemon of a Windows machine on the card of this version or later.",
+        ),
         GpuMaker::Nvidia => Some(
             "Each machine's GPU time isn't read on this card now, only the whole card's load. It comes from \
              the driver, through the daemon of a Windows machine on the card of this version or later.",
@@ -242,7 +246,11 @@ mod tests {
     #[test]
     fn a_card_says_what_its_figures_are_or_what_it_keeps_back() {
         assert!(card_note(&card(GpuMaker::Nvidia, true)).unwrap().contains("one-second sample"));
-        assert!(card_note(&card(GpuMaker::Nvidia, false)).unwrap().contains("isn't read on this card"));
+        let blind = card_note(&card(GpuMaker::Nvidia, false)).unwrap();
+        assert!(blind.contains("isn't read on this card") && !blind.contains("whole card"), "{blind}");
+        let mut loaded = card(GpuMaker::Nvidia, false);
+        loaded.whole.load_percent = Some(7);
+        assert!(card_note(&loaded).unwrap().contains("only the whole card's load"));
         assert!(card_note(&card(GpuMaker::Intel, false)).is_some());
         assert_eq!(card_note(&card(GpuMaker::Amd, false)), None);
     }

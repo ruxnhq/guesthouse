@@ -5,11 +5,11 @@
 # them. The driver's database is read-only where it's copied from and a copy keeps that, so it's
 # cleared here at every start: with it, nothing can save a profile.
 #
-# With $on set above it (the machine's "Faster programs in a window"), it also sets the driver's
-# Vulkan and OpenGL present method to its DXGI swap chain in the global profile. Under the default the
-# driver presents those through a copy of every frame into guest memory when vsync is off; through
-# DXGI the frame stays on the card. Only a value written here is ever taken back, and a value the
-# user set stays.
+# With $on set above it (the machine's "Faster programs in a window"), it also has the driver present
+# Vulkan and OpenGL through a DXGI swap chain, by the global profile. Under the default the driver
+# presents those through a copy of every frame into guest memory when vsync is off; through DXGI the
+# frame stays on the card. Only a value written here is ever taken back, and a value the user set
+# stays.
 $store = Join-Path $env:ProgramData 'NVIDIA Corporation\Drs'
 $usersSid = 'S-1-5-32-545'
 $names = 'nvdrsdb0.bin', 'nvdrsdb1.bin'
@@ -46,12 +46,14 @@ try {
 }
 }
 
-# NVIDIA's "Vulkan/OpenGL present method" setting, and 1: prefer the layered DXGI swap chain.
-$presentSetting = 0x20D690F8
-$presentValue = 1
-# Where it's noted that the value in the global profile is ours.
-$markKey = 'HKLM:\SOFTWARE\Guesthouse'
-$markName = 'NvidiaPresentMethod'
+# What the global profile gets, as id and value. 0x20D690F8, NVIDIA's "Vulkan/OpenGL present method", at
+# 1 prefers the layered DXGI swap chain. 0x2065EF11 bit 1 lets OpenGL make that chain when the
+# display it draws on isn't one the driver keeps, which is how it is once display-name.ps1 has
+# renamed ours. 0x20324987 bit 8 has the chain take OpenGL's own surface instead of going through
+# the driver's interop copies. The driver's own default for each is 0 or automatic.
+$settings = @(@(0x20D690F8, 1), @(0x2065EF11, 2), @(0x20324987, 0x100))
+# Where it's noted that a value in the global profile is ours, one value for each id.
+$markKey = 'HKLM:\SOFTWARE\Guesthouse\NvidiaProfile'
 
 $drs = @'
 using System;
@@ -124,34 +126,42 @@ public static class GuesthouseDrs {
 }
 '@
 
-function Set-PresentMethod {
+function Set-Profile {
     try {
         if (-not ('GuesthouseDrs' -as [type])) { Add-Type -TypeDefinition $drs -ErrorAction Stop }
-        $value = [GuesthouseDrs]::Read($presentSetting)
-        $ours = (Get-ItemProperty -LiteralPath $markKey -Name $markName -ea 0).$markName -eq 1
-        if ($ours -and $value -ne $presentValue) {
-            # The user changed it since, or took it out: it's theirs now.
+        $marks = Get-ItemProperty -LiteralPath $markKey -ea 0
+        $said = foreach ($setting in $settings) {
+            $id, $want = [uint32]$setting[0], [uint32]$setting[1]
+            $markName = '0x{0:X8}' -f $id
+            $value = [GuesthouseDrs]::Read($id)
+            $ours = $marks.$markName -eq 1
+            if ($ours -and $value -ne $want) {
+                # The user changed it since, or took it out: it's theirs now.
+                Remove-ItemProperty -LiteralPath $markKey -Name $markName -ErrorAction Stop
+                $ours = $false
+                if ($value -ge 0) { "kept $markName = $value, the user's"; continue }
+            }
+            if ($on) {
+                if ($value -eq $want) { "kept $markName"; continue }
+                if ($value -ge 0 -and -not $ours) { "kept $markName = $value, the user's"; continue }
+                [GuesthouseDrs]::Write($id, $want)
+                if (-not (Test-Path -LiteralPath $markKey)) { New-Item -Path $markKey -Force -ErrorAction Stop | Out-Null }
+                New-ItemProperty -LiteralPath $markKey -Name $markName -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
+                "set $markName = $want"
+                continue
+            }
+            if (-not $ours) { "kept $markName"; continue }
+            if ($value -eq $want) { [GuesthouseDrs]::Remove($id) }
             Remove-ItemProperty -LiteralPath $markKey -Name $markName -ErrorAction Stop
-            $ours = $false
-            if ($value -ge 0) { return "kept the present method the user set ($value)" }
+            "took back $markName"
         }
-        if ($on) {
-            if ($value -eq $presentValue) { return "kept the present method" }
-            if ($value -ge 0 -and -not $ours) { return "kept the present method the user set ($value)" }
-            [GuesthouseDrs]::Write($presentSetting, $presentValue)
-            New-Item -Path $markKey -Force -ErrorAction Stop | Out-Null
-            New-ItemProperty -LiteralPath $markKey -Name $markName -PropertyType DWord -Value 1 -Force -ErrorAction Stop | Out-Null
-            return "present method set to DXGI"
-        }
-        if (-not $ours) { return "kept the present method" }
-        if ($value -eq $presentValue) { [GuesthouseDrs]::Remove($presentSetting) }
-        Remove-ItemProperty -LiteralPath $markKey -Name $markName -ErrorAction Stop
-        "present method back to the driver's"
+        if (@($said | Where-Object { -not $_.StartsWith('kept') }).Count -eq 0) { 'kept the profile' }
+        else { 'profile: ' + ($said -join ', ') }
     } catch {
-        "FAILED present method: $($_.Exception.Message)"
+        "FAILED profile: $($_.Exception.Message)"
     }
 }
 
 $said = @(Place-Store)
-if (-not ($said -match '^(FAILED|no nvdrsdb)')) { $said += Set-PresentMethod }
+if (-not ($said -match '^(FAILED|no nvdrsdb)')) { $said += Set-Profile }
 $said -join "`n"

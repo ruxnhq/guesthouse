@@ -1,6 +1,8 @@
 use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::gpu_check::gpu_found;
-use super::guest_files::{place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store};
+use super::guest_files::{
+    name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
+};
 use super::guest_upload::stand_in::FilesGuest;
 use super::window_speed::apply_window_speed;
 use super::*;
@@ -716,6 +718,36 @@ fn the_profile_store_script_goes_to_the_guest_and_a_failure_is_said() {
     // The present method follows "Faster programs in a window".
     assert_eq!(asked[0].2, "$on = $true\nmake the store");
     assert_eq!(asked[1].2, "$on = $false\nmake the store");
+}
+
+#[test]
+fn the_display_is_named_by_the_vendor_number_windows_sees() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/display-name.ps1", "name it");
+    scratch.write("program/guest/setmode.ps1", "set the mode");
+    let agent = Arc::new(ScriptedAgent::answering(&[
+        "kept RDPUDD Chained DD\r\n",
+        "logon script placed\r\n",
+        "named Guesthouse Display from the next start (was RDPUDD Chained DD)\r\n",
+        "logon script placed\r\n",
+        "FAILED display name: denied\r\n",
+    ]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    name_display(&mut task).unwrap();
+    let maker = IdentityState { shown: Shown::Maker, ..Default::default() };
+    write_state(&context, &task.machine, &maker).unwrap();
+    name_display(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    name_display(&mut task).unwrap();
+    assert!(task.error.contains("display's name"), "{}", task.error);
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked[0].2, "$name = 'RDPUDD Chained DD'\nname it");
+    // The renamed display needs the logon task's script that knows the new name.
+    assert!(asked[1].2.contains("C:\\gpupv\\setmode.ps1"), "{}", asked[1].2);
+    assert_eq!(asked[2].2, "$name = 'Guesthouse Display'\nname it");
 }
 
 #[test]

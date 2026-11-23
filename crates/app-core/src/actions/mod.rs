@@ -35,8 +35,8 @@ use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
 use guest_files::{
-    place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store, place_system_files,
-    write_device_key,
+    name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
+    place_system_files, write_device_key,
 };
 use identity::set_up_identity;
 use identity_restart::restart_after_switch;
@@ -320,7 +320,8 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
         Some(GpuMaker::Nvidia) => {
             place_driver_files(task)?;
             place_nvapi_wrapper(task)?;
-            place_profile_store(task)
+            place_profile_store(task)?;
+            name_display(task)
         }
         Some(GpuMaker::Amd) => {
             bring_amd_driver_up_to_date(task)?;

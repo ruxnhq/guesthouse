@@ -8,7 +8,7 @@ use super::driver_store::HOST_DRIVER_STORE;
 use super::guest_upload::{put_big_file, quoted};
 use crate::agent::guest_script;
 use crate::failure::Result;
-use crate::gpu_identity::INTEL_RENDER;
+use crate::gpu_identity::{INTEL_RENDER, Shown, read_state};
 use crate::log::write_log;
 use crate::setup::amd_system_files::runtime_file_list;
 use crate::setup::guest_driver::guest_driver;
@@ -24,6 +24,14 @@ use std::fs;
 const SCRIPT_NAME: &str = "nv-files.ps1";
 const PROFILES_SCRIPT: &str = "nv-profiles.ps1";
 const PROFILES_SECONDS: u64 = 30;
+const DISPLAY_NAME_SCRIPT: &str = "display-name.ps1";
+const DISPLAY_NAME_SECONDS: u64 = 20;
+const SETMODE_SCRIPT: &str = "setmode.ps1";
+const SETMODE_PLACED: &str = "logon script placed";
+/// The name the display driver's INF gives the device.
+const INF_DISPLAY_NAME: &str = "RDPUDD Chained DD";
+/// The name the guest's scripts also know it by, see display-name.ps1.
+const OWN_DISPLAY_NAME: &str = "Guesthouse Display";
 const LIST_NAME: &str = "nv-files.txt";
 const LOG_NAME: &str = "nv-files.log";
 const CHECK_SECONDS: u64 = 20;
@@ -105,6 +113,64 @@ pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
     }
     if !all_kept(&said) {
         write_log(task.context, &format!("profile store: {}", said.trim()))?;
+    }
+    Ok(())
+}
+
+/// The name our display gets on an NVIDIA machine, by the vendor number Windows sees on the render
+/// device: on Microsoft's, NVIDIA's OpenGL and Vulkan driver finds its GPU only through a display
+/// named like a remote session's, which the INF names it; on NVIDIA's, that name folds the GPU into
+/// the display's adapter, and the other one lets the driver keep them apart.
+fn display_name(shown: Shown) -> &'static str {
+    match shown {
+        Shown::Microsoft => INF_DISPLAY_NAME,
+        Shown::Maker => OWN_DISPLAY_NAME,
+    }
+}
+
+/// Windows reads the name at boot, so what this writes counts from the next start. The start that
+/// moves a machine to NVIDIA's number restarts Windows anyway, so that boot has it already.
+pub(super) fn name_display(task: &mut Task) -> Result<()> {
+    let script = match guest_script(task.context, DISPLAY_NAME_SCRIPT) {
+        Ok(script) => script,
+        Err(failure) => {
+            write_log(task.context, &format!("display name: {}", failure.0))?;
+            return Ok(());
+        }
+    };
+    let name = display_name(read_state(task.context, &task.machine).shown);
+    // The logon task's script finds our display by its name too, and a guest keeps the copy it was
+    // installed with, which knows only the INF's.
+    if name != INF_DISPLAY_NAME {
+        refresh_setmode(task)?;
+    }
+    let said = task.ask_guest(&format!("$name = '{name}'\n{script}"), DISPLAY_NAME_SECONDS);
+    if said.contains(FAILED_MARK) {
+        task.error =
+            "Windows could not be given the display's name for NVIDIA's driver. The log says why.".to_owned();
+    }
+    if !all_kept(&said) {
+        write_log(task.context, &format!("display name: {}", said.trim()))?;
+    }
+    Ok(())
+}
+
+/// The install copied it from read-only media, and the copy kept the read-only mark.
+fn refresh_setmode(task: &Task) -> Result<()> {
+    let data = base64_encode(&fs::read(task.context.paths.guest_files().join(SETMODE_SCRIPT))?);
+    let path = guest_path(SETMODE_SCRIPT);
+    let said = task.ask_guest(
+        &format!(
+            "$file = '{path}'; if (Test-Path -LiteralPath $file) {{ (Get-Item -LiteralPath $file).IsReadOnly = $false }}; \
+             [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String('{data}')); '{SETMODE_PLACED}'"
+        ),
+        DISPLAY_NAME_SECONDS,
+    );
+    if !said.contains(SETMODE_PLACED) {
+        write_log(
+            task.context,
+            &format!("display name: the logon script stayed as it was: {}", said.trim()),
+        )?;
     }
     Ok(())
 }

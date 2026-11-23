@@ -364,9 +364,7 @@ fn make(
     check_disk(&folder.join(DISK_FILE))?;
     accepted::finish(&folder, notes)?;
     if left_out > 0 {
-        notes.push(format!(
-            "{left_out} files of the other PC's that this app doesn't take here were left out."
-        ));
+        notes.push(left_out_note(left_out));
     }
     guest_facts(&folder, machine.kind)?;
     if machine.throwaway {
@@ -380,6 +378,14 @@ fn make(
     write_json(&folder.join(MACHINE_FILE), machine)?;
     fs::rename(&folder, machine.folder(context))?;
     Ok(())
+}
+
+fn left_out_note(count: usize) -> String {
+    if count == 1 {
+        "1 file of the other PC's that this app doesn't take here was left out.".to_owned()
+    } else {
+        format!("{count} files of the other PC's that this app doesn't take here were left out.")
+    }
 }
 
 /// What lean Windows and Defender are in the guest, as far as this PC can know it. Only Windows has

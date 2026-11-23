@@ -432,3 +432,22 @@ fn lean_windows_comes_across_made_again_and_defender_is_asked_of_the_guest() {
     assert!(windows.join(crate::scan_exclusions::LOOK_MARK).exists(), "its first start asks the guest");
     assert!(windows.join("lean.json").exists());
 }
+
+#[test]
+fn the_note_about_files_left_out_counts_them_and_says_one_file_for_one() {
+    let scratch = Scratch::new();
+    let context = roomy_pc(&scratch);
+    let one = [
+        ("vars.fd", b"v".to_vec()),
+        ("remote-access.json", b"{}".to_vec()),
+        (DISK_FILE, qcow2(&scratch, "d", &[])),
+    ];
+    let made = imported(&context, &crafted(&scratch, &plain_settings(), &one), None).unwrap();
+    assert!(
+        made.notes
+            .contains(&"1 file of the other PC's that this app doesn't take here was left out.".to_owned()),
+        "{:?}",
+        made.notes
+    );
+    assert_eq!(left_out_note(3), "3 files of the other PC's that this app doesn't take here were left out.");
+}

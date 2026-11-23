@@ -98,6 +98,7 @@ pub fn install(task: &mut Task) -> Result<()> {
         )));
     }
     let _ = fs::remove_dir_all(boot);
+    fs::write(task.machine.network_by_name_marker(context), "")?;
     task.machine.installing = false;
     task.machine.iso.clear();
     task.machine.save(context)?;

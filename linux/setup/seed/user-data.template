@@ -11,6 +11,16 @@ autoinstall:
     username: "@USER@"
     realname: "@USER@"
     password: "@PASSWORD_HASH@"
+  # The card is found by its name. Left to itself the installer pins the netplan to the card's address,
+  # and a machine's address is its own and can change, as a copy's does.
+  network:
+    version: 2
+    ethernets:
+      all-en:
+        match:
+          name: "en*"
+        dhcp4: true
+        dhcp6: true
   ssh:
     install-server: true
     allow-pw: false

@@ -98,6 +98,9 @@ refresh_from_image() {
     esac
 }
 
+# Before anything that can stop this run: the network is the guest's way out, whatever the GPU does.
+"$here/netplan-by-name.sh" || true
+
 # Links from an earlier boot must not outlive it, whatever this boot decides.
 "$here/link-driver.sh" unlink
 udevadm settle --timeout=30

@@ -32,6 +32,7 @@ pub const MIN_RAM_GIB: u32 = 4;
 /// are for drives.
 pub const MAX_DRIVES: usize = 3;
 const MACHINE_FILE: &str = "machine.json";
+const NETWORK_BY_NAME_FILE: &str = "network-by-name";
 const OTHER_MAKER: &str =
     "Windows here was installed for the card it has now. For a card from another maker, make a new machine.";
 const THUMBNAIL_FILE: &str = "thumbnail.png";
@@ -335,6 +336,12 @@ impl Machine {
 
     pub fn folder(&self, context: &Context) -> PathBuf {
         context.paths.machines.join(&self.id)
+    }
+
+    /// Written when an Ubuntu install finishes, which finds the network card by its name. A guest from
+    /// before that has its netplan pinned to QEMU's default address, until its scripts have put that right.
+    pub fn network_by_name_marker(&self, context: &Context) -> PathBuf {
+        self.folder(context).join(NETWORK_BY_NAME_FILE)
     }
 
     pub fn tpm_folder(&self, context: &Context) -> PathBuf {

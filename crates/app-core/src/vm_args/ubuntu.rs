@@ -329,7 +329,7 @@ mod tests {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let mac = "52:54:00:a2:1c:6d";
-        let started = with_mac(&context, no_gpu(), mac).qemu_arguments();
+        let started = with_mac(&context, with_gpu(), mac).qemu_arguments();
         let card = value_after(&started, "-nic");
         assert!(
             card.starts_with(&format!("user,model=virtio-net-pci,mac={mac},hostfwd=tcp:127.0.0.1:")),
@@ -343,6 +343,22 @@ mod tests {
         };
         let installing = with_mac(&context, Boot::UbuntuInstall(install), mac).qemu_arguments();
         assert_eq!(value_after(&installing, "-nic"), format!("user,model=virtio-net-pci,mac={mac}"));
+    }
+
+    #[test]
+    fn a_guest_from_before_the_netplan_by_name_keeps_the_default_where_no_script_of_ours_runs() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let mac = "52:54:00:a2:1c:6d";
+        let plan = with_mac(&context, no_gpu(), mac);
+        assert!(
+            value_after(&plan.qemu_arguments(), "-nic").starts_with("user,model=virtio-net-pci,hostfwd=")
+        );
+        let machine = Machine { kind: Kind::Linux, ..Machine::new("ubuntu", "Ubuntu", "/m/disk.qcow2", "") };
+        std::fs::create_dir_all(machine.folder(&context)).unwrap();
+        std::fs::write(machine.network_by_name_marker(&context), "").unwrap();
+        let plan = with_mac(&context, no_gpu(), mac);
+        assert!(value_after(&plan.qemu_arguments(), "-nic").contains(&format!(",mac={mac},")));
     }
 
     #[test]

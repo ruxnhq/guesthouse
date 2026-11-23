@@ -130,6 +130,9 @@ fn serve_amd(
         if on(guesthouse_backend_amd::GIVE_WAY_VARIABLE) {
             backend.give_way();
         }
+        if on(guesthouse_backend_amd::GL_COPY_VARIABLE) {
+            backend.keep_gl_copies();
+        }
         if on(guesthouse_backend_amd::VIDEO_VARIABLE) {
             backend.offer_video();
         }

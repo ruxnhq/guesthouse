@@ -530,7 +530,7 @@ impl Backend for StandIn {
         })
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
+    fn registry_value(&mut self, name: &RegistryName, _asked_type: u32) -> Option<RegistryValue> {
         let utf16 = |text: &str| text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
         match name {
             RegistryName::DriverStorePath | RegistryName::DriverImagePath => {

@@ -238,8 +238,9 @@ pub trait Backend: Sized {
     /// a query it leaves to the core.
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status>;
 
-    /// A value from the adapter's registry key, or one of the driver paths.
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue>;
+    /// A value from the adapter's registry key, or one of the driver paths. `asked_type` is the
+    /// type the guest asks for, for a value a backend gives in whichever type it is asked in.
+    fn registry_value(&mut self, name: &RegistryName, asked_type: u32) -> Option<RegistryValue>;
 
     /// The GPU's clock, in nanoseconds.
     fn gpu_clock(&mut self) -> Result<u64, BackendError>;

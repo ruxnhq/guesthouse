@@ -46,6 +46,14 @@ Other RX 6000, RX 7000 and RX 9000 cards should work like the ones above. RX 500
 
 If you have an AMD card, open an issue to say how it went.
 
+## OpenGL in a window
+
+AMD's OpenGL driver shows a window's frames with a plain copy. In a guest, Windows turns each frame into a copy to a staging buffer and then copies it again with the CPU. The driver only takes the faster DXGI route for HDR, stereo, or a window the size of the screen. So the daemon turns on the driver's own setting for it, the one Adrenalin calls OpenGL Triple Buffering, and every OpenGL window gets DXGI.
+
+On a Radeon 610M with driver 32.0.21044.64 in the guest, a 1280x720 window of a light OpenGL scene went from about 690 frames a second to 1150. A heavy scene went from 206 to 264, the same as Direct3D 12. Driver 32.0.32015.12012 reads the setting the same way, but nobody has run it with this yet. Layered windows still get the copy, as the driver refuses DXGI for them on any PC.
+
+It's on by default. With `GUESTHOUSE_AMD_GL_COPY=1` in the environment the app or `guesthouse-vm` starts the machine from, OpenGL windows get the copy as before. Try that if an OpenGL program shows a wrong or stale picture.
+
 ## Sharing the card
 
 Off by default since 0.7.7. With `GUESTHOUSE_AMD_GIVE_WAY=1` in the environment the app or `guesthouse-vm` starts the machine from, a guest gives way when it sees others waiting for the card, so a small app on the host, in a container or in another VM gets turns between the guest's work. It helped a container's vkmark beside two Windows guests on a Radeon 780M (#276).

@@ -25,6 +25,7 @@ mod copy_ib;
 mod device;
 mod fault;
 mod fence_ib;
+mod gl_present;
 mod guest_dma;
 mod ib_dump;
 mod info;
@@ -52,6 +53,7 @@ pub use device::{Device, Mapping};
 pub use fence_ib::{
     Stamp, Writer as FenceWriter, stamp_words, words as fence_words, writer_for as fence_writer_for,
 };
+pub use gl_present::VARIABLE as GL_COPY_VARIABLE;
 pub use ib_dump::VARIABLE as IB_DUMP_VARIABLE;
 pub use info::{
     CardDetails, DeviceInfo, EngineSet, Firmware, HW_IP_DMA, HW_IP_GFX, read_device_info, read_gpu_clock,
@@ -138,6 +140,8 @@ pub struct AmdBackend {
     patience: Patience,
     /// Whether the guest gives way to the card's other users, see [`share`]. Off unless asked for.
     gives_way: bool,
+    /// OpenGL in a window keeps the blt present and its copies, see [`gl_present`].
+    gl_copies: bool,
     /// Runs the core has had prepared and not yet let go, by the doorbell that sends each.
     prepared: HashMap<u64, PreparedRun>,
     /// Video runs the core has had prepared and not yet let go, by the doorbell that sends each.
@@ -260,6 +264,7 @@ impl AmdBackend {
             copy_on_card: None,
             patience: Patience::RUN,
             gives_way: false,
+            gl_copies: false,
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
@@ -294,6 +299,13 @@ impl AmdBackend {
     pub fn give_way(&mut self) {
         log::info!("{GIVE_WAY_VARIABLE} is on: the guest gives way when it sees others waiting for the card");
         self.gives_way = true;
+    }
+
+    /// Keeps OpenGL in a window on the blt present, which the guest copies twice, see
+    /// [`gl_present`]. The daemon calls this when it was started with [`GL_COPY_VARIABLE`] on.
+    pub fn keep_gl_copies(&mut self) {
+        log::info!("{GL_COPY_VARIABLE} is on: OpenGL in a window is copied, not presented through DXGI");
+        self.gl_copies = true;
     }
 
     /// Offers the guest the card's video engine, where it can be: see [`video`]. The daemon calls
@@ -1180,8 +1192,18 @@ fn answer_query(info: &DeviceInfo, query: &VendorQuery<'_>, out: &mut Vec<u8>) -
 
 /// The registry value this backend has under a name, logged when it has one. A name it has no value
 /// for is the core's to log.
-fn registry_answer(name: &RegistryName, card_name: &str) -> Option<RegistryValue> {
-    let value = protocol::guest_driver::registry(name, card_name);
+/// `gl_dxgi` says OpenGL in a window is presented through DXGI, see [`gl_present`].
+fn registry_answer(
+    name: &RegistryName,
+    card_name: &str,
+    asked_type: u32,
+    gl_dxgi: bool,
+) -> Option<RegistryValue> {
+    let gl_value = match name {
+        RegistryName::Value(name) if gl_dxgi => gl_present::registry_value(name, asked_type),
+        _ => None,
+    };
+    let value = gl_value.or_else(|| protocol::guest_driver::registry(name, card_name));
     if let Some(value) = &value {
         traffic::registry(name, value);
     }
@@ -1549,8 +1571,8 @@ impl Backend for AmdBackend {
         answer_query(self.device.info(), query, out)
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
-        registry_answer(name, &self.facts.name)
+    fn registry_value(&mut self, name: &RegistryName, asked_type: u32) -> Option<RegistryValue> {
+        registry_answer(name, &self.facts.name, asked_type, !self.gl_copies)
     }
 
     fn gpu_clock(&mut self) -> Result<u64, BackendError> {

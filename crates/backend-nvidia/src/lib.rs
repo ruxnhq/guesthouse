@@ -614,7 +614,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         live.and_then(|live| perf_data::answer(query, &live, out)).or_else(|| self.answers.answer(query, out))
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
+    fn registry_value(&mut self, name: &RegistryName, _asked_type: u32) -> Option<RegistryValue> {
         self.answers.registry().lookup(name)
     }
 

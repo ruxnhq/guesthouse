@@ -28,6 +28,7 @@ use guesthouse_app_core::recipe::{
     Chosen, Entry, SettingsAsked, Source, Usual, fit, list_for, origin_text, what_it_will_run,
 };
 use guesthouse_app_core::remote_access::{Access, Service, ssh_problem};
+use guesthouse_app_core::scan_exclusions::{self, WHAT_IT_MEANS};
 use guesthouse_app_core::settings::max_vram_gib_for;
 use guesthouse_app_core::setup::amd::NO_AMD_SETUP;
 use guesthouse_app_core::setup::checks::machine_gpu_warning;
@@ -52,6 +53,7 @@ const SSH_NOTE: &str = "OpenSSH Server on guest port 22, for the account above. 
                         in too.";
 const NO_RECIPE: &str = "Nothing extra";
 const LEAN_TITLE: &str = "Lean Windows";
+const SKIP_SCANNING_TITLE: &str = "Leave Folders Out of Virus Scanning";
 const LEAN_NOTE: &str = "Leaves out apps Windows adds for every account, and keeps some programs from running in \
                          the background. Show lists all of it, and what it leaves alone.";
 const RECIPE_NOTE: &str = "A recipe sets a few of the machine's settings and gives it software once it is installed. \
@@ -95,6 +97,10 @@ struct Parts {
     lean: adw::SwitchRow,
     /// The switch is on because the recipe turned it on, and goes off with the recipe.
     lean_from_recipe: Cell<bool>,
+    /// Folders the chosen recipe names for Defender to leave out. There only when it names some, and
+    /// off whatever the recipe says, as only the user turns it on.
+    skip_scanning_group: adw::PreferencesGroup,
+    skip_scanning: adw::SwitchRow,
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     disk: adw::SpinRow,
@@ -216,6 +222,16 @@ impl NewMachineDialog {
         let lean_show = row_button("Show");
         lean.add_suffix(&lean_show);
         lean_group.add(&lean);
+        let skip_scanning_group = adw::PreferencesGroup::builder().visible(false).build();
+        page.add(&skip_scanning_group);
+        let skip_scanning = adw::SwitchRow::builder()
+            .title(SKIP_SCANNING_TITLE)
+            .subtitle(WHAT_IT_MEANS)
+            .subtitle_lines(0)
+            .build();
+        let skip_scanning_show = row_button("Show");
+        skip_scanning.add_suffix(&skip_scanning_show);
+        skip_scanning_group.add(&skip_scanning);
         let cards = windows_card_choices(&context);
         let labels: Vec<&str> = cards.iter().map(|choice| choice.label.as_str()).collect();
         let card = choice_row(CARD_TITLE, &labels);
@@ -272,6 +288,8 @@ impl NewMachineDialog {
             lean_group,
             lean,
             lean_from_recipe: Cell::new(false),
+            skip_scanning_group,
+            skip_scanning,
             cores,
             ram,
             disk,
@@ -296,6 +314,13 @@ impl NewMachineDialog {
         this.connect(&cancel, &choose);
         let dialog = this.0.dialog.clone();
         lean_show.connect_clicked(move |_| recipe_dialog::show(&dialog, LEAN_TITLE, &what_it_does()));
+        let handle = this.clone();
+        skip_scanning_show.connect_clicked(move |_| {
+            if let Some(entry) = handle.chosen_recipe() {
+                let text = scan_exclusions::what_it_does(&entry.recipe.scan_exclusions);
+                recipe_dialog::show(&handle.0.dialog, SKIP_SCANNING_TITLE, &text);
+            }
+        });
         let handle = this.clone();
         use_macos.connect_clicked(move |_| handle.choose_macos());
         this
@@ -649,6 +674,10 @@ impl NewMachineDialog {
         if parts.lean_from_recipe.replace(false) {
             parts.lean.set_active(false);
         }
+        // Never carried from one recipe to the next: each time, the user turns it on for these folders.
+        parts.skip_scanning.set_active(false);
+        let named = self.chosen_recipe().is_some_and(|entry| !entry.recipe.scan_exclusions.is_empty());
+        parts.skip_scanning_group.set_visible(named);
         let Some(entry) = self.chosen_recipe() else {
             parts.recipe_show.set_sensitive(false);
             parts.recipe_row.set_subtitle("");
@@ -753,6 +782,12 @@ impl NewMachineDialog {
         // The video memory cap is the one setting here that has no row, so it comes from the recipe,
         // held to what the card allows.
         let lean = iso.kind == Kind::Windows && parts.lean.is_active();
+        let skipped = match &entry {
+            Some(entry) if iso.kind == Kind::Windows && parts.skip_scanning.is_active() => {
+                entry.recipe.scan_exclusions.clone()
+            }
+            _ => Vec::new(),
+        };
         let extras = entry.map_or_else(Extras::default, |entry| {
             let asked =
                 SettingsAsked { vram_gib: entry.recipe.settings.vram_gib, ..SettingsAsked::default() };
@@ -762,10 +797,10 @@ impl NewMachineDialog {
             Extras {
                 vram_gib: vram,
                 recipe: Some(Chosen { source: entry.source, file, recipe: entry.recipe }),
-                lean: false,
+                ..Extras::default()
             }
         });
-        let extras = Extras { lean, ..extras };
+        let extras = Extras { lean, scan_exclusions: skipped, ..extras };
         let working = context.clone();
         let this = self.clone();
         in_background(

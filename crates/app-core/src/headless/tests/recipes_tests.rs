@@ -212,3 +212,36 @@ fn a_recipe_that_turns_lean_on_says_so_and_the_user_can_turn_it_off() {
     assert_eq!(result, Ok(()), "{out}");
     assert!(!crate::lean::is_lean(&context, &load(&context, "full").unwrap()));
 }
+
+#[test]
+fn folders_a_recipe_names_are_left_out_of_scanning_only_when_the_user_says_so() {
+    let scratch = Scratch::new();
+    let context = with_recipes(&scratch);
+    let named =
+        GAMES.replace("Games", "Lib").replace("[settings]", "scan_exclusions = ['D:\\Games']\n[settings]");
+    scratch.write("program/recipes/lib.toml", named);
+    let (out, result) = said(&context, &format!("{} --set-up-for lib", windows_words(&scratch, "Kept")));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(
+        out.contains("Defender's scanning can leave out, D:\\Games, and that is off unless you turn it on"),
+        "{out}"
+    );
+    assert!(!out.contains("Defender leaves out"), "{out}");
+    let kept = load(&context, "kept").unwrap();
+    assert!(crate::scan_exclusions::read_exclusions(&context, &kept).is_empty());
+    assert!(said(&context, "show kept").0.contains("defender  scans every folder"));
+    let (out, result) =
+        said(&context, &format!("{} --set-up-for lib --skip-scanning on", windows_words(&scratch, "Fast")));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(
+        out.contains(crate::scan_exclusions::WHAT_IT_MEANS) && out.contains("Defender leaves out D:\\Games."),
+        "{out}"
+    );
+    let (shown, _) = said(&context, "show fast");
+    assert!(shown.contains("defender  leaves out D:\\Games"), "{shown}");
+    let (out, result) = said(&context, &format!("{} --skip-scanning on", windows_words(&scratch, "Bare")));
+    assert!(failure_of(result).contains("goes with a Windows recipe that names folders"), "{out}");
+    let (out, result) =
+        said(&context, &format!("{} --set-up-for games --skip-scanning on", windows_words(&scratch, "None")));
+    assert!(failure_of(result).contains("names folders"), "{out}");
+}

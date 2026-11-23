@@ -167,6 +167,24 @@ fn lean_for(windows: bool, options: &NewOptions, extras: &Extras, out: &mut dyn 
     Ok(lean)
 }
 
+/// The folders a recipe names for Defender to leave out, only when `--skip-scanning on` says so, as
+/// nothing else turns it on. What it means is printed first.
+fn skipped_folders(options: &NewOptions, extras: &Extras, out: &mut dyn Write) -> Result<Vec<String>> {
+    let Some(word) = options.skip_scanning else { return Ok(Vec::new()) };
+    let named =
+        extras.recipe.as_ref().map(|chosen| chosen.recipe.scan_exclusions.clone()).unwrap_or_default();
+    if named.is_empty() {
+        return Err(Failure::new(
+            "--skip-scanning goes with a Windows recipe that names folders to leave out.",
+        ));
+    }
+    if !on_or_off("--skip-scanning", word)? {
+        return Ok(Vec::new());
+    }
+    writeln!(out, "{}", crate::scan_exclusions::what_it_does(&named))?;
+    Ok(named)
+}
+
 fn access_text(access: &Access) -> String {
     let on: Vec<&str> =
         Service::ALL.iter().filter(|service| access.is_on(**service)).map(|service| service.name()).collect();
@@ -189,6 +207,7 @@ fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Wr
         options.ssh,
         options.set_up_for,
         options.lean,
+        options.skip_scanning,
     ];
     if others.iter().any(Option::is_some) {
         return Err(Failure::new("A macOS machine takes --disk, --cores and --ram, and nothing else."));
@@ -258,6 +277,7 @@ pub(super) fn new_machine(
         return Err(Failure::new("--yes goes with --set-up-for."));
     }
     extras.lean = lean_for(windows, options, &extras, out)?;
+    extras.scan_exclusions = skipped_folders(options, &extras, out)?;
     let new = NewMachine {
         name: name.to_owned(),
         iso: iso.to_owned(),
@@ -299,6 +319,9 @@ pub(super) fn new_machine(
     }
     if extras.lean {
         writeln!(out, "It is lean Windows.")?;
+    }
+    if !extras.scan_exclusions.is_empty() {
+        writeln!(out, "Defender leaves out {}.", extras.scan_exclusions.join(", "))?;
     }
     if let Some(chosen) = &extras.recipe {
         writeln!(out, "Its steps run once it is installed and up: {}.", chosen.recipe.name)?;

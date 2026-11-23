@@ -62,6 +62,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              [--amd-driver PATH] [--intel-driver PATH]
                              [--remote-desktop on|off] [--ssh on|off]
                              [--set-up-for RECIPE [--yes]] [--lean on|off]
+                             [--skip-scanning on|off]
   new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
@@ -76,6 +77,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              the machine in one file, for Guesthouse on another PC
   import FILE [--name NAME]  a machine from such a file
   lean MACHINE [--no-wait]   take out again what lean Windows takes out, in the running guest
+  scan-all MACHINE [--no-wait]
+                             have Defender scan the folders it was told to leave out again
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
@@ -133,6 +136,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Recipes => recipes::show_all(context, out)?,
         Command::RunRecipe { name, wait } => recipes::run_again(context, &find(context, name)?, wait, out)?,
         Command::Lean { name, wait } => recipes::lean_again(context, &find(context, name)?, wait, out)?,
+        Command::ScanAll { name, wait } => recipes::scan_all(context, &find(context, name)?, wait, out)?,
         Command::Stop(name) => stop(context, &find(context, name)?, "stop", out)?,
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,

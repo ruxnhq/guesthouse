@@ -282,6 +282,8 @@ pub struct Extras {
     pub recipe: Option<crate::recipe::Chosen>,
     /// Made as lean Windows, which only a Windows machine can be.
     pub lean: bool,
+    /// Folders Defender's real-time scanning leaves out, which the user turned on. Windows only.
+    pub scan_exclusions: Vec<String>,
 }
 
 /// [`create`] for a machine that has a recipe. The cap is held to the same limit a setting is, and what
@@ -298,6 +300,12 @@ pub fn create_with(context: &Context, new: &NewMachine, extras: &Extras) -> Resu
     }
     if extras.lean && new.kind != Kind::Windows {
         return Err(Failure::new("Only a Windows machine can be made lean."));
+    }
+    if !extras.scan_exclusions.is_empty() && new.kind != Kind::Windows {
+        return Err(Failure::new("Only a Windows machine has Defender to leave folders out of scanning."));
+    }
+    if let Some(problem) = crate::scan_exclusions::list_problem(&extras.scan_exclusions) {
+        return Err(Failure(problem));
     }
     let machine = Machine { vram_gib: extras.vram_gib, ..planned(context, new) };
     let folder = context.paths.machines.join(&machine.id);
@@ -338,6 +346,7 @@ fn make_files(context: &Context, new: &NewMachine, machine: &Machine, extras: &E
     if machine.kind == Kind::Windows {
         write_access(context, machine, &new.access)?;
         crate::lean::write_lean(context, machine, extras.lean)?;
+        crate::scan_exclusions::write_exclusions(context, machine, &extras.scan_exclusions)?;
     }
     if let Some(chosen) = &extras.recipe {
         crate::recipe::write_chosen(context, machine, chosen)?;
@@ -1012,7 +1021,7 @@ mod tests {
         let none = create(&context, &new).unwrap();
         assert!(crate::recipe::read_chosen(&context, &none).is_none());
         assert!(!none.folder(&context).join("recipe.json").exists());
-        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("ubuntu")), lean: false };
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("ubuntu")), ..Extras::default() };
         let made = create_with(&context, &NewMachine { name: "Ub2".into(), ..new }, &extras).unwrap();
         assert_eq!(crate::recipe::read_chosen(&context, &made), extras.recipe);
     }
@@ -1021,7 +1030,7 @@ mod tests {
     fn a_recipe_for_another_kind_makes_nothing() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("windows")), lean: false };
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("windows")), ..Extras::default() };
         let said = create_with(&context, &plain(&scratch, "Plain", None), &extras).unwrap_err().0;
         assert!(said.contains("is for Windows"), "{said}");
         assert!(load_all(&context).0.is_empty(), "no machine was left behind");

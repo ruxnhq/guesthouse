@@ -359,6 +359,13 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;
         }
         line(out, "lean", &switch(crate::lean::is_lean(context, machine)))?;
+        let skipped = crate::scan_exclusions::read_exclusions(context, machine);
+        let defender = if skipped.is_empty() {
+            "scans every folder".to_owned()
+        } else {
+            format!("leaves out {}", skipped.join(", "))
+        };
+        line(out, "defender", &defender)?;
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
     line(out, "throwaway", &switch(machine.throwaway))?;

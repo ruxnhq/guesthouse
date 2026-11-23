@@ -59,6 +59,14 @@ pub fn what_it_will_run(recipe: &Recipe, source: Source, file: &str) -> String {
             crate::lean::what_it_does()
         );
     }
+    if !recipe.scan_exclusions.is_empty() {
+        let folders = recipe.scan_exclusions.join(", ");
+        let _ = write!(
+            text,
+            "\nIt names folders that Defender's scanning can leave out, {folders}, and that is off unless you \
+             turn it on."
+        );
+    }
     if recipe.steps.is_empty() {
         text.push_str("\nIt runs nothing in the machine.");
         return text.trim().to_owned();

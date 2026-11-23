@@ -113,6 +113,10 @@ pub struct Recipe {
     /// Left out of a file, and of a machine's copy, when it is off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lean: bool,
+    /// Folders Defender's real-time scanning may leave out, such as a games library. The recipe only
+    /// names them: the person making the machine is the one who turns it on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scan_exclusions: Vec<String>,
 }
 
 /// A character that draws nothing, or moves what is drawn around it: a control, or one of the marks that
@@ -187,6 +191,12 @@ impl Recipe {
         }
         if self.lean && self.guest != Guest::Windows {
             return Err(Failure::new("lean is for a Windows recipe."));
+        }
+        if !self.scan_exclusions.is_empty() && self.guest != Guest::Windows {
+            return Err(Failure::new("scan_exclusions is for a Windows recipe."));
+        }
+        if let Some(problem) = crate::scan_exclusions::list_problem(&self.scan_exclusions) {
+            return Err(Failure(problem));
         }
         if self.steps.packages.len() > PACKAGES_MOST {
             return Err(Failure(format!("A recipe lists at most {PACKAGES_MOST} packages.")));

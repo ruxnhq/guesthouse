@@ -39,15 +39,18 @@ use guest_files::{
     place_system_files, write_device_key,
 };
 use identity::set_up_identity;
+pub(crate) use identity::will_stage;
 use identity_restart::restart_after_switch;
 use identity_switch::{new_vm_needed, stop_for_new_identity};
 pub use install::{
     INSTALL_STEPS, answer_disc_path, answer_file, install, install_step, make_answer_disc, wait_for_setup,
 };
 use intel_files::complete_intel_driver;
+pub(crate) use nvme_move::{pending as nvme_pending, state_files as nvme_state_files};
 use remote_access::apply_remote_access;
 use window_speed::apply_window_speed;
 
+use crate::auto_snapshot::{self, AutoStart};
 use crate::context::Context;
 use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
@@ -100,6 +103,8 @@ pub struct Task<'a> {
     pub ram_this_run: Option<u32>,
     /// The desktop on the card is still to be watched once the start is reported done.
     watch_after_start: bool,
+    /// What a start's snapshot before it has to finish, and tell.
+    pub(crate) auto: AutoStart,
 }
 
 impl<'a> Task<'a> {
@@ -112,6 +117,7 @@ impl<'a> Task<'a> {
             error: String::new(),
             ram_this_run: None,
             watch_after_start: false,
+            auto: AutoStart::default(),
         }
     }
 
@@ -214,7 +220,12 @@ pub fn start(task: &mut Task) -> Result<()> {
         let plan = plan_for(task.context, &machine, Boot::Plain { iso: machine.iso.clone() });
         return task.host.start(&plan, &machine);
     }
+    auto_snapshot::before_start(task);
     boot(task)?;
+    auto_snapshot::start_succeeded(task);
+    if !task.auto.note.is_empty() {
+        task.error = [task.auto.note.as_str(), &task.error].join(" ").trim().to_owned();
+    }
     if let Some(gib) = task.ram_this_run {
         let note = smaller_start_note(gib, machine.ram_gib);
         task.error = [note.as_str(), &task.error].join(" ").trim().to_owned();

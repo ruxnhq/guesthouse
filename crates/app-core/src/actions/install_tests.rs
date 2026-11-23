@@ -404,9 +404,18 @@ fn an_install_forgets_what_the_old_windows_had_taken_in() {
     write_state(&context, &vm, &old).unwrap();
     let display = vm.folder(&context).join("display.json");
     fs::write(&display, r#"{"driver":"installed"}"#).unwrap();
+    let failed_start = crate::auto_snapshot::record::Record {
+        tag: "guesthouse-0a1b2c3d".into(),
+        name: "Automatic: before the vendor ID".into(),
+        pending: true,
+        covered: vec!["files:old".into()],
+    };
+    crate::auto_snapshot::record::write(&context, &vm, &failed_start).unwrap();
     let host = InstallHost { inner: RecordingHost::default(), context: &context };
     let mut task = Task::new(&context, &host, "install", vm.clone());
     assert!(install(&mut task).is_err(), "the stand-in VM never shuts down");
+    let record = crate::auto_snapshot::record::read(&context, &vm);
+    assert_eq!(record, Default::default(), "no way back to a snapshot that went with the old disk");
     assert!(read_state(&context, &vm).restart_due, "the new Windows was given the package again");
     assert!(!display.exists(), "and its display driver is looked at afresh");
 }

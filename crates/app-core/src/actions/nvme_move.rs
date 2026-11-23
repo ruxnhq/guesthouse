@@ -41,6 +41,11 @@ fn refused_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(REFUSED_FILE)
 }
 
+/// The two files that say where the disk stands in a move, for a snapshot to keep.
+pub(crate) fn state_files(context: &Context, machine: &Machine) -> [PathBuf; 2] {
+    [trial_file(context, machine), refused_file(context, machine)]
+}
+
 /// Whether this start is the machine's first on NVMe since it was moved there.
 pub(super) fn on_trial(context: &Context, machine: &Machine) -> bool {
     machine.nvme && trial_file(context, machine).is_file()
@@ -77,6 +82,15 @@ fn due(context: &Context, machine: &Machine) -> bool {
         && !machine.nvme
         && !machine.installing
         && !refused_file(context, machine).exists()
+}
+
+/// What of the move a start will find to do, if anything: `trial` for a machine already on NVMe that
+/// has not started there, `move` for one that is due and has the script to be readied by.
+pub(crate) fn pending(context: &Context, machine: &Machine) -> Option<&'static str> {
+    if on_trial(context, machine) {
+        return Some("trial");
+    }
+    (due(context, machine) && guest_script(context, SCRIPT_NAME).is_ok()).then_some("move")
 }
 
 /// Readies Windows for NVMe if this machine is one to move, and says whether it was. The machine is

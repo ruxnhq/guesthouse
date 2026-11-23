@@ -273,6 +273,11 @@ pub struct Machine {
     /// reims-vgpu's device. Left out of the file when empty, so an older build can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub opencore: String,
+    /// A snapshot before a start that changes Windows: see [`crate::auto_snapshot`]. Nothing here is
+    /// what [`crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON`] says, and the user's choice is written.
+    /// Left out of the file until then, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_snapshot: Option<bool>,
 }
 
 impl Machine {
@@ -324,6 +329,7 @@ impl Machine {
             disk_folder: String::new(),
             nvme: false,
             opencore: String::new(),
+            auto_snapshot: None,
         }
     }
 
@@ -388,6 +394,11 @@ impl Machine {
     /// Whether an NVIDIA guest gets the NVAPI wrapper in place of NVIDIA's NVAPI.
     pub fn nvapi_wrapper(&self) -> bool {
         !self.nvapi_wrapper_off
+    }
+
+    /// Whether a start of this machine takes a snapshot first when it has a risky change to make.
+    pub fn auto_snapshot_on(&self) -> bool {
+        self.auto_snapshot.unwrap_or(crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON)
     }
 
     pub fn has_gpu(&self) -> bool {

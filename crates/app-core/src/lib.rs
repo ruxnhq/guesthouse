@@ -11,6 +11,7 @@
 pub mod account;
 pub mod actions;
 pub mod agent;
+pub mod auto_snapshot;
 pub mod bridge;
 pub mod card_choice;
 pub mod card_share;
@@ -68,6 +69,7 @@ pub mod settings;
 pub mod setup;
 pub mod share;
 pub mod slots;
+pub mod snapshot_state;
 pub mod snapshots;
 pub mod start_checks;
 pub mod stopped;

@@ -380,9 +380,11 @@ pub fn remove_entry(context: &Context, machine: &Machine) -> Result<()> {
     if machine.owns_files(context) {
         return Err(Failure::new("This machine's disk is in its folder. Delete the machine instead."));
     }
-    if !list_snapshots(context, machine).is_empty() {
+    if list_snapshots(context, machine).iter().any(|snapshot| !snapshot.automatic) {
         return Err(Failure::new("Delete its snapshots first. They are inside the disk, which stays."));
     }
+    // The ones Guesthouse took by itself are not the user's to delete, so they go with the entry.
+    crate::auto_snapshot::delete_all(context, machine)?;
     let _ = fs::remove_dir_all(snapshots_folder(context, machine));
     kept_logs::forget(context, &machine.id);
     let thumbnail = machine.thumbnail(context);

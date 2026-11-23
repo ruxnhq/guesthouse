@@ -1,6 +1,7 @@
 //! Tasks as the app sees them: the small file each one writes, what is going on with a machine, and
 //! starting one. Actions themselves are in [`crate::actions`].
 
+use crate::auto_snapshot::{RestorePoint, restore_point};
 use crate::context::{Context, SLOT_VARIABLE};
 use crate::daemon::detached;
 use crate::display::{read_state, ring_in, screen_text};
@@ -118,6 +119,9 @@ pub struct Status {
     pub guest_gpu: String,
     /// The running Linux guest said its desktop is on the plain screen this boot.
     pub plain_desktop: bool,
+    /// The machine is off after a start that did not succeed, and Guesthouse took a snapshot before
+    /// it. Going back to it is offered, never done by itself.
+    pub restore_point: Option<RestorePoint>,
 }
 
 pub fn task_path(context: &Context, slot: Option<Slot>) -> PathBuf {
@@ -221,6 +225,9 @@ pub fn status_since(context: &Context, machine: &Machine, before: Option<(u8, Se
         found.display_problem = shown.problem(found.state == State::Running).to_owned();
         let identity = read_identity(context, machine);
         found.identity_note = identity.problem(found.state == State::Running).to_owned();
+        if found.state == State::Off && !found.busy {
+            found.restore_point = restore_point(context, machine);
+        }
         found.card_note = match machine.windows_maker() {
             Some(maker @ (GpuMaker::Amd | GpuMaker::Intel)) => card_note(context, maker, &machine.amd_gpu),
             Some(GpuMaker::Nvidia) => nvidia_card_note(context, &machine.amd_gpu).unwrap_or_default(),

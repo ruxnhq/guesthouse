@@ -6,6 +6,7 @@
 use super::Task;
 use super::guest_files::give_display_its_name;
 use crate::agent::guest_script;
+use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::gpu_identity::{
     FELL_BACK, IdentityState, STAYS_ON_INTEL, Shown, falls_back_after_failed_check, machine_maker,
@@ -14,6 +15,7 @@ use crate::gpu_identity::{
 use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::qemu_sets_identity;
 use crate::log::write_log;
+use crate::machine::Machine;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -47,6 +49,20 @@ fn script_id(script: &str) -> String {
     let mut hasher = DefaultHasher::new();
     script.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// Whether this machine's next boot will ask Windows to write the package for its maker's number,
+/// from what the state files and the scripts say now. The same checks `set_up` makes, in the same
+/// order, and the cheap ones first as this is asked at every start: the QEMU is only asked about a
+/// machine that has something to stage. It says which script would run, as a build with a new one
+/// tries again what an older one failed at.
+pub(crate) fn will_stage(context: &Context, machine: &Machine) -> Option<String> {
+    let state = read_state(context, machine);
+    if state.shown == Shown::Maker {
+        return None;
+    }
+    let id = script_id(&guest_script(context, SCRIPT).ok()?);
+    (state.failed_script != id && qemu_sets_identity(&context.paths.qemu)).then_some(id)
 }
 
 /// Has Windows write the package, and records what came of it.

@@ -142,6 +142,17 @@ pub fn state_text(context: &Context, machine: &Machine) -> Option<String> {
     })
 }
 
+/// What `show` says: `state_text`, or that no folder is left out, or that it isn't known yet.
+pub fn show_text(context: &Context, machine: &Machine) -> String {
+    state_text(context, machine).unwrap_or_else(|| {
+        if needs_look(context, machine) {
+            "Not known yet. The guest is asked at the next start.".to_owned()
+        } else {
+            "Guesthouse left no folder out of its scanning".to_owned()
+        }
+    })
+}
+
 /// Keeps the folders. None leaves no file.
 pub fn write_exclusions(context: &Context, machine: &Machine, folders: &[String]) -> Result<()> {
     let path = exclusions_file(context, machine);

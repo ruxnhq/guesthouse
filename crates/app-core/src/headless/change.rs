@@ -363,12 +363,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
             Some(done) if lean == "on" => line(out, "lean", &format!("on. {done}"))?,
             _ => line(out, "lean", &lean)?,
         }
-        let defender = crate::scan_exclusions::state_text(context, machine);
-        line(
-            out,
-            "defender",
-            &defender.as_deref().unwrap_or("Guesthouse left no folder out of its scanning"),
-        )?;
+        line(out, "defender", &crate::scan_exclusions::show_text(context, machine))?;
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
     line(out, "throwaway", &switch(machine.throwaway))?;

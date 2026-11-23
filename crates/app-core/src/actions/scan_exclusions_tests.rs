@@ -106,3 +106,18 @@ fn a_throwaway_does_not_take_its_folders_back_for_one_run() {
     assert!(agent.requests.lock().unwrap().is_empty());
     assert_eq!(crate::scan_exclusions::read_exclusions(&context, &vm).len(), 1);
 }
+
+#[test]
+fn show_says_it_is_not_known_yet_while_the_guest_has_not_been_asked() {
+    let scratch = Scratch::new();
+    let (context, _, vm) = setting_up(&scratch, &[], &[]);
+    assert_eq!(
+        crate::scan_exclusions::show_text(&context, &vm),
+        "Guesthouse left no folder out of its scanning"
+    );
+    crate::scan_exclusions::mark_for_look(&vm.folder(&context)).unwrap();
+    assert_eq!(
+        crate::scan_exclusions::show_text(&context, &vm),
+        "Not known yet. The guest is asked at the next start."
+    );
+}

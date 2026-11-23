@@ -35,6 +35,12 @@ distro_driver_packages() {
         sed -n 's/^ii *|//p' | tr '\n' ' ' | sed 's/ $//'
 }
 
+# What comes with Ubuntu's: the udev rules, services and firmware for a driver of its own.
+distro_driver_extras() {
+    dpkg-query -W -f '${db:Status-Abbrev}|${Package}\n' 'nvidia-kernel-common-*' 'nvidia-firmware-*' 2>/dev/null |
+        sed -n 's/^ii *|//p' | tr '\n' ' ' | sed 's/ $//'
+}
+
 # Reads one key from a file of key=value lines.
 value_of() {
     sed -n "s/^$2=//p" "$1" | head -n 1

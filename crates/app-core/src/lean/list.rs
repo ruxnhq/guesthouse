@@ -117,7 +117,7 @@ pub const NOT_ADDED: [App; 2] = [
 /// What stays, and why, for the person deciding.
 pub const LEFT_ALONE: [&str; 6] = [
     "Defender, the firewall, SmartScreen, Windows Update, UAC, Secure Boot, the TPM and BitLocker, as \
-     Windows sets them.",
+     Windows sets them. Leaving folders out of virus scanning is a choice of its own, off unless chosen.",
     "The Store, App Installer and winget, which the recipes install with.",
     "Every Xbox part, Game Bar and the Xbox identity provider, which games and Game Pass need.",
     "Edge, and the WebView2 runtime many programs need.",

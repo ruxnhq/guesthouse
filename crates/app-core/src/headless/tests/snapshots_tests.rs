@@ -86,7 +86,9 @@ fn going_back_needs_a_start_that_failed_after_a_snapshot_and_a_yes() {
     assert!(usage_of("snapshots a b").contains("snapshots takes only a machine."));
 }
 
-/// A task program that only writes down what it was asked, as the real one would be.
+/// A task program that only writes down what it was asked, as the real one would be. It waits for the
+/// record that names it first, as the real one's first words come long after: whoever started it writes
+/// that record once it is running, and a record written before that one would be lost under it.
 fn recording_tasks(scratch: &Scratch, context: &mut Context) -> std::path::PathBuf {
     context.processes = "/proc".into();
     context.slot = slot_free_on_this_pc(context);
@@ -94,9 +96,11 @@ fn recording_tasks(scratch: &Scratch, context: &mut Context) -> std::path::PathB
     let record = context.run_folder(None).join("guesthouse-task.json");
     let asked = scratch.path("asked");
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >> '{}'\necho '{{\"action\": \"'$1'\", \"machine\": \"win\"}}' > '{}'\n",
-        asked.display(),
-        record.display()
+        "#!/bin/sh\ntries=0\nuntil grep -Eq '\"pid\": ?'$$'[,}}]' '{record}' 2>/dev/null || [ $tries -ge 100 ]; do\n  \
+         sleep 0.05\n  tries=$((tries + 1))\ndone\necho \"$@\" >> '{asked}'\n\
+         echo '{{\"action\": \"'$1'\", \"machine\": \"win\"}}' > '{record}'\n",
+        asked = asked.display(),
+        record = record.display()
     );
     scratch.program("program/guesthouse-task", &script);
     asked

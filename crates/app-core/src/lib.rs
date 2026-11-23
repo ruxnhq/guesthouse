@@ -71,6 +71,7 @@ pub mod remote_access;
 pub mod render_cards;
 pub mod report;
 pub mod run_files;
+pub mod scan_exclusions;
 pub mod screen_gpu;
 pub mod settings;
 pub mod setup;

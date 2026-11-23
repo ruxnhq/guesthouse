@@ -70,6 +70,9 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure(problem));
     }
     task.step("Preparing the install");
+    super::recipe::reset(task);
+    // A new install is a new guest, with host keys of its own.
+    task.machine.forget_guest_host_key(context);
     let iso = task.machine.iso.clone();
     let listing = isoinfo_files(&iso)?;
     let package = listing.lines().find_map(kernel_package).map(str::to_owned);
@@ -101,7 +104,10 @@ pub fn install(task: &mut Task) -> Result<()> {
     task.machine.installing = false;
     task.machine.iso.clear();
     task.machine.save(context)?;
-    start_if_there_is_room(task, "Ubuntu")
+    start_if_there_is_room(task, "Ubuntu")?;
+    // Last, and after all of it has succeeded: what a recipe's steps do can't undo the install.
+    super::recipe::after_install(task);
+    Ok(())
 }
 
 fn wait_for_poweroff(task: &Task) -> Result<()> {

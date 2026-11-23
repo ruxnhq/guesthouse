@@ -24,6 +24,7 @@ mod macos;
 mod macos_install;
 mod nvme_move;
 mod own_linux;
+mod recipe;
 mod remote_access;
 mod ubuntu;
 mod window_speed;
@@ -90,6 +91,8 @@ const SIGTERM_WAIT_SECONDS: u64 = 20;
 const SIGKILL_WAIT_SECONDS: u64 = 10;
 const FORCE_POLL: Duration = Duration::from_millis(200);
 pub(crate) const KEY_POLL: Duration = Duration::from_millis(500);
+/// Runs a machine's recipe again, as its settings ask.
+pub const RECIPE_TASK: &str = "recipe";
 
 /// The running side of a task: reports steps, and holds what the actions need.
 pub struct Task<'a> {
@@ -547,6 +550,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
             Ok(())
         }
         crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
+        RECIPE_TASK => recipe::run_again(task),
         "install" if task.machine.macos() => macos_install::install(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),

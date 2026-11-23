@@ -432,3 +432,69 @@ fn a_machine_outside_its_folder_is_never_installed_over() {
     let mut task = Task::new(&context, &host, "install", elsewhere);
     assert!(install(&mut task).unwrap_err().0.contains("not in its folder"));
 }
+
+/// A guest that installs, and shuts down when told to. Every ask is kept, in order.
+struct ShutdownGuest {
+    process: std::path::PathBuf,
+    asked: Mutex<Vec<String>>,
+}
+
+impl crate::agent::GuestAgent for ShutdownGuest {
+    fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        self.asked.lock().unwrap().push(script.to_owned());
+        if script == "Stop-Computer -Force" {
+            let _ = fs::remove_dir_all(&self.process);
+            return String::new();
+        }
+        InstalledGuest.ask(port, token, script, seconds)
+    }
+}
+
+const RECIPE: &str =
+    "name = \"Box\"\ndescription = \"A box.\"\nguest = \"windows\"\n[steps]\npackages = [\"Git.Git\"]\n";
+
+/// Installs to the end, as a guest that shuts down does, with the recipe if there is one. There is no
+/// room to start the machine after it, so it ends off, which is the one end that needs no GPU.
+fn install_to_the_end(scratch: &Scratch, recipe: Option<&str>) -> (Context, Machine, Vec<String>, String) {
+    let (mut context, vm) = install_setup(scratch);
+    let guest = Arc::new(ShutdownGuest { process: context.processes.join("40"), asked: Mutex::default() });
+    context.agent = guest.clone();
+    context.ram_limit = Some(1);
+    if let Some(text) = recipe {
+        let chosen = crate::recipe::Chosen {
+            source: crate::recipe::Source::App,
+            file: String::new(),
+            recipe: crate::recipe::Recipe::parse(text).unwrap(),
+        };
+        crate::recipe::write_chosen(&context, &vm, &chosen).unwrap();
+    }
+    let host = InstallHost { inner: RecordingHost::default(), context: &context };
+    let mut task = Task::new(&context, &host, "install", vm.clone());
+    install(&mut task).unwrap();
+    let asked = guest.asked.lock().unwrap().clone();
+    let (made, error) = (load(&context, &vm.id).unwrap(), task.error);
+    (context, made, asked, error)
+}
+
+#[test]
+fn an_install_with_no_recipe_ends_as_it_did_and_asks_a_guest_nothing_after_its_shutdown() {
+    let scratch = Scratch::new();
+    let (_, made, asked, error) = install_to_the_end(&scratch, None);
+    assert!(!made.installing);
+    assert_eq!(error, "Windows is installed. There isn't room to start it right now.");
+    assert_eq!(asked.last().map(String::as_str), Some("Stop-Computer -Force"), "{asked:?}");
+}
+
+#[test]
+fn a_recipes_steps_wait_when_the_machine_ends_off_and_say_so() {
+    let scratch = Scratch::new();
+    let (context, made, asked, error) = install_to_the_end(&scratch, Some(RECIPE));
+    assert!(!made.installing, "the machine is installed");
+    assert!(error.contains("isn't room") && error.contains("recipe's steps wait"), "{error}");
+    assert_eq!(
+        asked.last().map(String::as_str),
+        Some("Stop-Computer -Force"),
+        "the guest was asked nothing more"
+    );
+    assert_eq!(crate::recipe::read_outcome(&context, &made), crate::recipe::Outcome::Pending);
+}

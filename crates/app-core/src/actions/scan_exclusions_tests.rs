@@ -44,6 +44,8 @@ fn the_folders_go_to_the_guest_as_data() {
     let mut task = Task::new(&context, &host, "install", vm);
     after_install(&mut task);
     assert!(task.error.is_empty(), "{}", task.error);
+    let state = crate::scan_exclusions::state_text(&context, &task.machine).unwrap();
+    assert!(state.starts_with("Defender doesn't scan D:\\Games."), "{state}");
     let requests = agent.requests.lock().unwrap();
     let sent = &requests[0].2;
     assert!(sent.contains("\n$change = 'add'\nSCRIPT\n"), "{sent}");
@@ -59,6 +61,8 @@ fn when_defender_does_not_take_them_the_install_goes_on_with_a_note() {
     let mut task = Task::new(&context, &host, "install", vm);
     after_install(&mut task);
     assert_eq!(task.error, "Defender still scans every folder: not done: no.");
+    let state = crate::scan_exclusions::state_text(&context, &task.machine).unwrap();
+    assert!(state.ends_with("but didn't take them, so every folder is scanned."), "{state}");
 }
 
 #[test]

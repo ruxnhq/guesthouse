@@ -41,6 +41,10 @@ fn only_a_plain_full_path_is_a_folder() {
         r"C:Games",
         r"C:\Games\*",
         r"C:\Games\..\Windows",
+        r"C:\Windows.",
+        r"C:\Users.\gpupv",
+        r"C:\Windows \System32",
+        r"C:\.hidden",
         r"C:\Games\",
         r"C:\%TEMP%",
         "C:\\Games\\a\u{202e}b",
@@ -65,8 +69,20 @@ fn the_machine_keeps_its_folders_and_none_is_no_file() {
     let folders = vec![r"D:\Games".to_owned()];
     write_exclusions(&context, &vm, &folders).unwrap();
     assert_eq!(read_exclusions(&context, &vm), folders);
+    assert_eq!(
+        state_text(&context, &vm).unwrap(),
+        "Defender was to leave out D:\\Games, but didn't take them, so every folder is scanned."
+    );
+    mark_applied(&context, &vm).unwrap();
+    assert_eq!(read_exclusions(&context, &vm), folders);
+    assert_eq!(
+        state_text(&context, &vm).unwrap(),
+        "Defender doesn't scan D:\\Games. Everything else is scanned."
+    );
     write_exclusions(&context, &vm, &[]).unwrap();
     assert!(!vm.folder(&context).join(EXCLUSIONS_FILE).exists());
+    assert_eq!(state_text(&context, &vm), None);
+    assert!(mark_applied(&context, &vm).is_err());
 }
 
 #[test]

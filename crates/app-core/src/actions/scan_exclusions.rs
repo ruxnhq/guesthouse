@@ -4,7 +4,7 @@
 use super::Task;
 use crate::agent::guest_script;
 use crate::failure::{Failure, Result};
-use crate::scan_exclusions::{guest_data, read_exclusions, write_exclusions};
+use crate::scan_exclusions::{guest_data, mark_applied, read_exclusions, write_exclusions};
 use crate::text::base64_encode;
 
 const SCRIPT: &str = "scan-exclusions.ps1";
@@ -35,10 +35,18 @@ pub(super) fn after_install(task: &mut Task) {
         return;
     }
     task.step(STEP);
-    if let Err(why) = change(task, &folders, ADD) {
-        let note = format!("Defender still scans every folder: {why}.");
-        task.error = [task.error.as_str(), note.as_str()].join(" ").trim().to_owned();
-    }
+    let note = match change(task, &folders, ADD) {
+        Ok(()) => match mark_applied(task.context, &task.machine) {
+            Ok(()) => return,
+            Err(failure) => format!(
+                "Defender leaves out {}, and that could not be noted: {}",
+                folders.join(", "),
+                failure.0
+            ),
+        },
+        Err(why) => format!("Defender still scans every folder: {why}."),
+    };
+    task.error = [task.error.as_str(), note.as_str()].join(" ").trim().to_owned();
 }
 
 /// Has Defender scan the folders again, and forgets them only once it does.

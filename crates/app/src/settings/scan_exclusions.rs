@@ -5,7 +5,7 @@ use super::Shared;
 use crate::rows::row_button;
 use adw::prelude::*;
 use guesthouse_app_core::actions::SCAN_ALL_TASK;
-use guesthouse_app_core::scan_exclusions::read_exclusions;
+use guesthouse_app_core::scan_exclusions::state_text;
 use guesthouse_app_core::tasks::{State, Status};
 
 const TITLE: &str = "Virus Scanning";
@@ -18,24 +18,14 @@ pub struct ScanExclusions {
     shared: Shared,
 }
 
-fn said(folders: &[String]) -> String {
-    format!("Defender doesn't scan {}. Everything else is scanned.", folders.join(", "))
-}
-
 impl ScanExclusions {
     /// `None` for a machine that leaves no folder out.
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Option<Self> {
-        let folders = read_exclusions(&shared.window.context(), &shared.machine.borrow());
-        if folders.is_empty() {
-            return None;
-        }
+        let text = state_text(&shared.window.context(), &shared.machine.borrow())?;
         let group = adw::PreferencesGroup::builder().title(TITLE).build();
         page.add(&group);
-        let row = adw::ActionRow::builder()
-            .title("Folders Left Out")
-            .subtitle(said(&folders))
-            .subtitle_lines(0)
-            .build();
+        let row =
+            adw::ActionRow::builder().title("Folders Left Out").subtitle(text).subtitle_lines(0).build();
         let again = row_button("Scan Them Again");
         again.set_sensitive(false);
         row.add_suffix(&again);
@@ -49,10 +39,10 @@ impl ScanExclusions {
     }
 
     pub fn set_status(&self, status: &Status) {
-        let folders = read_exclusions(&self.shared.window.context(), &self.shared.machine.borrow());
-        self.group.set_visible(!folders.is_empty());
-        if !folders.is_empty() {
-            self.row.set_subtitle(&said(&folders));
+        let text = state_text(&self.shared.window.context(), &self.shared.machine.borrow());
+        self.group.set_visible(text.is_some());
+        if let Some(text) = text {
+            self.row.set_subtitle(&text);
         }
         let usable = status.state == State::Running && !status.busy;
         self.again.set_sensitive(usable);

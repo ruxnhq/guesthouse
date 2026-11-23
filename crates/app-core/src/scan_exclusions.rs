@@ -4,10 +4,12 @@
 //!
 //! It is the one choice here that makes a guest less safe, so it is kept beside the machine for as long
 //! as it holds, and the machine's settings and `guesthouse-vm show` say so. Taking it back is a button,
-//! and `Remove-MpPreference` in the guest. It is Defender's own documented setting, which works with
-//! Tamper Protection on in a Windows nobody manages, as a guest is.
+//! and `Remove-MpPreference` in the guest. It is Defender's own documented setting. Microsoft's pages
+//! say Tamper Protection guards exclusions only on a device an organization manages, which a guest is
+//! not, so it should take them with Tamper Protection on. No guest has shown that yet.
 
 use crate::context::Context;
+use crate::failure::Failure;
 use crate::failure::Result;
 use crate::machine::Machine;
 use crate::settings::write_json;
@@ -43,8 +45,10 @@ pub fn folder_problem(path: &str) -> Option<String> {
             .skip(2)
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '\\' | ' ' | '.' | '_' | '-' | '(' | ')'));
     let parts: Vec<String> = path.get(3..).unwrap_or_default().split('\\').map(str::to_lowercase).collect();
-    let tidy =
-        parts.iter().all(|part| !part.is_empty() && part != "." && part != ".." && part.trim() == part);
+    // Windows drops a dot or a space at the end of a name, so C:\Windows. would be C:\Windows.
+    let tidy = parts.iter().all(|part| {
+        !part.is_empty() && part.trim() == part && !part.ends_with('.') && !part.starts_with('.')
+    });
     if !drive || !plain || !tidy {
         return Some(format!(
             "\"{path}\" is not a folder to leave out of scanning. It is a full path such as D:\\Games, \
@@ -80,17 +84,50 @@ pub fn what_it_does(folders: &[String]) -> String {
 #[serde(deny_unknown_fields)]
 struct Kept {
     folders: Vec<String>,
+    /// Defender took them. Until then, and if it didn't, every folder is scanned.
+    #[serde(default)]
+    applied: bool,
 }
 
 fn exclusions_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(EXCLUSIONS_FILE)
 }
 
-/// The folders this machine leaves out of scanning, as it was made. The app writes the file and nothing
-/// else does, so one that can't be read is taken as none.
+fn read_kept(context: &Context, machine: &Machine) -> Kept {
+    let text = fs::read_to_string(exclusions_file(context, machine)).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// The folders this machine was made to leave out of scanning, whether or not Defender has them yet.
+/// The app writes the file and nothing else does, so one that can't be read is taken as none.
 pub fn read_exclusions(context: &Context, machine: &Machine) -> Vec<String> {
-    let Ok(text) = fs::read_to_string(exclusions_file(context, machine)) else { return Vec::new() };
-    serde_json::from_str::<Kept>(&text).map(|kept| kept.folders).unwrap_or_default()
+    read_kept(context, machine).folders
+}
+
+/// Notes that Defender took the folders.
+pub fn mark_applied(context: &Context, machine: &Machine) -> Result<()> {
+    let kept = read_kept(context, machine);
+    if kept.folders.is_empty() {
+        return Err(Failure::new("The machine has no folders to leave out of scanning."));
+    }
+    write_json(&exclusions_file(context, machine), &Kept { applied: true, ..kept })
+}
+
+/// What is true of Defender's scanning in this machine, as far as Guesthouse knows, for its settings
+/// and `show`. Nothing for a machine where Guesthouse left no folder out.
+pub fn state_text(context: &Context, machine: &Machine) -> Option<String> {
+    let kept = read_kept(context, machine);
+    if kept.folders.is_empty() {
+        return None;
+    }
+    let folders = kept.folders.join(", ");
+    Some(if kept.applied {
+        format!("Defender doesn't scan {folders}. Everything else is scanned.")
+    } else if machine.installing {
+        format!("Defender is to leave out {folders} once Windows is installed.")
+    } else {
+        format!("Defender was to leave out {folders}, but didn't take them, so every folder is scanned.")
+    })
 }
 
 /// Keeps the folders. None leaves no file.
@@ -102,7 +139,7 @@ pub fn write_exclusions(context: &Context, machine: &Machine, folders: &[String]
             _ => Ok(()),
         };
     }
-    write_json(&path, &Kept { folders: folders.to_vec() })
+    write_json(&path, &Kept { folders: folders.to_vec(), applied: false })
 }
 
 /// The folders as the guest's script is given them, as data.

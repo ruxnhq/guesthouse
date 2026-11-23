@@ -229,7 +229,9 @@ fn folders_a_recipe_names_are_left_out_of_scanning_only_when_the_user_says_so() 
     assert!(!out.contains("Defender leaves out"), "{out}");
     let kept = load(&context, "kept").unwrap();
     assert!(crate::scan_exclusions::read_exclusions(&context, &kept).is_empty());
-    assert!(said(&context, "show kept").0.contains("defender  scans every folder"));
+    assert!(
+        said(&context, "show kept").0.contains("defender  Guesthouse left no folder out of its scanning")
+    );
     let (out, result) =
         said(&context, &format!("{} --set-up-for lib --skip-scanning on", windows_words(&scratch, "Fast")));
     assert_eq!(result, Ok(()), "{out}");
@@ -238,7 +240,10 @@ fn folders_a_recipe_names_are_left_out_of_scanning_only_when_the_user_says_so() 
         "{out}"
     );
     let (shown, _) = said(&context, "show fast");
-    assert!(shown.contains("defender  leaves out D:\\Games"), "{shown}");
+    assert!(
+        shown.contains("defender  Defender is to leave out D:\\Games once Windows is installed."),
+        "{shown}"
+    );
     let (out, result) = said(&context, &format!("{} --skip-scanning on", windows_words(&scratch, "Bare")));
     assert!(failure_of(result).contains("goes with a Windows recipe that names folders"), "{out}");
     let (out, result) =

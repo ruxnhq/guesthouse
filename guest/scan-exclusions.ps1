@@ -8,7 +8,8 @@ try {
     $done = 0
     foreach ($folder in $folders) {
         $path = "$folder"
-        if ($path -notmatch $folderShape -or $path -match '\\\.\.?(\\|\z)') { "not a folder: $path"; return }
+        # Windows drops a dot or a space at the end of a name, so none may start or end with one.
+        if ($path -notmatch $folderShape -or $path -match '[. ](\\|\z)' -or $path -match '\\[. ]') { "not a folder: $path"; return }
         if ($change -eq 'add') {
             Add-MpPreference -ExclusionPath $path -ErrorAction Stop
         } elseif ($change -eq 'remove') {

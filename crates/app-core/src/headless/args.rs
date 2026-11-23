@@ -21,6 +21,7 @@ const NEW_OPTIONS: [&str; 12] = [
     "--ssh",
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
+const MINUTES: &str = "--minutes";
 
 /// What `new` was told. Whatever it wasn't told, the New Machine dialog's choice stands.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -60,6 +61,7 @@ pub(super) enum Command<'a> {
     Off(&'a str),
     Log(&'a str),
     Standalone(&'a str),
+    Idle { name: &'a str, minutes: Option<&'a str> },
     New { name: &'a str, options: NewOptions<'a> },
     Set { name: &'a str, key: &'a str, value: &'a str },
     Forward { name: &'a str, change: Forwarding<'a> },
@@ -142,6 +144,10 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 "command" => Command::Standalone(name),
                 _ => Command::Log(name),
             })
+        }
+        "idle" => {
+            let split = Split::new(command, rest, &[MINUTES], &[])?;
+            Ok(Command::Idle { name: split.exactly(command, machine, 1)?[0], minutes: split.value(MINUTES) })
         }
         "start" | "install" => {
             let split = Split::new(command, rest, &[], &[NO_WAIT])?;

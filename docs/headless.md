@@ -10,6 +10,7 @@ guesthouse-vm stop NAME
 guesthouse-vm off NAME
 guesthouse-vm log NAME
 guesthouse-vm command NAME
+guesthouse-vm idle NAME [--minutes N]
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
@@ -33,6 +34,25 @@ NAME is a machine's id, or its name in any case. If a name fits two machines, it
 - `start` does what Start does in the app, and prints each step as the task writes it to the log. It ends when the machine is ready, with exit code 0, or prints what went wrong and exits with 1. `--no-wait` returns as soon as the start is under way, and `status` says how far it is.
 - `stop` asks the guest to shut down and waits. If the guest doesn't shut down in time, the VM is turned off and it says so. `off` is Force Off: the power is cut and the guest gets no chance to save anything.
 - `log` says where the log is and shows the end of it. The log is one file for every machine, so the lines aren't sorted by machine.
+
+## Reading how busy a machine is
+
+`idle` reads a running machine and says in plain words whether it would count as idle. It acts on nothing: no machine is paused or stopped, and no setting changes. It is the measuring half of stopping or parking a machine nobody uses, which does not exist yet. A reading takes a few seconds.
+
+For a Windows machine it reads four things:
+
+- the last keyboard or mouse input in the user's session, or that nobody is logged in
+- the Remote Desktop sessions that are connected (one that was left disconnected doesn't count)
+- what programs have asked Windows to stay awake, from `powercfg /requests`, for the display, the system, away mode and execution
+- the guest's CPU time on this PC, as a share of one core over the few seconds the reading takes, which the host reads from QEMU's own process and needs nothing from the guest
+
+Windows words its own output in the PC's language, so none of it is read by a word. The guest says its sessions by Windows' numbers and station names, and `powercfg`'s text is read by its layout. If that layout isn't what was expected, the reading says it could not be read.
+
+A machine counts as idle only when every one of those was read and every one was quiet. Any one that says busy makes it busy, whatever else could not be read. A reading that could not be taken, such as an agent that did not answer, is never idle: it says it cannot tell. `--minutes N` is how old the last input must be to count as quiet, and is 30 by default. The CPU limit is a few percent of one core. Both are first guesses that no idle Windows has been measured against.
+
+For an Ubuntu machine, a plain VM or a macOS machine, only the CPU time can be read, as nothing in them answers Guesthouse. That is not enough to call one idle, so it says it cannot tell, and says busy if the CPU time is.
+
+The reading sends `guest/idle.ps1` through the agent. The only thing it does in Windows is to start a task in the user's session for a moment, as only a program there can see that session's input. The task, its helper script in `C:\gpupv` and its answer file in the public documents folder are removed when it is done, or at the next reading if one was cut short.
 
 ## Making a machine
 

@@ -3,6 +3,7 @@
 
 mod args;
 mod change;
+mod idle;
 mod make;
 mod pick;
 mod setup;
@@ -40,6 +41,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   off MACHINE                cut the power, as Force Off does
   log MACHINE                where the log is, and the end of it
   command MACHINE            what would start it beside your own QEMU or libvirt, printed
+  idle MACHINE [--minutes N] read how busy a running machine is, and say if it would count as
+                             idle. It changes nothing
 
   new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
@@ -103,6 +106,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Stop(name) => stop(context, &find(context, name)?, "stop", out)?,
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
+        Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,
         Command::Standalone(name) => standalone::command(context, &find(context, name)?, out)?,
         Command::New { name, options } => make::new_machine(context, name, &options, out)?,
         Command::Set { name, key, value } => change::set(context, find(context, name)?, key, value, out)?,

@@ -9,6 +9,7 @@ mod drives;
 mod forwarding_jail;
 mod macos;
 mod nic;
+pub use nic::passt_probe_words;
 mod own_linux;
 mod qemu_jail;
 mod standalone;

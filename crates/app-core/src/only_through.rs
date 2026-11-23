@@ -80,40 +80,25 @@ pub fn link_dns(resolvectl_output: &str) -> Option<String> {
 /// The oldest passt a machine held to an interface may use. Before 2024_05_10 passt doesn't bind
 /// UDP to the interface at all (2024_02_20, Ubuntu 24.04's, sends it out the normal link), and the
 /// app's own words need `--map-host-loopback none`, which works from this one on.
-pub const PASST_FLOOR: u32 = 20_250_415;
-const PASST_FLOOR_TEXT: &str = "2025_04_15";
+const PASST_FLOOR: &str = "2025_04_15";
 
-/// The date in `passt --version`'s first line: `passt 2024_10_30.ee7d0b6` from upstream's tags, or
-/// `passt 0.0~git20250503.587980c-2` as Debian builds it.
-pub fn passt_date(version_output: &str) -> Option<u32> {
-    let line = version_output.lines().find(|line| line.starts_with("passt") || line.starts_with("pasta"))?;
-    let word = line.split_whitespace().nth(1)?;
-    let digits: String = word
-        .trim_start_matches("0.0~git")
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '_')
-        .filter(char::is_ascii_digit)
-        .collect();
-    (digits.len() == 8).then(|| digits.parse().ok()).flatten()
-}
-
-/// What to say when this PC's passt is older than [`PASST_FLOOR`]. A version that can't be read says
-/// nothing: passt itself then refuses the words it doesn't know, and the machine doesn't start.
-pub fn passt_too_old(version_output: &str) -> Option<String> {
-    let date = passt_date(version_output)?;
-    (date < PASST_FLOOR).then(|| {
-        let line = version_output.lines().find(|line| line.starts_with("pas")).unwrap_or("").trim();
+/// What to say when this PC's passt doesn't take the app's words. Its version can't be read for
+/// this: Ubuntu 24.04's says "unknown version" and Debian 13's prints none into a pipe.
+pub fn passt_too_old(takes_the_words: bool) -> Option<String> {
+    (!takes_the_words).then(|| {
         format!(
-            "This PC's passt ({line}) is too old to hold a machine to one interface. It needs \
-             passt {PASST_FLOOR_TEXT} or newer."
+            "This PC's passt is too old to hold a machine to one interface. It needs passt \
+             {PASST_FLOOR} or newer."
         )
     })
 }
 
-/// [`passt_too_old`] for the passt this PC has now.
-pub fn passt_too_old_now() -> Option<String> {
-    let output = Command::new("passt").arg("--version").output().ok()?;
-    passt_too_old(&String::from_utf8_lossy(&output.stdout))
+/// [`passt_too_old`] for the passt this PC has now: passt given the app's words, then `--version`,
+/// stops at the first word it doesn't know with a status that isn't success. One that can't be run
+/// says nothing here, as passt missing is its own problem.
+pub fn passt_too_old_now(words: &[String]) -> Option<String> {
+    let status = Command::new("passt").args(words).arg("--version").output().ok()?.status;
+    passt_too_old(status.success())
 }
 
 /// The first IPv4 address `nmcli -g IP4.DNS device show LINK` prints, as in `10.64.0.1 | 10.64.0.2`.
@@ -210,22 +195,9 @@ fc000000000000000000000000000002 07 80 00 80    wg0
     }
 
     #[test]
-    fn passts_date_is_read_from_upstreams_and_debians_versions() {
-        assert_eq!(passt_date("passt 2024_10_30.ee7d0b6\nCopyright\n"), Some(20_241_030));
-        assert_eq!(passt_date("passt 0.0~git20250503.587980c-2+deb13u1\n"), Some(20_250_503));
-        assert_eq!(passt_date("passt 2024_02_20.1e6f92b\n"), Some(20_240_220));
-        assert_eq!(passt_date("passt unknown\n"), None);
-        assert_eq!(passt_date(""), None);
-    }
-
-    #[test]
-    fn only_a_passt_older_than_the_floor_is_too_old() {
-        let old = passt_too_old("passt 2024_02_20.1e6f92b\n").unwrap();
-        assert!(old.contains("2024_02_20.1e6f92b") && old.contains("2025_04_15"), "{old}");
-        assert!(passt_too_old("passt 2024_10_30.ee7d0b6\n").is_some());
-        assert_eq!(passt_too_old("passt 2025_04_15.2340bbf\n"), None);
-        assert_eq!(passt_too_old("passt 0.0~git20250503.587980c-2\n"), None);
-        assert_eq!(passt_too_old("passt unknown\n"), None);
+    fn a_passt_that_refuses_the_words_is_too_old() {
+        assert!(passt_too_old(false).unwrap().contains("2025_04_15"));
+        assert_eq!(passt_too_old(true), None);
     }
 
     #[test]

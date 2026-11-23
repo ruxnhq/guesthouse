@@ -178,7 +178,7 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
     found.extend(only_through_problems(
         machine,
         passt_installed(),
-        only_through::passt_too_old_now,
+        || only_through::passt_too_old_now(&crate::vm_args::passt_probe_words()),
         |interface| only_through::dns_now(&machine.dns, interface),
     ));
     for item in &machine.forwards {
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn a_passt_too_old_to_bind_udp_is_a_problem() {
-        let old = || only_through::passt_too_old("passt 2024_02_20.1e6f92b\n");
+        let old = || only_through::passt_too_old(false);
         let found = only_through_problems(&held_to("lo", "10.64.0.1"), true, old, found_dns);
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("2025_04_15"), "{found:?}");

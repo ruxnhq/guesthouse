@@ -33,6 +33,17 @@ const MACOS_CARD: &str = "virtio-net-pci";
 const MACOS_CARD_SLOT: &str = "0x3";
 const QEMU_NAT: &str = "user";
 
+/// Words that only a passt new enough for the app takes, to ask it with before a start: the app's
+/// own network words, a DNS server and a bound interface.
+pub fn passt_probe_words() -> Vec<String> {
+    let mut words = vec![PASST_QUIET.to_owned()];
+    for (name, value) in PASST_NETWORK.iter().chain(&[("dns-host", "192.0.2.1")]) {
+        words.extend([format!("--{name}"), (*value).to_owned()]);
+    }
+    words.extend([PASST_OUT_IF4.to_owned(), "lo".to_owned()]);
+    words
+}
+
 impl VmPlan {
     fn passt_settings(&self) -> Vec<(&'static str, String)> {
         let mut settings: Vec<(&str, String)> =

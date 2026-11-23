@@ -35,6 +35,7 @@ Write-Output "Anything PowerShell can run."
 - `name` is at most 40 characters and `description` at most 160, each one line of plain text.
 - `guest` is `windows` or `ubuntu`. A recipe shows only for a disc of that kind. A plain VM, a Linux you installed yourself and macOS have no recipes, as there's no way in for the steps.
 - `[settings]` is optional, and so is each setting in it: `cores`, `ram_gib` and `disk_gib`, and for a Windows recipe `vram_gib`, the cap on video memory, where 0 is no cap. They are the same settings the dialog and `guesthouse-vm set` have, and they're held to the same limits. What this PC can't give comes down to what it can, and the dialog says so. Picking a recipe puts its sizes in the rows, and you can change them after. On the command line, what you type wins over the recipe.
+- `lean = true` turns on [lean Windows](#lean-windows) for the machine, in a Windows recipe only. The person making the machine can still turn it off.
 - `[steps]` is optional too. `packages` is a list of names, each its own step, and `script` runs after them. On Windows the packages are winget ids and the script is PowerShell. On Ubuntu they are apt packages and the script is run by bash.
 - A name can only be letters, digits and `. _ + -`, and never starts with a hyphen. On Ubuntu, only small letters. At most 30 packages, and the script is at most 32 KiB. A file that says anything else, a word the format doesn't have, or a name that isn't a name, is refused with the line it's on.
 
@@ -50,18 +51,46 @@ Nothing from a recipe is ever put into a script as text. On **Windows**, the app
 
 The Windows steps wait up to ten minutes for winget, as a new Windows 11 can take a while to register it. If it doesn't come, the step says so and the machine's settings can run the steps again later.
 
+## Lean Windows
+
+A choice of its own for any Windows machine, with or without a recipe: the *Lean Windows* row in New Machine, `--lean on` on the command line, or `lean = true` in a recipe. It's off unless one of those turns it on, and a machine made with it off is made exactly as before, to the byte of its answer file and every script. *Show* in the row lists everything below, as it will be done.
+
+Nothing is changed in your ISO. When it's on, the answer disc carries `guest/lean.ps1` and the list as data, and the answer file gets one more command in Setup's *specialize* pass, the last moment before any account exists. There the script takes the apps out of what Windows installs for each new account, so the account never gets them, and sets the policies. Once the install is up, before its shutdown, the app runs the same script again through the agent, as SYSTEM, for every account, so that anything that reached one anyway goes too. That's a step of the install with its own name, and if any of it doesn't happen the machine is installed all the same, with a note saying what. The machine's settings have *Run Again*, and `guesthouse-vm lean NAME` does the same.
+
+It only does two kinds of thing, both documented and both undone the documented way:
+
+- It removes these app packages, by their package name, which is the same in every language and edition, compared whole and never as a pattern. One that isn't there is skipped, so Windows 11 IoT Enterprise LTSC, which has few of them, is fine. Each comes back from the Store.
+  - Phone Link (`Microsoft.YourPhone`), Teams (`MSTeams`, and `MicrosoftTeams` on the first Windows 11 releases), Cortana (`Microsoft.549981C3F5F10`): a program that runs in the background from logon.
+  - Copilot (`Microsoft.Copilot`): a program that can start at logon, and its updates.
+  - Tips (`Microsoft.Getstarted`): the tips it shows after the first logon.
+  - Maps (`Microsoft.WindowsMaps`): disk space, and its map updates.
+  - News (`Microsoft.BingNews`), Weather (`Microsoft.BingWeather`), Microsoft 365 (`Microsoft.MicrosoftOfficeHub`), Outlook (`Microsoft.OutlookForWindows`), Mail and Calendar (`microsoft.windowscommunicationsapps`), Solitaire Collection (`Microsoft.MicrosoftSolitaireCollection`), Clipchamp (`Clipchamp.Clipchamp`), Power Automate (`Microsoft.PowerAutomateDesktop`), To Do (`Microsoft.Todos`), Dev Home (`Microsoft.Windows.DevHome`), Feedback Hub (`Microsoft.WindowsFeedbackHub`), Movies & TV (`Microsoft.ZuneVideo`), Family (`MicrosoftCorporationII.MicrosoftFamily`), and on Windows 10 People (`Microsoft.People`) and Skype (`Microsoft.SkypeApp`): disk space, and the Store keeping each up to date.
+- It sets these policies, each a number under `HKLM\SOFTWARE\Policies`. Deleting the value undoes it.
+  - `Microsoft\Windows\CloudContent` `DisableWindowsConsumerFeatures = 1`: no suggested apps from other makers in the new account. Enterprise, Education and IoT Enterprise honour it, and Home and Pro ignore it.
+  - `Microsoft\Dsh` `AllowNewsAndInterests = 0`: Widgets are off, so their programs don't run from logon.
+  - `Microsoft\Windows\OneDrive` `DisableFileSyncNGSC = 1`: OneDrive doesn't run or sync.
+  - `Microsoft\Edge` `StartupBoostEnabled = 0` and `BackgroundModeEnabled = 0`: Edge doesn't start at logon, and doesn't keep running after its last window closes.
+
+Settings and Edge then say some settings are managed by your organization, as they do for any policy.
+
+It leaves alone, on purpose: Defender, the firewall, SmartScreen, Windows Update, UAC, Secure Boot, the TPM and BitLocker, as Windows sets them; the Store, App Installer and winget, which recipes install with; every Xbox part, Game Bar and the Xbox identity provider, which games and Game Pass need; Edge and the WebView2 runtime; Get Help, which is Windows 11's troubleshooters, and Quick Assist; Photos, Media Player, Notepad, Paint, Calculator, Terminal, Snipping Tool, Camera, Clock, Sound Recorder and Sticky Notes; the runtimes, languages, input methods and accessibility tools; every service and scheduled task. The services that cost something at idle are the search indexer, SysMain, Defender and Update, and each is either kept on purpose or what Start's search needs.
+
+How much faster or smaller it makes a guest hasn't been measured yet. The list says what each item saves in kind, not how much.
+
 ## On the command line
 
 ```
 guesthouse-vm recipes
-guesthouse-vm new NAME --iso PATH --set-up-for RECIPE [--yes]
+guesthouse-vm new NAME --iso PATH --set-up-for RECIPE [--yes] [--lean on|off]
 guesthouse-vm recipe NAME [--no-wait]
+guesthouse-vm lean NAME [--no-wait]
 ```
 
 `recipes` lists them. `RECIPE` is a recipe's key (`app/games` or `yours/mine`), its file's name or its name, and a key is needed only if two fit. `new` prints the whole recipe first, as the dialog shows it, and one of your own that has steps goes ahead only with `--yes`. `recipe` runs a machine's steps again, in the running guest. `show` says how its steps went.
 
 ## What needs a real guest to prove
 
+- Lean Windows: that the Appx cmdlets work in the specialize pass as SYSTEM, that what it removed doesn't come back at the first logon or with a Store update, that each policy takes effect on Home, Pro and IoT Enterprise LTSC, and how much it saves.
 - winget on a freshly installed Windows 11: that `Add-AppxPackage -RegisterByFamilyName` makes it appear, how long that takes, and that the ids in the recipes are right. This is the first thing to try.
 - That the task as the guest's account runs with administrator rights, and that winget works from it.
 - What winget says and returns for a package that's already installed, which the steps take as done.

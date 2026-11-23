@@ -21,7 +21,7 @@ guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                        [--amd-driver PATH] [--intel-driver PATH]
                        [--remote-desktop on|off] [--ssh on|off]
-                       [--set-up-for RECIPE [--yes]]
+                       [--set-up-for RECIPE [--yes]] [--lean on|off]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
 guesthouse-vm recipes
@@ -29,6 +29,7 @@ guesthouse-vm recipe NAME [--no-wait]
 guesthouse-vm duplicate NAME [--name NAME] [--throwaway [--delete-when-stopped]] [--no-wait]
 guesthouse-vm export NAME FILE [--no-wait]
 guesthouse-vm import FILE [--name NAME]
+guesthouse-vm lean NAME [--no-wait]
 
 guesthouse-vm show NAME
 guesthouse-vm set NAME SETTING VALUE
@@ -81,6 +82,8 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 `new` makes the disk and its settings and stops there. A Windows or Ubuntu machine is then installed with `install`, which follows the install step by step like `start`. The guest account's password is made at the install and kept in the machine's folder. There's no way to choose it here.
 
 `--set-up-for` makes a Windows or Ubuntu machine for a [recipe](recipes.md): it prints the whole recipe first, takes the recipe's sizes unless you typed your own, and runs the recipe's steps once the install has finished and the machine is up. `recipes` lists them, and `recipe NAME` runs a machine's steps again. A recipe of your own that has steps goes ahead only with `--yes` after you've read it.
+
+`--lean on` makes a Windows machine as [lean Windows](recipes.md#lean-windows), without the apps Windows adds for every account, and prints all it takes out and switches off first. It's off unless you say so or the recipe turns it on, and `--lean off` turns a recipe's off. `show` says `lean on` for a machine made with it, and `lean NAME` does it again in the running guest.
 
 `remove` says what it would delete, and does it when you add `--yes`. A machine whose disk is outside its folder only loses its entry, and the disk stays.
 

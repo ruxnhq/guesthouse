@@ -163,6 +163,10 @@ pub struct SpaceVm {
     video_wake_failed: bool,
     /// How each engine family gives way to the card's other users, see [`crate::share`].
     shares: HashMap<u32, Share>,
+    /// Whether finished runs are kept for giving way, which only then judges them.
+    keeps_finished: bool,
+    /// Runs seen to retire since they were last asked for, with their times, while kept.
+    finished: Vec<Finished>,
     /// How fast the card's clock runs, to read the times runs note.
     clock_khz: u32,
 }
@@ -186,6 +190,13 @@ struct OnCard {
     retired: Syncobj,
     /// None once its queue has gone, as the fence's page may then be another queue's.
     fence: Option<GuestFence>,
+}
+
+/// A run of the space's that the card has been through: its engine family and when it ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Finished {
+    pub ip_type: u32,
+    pub times: RunTimes,
 }
 
 /// How a run on the card ended.
@@ -247,6 +258,8 @@ impl SpaceVm {
             video_last_retired: None,
             video_wake_failed: false,
             shares: HashMap::new(),
+            keeps_finished: false,
+            finished: Vec::new(),
             clock_khz: device.info().counter_freq_khz,
         })
     }
@@ -579,6 +592,37 @@ impl SpaceVm {
         }
     }
 
+    /// Has the space keep its finished runs for [`Self::take_finished`], to give way.
+    pub fn keep_finished(&mut self) {
+        self.keeps_finished = true;
+    }
+
+    /// The runs seen to retire since this was last asked, looking at them all, with their times.
+    pub fn take_finished(&mut self) -> Vec<Finished> {
+        self.take_back_slots(true);
+        std::mem::take(&mut self.finished)
+    }
+
+    /// When the runs still on the card that the card has been through ended, by engine family: the
+    /// card notes a run's end before the kernel retires it.
+    pub fn ends_on_card(&self) -> Vec<(u32, u64)> {
+        let Some(fence_ibs) = &self.fence_ibs else { return Vec::new() };
+        self.on_card
+            .iter()
+            .filter(|run| run.sent.is_some())
+            .filter_map(|run| {
+                let (started, ended) = fence_ibs.times(run.slot);
+                (started != 0 && ended >= started).then(|| (run.ip_type, ticks_to_ns(ended, self.clock_khz)))
+            })
+            .collect()
+    }
+
+    /// Judges a finished run for giving way, with when the guest's own work last ended before it
+    /// started: see [`Share::retired`].
+    pub fn judge(&mut self, finished: Finished, own_end: u64) {
+        self.shares.entry(finished.ip_type).or_default().retired(finished.times, own_end);
+    }
+
     /// Whether a run may go to the engine family `ip_type` now, or should wait while the space gives
     /// way to others on the card. See [`crate::share`].
     pub fn may_send(&mut self, ip_type: u32) -> bool {
@@ -618,10 +662,10 @@ impl SpaceVm {
             if run.retired.signalled(&self.file).unwrap_or(true) {
                 run.retired.destroy(&self.file);
                 let (started, ended) = fence_ibs.times(run.slot);
-                if let Some(sent) = run.sent {
+                if let Some(sent) = run.sent.filter(|_| self.keeps_finished) {
                     let ticks = |ticks| ticks_to_ns(ticks, self.clock_khz);
                     let times = RunTimes { sent, started: ticks(started), ended: ticks(ended) };
-                    self.shares.entry(run.ip_type).or_default().retired(times);
+                    self.finished.push(Finished { ip_type: run.ip_type, times });
                 }
                 fence_ibs.give_back(run.slot);
                 self.retired.extend(run.fence);
@@ -774,6 +818,8 @@ mod tests {
             video_last_retired: None,
             video_wake_failed: false,
             shares: HashMap::new(),
+            keeps_finished: false,
+            finished: Vec::new(),
             clock_khz: 100_000,
         }
     }

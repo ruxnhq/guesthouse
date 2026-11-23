@@ -6,14 +6,21 @@
 //! job notes the card's clock when it starts and ends, so the report gives each client's share of
 //! the engine's time. `--yield` has the heavy clients give way to others the way the daemon has a
 //! guest do it, with the same `Share`, polling as the daemon polls a held submission.
+//!
+//! `--sibling-hz N` adds a small client that is the first heavy one's own, as a guest's compositor
+//! is a game's: its jobs count as the guest's work, through the same `OwnEnds`. Each client waits
+//! for its own jobs, so a sibling's end is noted a moment after it, where the daemon reads it from
+//! the card's times. The heavy client's next job ends long after, so this doesn't show.
+//! `--sibling-foreign` has the sibling count as someone else's, as 0.7.6 took a guest's other
+//! processes.
 
 use guesthouse_backend_amd::{
-    Context, CpuAccess, DOMAIN_GTT, Device, HW_IP_DMA, Ib, MapFlags, MemoryType, RunTimes, Share, Syncobj,
-    close_buffer, create_buffer, map_buffer, submit_all, wait_eventfd,
+    Context, CpuAccess, DOMAIN_GTT, Device, HW_IP_DMA, Ib, MapFlags, MemoryType, OwnEnds, RunTimes, Share,
+    Syncobj, close_buffer, create_buffer, map_buffer, submit_all, wait_eventfd,
 };
 use std::collections::VecDeque;
 use std::process::ExitCode;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -42,13 +49,20 @@ struct Report {
     busy_ns: u64,
     waited_ns: u64,
     paused_ns: u64,
+    /// Runs that retired while the client was giving way.
+    giving_way: u64,
     waits: Vec<u64>,
 }
 
-fn arguments() -> (usize, Settings, Settings, Duration) {
+/// The sibling's settings, and whether it is to count as someone else, as 0.7.6 took it.
+type Sibling = Option<(Settings, bool)>;
+
+fn arguments() -> (usize, Settings, Settings, Sibling, Duration) {
     let mut heavy = 2;
     let mut heavy_settings = Settings { bytes: 64 << 20, hz: 0, depth: 4, yields: false };
     let mut light = Settings { bytes: 256 << 10, hz: 0, depth: 1, yields: false };
+    let mut sibling = Settings { bytes: 256 << 10, hz: 0, depth: 1, yields: false };
+    let mut foreign = false;
     let mut seconds = 5;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -59,12 +73,16 @@ fn arguments() -> (usize, Settings, Settings, Duration) {
             "--depth" => heavy_settings.depth = (number() as usize).clamp(1, SLOTS),
             "--light-kb" => light.bytes = number() << 10,
             "--light-hz" => light.hz = number(),
+            "--sibling-kb" => sibling.bytes = number() << 10,
+            "--sibling-hz" => sibling.hz = number(),
+            "--sibling-foreign" => foreign = true,
             "--seconds" => seconds = number(),
             "--yield" => heavy_settings.yields = true,
             other => eprintln!("ignored {other}"),
         }
     }
-    (heavy, heavy_settings, light, Duration::from_secs(seconds))
+    let sibling = (sibling.hz > 0).then_some((sibling, foreign));
+    (heavy, heavy_settings, light, sibling, Duration::from_secs(seconds))
 }
 
 fn ticks_to_ns(ticks: u64, freq_khz: u32) -> u64 {
@@ -104,7 +122,16 @@ struct OnCard {
     submitted_ns: u64,
 }
 
-fn client(name: String, settings: Settings, run_for: Duration, start: Arc<Barrier>) -> Report {
+/// The work of one guest's clients, when a client has a sibling.
+type Guest = Arc<Mutex<OwnEnds>>;
+
+fn client(
+    name: String,
+    settings: Settings,
+    run_for: Duration,
+    start: Arc<Barrier>,
+    guest: Option<Guest>,
+) -> Report {
     let device = Device::open(None).expect("no AMD render node");
     let info = device.info().clone();
     let align = info.va_alignment.max(PAGE);
@@ -172,12 +199,6 @@ fn client(name: String, settings: Settings, run_for: Duration, start: Arc<Barrie
             let submitted_ns = device.gpu_clock().unwrap();
             on_card.push_back(OnCard { slot, done, submitted_ns });
         }
-        if settings.hz > 0 {
-            let due = began + Duration::from_secs_f64(report.jobs as f64 / settings.hz as f64);
-            if let Some(left) = due.checked_duration_since(Instant::now()) {
-                thread::sleep(left);
-            }
-        }
         let oldest = on_card.pop_front().unwrap();
         let event = oldest.done.arm_eventfd(&device).unwrap();
         assert!(wait_eventfd(&event, 5000).unwrap(), "{name}: a job didn't finish");
@@ -187,12 +208,26 @@ fn client(name: String, settings: Settings, run_for: Duration, start: Arc<Barrie
         // What ran on the engine between this client's sending the job, or its last job's end, and
         // this job's start, was someone else's.
         let waited = started.saturating_sub(oldest.submitted_ns.max(last_end));
+        let mut own_end = last_end;
+        if let Some(guest) = &guest {
+            let mut guest = guest.lock().unwrap();
+            own_end = own_end.max(guest.last_by(HW_IP_DMA, started));
+            guest.noted(HW_IP_DMA, ended);
+        }
         last_end = ended;
         report.jobs += 1;
         report.busy_ns += took;
         report.waited_ns += waited;
         report.waits.push(waited);
-        share.retired(RunTimes { sent: oldest.submitted_ns, started, ended });
+        share.retired(RunTimes { sent: oldest.submitted_ns, started, ended }, own_end);
+        report.giving_way += u64::from(share.contended(ended));
+        // Paced after its job is in, so a sibling's end is noted as soon as it can be.
+        if settings.hz > 0 {
+            let due = began + Duration::from_secs_f64(report.jobs as f64 / settings.hz as f64);
+            if let Some(left) = due.checked_duration_since(Instant::now()) {
+                thread::sleep(left);
+            }
+        }
     }
     for left in on_card {
         let event = left.done.arm_eventfd(&device).unwrap();
@@ -210,20 +245,30 @@ fn run(
     heavy: usize,
     heavy_settings: Settings,
     light: Option<Settings>,
+    sibling: Sibling,
     run_for: Duration,
 ) -> Vec<(String, Report)> {
-    let mut clients: Vec<(String, Settings)> =
-        (0..heavy).map(|index| (format!("heavy {}", index + 1), heavy_settings)).collect();
+    let guest: Option<Guest> = sibling.map(|_| Arc::default());
+    let heavy_guest = guest.clone().filter(|_| !sibling.is_some_and(|(_, foreign)| foreign));
+    let mut clients: Vec<(String, Settings, Option<Guest>)> = (0..heavy)
+        .map(|index| {
+            let own = if index == 0 { heavy_guest.clone() } else { None };
+            (format!("heavy {}", index + 1), heavy_settings, own)
+        })
+        .collect();
+    if let Some((sibling, _)) = sibling {
+        clients.push(("sibling".to_string(), sibling, guest.clone()));
+    }
     if let Some(light) = light {
-        clients.push(("light".to_string(), light));
+        clients.push(("light".to_string(), light, None));
     }
     let start = Arc::new(Barrier::new(clients.len()));
     let threads: Vec<_> = clients
         .into_iter()
-        .map(|(name, settings)| {
+        .map(|(name, settings, guest)| {
             let start = Arc::clone(&start);
             let label = name.clone();
-            (label, thread::spawn(move || client(name, settings, run_for, start)))
+            (label, thread::spawn(move || client(name, settings, run_for, start, guest)))
         })
         .collect();
     threads.into_iter().map(|(name, thread)| (name, thread.join().unwrap())).collect()
@@ -236,10 +281,12 @@ fn print(title: &str, results: &[(String, Report)], run_for: Duration) {
         let mean_wait =
             if report.jobs == 0 { 0.0 } else { report.waited_ns as f64 / report.jobs as f64 / 1e6 };
         println!(
-            "  {name:8} {:7.1} jobs/s  {:5.1} % of the engine  waited {mean_wait:6.2} ms a job  paused {:5.1} %",
+            "  {name:8} {:7.1} jobs/s  {:5.1} % of the engine  waited {mean_wait:6.2} ms a job  paused {:5.1} %  \
+             giving way {:5.1} %",
             report.jobs as f64 / run_for.as_secs_f64(),
             report.busy_ns as f64 / total * 100.0,
             report.paused_ns as f64 / total * 100.0,
+            report.giving_way as f64 / report.jobs.max(1) as f64 * 100.0,
         );
         let mut waits = report.waits.clone();
         waits.sort_unstable();
@@ -250,7 +297,7 @@ fn print(title: &str, results: &[(String, Report)], run_for: Duration) {
 }
 
 pub fn main() -> ExitCode {
-    let (heavy, heavy_settings, light, run_for) = arguments();
+    let (heavy, heavy_settings, light, sibling, run_for) = arguments();
     let Ok(device) = Device::open(None) else {
         eprintln!("no AMD render node");
         return ExitCode::FAILURE;
@@ -262,12 +309,21 @@ pub fn main() -> ExitCode {
         std::fs::read_to_string("/sys/module/gpu_sched/parameters/sched_policy").unwrap_or_default().trim()
     );
     drop(device);
-    print("light alone", &run(0, heavy_settings, Some(light), run_for), run_for);
-    print("one heavy alone", &run(1, heavy_settings, None, run_for), run_for);
-    print(&format!("{heavy} heavy alone"), &run(heavy, heavy_settings, None, run_for), run_for);
-    print(&format!("{heavy} heavy and light"), &run(heavy, heavy_settings, Some(light), run_for), run_for);
+    print("light alone", &run(0, heavy_settings, Some(light), None, run_for), run_for);
+    print("one heavy alone", &run(1, heavy_settings, None, None, run_for), run_for);
+    print(&format!("{heavy} heavy alone"), &run(heavy, heavy_settings, None, None, run_for), run_for);
+    print(
+        &format!("{heavy} heavy and light"),
+        &run(heavy, heavy_settings, Some(light), None, run_for),
+        run_for,
+    );
     if heavy > 1 {
-        print("one heavy and light", &run(1, heavy_settings, Some(light), run_for), run_for);
+        print("one heavy and light", &run(1, heavy_settings, Some(light), None, run_for), run_for);
+    }
+    if sibling.is_some() {
+        print("one heavy and its sibling", &run(1, heavy_settings, None, sibling, run_for), run_for);
+        let all = run(1, heavy_settings, Some(light), sibling, run_for);
+        print("one heavy, its sibling and light", &all, run_for);
     }
     ExitCode::SUCCESS
 }

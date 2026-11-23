@@ -2090,6 +2090,27 @@ mod queues {
     }
 
     #[test]
+    fn a_reply_can_go_before_the_doorbell_which_is_then_rung_in_order() {
+        let mut session = session();
+        session.backend_mut().run_work = true;
+        let context = create_context(&mut session, 0);
+        let (queue, _, _) = create_queue(&mut session, context);
+        let mut request = message(Command::SubmitToHardwareQueue, 0x50);
+        set_u32(&mut request, 0x18, queue);
+        set_u64(&mut request, 0x20, 1);
+        let mut out = Vec::new();
+        let answer = session.handle_message_reply_first(&request, Some(ReplyTicket::default()), &mut out);
+        assert_eq!((answer, out), (Answer::Now, SUCCESS.to_le_bytes().to_vec()));
+        assert!(session.backend().doorbells.is_empty(), "the reply goes first");
+        session.ring_after_reply();
+        assert_eq!(session.backend().doorbells, [(queue, 1)]);
+        // Nothing is left for later, and plain handling rings at once as before.
+        session.ring_after_reply();
+        submit(&mut session, queue, 2);
+        assert_eq!(session.backend().doorbells, [(queue, 1), (queue, 2)]);
+    }
+
+    #[test]
     fn a_backend_can_take_gpu_addresses_for_its_channels() {
         let mut session = session();
         session.backend_mut().run_work = true;

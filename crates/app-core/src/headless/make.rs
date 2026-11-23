@@ -3,6 +3,7 @@
 
 use super::args::NewOptions;
 use super::change::on_or_off;
+use super::recipes;
 use super::{follow_up, run_task};
 use crate::card_choice::{choice_at, default_choice, windows_card_choices};
 use crate::context::Context;
@@ -12,7 +13,9 @@ use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use crate::host::{RamField, physical_cores};
 use crate::iso::Iso;
-use crate::library::{NewMachine, create, delete, folders_text, refuse_before_its_driver, remove_entry};
+use crate::library::{
+    Extras, NewMachine, create_with, delete, folders_text, refuse_before_its_driver, remove_entry,
+};
 use crate::machine::{Kind, MIN_RAM_GIB, Machine, load};
 use crate::macos_setup::{MACOS_SIZES, MACOS_TITLE, NewMac, create_macos, how_it_installs};
 use crate::remote_access::{Access, Service};
@@ -168,6 +171,7 @@ fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Wr
         options.intel_driver,
         options.remote_desktop,
         options.ssh,
+        options.set_up_for,
     ];
     if others.iter().any(Option::is_some) {
         return Err(Failure::new("A macOS machine takes --disk, --cores and --ram, and nothing else."));
@@ -227,14 +231,23 @@ pub(super) fn new_machine(
         Some(text) => whole_number(option, text),
         None => Ok(usual),
     };
+    // What the recipe asks of the sizes where this PC allows it, then what was typed over that.
+    let mut usual = recipes::usual_of(&sizes, physical_cores(&context.cpus), field.value as u32);
+    let mut extras = Extras::default();
+    if let Some(wanted) = options.set_up_for {
+        let chosen = recipes::pick(context, kind, wanted, options.yes, out)?;
+        (usual, extras) = recipes::sized(context, kind, &card, options, &chosen, usual, out)?;
+    } else if options.yes {
+        return Err(Failure::new("--yes goes with --set-up-for."));
+    }
     let new = NewMachine {
         name: name.to_owned(),
         iso: iso.to_owned(),
         kind,
         windows_disc: disc.windows_disc,
-        cores: number("--cores", options.cores, sizes.cores.min(physical_cores(&context.cpus)))?,
-        ram_gib: number("--ram", options.ram, field.value as u32)?,
-        disk_gib: number("--disk", options.disk, sizes.disk)?,
+        cores: number("--cores", options.cores, usual.cores)?,
+        ram_gib: number("--ram", options.ram, usual.ram_gib)?,
+        disk_gib: number("--disk", options.disk, usual.disk_gib)?,
         refresh_hz: None,
         user: account_name(kind, options.user.unwrap_or_default().trim()),
         password: String::new(),
@@ -258,13 +271,16 @@ pub(super) fn new_machine(
             unpack_intel_driver(context, pci, installer, out)?;
         }
     }
-    let machine = create(context, &new)?;
+    let machine = create_with(context, &new, &extras)?;
     writeln!(out, "Made {} in {}.", machine.name, machine.folder(context).display())?;
     if !machine.disk_folder.is_empty() {
         writeln!(out, "Its disk is in {}.", machine.disk_folder)?;
     }
     if windows {
         writeln!(out, "{}", access_text(&new.access))?;
+    }
+    if let Some(chosen) = &extras.recipe {
+        writeln!(out, "Its steps run once it is installed and up: {}.", chosen.recipe.name)?;
     }
     if machine.installing {
         let who = if windows { "Windows" } else { "Ubuntu" };

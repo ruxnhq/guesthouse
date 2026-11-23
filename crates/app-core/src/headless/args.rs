@@ -6,7 +6,7 @@ use std::fmt;
 const NO_WAIT: &str = "--no-wait";
 const YES: &str = "--yes";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 12] = [
+const NEW_OPTIONS: [&str; 13] = [
     "--iso",
     "--kind",
     "--disk",
@@ -19,6 +19,7 @@ const NEW_OPTIONS: [&str; 12] = [
     "--intel-driver",
     "--remote-desktop",
     "--ssh",
+    "--set-up-for",
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
 const MINUTES: &str = "--minutes";
@@ -41,6 +42,10 @@ pub(super) struct NewOptions<'a> {
     /// On or off, for a Windows machine.
     pub remote_desktop: Option<&'a str>,
     pub ssh: Option<&'a str>,
+    /// A recipe, by its key, its file's name or its name.
+    pub set_up_for: Option<&'a str>,
+    /// Goes ahead with a recipe of the user's own, whose steps `new` shows first.
+    pub yes: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +65,11 @@ pub(super) enum Command<'a> {
         wait: bool,
     },
     Install {
+        name: &'a str,
+        wait: bool,
+    },
+    Recipes,
+    RunRecipe {
         name: &'a str,
         wait: bool,
     },
@@ -186,6 +196,14 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 _ => Command::Log(name),
             })
         }
+        "recipes" => {
+            Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
+            Ok(Command::Recipes)
+        }
+        "recipe" => {
+            let split = Split::new(command, rest, &[], &[NO_WAIT])?;
+            Ok(Command::RunRecipe { name: split.exactly(command, machine, 1)?[0], wait: !split.has(NO_WAIT) })
+        }
         "idle" => {
             let split = Split::new(command, rest, &[MINUTES], &[])?;
             Ok(Command::Idle { name: split.exactly(command, machine, 1)?[0], minutes: split.value(MINUTES) })
@@ -230,7 +248,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
             Ok(Command::Remove { name: split.exactly(command, machine, 1)?[0], yes: split.has(YES) })
         }
         "new" => {
-            let split = Split::new(command, rest, &NEW_OPTIONS, &[])?;
+            let split = Split::new(command, rest, &NEW_OPTIONS, &[YES])?;
             let name = split.exactly(command, "a name for the machine", 1)?[0];
             let options = NewOptions {
                 iso: split.value("--iso"),
@@ -245,6 +263,8 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 intel_driver: split.value("--intel-driver"),
                 remote_desktop: split.value("--remote-desktop"),
                 ssh: split.value("--ssh"),
+                set_up_for: split.value("--set-up-for"),
+                yes: split.has(YES),
             };
             Ok(Command::New { name, options })
         }

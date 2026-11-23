@@ -338,6 +338,9 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
     if !machine.iso.is_empty() {
         line(out, "iso", &machine.iso)?;
     }
+    if let Some(recipe) = crate::recipe::summary(context, machine) {
+        line(out, "recipe", &recipe)?;
+    }
     if machine.installing {
         writeln!(out, "Its install has not finished.")?;
     }

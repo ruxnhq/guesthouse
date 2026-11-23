@@ -322,6 +322,7 @@ fn the_log_command_says_where_the_log_is_and_shows_its_end() {
 
 mod idle_tests;
 mod making_tests;
+mod recipes_tests;
 mod settings_tests;
 mod snapshots_tests;
 mod standalone_tests;

@@ -15,11 +15,11 @@ use crate::setup::driver::{WINDOWS_DRIVER, driver_problem};
 use setup::setup_after;
 use std::path::Path;
 
-fn plain_disc(scratch: &Scratch) -> String {
+pub(super) fn plain_disc(scratch: &Scratch) -> String {
     make_iso(scratch, "tiny", &[("readme.txt", b"hello")])
 }
 
-fn failure_of(result: std::result::Result<(), Problem>) -> String {
+pub(super) fn failure_of(result: std::result::Result<(), Problem>) -> String {
     match result {
         Err(Problem::Failed(failure)) => failure.0,
         other => panic!("expected a failure, got {other:?}"),
@@ -139,13 +139,13 @@ fn a_recorded_intel_card_is_offered_when_one_is_named_and_wants_intels_driver() 
     assert_eq!(refused, "--intel-driver is for a Windows machine on an Intel card.");
 }
 
-const AMD_IGPU: &str = "0000:7c:00.0";
+pub(super) const AMD_IGPU: &str = "0000:7c:00.0";
 const RDNA3_GRAPHICS: u32 = 11;
 /// In GiB, for an install that no drive has the room for.
 const MORE_ROOM_THAN_ANY_DRIVE_HAS: u64 = 1 << 40;
 
 /// A PC whose only card is an AMD one GPU-PV handles.
-fn with_an_amd_card(scratch: &Scratch) -> Context {
+pub(super) fn with_an_amd_card(scratch: &Scratch) -> Context {
     let mut context = with_cards(scratch, &[]);
     context.drm_class = scratch.path("drm");
     context.install_room = Some(0);

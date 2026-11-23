@@ -20,8 +20,11 @@ guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                        [--amd-driver PATH] [--intel-driver PATH]
                        [--remote-desktop on|off] [--ssh on|off]
+                       [--set-up-for RECIPE [--yes]]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
+guesthouse-vm recipes
+guesthouse-vm recipe NAME [--no-wait]
 
 guesthouse-vm show NAME
 guesthouse-vm set NAME SETTING VALUE
@@ -70,6 +73,8 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 `--disk-folder` keeps the disk on another drive. The disk gets a folder of its own inside the one you name, and `remove` takes it with the machine. The disk's file starts small and grows as the guest fills it, so `--disk` is the most it can hold, not what it takes at once.
 
 `new` makes the disk and its settings and stops there. A Windows or Ubuntu machine is then installed with `install`, which follows the install step by step like `start`. The guest account's password is made at the install and kept in the machine's folder. There's no way to choose it here.
+
+`--set-up-for` makes a Windows or Ubuntu machine for a [recipe](recipes.md): it prints the whole recipe first, takes the recipe's sizes unless you typed your own, and runs the recipe's steps once the install has finished and the machine is up. `recipes` lists them, and `recipe NAME` runs a machine's steps again. A recipe of your own that has steps goes ahead only with `--yes` after you've read it.
 
 `remove` says what it would delete, and does it when you add `--yes`. A machine whose disk is outside its folder only loses its entry, and the disk stays.
 

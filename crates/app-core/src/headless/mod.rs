@@ -6,6 +6,7 @@ mod change;
 mod idle;
 mod make;
 mod pick;
+mod recipes;
 mod setup;
 mod snapshots;
 mod standalone;
@@ -56,10 +57,13 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                              [--amd-driver PATH] [--intel-driver PATH]
                              [--remote-desktop on|off] [--ssh on|off]
+                             [--set-up-for RECIPE [--yes]]
   new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
+  recipes                    the recipes a machine can be set up for
+  recipe MACHINE [--no-wait] run a machine's recipe steps again, in the running guest
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
@@ -112,6 +116,8 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Show(name) => change::show(context, &find(context, name)?, out)?,
         Command::Start { name, wait } => start(context, &find(context, name)?, wait, out)?,
         Command::Install { name, wait } => make::install(context, &find(context, name)?, wait, out)?,
+        Command::Recipes => recipes::show_all(context, out)?,
+        Command::RunRecipe { name, wait } => recipes::run_again(context, &find(context, name)?, wait, out)?,
         Command::Stop(name) => stop(context, &find(context, name)?, "stop", out)?,
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,

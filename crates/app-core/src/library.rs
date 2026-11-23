@@ -267,7 +267,31 @@ fn planned(context: &Context, new: &NewMachine) -> Machine {
 
 /// Makes a machine's folder, disk and firmware file. Installing Windows is a task of its own.
 pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
-    let machine = planned(context, new);
+    create_with(context, new, &Extras::default())
+}
+
+/// What a machine can be made with besides what a [`NewMachine`] says: what a recipe asked of it.
+#[derive(Debug, Clone, Default)]
+pub struct Extras {
+    /// The most video memory it may use, in GiB. 0 is no cap.
+    pub vram_gib: u32,
+    /// The recipe it is made for. Its steps run after the install.
+    pub recipe: Option<crate::recipe::Chosen>,
+}
+
+/// [`create`] for a machine that has a recipe. The cap is held to the same limit a setting is, and what
+/// the recipe is goes in the machine's folder.
+pub fn create_with(context: &Context, new: &NewMachine, extras: &Extras) -> Result<Machine> {
+    if let Some(chosen) = &extras.recipe
+        && chosen.recipe.kind() != new.kind
+    {
+        let name = &chosen.recipe.name;
+        return Err(Failure(format!(
+            "The recipe {name} is for {}, and this machine is not.",
+            chosen.recipe.guest.name()
+        )));
+    }
+    let machine = Machine { vram_gib: extras.vram_gib, ..planned(context, new) };
     let folder = context.paths.machines.join(&machine.id);
     if let Some(problem) = create_problems(context, new, &machine)?.into_iter().next() {
         return Err(Failure(problem));
@@ -278,7 +302,7 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
         let _ = fs::remove_dir_all(&folder);
         return Err(failure);
     }
-    let made = make_files(context, new, &machine);
+    let made = make_files(context, new, &machine, extras);
     if made.is_err() {
         let _ = remove_disk_folder(&machine);
         let _ = fs::remove_dir_all(&folder);
@@ -297,13 +321,16 @@ fn make_disk_folder(machine: &Machine) -> Result<()> {
     })
 }
 
-/// The password, the choices of Remote Desktop and SSH, and the disk.
-fn make_files(context: &Context, new: &NewMachine, machine: &Machine) -> Result<()> {
+/// The password, the choices of Remote Desktop and SSH, the recipe if there is one, and the disk.
+fn make_files(context: &Context, new: &NewMachine, machine: &Machine, extras: &Extras) -> Result<()> {
     if installs_itself(machine) && !new.password.is_empty() {
         store_password(&machine.password_file(context), &new.password)?;
     }
     if machine.kind == Kind::Windows {
         write_access(context, machine, &new.access)?;
+    }
+    if let Some(chosen) = &extras.recipe {
+        crate::recipe::write_chosen(context, machine, chosen)?;
     }
     make_disk(context, machine, new.disk_gib)
 }
@@ -954,5 +981,59 @@ mod tests {
         assert!(!with_suffix(&path, ".new").exists());
         remove_entry(&context, &imported).unwrap();
         assert!(!imported.folder(&context).exists(), "it goes with the entry");
+    }
+
+    fn a_recipe(guest: &str) -> crate::recipe::Chosen {
+        let text = format!(
+            "name = \"R\"\ndescription = \"D.\"\nguest = \"{guest}\"\n[steps]\npackages = [\"git\"]\n"
+        );
+        crate::recipe::Chosen {
+            source: crate::recipe::Source::App,
+            file: String::new(),
+            recipe: crate::recipe::Recipe::parse(&text).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_machine_made_for_a_recipe_keeps_it_and_one_made_for_none_has_no_file() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let new = NewMachine { kind: Kind::Linux, ..plain(&scratch, "Ub", None) };
+        let none = create(&context, &new).unwrap();
+        assert!(crate::recipe::read_chosen(&context, &none).is_none());
+        assert!(!none.folder(&context).join("recipe.json").exists());
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("ubuntu")) };
+        let made = create_with(&context, &NewMachine { name: "Ub2".into(), ..new }, &extras).unwrap();
+        assert_eq!(crate::recipe::read_chosen(&context, &made), extras.recipe);
+    }
+
+    #[test]
+    fn a_recipe_for_another_kind_makes_nothing() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("windows")) };
+        let said = create_with(&context, &plain(&scratch, "Plain", None), &extras).unwrap_err().0;
+        assert!(said.contains("is for Windows"), "{said}");
+        assert!(load_all(&context).0.is_empty(), "no machine was left behind");
+    }
+
+    #[test]
+    fn a_cap_a_recipe_asks_is_held_to_the_cards_limit() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.install_room = Some(0);
+        fs::create_dir_all(crate::settings::driver_folder(&context)).unwrap();
+        let new = NewMachine {
+            kind: Kind::Windows,
+            windows_disc: true,
+            cores: 2,
+            ram_gib: 4,
+            disk_gib: 64,
+            ..plain(&scratch, "Win", Some(&scratch.write("win.iso", "disc").display().to_string()))
+        };
+        let said = create_with(&context, &new, &Extras { vram_gib: 999, recipe: None }).unwrap_err().0;
+        assert!(said.contains("video memory cap"), "{said}");
+        let made = create_with(&context, &new, &Extras::default()).unwrap();
+        assert_eq!(made.vram_gib, 0);
     }
 }

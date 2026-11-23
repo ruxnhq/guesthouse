@@ -7,7 +7,8 @@
 # sees. Windows reads the name at boot, so a change counts from the next start.
 $hardwareId = 'Root\GuesthouseDisplay'
 try {
-    $device = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY' -ea Stop |
+    # A guest without our display driver has no such key, and nothing to name.
+    $device = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Enum\ROOT\DISPLAY' -ea 0 |
         Where-Object { (Get-ItemProperty $_.PSPath -ea 0).HardwareID -contains $hardwareId } | Select-Object -First 1
     if (-not $device) { "kept: no display of ours"; return }
     $driver = (Get-ItemProperty $device.PSPath -ErrorAction Stop).Driver

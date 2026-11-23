@@ -127,6 +127,9 @@ fn serve_amd(
             backend.keep_command_buffers(&run_folder, guesthouse_daemon::logger::started());
         }
         let on = |name| guesthouse_backend_amd::video_switch_is_on(name, env::var_os(name).as_deref());
+        if on(guesthouse_backend_amd::GIVE_WAY_VARIABLE) {
+            backend.give_way();
+        }
         if on(guesthouse_backend_amd::VIDEO_VARIABLE) {
             backend.offer_video();
         }

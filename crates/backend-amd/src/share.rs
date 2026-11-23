@@ -18,6 +18,10 @@
 //! binary. A light client went from 72 jobs a second beside two heavy ones to over 1200, the three
 //! then had about a third of the engine each, and the two heavy ones alone lost nothing.
 
+/// The daemon's switch that turns giving way on. It is off without it: as built, a guest alone on
+/// the card can take its own other processes, or the card waking from idle, for others (#327).
+pub const VARIABLE: &str = "GUESTHOUSE_AMD_GIVE_WAY";
+
 /// How much longer than its own sending a run must have waited to have waited for someone else.
 /// A space's runs alone wait under 25 µs.
 pub const WAITED_NS: u64 = 50_000;

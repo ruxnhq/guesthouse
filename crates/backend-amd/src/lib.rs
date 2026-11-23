@@ -61,6 +61,7 @@ pub use memory::{
     CpuAccess, DOMAIN_GTT, DOMAIN_VRAM, GemHandle, MapFlags, MemoryType, set_tiling as set_buffer_tiling,
     tiling as buffer_tiling,
 };
+pub use share::VARIABLE as GIVE_WAY_VARIABLE;
 pub use share::{RunTimes, Share};
 pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
@@ -132,6 +133,8 @@ pub struct AmdBackend {
     copy_ib: Option<CopyIb>,
     /// How long the next run is waited for, which is less after one that hung.
     patience: Patience,
+    /// Whether the guest gives way to the card's other users, see [`share`]. Off unless asked for.
+    gives_way: bool,
     /// Runs the core has had prepared and not yet let go, by the doorbell that sends each.
     prepared: HashMap<u64, PreparedRun>,
     /// Video runs the core has had prepared and not yet let go, by the doorbell that sends each.
@@ -252,6 +255,7 @@ impl AmdBackend {
             cpu_views: HashMap::new(),
             copy_ib: None,
             patience: Patience::RUN,
+            gives_way: false,
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
@@ -277,6 +281,15 @@ impl AmdBackend {
             info.device_id, info.pci_revision, info.family, info.details.external_revision
         );
         self.ib_dump = Some(ib_dump::Keeper::new(folder, started, card));
+    }
+
+    /// Has the guest give way to the card's other users, see [`share`]. The daemon calls this when
+    /// it was started with [`GIVE_WAY_VARIABLE`] on. Off by default since 0.7.7: as built in 0.7.6,
+    /// a guest alone on the card took its own other processes, and the card waking from idle, for
+    /// others, and kept giving way to itself (#327).
+    pub fn give_way(&mut self) {
+        log::info!("{GIVE_WAY_VARIABLE} is on: the guest gives way when it sees others waiting for the card");
+        self.gives_way = true;
     }
 
     /// Offers the guest the card's video engine, where it can be: see [`video`]. The daemon calls
@@ -1523,7 +1536,7 @@ impl Backend for AmdBackend {
             .filter(|_| space.vm.holds(work.fence_gpu_address, FENCE_BYTES));
         if let Some(writer) = writer {
             // While others wait for the card, the space sends one run at a time and pauses between.
-            if !space.vm.may_send(node.ip_type) {
+            if self.gives_way && !space.vm.may_send(node.ip_type) {
                 return WorkStart::Busy;
             }
             // The card writes the fence itself when the run is through, so nothing waits here.

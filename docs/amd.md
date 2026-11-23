@@ -46,6 +46,12 @@ Other RX 6000, RX 7000 and RX 9000 cards should work like the ones above. RX 500
 
 If you have an AMD card, open an issue to say how it went.
 
+## Sharing the card
+
+Off by default since 0.7.7. With `GUESTHOUSE_AMD_GIVE_WAY=1` in the environment the app or `guesthouse-vm` starts the machine from, a guest gives way when it sees others waiting for the card, so a small app on the host, in a container or in another VM gets turns between the guest's work. It helped a container's vkmark beside two Windows guests on a Radeon 780M (#276).
+
+It was on for everyone in 0.7.6, and a guest alone on the card could then give way to itself. On a tester's 780M, GravityMark ran at under a third of 0.7.5's score (#327). With the switch on, that still happens, so turn it on only when the card is shared and the others matter more than the guest's speed. It also doesn't see every client yet. A host app with very short jobs beside one guest wasn't noticed in a test on a Radeon 610M.
+
 ## Hardware video
 
 Off by default, and an experiment. With `GUESTHOUSE_AMD_VIDEO=1` in the environment the app or `guesthouse-vm` starts the machine from, the daemon offers Windows the card's video engine. AMD's driver then lists its hardware decoders, and AMF finds its encoder. Without it, video is decoded and encoded on the CPU as before.

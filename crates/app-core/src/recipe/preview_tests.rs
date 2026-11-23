@@ -67,6 +67,7 @@ fn a_machines_recipe_is_said_with_how_its_steps_went() {
     );
     write_outcome(&context, &vm, &Outcome::Done).unwrap();
     assert!(summary(&context, &vm).unwrap().ends_with("Its steps ran."));
+    assert_eq!(origin_and_outcome(&context, &vm).unwrap(), "It comes with Guesthouse. Its steps ran.");
 }
 
 #[test]

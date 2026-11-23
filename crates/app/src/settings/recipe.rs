@@ -6,7 +6,7 @@ use crate::recipe_dialog;
 use crate::rows::row_button;
 use adw::prelude::*;
 use guesthouse_app_core::actions::RECIPE_TASK;
-use guesthouse_app_core::recipe::{read_chosen, summary, what_it_will_run};
+use guesthouse_app_core::recipe::{origin_and_outcome, read_chosen, what_it_will_run};
 use guesthouse_app_core::tasks::{State, Status};
 
 const NOT_RUNNING: &str = "The machine has to be running: the steps run in the guest.";
@@ -28,7 +28,7 @@ impl Recipe {
         page.add(&group);
         let row = adw::ActionRow::builder()
             .title(chosen.recipe.name.as_str())
-            .subtitle(summary(&context, &machine).unwrap_or_default())
+            .subtitle(origin_and_outcome(&context, &machine).unwrap_or_default())
             .subtitle_lines(0)
             .use_markup(false)
             .build();
@@ -60,7 +60,7 @@ impl Recipe {
         self.again.set_sensitive(usable);
         self.again.set_tooltip_text((!usable).then_some(NOT_RUNNING));
         let context = self.shared.window.context();
-        let text = summary(&context, &self.shared.machine.borrow()).unwrap_or_default();
+        let text = origin_and_outcome(&context, &self.shared.machine.borrow()).unwrap_or_default();
         if *self.shown.borrow() != text {
             self.row.set_subtitle(&text);
             *self.shown.borrow_mut() = text;

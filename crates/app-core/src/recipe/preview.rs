@@ -74,7 +74,31 @@ pub fn what_it_will_run(recipe: &Recipe, source: Source, file: &str) -> String {
     text.trim().to_owned()
 }
 
-/// A machine's recipe and how its steps went, in a sentence or two, or nothing for a machine made with none.
+/// How the steps of a machine's recipe went.
+fn outcome_text(context: &Context, machine: &Machine, recipe: &Recipe) -> String {
+    if recipe.steps.is_empty() {
+        return "It has no steps to run.".to_owned();
+    }
+    match read_outcome(context, machine) {
+        Outcome::Pending => "Its steps have not run yet.".to_owned(),
+        Outcome::Done => "Its steps ran.".to_owned(),
+        Outcome::Failed { step, why } => format!("Its steps stopped at \"{step}\": {why}"),
+    }
+}
+
+/// Where a machine's recipe is from and how its steps went, for a row that has the recipe's name as its
+/// title already. Nothing for a machine made with none.
+pub fn origin_and_outcome(context: &Context, machine: &Machine) -> Option<String> {
+    let chosen = read_chosen(context, machine)?;
+    let from = match chosen.source {
+        Source::App => "It comes with Guesthouse.",
+        Source::Yours => "It is your own recipe.",
+    };
+    Some(format!("{from} {}", outcome_text(context, machine, &chosen.recipe)))
+}
+
+/// A machine's recipe by name, and how its steps went, in a sentence or two, or nothing for a machine made
+/// with none.
 pub fn summary(context: &Context, machine: &Machine) -> Option<String> {
     let chosen = read_chosen(context, machine)?;
     let name = &chosen.recipe.name;
@@ -82,16 +106,7 @@ pub fn summary(context: &Context, machine: &Machine) -> Option<String> {
         Source::App => "from Guesthouse",
         Source::Yours => "your own",
     };
-    let went = if chosen.recipe.steps.is_empty() {
-        "It has no steps to run.".to_owned()
-    } else {
-        match read_outcome(context, machine) {
-            Outcome::Pending => "Its steps have not run yet.".to_owned(),
-            Outcome::Done => "Its steps ran.".to_owned(),
-            Outcome::Failed { step, why } => format!("Its steps stopped at \"{step}\": {why}"),
-        }
-    };
-    Some(format!("{name} ({from}). {went}"))
+    Some(format!("{name} ({from}). {}", outcome_text(context, machine, &chosen.recipe)))
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ mod settings;
 mod shelf;
 
 pub use format::{Guest, Recipe, SettingsAsked, Steps};
-pub use preview::{origin_text, summary, what_it_will_run};
+pub use preview::{origin_and_outcome, origin_text, summary, what_it_will_run};
 pub use record::{
     CHOSEN_FILE, Chosen, OUTCOME_FILE, Outcome, read_chosen, read_outcome, write_chosen, write_outcome,
 };

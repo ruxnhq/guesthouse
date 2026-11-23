@@ -9753,3 +9753,95 @@ index ad4fa66..2589009 100644
 -- 
 2.56.1
 
+From dd9cca8ad79975291d7ccef70d9d630b811bca6b Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 15:41:11 -0800
+Subject: [PATCH] hw/display/virtio-gpu-gl: answer the guest's resource UUID
+ requests
+
+Android's minigbm marks every blob it makes for use across devices, and
+the guest's kernel refuses such a blob unless the GPU offers
+VIRTIO_GPU_F_RESOURCE_UUID. Only vhost-user-gpu did. The GL device now
+answers RESOURCE_ASSIGN_UUID with a fresh UUID, behind a resource_uuid
+property that is off by default. Nothing on the host imports by UUID,
+so any unique one will do.
+---
+ hw/display/virtio-gpu-gl.c    |  2 ++
+ hw/display/virtio-gpu-virgl.c | 34 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 36 insertions(+)
+
+diff --git a/hw/display/virtio-gpu-gl.c b/hw/display/virtio-gpu-gl.c
+index 2b7a41c..4fb64bf 100644
+--- a/hw/display/virtio-gpu-gl.c
++++ b/hw/display/virtio-gpu-gl.c
+@@ -170,6 +170,8 @@ static const Property virtio_gpu_gl_properties[] = {
+                     VIRTIO_GPU_FLAG_VENUS_ENABLED, false),
+     DEFINE_PROP_BIT("drm_native_context", VirtIOGPU, parent_obj.conf.flags,
+                     VIRTIO_GPU_FLAG_DRM_ENABLED, false),
++    DEFINE_PROP_BIT("resource_uuid", VirtIOGPU, parent_obj.conf.flags,
++                    VIRTIO_GPU_FLAG_RESOURCE_UUID_ENABLED, false),
+ };
+ 
+ static void virtio_gpu_gl_device_unrealize(DeviceState *qdev)
+diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
+index 9bda572..9eefb28 100644
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -14,6 +14,8 @@
+ #include "qemu/osdep.h"
+ #include "qemu/error-report.h"
+ #include "qemu/iov.h"
++#include "qemu/log.h"
++#include "qemu/uuid.h"
+ #include "trace.h"
+ #include "hw/virtio/virtio.h"
+ #include "hw/virtio/virtio-gpu.h"
+@@ -1033,6 +1035,35 @@ static void virgl_cmd_set_scanout_blob(VirtIOGPU *g,
+ }
+ #endif
+ 
++/*
++ * A guest that shares a buffer across devices asks for its UUID first, and
++ * Android's minigbm marks every blob that way. Nothing here imports by UUID,
++ * so any unique one will do.
++ */
++static void virgl_cmd_resource_assign_uuid(VirtIOGPU *g,
++                                           struct virtio_gpu_ctrl_command *cmd)
++{
++    struct virtio_gpu_resource_assign_uuid assign;
++    struct virtio_gpu_resp_resource_uuid resp;
++    QemuUUID uuid;
++
++    VIRTIO_GPU_FILL_CMD(assign);
++    virtio_gpu_bswap_32(&assign, sizeof(assign));
++
++    if (!virtio_gpu_virgl_find_resource(g, assign.resource_id)) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: no resource %d\n", __func__,
++                      assign.resource_id);
++        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
++        return;
++    }
++
++    memset(&resp, 0, sizeof(resp));
++    resp.hdr.type = VIRTIO_GPU_RESP_OK_RESOURCE_UUID;
++    qemu_uuid_generate(&uuid);
++    memcpy(resp.uuid, uuid.data, sizeof(resp.uuid));
++    virtio_gpu_ctrl_response(g, cmd, &resp.hdr, sizeof(resp));
++}
++
+ void virtio_gpu_virgl_process_cmd(VirtIOGPU *g,
+                                       struct virtio_gpu_ctrl_command *cmd)
+ {
+@@ -1102,6 +1133,9 @@ void virtio_gpu_virgl_process_cmd(VirtIOGPU *g,
+     case VIRTIO_GPU_CMD_GET_EDID:
+         virtio_gpu_get_edid(g, cmd);
+         break;
++    case VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID:
++        virgl_cmd_resource_assign_uuid(g, cmd);
++        break;
+ #if VIRGL_VERSION_MAJOR >= 1
+     case VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB:
+         virgl_cmd_resource_create_blob(g, cmd);
+-- 
+2.56.1
+

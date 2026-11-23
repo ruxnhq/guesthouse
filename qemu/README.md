@@ -8,6 +8,8 @@ For a Linux guest the patch adds a device, `nvfwd`, in `hw/misc/nvfwd`. It forwa
 
 Two more changes are for a Linux guest on an AMD card. QEMU's D-Bus display reads the guest's GL frames back into shared memory for a viewer that takes no dmabufs, which the app's viewer doesn't, and `-vga virtio` makes the GL device on a GL display, in the VGA's place on the bus.
 
+An Android guest needs one more on the GL device: `resource_uuid=on` makes it answer the guest's requests for a buffer's UUID. Android's allocator asks for one for every buffer it shares, and the guest's kernel refuses those buffers on a GPU that can't answer.
+
 For an AMD card, QEMU shows the guest a virtio GPU on the host's card, through virglrenderer. The distros' virglrenderer has no AMD native context, so it's built from upstream's source first, with native context for AMD and Venus. It needs libdrm 2.4.121 or newer, libepoxy and Mesa's GBM.
 
 ```sh

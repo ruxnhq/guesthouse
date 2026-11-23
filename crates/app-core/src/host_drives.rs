@@ -288,6 +288,9 @@ fn is_partition(context: &Context, drive: &Drive) -> bool {
 }
 
 pub fn add_drive(context: &Context, machine: &mut Machine, drive: Drive) -> Result<()> {
+    if machine.android() {
+        return Err(Failure::new("Android has no driver for the controller a drive goes on."));
+    }
     machine.drives.push(drive);
     let saved = machine.save(context);
     if saved.is_err() {

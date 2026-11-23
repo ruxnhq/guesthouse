@@ -528,6 +528,11 @@ fn resume(task: &mut Task) -> Result<()> {
 }
 
 pub fn grow(task: &mut Task, gib: u32) -> Result<()> {
+    if task.machine.android() {
+        return Err(Failure::new(
+            "Android sizes its data when it formats it, so an Android machine's disk can't grow.",
+        ));
+    }
     if task.pid().is_some() {
         return Err(Failure::new("The disk can only grow while the VM is off."));
     }

@@ -82,7 +82,11 @@ impl Disk {
 
     fn read_disk(&self) {
         let context = self.0.shared.window.context();
-        let disk = self.0.shared.machine.borrow().disk.clone();
+        // An Android machine's size is its data disk's, where its apps go.
+        let disk = {
+            let machine = self.0.shared.machine.borrow();
+            if machine.android() { machine.android_data.clone() } else { machine.disk.clone() }
+        };
         let this = self.clone();
         in_background(
             &context,
@@ -99,6 +103,8 @@ impl Disk {
 
     fn show_size(&self) {
         let off = is_off(&self.0.status.borrow());
+        // Android's data partition is sized when Android formats it, and isn't grown after.
+        self.0.grow.set_visible(!self.0.shared.machine.borrow().android());
         self.0.grow.set_sensitive(off && self.0.size.get().is_some());
         if let Some(size) = self.0.size.get() {
             let note = if off { "" } else { " It can only grow while the VM is off." };

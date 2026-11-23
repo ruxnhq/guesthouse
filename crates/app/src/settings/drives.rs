@@ -52,8 +52,8 @@ impl Drives {
         let group = adw::PreferencesGroup::builder()
             .title("Drives of This PC")
             .description(HELP)
-            // Ubuntu's machine has no controller to put them on.
-            .visible(shared.machine.borrow().kind != Kind::Linux)
+            // Ubuntu's machine has no controller to put them on, and Android has no driver for one.
+            .visible(shared.machine.borrow().kind != Kind::Linux && !shared.machine.borrow().android())
             .build();
         page.add(&group);
         let add = row_button("Add Drive");

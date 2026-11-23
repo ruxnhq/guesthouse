@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 25] = [
+const SENT_TO_THE_GUEST: [&str; 27] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "api-check.ps1",
@@ -21,6 +21,8 @@ const SENT_TO_THE_GUEST: [&str; 25] = [
     "files.ps1",
     "finish.ps1",
     "helper-stop.ps1",
+    "idle-input.ps1",
+    "idle.ps1",
     "nv-files.ps1",
     "nv-profiles.ps1",
     "nvme-ready.ps1",

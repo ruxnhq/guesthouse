@@ -36,6 +36,7 @@ pub mod held_memory;
 pub mod host;
 pub mod host_drives;
 pub mod host_sensors;
+pub mod idle;
 pub mod input;
 pub mod intel_desktop;
 pub mod iso;

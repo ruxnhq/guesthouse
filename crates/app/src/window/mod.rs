@@ -2,6 +2,7 @@
 //! saving machines. The pages it shows are modules of their own.
 
 mod actions;
+mod go_back;
 mod hero;
 mod keys;
 mod library_page;

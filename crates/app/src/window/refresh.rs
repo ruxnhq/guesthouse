@@ -194,7 +194,10 @@ impl Window {
         let looked = self.0.refresh.borrow().looked;
         let before = row.status();
         if looked && !status.error.is_empty() && status.error != before.error {
-            self.problem(&status.error);
+            match &status.restore_point {
+                Some(point) => self.start_failed(&status.error, &row.machine().borrow(), point),
+                None => self.problem(&status.error),
+            }
         }
         if looked
             && let Some((title, body)) = notify::of_change(&row.machine().borrow().name, &before, status)

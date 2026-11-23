@@ -36,6 +36,7 @@ Write-Output "Anything PowerShell can run."
 - `guest` is `windows` or `ubuntu`. A recipe shows only for a disc of that kind. A plain VM, a Linux you installed yourself and macOS have no recipes, as there's no way in for the steps.
 - `[settings]` is optional, and so is each setting in it: `cores`, `ram_gib` and `disk_gib`, and for a Windows recipe `vram_gib`, the cap on video memory, where 0 is no cap. They are the same settings the dialog and `guesthouse-vm set` have, and they're held to the same limits. What this PC can't give comes down to what it can, and the dialog says so. Picking a recipe puts its sizes in the rows, and you can change them after. On the command line, what you type wins over the recipe.
 - `lean = true` turns on [lean Windows](#lean-windows) for the machine, in a Windows recipe only. The person making the machine can still turn it off.
+- `scan_exclusions` is a list of folders, such as a games library, that Defender's real-time scanning may [leave out](#leaving-folders-out-of-virus-scanning), in a Windows recipe only. The recipe only names them. Whoever makes the machine turns it on, and it's off unless they do.
 - `[steps]` is optional too. `packages` is a list of names, each its own step, and `script` runs after them. On Windows the packages are winget ids and the script is PowerShell. On Ubuntu they are apt packages and the script is run by bash.
 - A name can only be letters, digits and `. _ + -`, and never starts with a hyphen. On Ubuntu, only small letters. At most 30 packages, and the script is at most 32 KiB. A file that says anything else, a word the format doesn't have, or a name that isn't a name, is refused with the line it's on.
 
@@ -77,19 +78,31 @@ It leaves alone, on purpose: Defender, the firewall, SmartScreen, Windows Update
 
 How much faster or smaller it makes a guest hasn't been measured yet. The list says what each item saves in kind, not how much.
 
+## Leaving folders out of virus scanning
+
+This one makes a guest less safe, so it is a question of its own, off unless you say yes, and never turned on by a recipe or by any other choice. A recipe can only name the folders, with `scan_exclusions`. New Machine then has a row *Leave Folders Out of Virus Scanning*, which is off, and `guesthouse-vm new` takes `--skip-scanning on`. With a recipe that names no folders there's no row, so a machine made to try unknown things in, like the Clean box, is never offered it.
+
+What it means, as the row says: Defender, Windows' own virus protection, doesn't check files in those folders as they're written or run. Defender stays on for everything else, and Windows Security shows it as on. It suits a machine for games or builds you trust, where Defender checking every file is much of what makes loading and installing slow, and not one for files or programs you don't know.
+
+Near the end of the install the app gives each folder to Defender's own setting, `Add-MpPreference -ExclusionPath`, through the agent, with the folders as data. It's kept in the machine's folder (`scan-exclusions.json`), and the machine's settings and `guesthouse-vm show` say which folders Defender leaves out for as long as it does. *Scan Them Again* in the settings, or `guesthouse-vm scan-all NAME`, takes them back with `Remove-MpPreference`, and in the guest you can do the same yourself as administrator, or under Windows Security's exclusions. A folder is a full path such as `D:\Games`, of plain characters, at most 8 of them, and never the whole of Windows, Program Files, ProgramData, Users or a profile, nor a Downloads, Desktop, Documents, AppData or Temp folder anywhere.
+
+Why not turn real-time protection off for the whole machine: Windows doesn't let a program do that. Tamper Protection, which is on by default in every Windows nobody manages, blocks it, and a policy or a setting from a script only seems to work. Only a person in Windows Security can turn Tamper Protection off, and even then real-time protection turns itself back on after a while. Folder exclusions are Defender's own setting, which works with Tamper Protection on.
+
 ## On the command line
 
 ```
 guesthouse-vm recipes
-guesthouse-vm new NAME --iso PATH --set-up-for RECIPE [--yes] [--lean on|off]
+guesthouse-vm new NAME --iso PATH --set-up-for RECIPE [--yes] [--lean on|off] [--skip-scanning on|off]
 guesthouse-vm recipe NAME [--no-wait]
 guesthouse-vm lean NAME [--no-wait]
+guesthouse-vm scan-all NAME [--no-wait]
 ```
 
 `recipes` lists them. `RECIPE` is a recipe's key (`app/games` or `yours/mine`), its file's name or its name, and a key is needed only if two fit. `new` prints the whole recipe first, as the dialog shows it, and one of your own that has steps goes ahead only with `--yes`. `recipe` runs a machine's steps again, in the running guest. `show` says how its steps went.
 
 ## What needs a real guest to prove
 
+- Leaving folders out of scanning: that `Add-MpPreference` as SYSTEM takes a folder with Tamper Protection on, that `Get-MpComputerStatus` still says real-time protection is on, and that Windows Security lists the folder under exclusions.
 - Lean Windows: that the Appx cmdlets work in the specialize pass as SYSTEM, that what it removed doesn't come back at the first logon or with a Store update, that each policy takes effect on Home, Pro and IoT Enterprise LTSC, and how much it saves.
 - winget on a freshly installed Windows 11: that `Add-AppxPackage -RegisterByFamilyName` makes it appear, how long that takes, and that the ids in the recipes are right. This is the first thing to try.
 - That the task as the guest's account runs with administrator rights, and that winget works from it.

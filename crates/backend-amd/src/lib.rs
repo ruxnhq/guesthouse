@@ -1677,7 +1677,8 @@ impl Backend for AmdBackend {
         if let Some(video) = &mut self.video {
             video.all_gone();
         }
-        // The core closes no queue and no space of a guest that restarted.
+        // The core has closed the queues and spaces of a guest that restarted by now. What a
+        // session left besides them goes here.
         self.video_starts.all_gone();
         if let Some(watch) = &mut self.video_close {
             watch.all_gone();

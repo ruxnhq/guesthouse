@@ -63,6 +63,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// The address space closes at the next chance to run deferred work, not now.
     pub(super) fn destroy_process(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let process = MessageHeader::process_of(message)?;
+        self.end_process(process);
+        answer_status(Status::SUCCESS, out);
+        Ok(())
+    }
+
+    /// Forgets a process, and closes its address space once nothing waits for it.
+    fn end_process(&mut self, process: u32) {
         self.processes_32_bit.remove(&process);
         self.guest_pids.remove(&process);
         self.programs.remove(&process);
@@ -79,8 +86,36 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             let action = DeferredAction::CloseSpace(space);
             self.deferred.push(crate::deferred::Deferred { waits: Vec::new(), action });
         }
-        answer_status(Status::SUCCESS, out);
-        Ok(())
+    }
+
+    /// A guest that restarted without saying goodbye destroys nothing, so what its last start had
+    /// would stay until the machine stops: the card's memory, and pins on guest pages the new start
+    /// uses again. It all goes here, the way a guest's own destroys would take it: the allocations
+    /// once the GPU is done with them, then the processes and their address spaces. One a copy still
+    /// uses stays, as a destroy would wait for that copy and the guest won't send one again.
+    pub(super) fn end_the_last_start(&mut self) {
+        let mut handles: Vec<u32> =
+            self.allocations.keys().copied().filter(|&handle| !self.copy_uses(handle)).collect();
+        handles.sort_unstable();
+        let mut processes: Vec<u32> =
+            self.spaces.keys().chain(self.guest_pids.keys()).chain(self.programs.keys()).copied().collect();
+        processes.sort_unstable();
+        processes.dedup();
+        if handles.is_empty() && processes.is_empty() {
+            return;
+        }
+        log::info!(
+            "the guest restarted: freeing {} allocations and {} processes of its last start",
+            handles.len(),
+            processes.len()
+        );
+        self.run_deferred();
+        self.free_allocations(handles);
+        self.resources.clear();
+        self.resource_users.clear();
+        self.shared_objects.clear();
+        processes.into_iter().for_each(|process| self.end_process(process));
+        self.run_deferred();
     }
 
     /// Frees an address space, and anything still running or mapped there.

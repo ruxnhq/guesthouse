@@ -345,8 +345,9 @@ impl Watch {
         self.open.retain(|_, (of, _)| *of != space);
     }
 
-    /// Forgets every session: the guest has restarted, and its old queues and spaces will never
-    /// be said to have gone. When the engine last had work is the card's to know, and stays.
+    /// Forgets every session: the guest has restarted. Its old queues and spaces were closed
+    /// already, and this takes whatever was left. When the engine last had work is the card's to
+    /// know, and stays.
     pub fn all_gone(&mut self) {
         self.open.clear();
     }

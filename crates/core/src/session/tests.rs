@@ -817,6 +817,40 @@ mod allocations {
         assert!(session.allocations.is_empty());
     }
 
+    /// A guest reset with no goodbye: nothing is destroyed, and all of it has to go anyway.
+    #[test]
+    fn a_guest_that_restarts_frees_what_its_last_start_had() {
+        let mut session = session();
+        let (_, on_card) = allocate(&mut session, private(0x1000));
+        map(&mut session, on_card, 0, 0, 0);
+        let reply = send(&mut session, &create_message(0x20, &[private(0x2000)]));
+        let guest_backed = u32_at(&reply, 0x10).unwrap();
+        let mut pages = message(Command::SetGuestPages, 0x28);
+        set_u32(&mut pages, 0x1C, guest_backed);
+        set_u32(&mut pages, 0x20, 2);
+        [7u64, 9].iter().for_each(|page| pages.extend_from_slice(&page.to_le_bytes()));
+        assert_eq!(status_of(&send(&mut session, &pages)), SUCCESS);
+        // The first map made the fences' block too, which is the daemon's own and stays.
+        assert!(session.fences.block.is_some());
+        assert_eq!(session.backend().live_memory_blocks(), 3);
+        assert_eq!(session.memory().views.len(), 1);
+        assert_eq!(session.backend().live_address_spaces(), 1);
+
+        session.guest_reset();
+        assert!(session.allocations.is_empty());
+        assert!(session.resources.is_empty());
+        assert_eq!(session.backend().live_memory_blocks(), 1);
+        assert!(session.memory().views.is_empty());
+        assert_eq!(session.backend().live_address_spaces(), 0);
+        assert!(session.spaces.is_empty());
+
+        // Each channel says the guest reset, so it comes twice, and the new start gets a fresh table.
+        session.guest_reset();
+        let (_, handle) = allocate(&mut session, private(0x1000));
+        assert_eq!(map(&mut session, handle, 0, 0, 0).1, SUCCESS);
+        assert_eq!(session.backend().live_memory_blocks(), 2);
+    }
+
     #[test]
     fn naming_an_allocation_frees_it_and_its_resource_goes_with_the_last_one() {
         let mut session = session();

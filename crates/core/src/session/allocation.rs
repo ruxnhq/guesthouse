@@ -303,6 +303,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let mut handles: Vec<u32> = request.handles.iter().filter(|handle| !held_elsewhere(handle)).collect();
         handles.extend(self.resources.remove(&resource).unwrap_or_default());
         self.run_deferred();
+        self.free_allocations(handles);
+        Ok(())
+    }
+
+    /// Frees each allocation once the GPU is done with what it was given, as the guest destroyed it.
+    pub(super) fn free_allocations(&mut self, handles: Vec<u32>) {
         for handle in handles {
             self.allocation_going(handle);
             if self.newest_description.is_some_and(|(_, described, _)| described == handle) {
@@ -320,7 +326,6 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             };
             self.defer(DeferredAction::FreeAllocation(freed));
         }
-        Ok(())
     }
 
     /// Keeps the priorities for the allocations named, or for the whole resource if none is. The

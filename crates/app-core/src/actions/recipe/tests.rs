@@ -282,7 +282,7 @@ fn a_machine_left_off_keeps_its_steps_waiting() {
     let host = RecordingHost::default();
     let mut task = Task::new(&context, &host, "install", vm.clone());
     after_install(&mut task);
-    assert!(task.error.contains("wait for the machine to run"), "{}", task.error);
+    assert!(task.error.contains("run at its first start"), "{}", task.error);
     assert_eq!(crate::recipe::read_outcome(&context, &vm), Outcome::Pending);
     assert!(agent.requests.lock().unwrap().is_empty());
 }
@@ -302,6 +302,53 @@ fn an_install_on_a_throwaway_leaves_its_steps_waiting_and_says_why() {
     assert!(task.error.contains("a throwaway loses what they install"), "{}", task.error);
     assert_eq!(crate::recipe::read_outcome(&context, &vm), Outcome::Pending);
     assert!(crate::recipe::summary(&context, &vm).unwrap().ends_with("gone when it shuts down."));
+}
+
+#[test]
+fn steps_an_install_left_waiting_run_at_the_first_start_once() {
+    let scratch = Scratch::new();
+    let mut context = windows_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::answering(&["up", "started", "begin\nstart 1\nok 1\nend\n"]));
+    context.agent = agent.clone();
+    let recipe = chosen("windows", &["Git.Git"], None);
+    let vm = windows_machine(&context, &recipe);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    after_start(&mut task);
+    assert!(task.error.is_empty(), "{}", task.error);
+    assert_eq!(crate::recipe::read_outcome(&context, &vm), Outcome::Done);
+    assert!(read_task(&context, None).step.starts_with("Setting up for Box"));
+    let asked = agent.requests.lock().unwrap().len();
+    after_start(&mut task);
+    assert_eq!(agent.requests.lock().unwrap().len(), asked, "never a second time");
+}
+
+#[test]
+fn steps_a_start_cut_short_are_not_run_again_by_the_next_start() {
+    let scratch = Scratch::new();
+    let mut context = windows_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::answering(&["up", "started"]));
+    context.agent = agent.clone();
+    let recipe = chosen("windows", &["Git.Git"], None);
+    let vm = windows_machine(&context, &recipe);
+    crate::recipe::write_outcome(
+        &context,
+        &vm,
+        &Outcome::Failed { step: CUT_SHORT_STEP.into(), why: CUT_SHORT.into() },
+    )
+    .unwrap();
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty());
+    let installing = Machine { installing: true, ..vm.clone() };
+    crate::recipe::write_outcome(&context, &vm, &Outcome::Pending).unwrap();
+    let mut task = Task::new(&context, &host, "start", installing);
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty(), "not while the install is unfinished");
+    let mut task = Task::new(&context, &host, "start", Machine { throwaway: true, ..vm });
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty(), "nor on a throwaway, which would lose them");
 }
 
 #[test]

@@ -16,7 +16,9 @@ use crate::text::base64_encode;
 /// A throwaway's run is gone at its next start, and so would be what the steps install.
 const NOT_ON_THROWAWAY: &str = "Its recipe's steps did not run, as a throwaway loses what they install when it \
                                 shuts down. Turn Throwaway off and run them from its settings to keep them.";
-
+/// What a run that a start began and never ended leaves, so that no start runs the steps twice.
+const CUT_SHORT_STEP: &str = "Starting the steps";
+const CUT_SHORT: &str = "The steps were cut short before they ended.";
 /// The most of what a guest said that goes into a line a person reads.
 const WHY_LONGEST: usize = 300;
 
@@ -88,7 +90,7 @@ fn failure_text(chosen: &Chosen, stopped: &Stopped) -> String {
 
 /// What an install does last. The machine is installed and, if it fit, started, so the recipe's steps
 /// run now. Whatever they do, the install has succeeded: a failure is only told. A machine left off
-/// has its steps waiting.
+/// has its steps waiting for its first start.
 pub(super) fn after_install(task: &mut Task) {
     let Some(chosen) = read_chosen(task.context, &task.machine) else { return };
     if task.machine.throwaway && !chosen.recipe.step_names().is_empty() {
@@ -96,7 +98,7 @@ pub(super) fn after_install(task: &mut Task) {
         return;
     }
     if task.pid().is_none() {
-        let note = "Its recipe's steps wait for the machine to run. Run them from its settings.";
+        let note = "Its recipe's steps wait, and run at its first start.";
         task.error = [task.error.as_str(), note].join(" ").trim().to_owned();
         return;
     }
@@ -105,6 +107,29 @@ pub(super) fn after_install(task: &mut Task) {
     // at its end.
     if !task.error.is_empty() && !chosen.recipe.step_names().is_empty() {
         task.step(&task.error.clone());
+    }
+    if let Err(stopped) = stage(task, &chosen) {
+        let told = failure_text(&chosen, &stopped);
+        task.error = [task.error.as_str(), told.as_str()].join(" ").trim().to_owned();
+    }
+}
+
+/// What a start does last, for a machine whose install could not run its recipe's steps, as there was
+/// no room to start it then. They run once, with the same progress as after an install, and a failure
+/// is only told. Before they begin, the machine is marked as having had them cut short, so a start
+/// that ends in the middle of them never leads to a second run by itself: that is the user's to ask.
+pub(super) fn after_start(task: &mut Task) {
+    let Some(chosen) = read_chosen(task.context, &task.machine) else { return };
+    // A throwaway would lose what they install at its next start, as after its install.
+    let waiting = !task.machine.installing
+        && !task.machine.throwaway
+        && read_outcome(task.context, &task.machine) == Outcome::Pending;
+    if !waiting || task.pid().is_none() {
+        return;
+    }
+    let cut_short = Outcome::Failed { step: CUT_SHORT_STEP.to_owned(), why: CUT_SHORT.to_owned() };
+    if write_outcome(task.context, &task.machine, &cut_short).is_err() {
+        return;
     }
     if let Err(stopped) = stage(task, &chosen) {
         let told = failure_text(&chosen, &stopped);

@@ -551,7 +551,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         "start" => {
             // Each start is a look at the library, as the app's is.
             crate::throwaway::delete_finished(task.context);
-            start(task)
+            start(task).map(|()| recipe::after_start(task))
         }
         "stop" => stop(task),
         "force" => force(task, first),

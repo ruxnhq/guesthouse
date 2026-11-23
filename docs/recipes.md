@@ -44,7 +44,7 @@ Write-Output "Anything PowerShell can run."
 
 They run as a stage of their own, after the install has fully succeeded and the machine has started. A step that fails never turns an install that worked into a failed machine: the machine stays, you're told which step stopped and what the guest said, and the machine's settings have the recipe with *Show* and *Run Again*. Steps run in order, and the first that fails stops the rest. Running again starts from the top, and a package that's already there is skipped.
 
-If the PC has no room to start the machine after its install, it stays off with its steps waiting. Start it, and run them from its settings.
+If the PC has no room to start the machine after its install, it stays off with its steps waiting, and they run at its first start, with the same progress, once. A start that ends in the middle of them doesn't run them again by itself: the machine's settings say they were cut short, and *Run Again* is yours to press.
 
 How the steps went is kept with the machine's other notes about its guest. A snapshot keeps it, so going back to one from before the steps ran says they haven't. A throwaway loses what they install when it shuts down, so an install there, as Start Over does, leaves its steps waiting and says why. Run Again on a throwaway runs them for that run only, and its next start says they haven't run.
 

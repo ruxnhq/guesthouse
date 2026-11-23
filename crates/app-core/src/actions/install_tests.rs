@@ -538,7 +538,7 @@ fn a_recipes_steps_wait_when_the_machine_ends_off_and_say_so() {
     let scratch = Scratch::new();
     let (context, made, asked, error) = install_to_the_end(&scratch, Some(RECIPE));
     assert!(!made.installing, "the machine is installed");
-    assert!(error.contains("isn't room") && error.contains("recipe's steps wait"), "{error}");
+    assert!(error.contains("isn't room") && error.contains("run at its first start"), "{error}");
     assert_eq!(
         asked.last().map(String::as_str),
         Some("Stop-Computer -Force"),

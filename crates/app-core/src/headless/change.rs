@@ -22,7 +22,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 17] = [
+const SETTINGS: [&str; 18] = [
     "cores",
     "ram",
     "vram",
@@ -40,6 +40,7 @@ const SETTINGS: [&str; 17] = [
     "start-unjailed",
     "remote-desktop",
     "ssh",
+    "auto-snapshot",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -161,6 +162,10 @@ pub(super) fn set(
         "dlss" => {
             only_for_nvidia(&machine, key)?;
             machine.nvapi_wrapper_off = !on_or_off(key, value)?;
+        }
+        "auto-snapshot" => {
+            only_for_windows(&machine, key)?;
+            machine.auto_snapshot = Some(on_or_off(key, value)?);
         }
         "start-unjailed" => {
             must_be_off(context, &machine)?;
@@ -303,6 +308,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
+        line(out, "auto-snapshot", &switch(machine.auto_snapshot_on()))?;
         if machine.windows_maker() == Some(GpuMaker::Nvidia) {
             line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
         }

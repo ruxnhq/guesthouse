@@ -55,18 +55,59 @@ pub(super) enum Command<'a> {
     List,
     Status(&'a str),
     Show(&'a str),
-    Start { name: &'a str, wait: bool },
-    Install { name: &'a str, wait: bool },
+    Start {
+        name: &'a str,
+        wait: bool,
+    },
+    Install {
+        name: &'a str,
+        wait: bool,
+    },
     Stop(&'a str),
     Off(&'a str),
     Log(&'a str),
     Standalone(&'a str),
-    Idle { name: &'a str, minutes: Option<&'a str> },
-    New { name: &'a str, options: NewOptions<'a> },
-    Set { name: &'a str, key: &'a str, value: &'a str },
-    Forward { name: &'a str, change: Forwarding<'a> },
-    Setup { driver: Option<&'a str>, card: Option<&'a str> },
-    Remove { name: &'a str, yes: bool },
+    Idle {
+        name: &'a str,
+        minutes: Option<&'a str>,
+    },
+    New {
+        name: &'a str,
+        options: NewOptions<'a>,
+    },
+    Set {
+        name: &'a str,
+        key: &'a str,
+        value: &'a str,
+    },
+    Forward {
+        name: &'a str,
+        change: Forwarding<'a>,
+    },
+    Setup {
+        driver: Option<&'a str>,
+        card: Option<&'a str>,
+    },
+    Remove {
+        name: &'a str,
+        yes: bool,
+    },
+    Snapshots(&'a str),
+    /// Back to the named snapshot, or with none to the one taken before a start that failed.
+    GoBack {
+        name: &'a str,
+        snapshot: Option<&'a str>,
+        yes: bool,
+    },
+    TakeSnapshot {
+        name: &'a str,
+        snapshot: &'a str,
+    },
+    DeleteSnapshot {
+        name: &'a str,
+        snapshot: &'a str,
+        yes: bool,
+    },
 }
 
 pub(super) fn mistake(why: impl fmt::Display) -> Problem {
@@ -157,6 +198,32 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
             } else {
                 Command::Install { name, wait }
             })
+        }
+        "snapshots" => {
+            let split = Split::new(command, rest, &[], &[])?;
+            Ok(Command::Snapshots(split.exactly(command, machine, 1)?[0]))
+        }
+        "go-back" => {
+            let split = Split::new(command, rest, &[], &[YES])?;
+            let words = match split.words.len() {
+                2 => &split.words[..],
+                _ => split.exactly(command, machine, 1)?,
+            };
+            Ok(Command::GoBack { name: words[0], snapshot: words.get(1).copied(), yes: split.has(YES) })
+        }
+        "take-snapshot" => {
+            let split = Split::new(command, rest, &[], &[])?;
+            let [name, snapshot] = split.exactly(command, "a machine and a name", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::TakeSnapshot { name, snapshot })
+        }
+        "delete-snapshot" => {
+            let split = Split::new(command, rest, &[], &[YES])?;
+            let [name, snapshot] = split.exactly(command, "a machine and a snapshot", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::DeleteSnapshot { name, snapshot, yes: split.has(YES) })
         }
         "remove" => {
             let split = Split::new(command, rest, &[], &[YES])?;

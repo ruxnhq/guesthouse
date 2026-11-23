@@ -10,6 +10,10 @@ guesthouse-vm stop NAME
 guesthouse-vm off NAME
 guesthouse-vm log NAME
 guesthouse-vm command NAME
+guesthouse-vm snapshots NAME
+guesthouse-vm take-snapshot NAME SNAPSHOT
+guesthouse-vm go-back NAME [SNAPSHOT] [--yes]
+guesthouse-vm delete-snapshot NAME SNAPSHOT [--yes]
 guesthouse-vm idle NAME [--minutes N]
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
@@ -33,6 +37,7 @@ NAME is a machine's id, or its name in any case. If a name fits two machines, it
 - `list` has a line for each machine: its name, id, kind and what it's doing.
 - `start` does what Start does in the app, and prints each step as the task writes it to the log. It ends when the machine is ready, with exit code 0, or prints what went wrong and exits with 1. `--no-wait` returns as soon as the start is under way, and `status` says how far it is.
 - `stop` asks the guest to shut down and waits. If the guest doesn't shut down in time, the VM is turned off and it says so. `off` is Force Off: the power is cut and the guest gets no chance to save anything.
+- A Windows machine with `auto-snapshot` on takes a snapshot first at a start when a change that can leave Windows unable to come up is due, as the app's Start does. See [A snapshot before a risky start](#a-snapshot-before-a-risky-start).
 - `log` says where the log is and shows the end of it. The log is one file for every machine, so the lines aren't sorted by machine.
 
 ## Reading how busy a machine is
@@ -88,12 +93,32 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `only-through` | an interface's name such as wg0, or off, with NAT | not Ubuntu |
 | `dns` | an IPv4 address, or auto | not Ubuntu |
 | `share` | a folder, or `none` | not Ubuntu |
+| `auto-snapshot` | on or off: whether a start takes a snapshot first when it has a risky change to make | Windows |
 | `remote-desktop` | on or off | Windows |
 | `ssh` | on or off | Windows |
 
 These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
+`auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which.
+
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
+
+## A snapshot before a risky start
+
+This is off until you turn it on for a machine, with `set NAME auto-snapshot on` or the switch in its Snapshots settings. A snapshot needs the machine off, so a Windows machine with it on takes it as `start` begins, before QEMU runs. It does so only if a change is due that can leave Windows unable to come up, and no successful start has met that change yet:
+
+- Windows is to write the driver package for its card maker's vendor ID, or this is the first start that shows that ID.
+- The disk is due to move to NVMe, or is on NVMe and has not started there yet.
+- A new build, or a new host driver, has files to put in the guest.
+- A new build of the display driver is to go into Windows.
+
+A start with none of these due takes none, and costs a few small reads. The snapshot is the machine's own, named for what it is before and when, such as `Automatic: before the vendor ID, 23 Nov, 14:05`, and it replaces the one before it. Snapshots you took in the app are never touched. A snapshot that can't be taken, as something else has the disk open or there is no room, is said as a note and the start goes on. A disk that isn't a qcow2 file can't hold one, so it gets none, and the app's settings say so. It also holds the machine's notes about its guest (which vendor ID it shows, and where its disk is), so going back puts them back with the disk.
+
+If that start then fails, `start` says so and tells you the snapshot, and `go-back NAME` goes back to it. It shows what is lost and does it with `--yes`. The machine must be off. A later start that works clears the offer, and so does going back. `snapshots NAME` lists them all, with the automatic one marked.
+
+`snapshots NAME` gives each snapshot's tag in brackets. `take-snapshot NAME SNAPSHOT` takes one by that name, as Take Snapshot does in the app. `go-back NAME SNAPSHOT` goes back to the snapshot of that name, or of that tag when two share a name, and `delete-snapshot NAME SNAPSHOT` deletes it. Both say what is lost and do it only with `--yes`. All three refuse where the app's Snapshots page does: while the machine is running or busy with a task, and before its install has finished. Linux machines (Ubuntu) and plain machines take none: an Ubuntu machine has no firmware file for a snapshot to keep, and a plain machine has no change that the app makes to its guest.
+
+A change made to a running Windows with no start after it, such as installing the display driver from the settings, takes no snapshot, as there is no moment to take one. Starting a machine with your own QEMU command from `command` takes none either.
 
 ## Setup
 

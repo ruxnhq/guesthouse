@@ -347,7 +347,7 @@ impl VmHost for LocalHost<'_> {
             *kept = Some(ThrowawayRun::prepare(self.context, machine)?);
         }
         let run = kept.as_ref().filter(|_| throwaway);
-        let plan = run.map_or_else(|| plan.clone(), |run| run.applied_to(plan));
+        let plan = run.map_or_else(|| Ok(plan.clone()), |run| run.applied_to(plan))?;
         let handed = Handed { drives: &drives, throwaway: run };
         let started = if !plan.is_gpu() {
             self.start_plain(&plan, machine, &handed)

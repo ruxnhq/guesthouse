@@ -256,8 +256,9 @@ impl ThrowawayRun {
     }
 
     /// The plan with this run's overlay, firmware settings and TPM in place of the machine's own.
-    pub fn applied_to(&self, plan: &VmPlan) -> VmPlan {
-        VmPlan {
+    /// A jail chosen before has its backing files found again, as the disk is one of them now.
+    pub fn applied_to(&self, plan: &VmPlan) -> Result<VmPlan> {
+        let applied = VmPlan {
             throwaway: Some(plan.disk.clone()),
             disk: throwaway_disk(),
             vars: self
@@ -272,7 +273,9 @@ impl ThrowawayRun {
                 (boot, _) => boot.clone(),
             },
             ..plan.clone()
-        }
+        };
+        let jail = applied.jail.clone().map(|jail| applied.with_backing_files(jail)).transpose()?;
+        Ok(VmPlan { jail, ..applied })
     }
 
     /// Leaves the overlay open in what this command starts, at [`THROWAWAY_FDS`].

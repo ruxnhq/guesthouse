@@ -109,7 +109,7 @@ fn a_run_writes_to_an_overlay_with_no_name_and_the_disk_stays_clean() {
     assert!(qemu_io(&overlay, "write -P 34 0 64k"));
     assert!(qemu_io(&machine.disk, "read -P 17 0 64k"), "the disk is as it was");
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
-    let applied = run.applied_to(&plan);
+    let applied = run.applied_to(&plan).unwrap();
     assert_eq!(
         (applied.disk.as_str(), applied.throwaway.as_deref()),
         ("/dev/fdset/50", Some(machine.disk.as_str()))
@@ -211,7 +211,7 @@ fn the_jail_lets_qemu_read_the_disk_and_write_nothing_by_the_overlays_name() {
     let machine = throwaway(&scratch, &context);
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
     let run = ThrowawayRun::prepare(&context, &machine).unwrap();
-    let plan = run.applied_to(&plan);
+    let plan = run.applied_to(&plan).unwrap();
     let jail = crate::vm_args::QemuJail {
         launcher: "/l".into(),
         namespaces: true,
@@ -233,6 +233,35 @@ fn the_jail_lets_qemu_read_the_disk_and_write_nothing_by_the_overlays_name() {
     assert_eq!(grants(&machine.disk), [Grant::Read]);
     assert!(grants("/dev/fdset/50").is_empty());
     assert_eq!(grants(&plan.vars), [Grant::Write]);
+}
+
+#[test]
+fn a_jail_chosen_before_the_run_still_lets_qemu_read_the_disk() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = throwaway(&scratch, &context);
+    let jail = crate::vm_args::QemuJail {
+        launcher: "/l".into(),
+        namespaces: true,
+        qemu_sandbox: false,
+        sound_socket: None,
+        backing_files: Vec::new(),
+    };
+    // Ubuntu and macOS choose their jail before the host puts the run in place.
+    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    let plan = VmPlan { jail: Some(plan.with_backing_files(jail).unwrap()), ..plan };
+    let run = ThrowawayRun::prepare(&context, &machine).unwrap();
+    let plan = run.applied_to(&plan).unwrap();
+    let jail = plan.jail.clone().unwrap();
+    assert_eq!(jail.backing_files, [PathBuf::from(&machine.disk)]);
+    let granted = plan.qemu_jail_plan(&jail);
+    let grants: Vec<_> = granted
+        .paths
+        .iter()
+        .filter(|(_, at)| at == Path::new(&machine.disk))
+        .map(|(grant, _)| *grant)
+        .collect();
+    assert_eq!(grants, [Grant::Read]);
 }
 
 /// A guest's agent that answers only to its token, and takes a new one as the real one does.
@@ -317,7 +346,7 @@ fn a_macs_opencore_image_and_qemus_home_are_a_runs_own_copies() {
         home: folder.join("gpu-cache"),
     };
     let plan = VmPlan::new(&context, &machine, Boot::Macos(boot), slots::first(), 0);
-    let Boot::Macos(applied) = run.applied_to(&plan).boot else { panic!("still a Mac") };
+    let Boot::Macos(applied) = run.applied_to(&plan).unwrap().boot else { panic!("still a Mac") };
     let own = run_folder(&context, &machine);
     assert_eq!(
         (applied.opencore.as_path(), applied.home.as_path()),

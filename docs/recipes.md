@@ -60,7 +60,7 @@ Nothing is changed in your ISO. When it's on, the answer disc carries `guest/lea
 
 It only does two kinds of thing, both documented and both undone the documented way:
 
-- It removes these app packages, by their package name, which is the same in every language and edition, compared whole and never as a pattern. One that isn't there is skipped, so Windows 11 IoT Enterprise LTSC, which has few of them, is fine. Each comes back from the Store.
+- It removes these app packages, by their package name, which is the same in every language and edition, compared whole and never as a pattern. One that isn't there is skipped, so Windows 11 IoT Enterprise LTSC, which has few of them, is fine. Which ones a disc has can't be told from the ISO without reading the whole install image, so New Machine shows all it may take out, and once the install has run, the machine's settings and `show` say which it did take out. On a Windows 11 build 26300 disc that was 12 of the 22. Each comes back from the Store.
   - Phone Link (`Microsoft.YourPhone`), Teams (`MSTeams`, and `MicrosoftTeams` on the first Windows 11 releases), Cortana (`Microsoft.549981C3F5F10`): a program that runs in the background from logon.
   - Copilot (`Microsoft.Copilot`): a program that can start at logon, and its updates.
   - Tips (`Microsoft.Getstarted`): the tips it shows after the first logon.

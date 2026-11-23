@@ -130,8 +130,9 @@ pub const LEFT_ALONE: [&str; 6] = [
 /// The whole of it, as the user reads it before the machine is made.
 pub fn what_it_does() -> String {
     let mut text = String::from(
-        "Lean Windows takes out these apps before the account first logs on, and again after the install \
-         from every account:\n",
+        "Lean Windows takes out these apps where this Windows has them, before the account first logs on, \
+         and again after the install from every account. Some are only on older Windows, and the \
+         machine's settings say afterwards which it took out:\n",
     );
     for app in &APPS {
         let _ = writeln!(text, "- {} ({}): {}", app.title, app.name, app.saves);

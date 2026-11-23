@@ -9,7 +9,7 @@
 use super::Task;
 use crate::agent::{QUICK_SECONDS, guest_script};
 use crate::failure::{Failure, Result};
-use crate::lean::{SCRIPT, guest_data, is_lean};
+use crate::lean::{APPS, SCRIPT, guest_data, is_lean, names_taken_out, read_outcome, write_outcome};
 use crate::text::base64_encode;
 use std::time::Duration;
 
@@ -18,6 +18,9 @@ const START_SECONDS: u64 = 60;
 const START_MARK: &str = "started";
 const STATUS_ASK: &str =
     "Get-Content -LiteralPath C:\\gpupv\\lean\\status.txt -Raw -ErrorAction SilentlyContinue";
+/// What both runs said: Setup's, before the first logon, and the one through the agent.
+const LOGS_ASK: &str = "Get-Content -LiteralPath C:\\gpupv\\lean-setup.log, C:\\gpupv\\lean\\status.txt \
+                        -ErrorAction SilentlyContinue";
 /// Nobody has timed it in a guest yet. Each package takes seconds, so this is generous, and the task in
 /// the guest stops itself at 30.
 const LIMIT_MINUTES: u64 = 20;
@@ -87,13 +90,31 @@ fn run(task: &Task) -> std::result::Result<(), String> {
     }
 }
 
+/// Keeps which apps the runs took out, as only those this Windows had are. A note that can't be kept
+/// costs only the settings page's words.
+fn note_taken_out(task: &Task) {
+    let found = names_taken_out(&task.ask_guest(LOGS_ASK, QUICK_SECONDS));
+    let mut outcome = read_outcome(task.context, &task.machine);
+    let before = outcome.taken_out.clone();
+    outcome.taken_out = APPS
+        .iter()
+        .map(|app| app.name.to_owned())
+        .filter(|name| before.contains(name) || found.contains(name))
+        .collect();
+    if outcome.taken_out != before {
+        let _ = write_outcome(task.context, &task.machine, &outcome);
+    }
+}
+
 /// Part of an install, once its desktop has been checked. A machine made without the choice is not
 /// touched, and one where it didn't all happen is installed all the same, with a note.
 pub(super) fn after_install(task: &mut Task) {
     if !is_lean(task.context, &task.machine) {
         return;
     }
-    if let Err(why) = run(task) {
+    let ran = run(task);
+    note_taken_out(task);
+    if let Err(why) = ran {
         let note = format!("Lean Windows did not all happen: {why}. {AGAIN}");
         task.error = [task.error.as_str(), note.as_str()].join(" ").trim().to_owned();
     }
@@ -111,7 +132,9 @@ pub(super) fn run_again(task: &mut Task) -> Result<()> {
     if task.pid().is_none() {
         return Err(Failure::new("Start the machine first. This runs in the guest."));
     }
-    run(task).map_err(|why| Failure(format!("Lean Windows did not all happen: {why}.")))
+    let ran = run(task);
+    note_taken_out(task);
+    ran.map_err(|why| Failure(format!("Lean Windows did not all happen: {why}.")))
 }
 
 #[cfg(test)]

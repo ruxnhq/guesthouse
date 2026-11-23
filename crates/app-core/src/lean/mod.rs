@@ -8,8 +8,12 @@
 //! (`actions/lean.rs`), to catch what reached the account anyway.
 
 mod list;
+mod record;
 
 pub use list::{APPS, LEFT_ALONE, POLICIES, guest_data, what_it_does};
+pub use record::{
+    Outcome, RESULT_FILE, names_back, names_taken_out, read_outcome, state_text, titles, write_outcome,
+};
 
 use crate::context::Context;
 use crate::failure::{Failure, Result};

@@ -106,3 +106,19 @@ fn running_it_again_is_only_for_a_lean_machine_that_runs() {
     let mut task = Task::new(&context, &host, LEAN_TASK, vm);
     run_again(&mut task).unwrap();
 }
+
+#[test]
+fn the_machine_keeps_which_apps_this_windows_had_and_lost() {
+    let scratch = Scratch::new();
+    let logs = "begin\ndeprovisioned Microsoft.BingNews\ndeprovisioned Microsoft.Windows.DevHome\nend 0\n\
+                begin\nremoved MSTeams\nend 0\n";
+    let (context, _) = lean_context(&scratch, &["started", "begin\nend 0\n", logs]);
+    let vm = windows_machine(&context, true);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "install", vm.clone());
+    after_install(&mut task);
+    let outcome = crate::lean::read_outcome(&context, &vm);
+    assert_eq!(outcome.taken_out, ["MSTeams", "Microsoft.BingNews", "Microsoft.Windows.DevHome"]);
+    let text = crate::lean::state_text(&context, &vm).unwrap();
+    assert_eq!(text, "Took out Teams (free), News, Dev Home, which this Windows had.");
+}

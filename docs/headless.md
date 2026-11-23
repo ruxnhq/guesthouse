@@ -85,7 +85,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 `--set-up-for` makes a Windows or Ubuntu machine for a [recipe](recipes.md): it prints the whole recipe first, takes the recipe's sizes unless you typed your own, and runs the recipe's steps once the install has finished and the machine is up. `recipes` lists them, and `recipe NAME` runs a machine's steps again. A recipe of your own that has steps goes ahead only with `--yes` after you've read it.
 
-`--lean on` makes a Windows machine as [lean Windows](recipes.md#lean-windows), without the apps Windows adds for every account, and prints all it takes out and switches off first. It's off unless you say so or the recipe turns it on, and `--lean off` turns a recipe's off. `show` says `lean on` for a machine made with it, and `lean NAME` does it again in the running guest.
+`--lean on` makes a Windows machine as [lean Windows](recipes.md#lean-windows), without the apps Windows adds for every account, and prints all it takes out and switches off first. It's off unless you say so or the recipe turns it on, and `--lean off` turns a recipe's off. `show` says `lean on` for a machine made with it, and which apps it took out, and `lean NAME` does it again in the running guest.
 
 `--skip-scanning on` has Defender leave out of its real-time scanning the folders the recipe names, and prints what that means first. It's off unless you say it, a recipe can't turn it on, and it needs a recipe that names folders. [Recipes](recipes.md#leaving-folders-out-of-virus-scanning) says what it means and doesn't. `show` says on its `defender` line which folders Defender leaves out, for as long as it does, and `scan-all NAME` has Defender scan them again.
 

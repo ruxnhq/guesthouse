@@ -227,7 +227,7 @@ fn show_status(context: &Context, machine: &Machine, out: &mut dyn Write) -> Res
         writeln!(out, "{note}")?;
     }
     if let Some(point) = &found.restore_point {
-        writeln!(out, "{}", snapshots::offer(&machine.id, &point.name))?;
+        writeln!(out, "{}", snapshots::offer(&machine.id, point))?;
     }
     // A machine held to one interface that has gone still runs, with no network.
     let in_use = found.slot.and_then(|_| network_in_use(context, machine));
@@ -319,7 +319,7 @@ fn start(context: &Context, machine: &Machine, wait: bool, out: &mut dyn Write) 
         let mut failure =
             follow_up(&found, format!("{name} did not start. The log has more: {}", log.display()));
         if let Some(point) = &found.restore_point {
-            failure.0 = format!("{} {}", failure.0, snapshots::offer(&machine.id, &point.name));
+            failure.0 = format!("{} {}", failure.0, snapshots::offer(&machine.id, point));
         }
         return Err(failure);
     }

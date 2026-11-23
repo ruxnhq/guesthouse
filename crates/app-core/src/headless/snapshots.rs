@@ -4,6 +4,7 @@
 //! [`crate::auto_snapshot`], and it holds here as it does for the app's Start, as both run the same task.
 
 use super::run_task_with;
+use crate::auto_snapshot::RestorePoint;
 use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::machine::Machine;
@@ -14,8 +15,16 @@ use jiff::tz::TimeZone;
 use std::io::Write;
 
 /// What a failed start tells, to say how to go back.
-pub(super) fn offer(id: &str, name: &str) -> String {
-    format!("Guesthouse took a snapshot before it, {name}. guesthouse-vm go-back {id} goes back to it.")
+pub(super) fn offer(id: &str, point: &RestorePoint) -> String {
+    let name = &point.name;
+    if point.automatic {
+        format!("Guesthouse took a snapshot before it, {name}. guesthouse-vm go-back {id} goes back to it.")
+    } else {
+        format!(
+            "It started from the snapshot {name}, which it had gone back to. guesthouse-vm go-back {id} goes \
+             back to it again."
+        )
+    }
 }
 
 fn when(taken: i64) -> String {

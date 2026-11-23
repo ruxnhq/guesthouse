@@ -26,10 +26,14 @@ impl Window {
     }
 
     fn ask_to_go_back(&self, machine: &Machine, point: &RestorePoint) {
+        let taken = if point.automatic {
+            "Guesthouse took this snapshot just before it."
+        } else {
+            "It started from this snapshot, which it had just gone back to."
+        };
         let body = format!(
-            "{} did not start after a change. Guesthouse took this snapshot just before it. Going back \
-             undoes everything done on the machine since: the change, and anything else. Other snapshots \
-             stay. This cannot be undone.",
+            "{} did not start after a change. {taken} Going back undoes everything done on the machine \
+             since: the change, and anything else. Other snapshots stay. This cannot be undone.",
             machine.name
         );
         let (this, machine, tag) = (self.clone(), machine.clone(), point.tag.clone());

@@ -226,6 +226,7 @@ fn a_throwaway_takes_none_and_offers_no_way_back_as_each_start_is_clean() {
         name: "Before".into(),
         pending: true,
         covered: vec![],
+        back_to: None,
     };
     record::write(&context, &machine, &left).unwrap();
     assert_eq!(restore_point(&context, &machine), None, "a failed run is undone by the next start");
@@ -405,4 +406,88 @@ fn a_new_host_driver_of_any_maker_is_a_new_change() {
         let after = files(&machine);
         assert!(after.ends_with(":32.0.1") && after != before, "{maker:?}: {after}");
     }
+}
+
+#[test]
+fn going_back_to_a_users_snapshot_keeps_the_automatic_one_and_a_failed_start_offers_the_users() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows(&context, &scratch);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "take_snapshot", machine.clone());
+    take_snapshot(&mut task, "Mine").unwrap();
+    start(&context, &machine, true);
+    let automatic = record::read(&context, &machine).tag;
+    let mine = list_snapshots(&context, &machine).into_iter().find(|found| !found.automatic).unwrap().tag;
+    let mut task = Task::new(&context, &host, "go_back", machine.clone());
+    go_back(&mut task, &mine).unwrap();
+    let after = start(&context, &machine, false);
+    assert!(!after.auto.covers.is_empty(), "the changes it had met are due again");
+    let found = names(&context, &machine);
+    assert_eq!(found.len(), 2, "no double of the disk it went back to: {found:?}");
+    assert!(
+        list_snapshots(&context, &machine).iter().any(|found| found.tag == automatic),
+        "the automatic one stays"
+    );
+    let offered = restore_point(&context, &machine).unwrap();
+    assert_eq!(
+        (offered.tag.as_str(), offered.name.as_str(), offered.automatic),
+        (mine.as_str(), "Mine", false)
+    );
+    // A try again after the failure takes none either, and still offers it.
+    start(&context, &machine, false);
+    assert_eq!(restore_point(&context, &machine), Some(offered));
+    assert_eq!(names(&context, &machine).len(), 2);
+    start(&context, &machine, true);
+    assert_eq!(restore_point(&context, &machine), None, "a start that works ends it");
+    assert!(record::read(&context, &machine).back_to.is_none());
+}
+
+#[test]
+fn a_disk_written_since_going_back_or_a_snapshot_gone_takes_its_own_snapshot_again() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows(&context, &scratch);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "take_snapshot", machine.clone());
+    take_snapshot(&mut task, "Mine").unwrap();
+    let mine = list_snapshots(&context, &machine)[0].tag.clone();
+    let mut task = Task::new(&context, &host, "go_back", machine.clone());
+    go_back(&mut task, &mine).unwrap();
+    // A start with the switch off, or anything else, wrote to the disk since.
+    let mut record = record::read(&context, &machine);
+    record.back_to.as_mut().unwrap().written -= 1;
+    record::write(&context, &machine, &record).unwrap();
+    start(&context, &machine, false);
+    let offered = restore_point(&context, &machine).unwrap();
+    assert!(offered.automatic && offered.tag != mine, "{offered:?}");
+    // Going back again, and the snapshot it went back to deleted before the start.
+    let mut task = Task::new(&context, &host, "go_back", machine.clone());
+    go_back(&mut task, &mine).unwrap();
+    crate::snapshots::delete_snapshot(&mut task, &mine).unwrap();
+    assert!(record::read(&context, &machine).back_to.is_none());
+    start(&context, &machine, false);
+    assert!(restore_point(&context, &machine).unwrap().automatic);
+}
+
+#[test]
+fn taking_or_deleting_another_snapshot_after_going_back_leaves_the_disk_the_one_it_went_back_to() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows(&context, &scratch);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "take_snapshot", machine.clone());
+    take_snapshot(&mut task, "Mine").unwrap();
+    take_snapshot(&mut task, "Old").unwrap();
+    start(&context, &machine, true);
+    let found = list_snapshots(&context, &machine);
+    let tag_of = |name: &str| found.iter().find(|snapshot| snapshot.name == name).unwrap().tag.clone();
+    let mut task = Task::new(&context, &host, "go_back", machine.clone());
+    go_back(&mut task, &tag_of("Mine")).unwrap();
+    take_snapshot(&mut task, "Just after").unwrap();
+    crate::snapshots::delete_snapshot(&mut task, &tag_of("Old")).unwrap();
+    start(&context, &machine, false);
+    let offered = restore_point(&context, &machine).unwrap();
+    assert!(!offered.automatic && offered.name == "Mine", "{offered:?}");
+    assert_eq!(names(&context, &machine).iter().filter(|(_, automatic)| *automatic).count(), 1);
 }

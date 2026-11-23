@@ -141,7 +141,10 @@ pub(crate) fn make_snapshot(task: &mut Task, name: &str, automatic: bool) -> Res
     snapshot_state::keep(context, &machine, &snapshot_file(context, &machine, &tag, ".state"))?;
     let saved = json!({"name": name, "auto": automatic, "nvme": machine.nvme});
     fs::write(snapshot_file(context, &machine, &tag, ".json"), saved.to_string())?;
-    if let Err(failure) = change_snapshots(context, &machine, &["-c", &tag]) {
+    let made = auto_snapshot::record::keeping_back_to(context, &machine, || {
+        change_snapshots(context, &machine, &["-c", &tag])
+    });
+    if let Err(failure) = made {
         remove_snapshot_files(context, &machine, &tag)?;
         return Err(failure);
     }
@@ -188,7 +191,7 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
     snapshot_state::restore(context, &task.machine, &snapshot_file(context, &machine, tag, ".state"))?;
     let saved = snapshot_file(context, &machine, tag, ".json");
     snapshot_state::restore_disk_place(context, &mut task.machine, saved)?;
-    auto_snapshot::record::disk_changed(context, &machine);
+    auto_snapshot::record::went_back(context, &task.machine, tag, &snapshot.name);
     Ok(())
 }
 
@@ -201,7 +204,9 @@ pub fn delete_snapshot(task: &mut Task, tag: &str) -> Result<()> {
 /// Deletes the snapshot from the disk and what is kept beside it.
 pub(crate) fn delete_tag(context: &Context, machine: &Machine, tag: &str) -> Result<()> {
     find_snapshot(context, machine, tag)?;
-    change_snapshots(context, machine, &["-d", tag])?;
+    auto_snapshot::record::keeping_back_to(context, machine, || {
+        change_snapshots(context, machine, &["-d", tag])
+    })?;
     remove_snapshot_files(context, machine, tag)
 }
 

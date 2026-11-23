@@ -409,6 +409,7 @@ fn an_install_forgets_what_the_old_windows_had_taken_in() {
         name: "Automatic: before the vendor ID".into(),
         pending: true,
         covered: vec!["files:old".into()],
+        back_to: None,
     };
     crate::auto_snapshot::record::write(&context, &vm, &failed_start).unwrap();
     let host = InstallHost { inner: RecordingHost::default(), context: &context };

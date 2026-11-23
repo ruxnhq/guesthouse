@@ -7,6 +7,9 @@
 //! There is one of these per machine, and a new one replaces it. Snapshots the user takes are never
 //! touched: this only ever deletes ones its own record marks as automatic.
 //!
+//! A start right after going back to a snapshot takes none: that snapshot already is the disk the
+//! start begins from, so it is what a failed start offers, and the automatic one there is stays.
+//!
 //! None of this may stop a start that would have worked. A snapshot that cannot be taken is said and
 //! the start goes on.
 
@@ -89,6 +92,24 @@ pub fn before_start(task: &mut Task) {
         task.auto.covers = signatures;
         return;
     }
+    if record.back_to.is_some() {
+        if still_back(context, &machine, &record) {
+            // The disk is the snapshot it went back to, which is the way back to it already. One
+            // taken now would only be its double, and would replace the automatic one there is.
+            record.pending = true;
+            match record::write(context, &machine, &record) {
+                Ok(()) => task.auto.covers = signatures,
+                Err(failure) => {
+                    let _ = write_log(
+                        context,
+                        &format!("auto snapshot: could not write its record: {}", failure.0),
+                    );
+                }
+            }
+            return;
+        }
+        record.back_to = None;
+    }
     if !disk_can_hold(&machine) {
         let _ = write_log(context, &format!("auto snapshot: {DISK_CANNOT}"));
         task.auto.covers = signatures;
@@ -99,7 +120,7 @@ pub fn before_start(task: &mut Task) {
     match make_snapshot(task, &name, true) {
         Ok(tag) => {
             let _ = delete_all_but(task.context, &task.machine, &tag);
-            record = record::Record { tag, name, pending: true, covered: record.covered };
+            record = record::Record { tag, name, pending: true, covered: record.covered, back_to: None };
             if let Err(failure) = record::write(context, &machine, &record) {
                 let _ =
                     write_log(context, &format!("auto snapshot: could not write its record: {}", failure.0));
@@ -112,6 +133,13 @@ pub fn before_start(task: &mut Task) {
             task.auto.note = format!("No snapshot was taken before this start: {}", failure.0);
         }
     }
+}
+
+/// Whether the disk is still as going back left it, and the snapshot it went back to is still there.
+fn still_back(context: &Context, machine: &Machine, record: &record::Record) -> bool {
+    let Some(back) = &record.back_to else { return false };
+    record::disk_written(machine) == Some(back.written)
+        && list_snapshots(context, machine).iter().any(|snapshot| snapshot.tag == back.tag)
 }
 
 /// Deletes the automatic snapshots but `keep`, and never any other. The first failure stops it.
@@ -140,10 +168,11 @@ pub fn delete_all(context: &Context, machine: &Machine) -> Result<()> {
 /// can be gone by the next one, and a user can have turned the switch off between.
 pub fn start_succeeded(task: &Task) {
     let mut record = record::read(task.context, &task.machine);
-    if !record.pending && task.auto.covers.is_empty() {
+    if !record.pending && task.auto.covers.is_empty() && record.back_to.is_none() {
         return;
     }
     record.pending = false;
+    record.back_to = None;
     for signature in &task.auto.covers {
         if !record.covered.contains(signature) {
             record.covered.push(signature.clone());
@@ -159,6 +188,9 @@ pub fn start_succeeded(task: &Task) {
 pub struct RestorePoint {
     pub tag: String,
     pub name: String,
+    /// Guesthouse took it before the start. Otherwise it's the snapshot the user went back to, which
+    /// the start began from.
+    pub automatic: bool,
 }
 
 /// The snapshot to offer a machine that is off after a start that did not succeed.
@@ -167,7 +199,16 @@ pub fn restore_point(context: &Context, machine: &Machine) -> Option<RestorePoin
         return None;
     }
     let record = record::read(context, machine);
-    (record.pending && !record.tag.is_empty()).then_some(RestorePoint { tag: record.tag, name: record.name })
+    if !record.pending {
+        return None;
+    }
+    match record.back_to {
+        Some(back) => Some(RestorePoint { tag: back.tag, name: back.name, automatic: false }),
+        None if !record.tag.is_empty() => {
+            Some(RestorePoint { tag: record.tag, name: record.name, automatic: true })
+        }
+        None => None,
+    }
 }
 
 #[cfg(test)]

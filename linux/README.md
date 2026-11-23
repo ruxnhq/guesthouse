@@ -31,6 +31,8 @@ You need an NVIDIA card with the open kernel modules loaded, and the driver vers
 
 The install needs no hands, and the first boot builds everything. If anything about the driver is in doubt the GPU stays off and the VM still boots. The guest gets one plain sentence and the app has the details, as those can hold your paths. As root in the guest, `nvfwd-check` says which parts work.
 
+An Ubuntu guest's network is QEMU's own NAT, and its card has the machine's own address. The install writes a netplan that finds the card by its name (`en*`) with DHCP for IPv4 and IPv6, so the address can change, as a copy's does. Guests installed before that had a netplan pinned to QEMU's default address, `52:54:00:12:34:56`. On a start with the driver image, `netplan-by-name.sh` rewrites the installer's file, and only a file exactly as the installer left it, so a netplan you wrote stays. A guest started without a GPU has no image, so it keeps the default address until it has had one start with the GPU, as the initrd's catch-all is all it would have otherwise.
+
 After the app updates, the guest takes the new scripts and settings by itself. Each driver image carries them, and when a boot finds an image whose scripts differ from the guest's, it installs them the way a fresh setup would and carries on with the new ones. If that fails, the guest keeps what it had and boots as before, and `nvfwd-check` says why. A guest made before 0.2.3 doesn't know to do this yet, so run this once in it, as root, and reboot:
 
     sudo bash /opt/nv/driver/setup/refresh.sh

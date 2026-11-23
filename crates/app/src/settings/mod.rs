@@ -3,6 +3,7 @@
 //! dialogs over.
 
 mod account;
+mod android;
 mod copies;
 mod disk;
 mod display;
@@ -186,6 +187,7 @@ struct Parts {
     _jail: jail::Jail,
     linux_gpu: linux_gpu::LinuxGpu,
     macos: macos::Macos,
+    android: android::Android,
     windows_card: windows_card::WindowsCard,
     sharing: sharing::Sharing,
     network: network::Network,
@@ -226,6 +228,7 @@ impl SettingsDialog {
             _gpu_preview: gpu_preview::GpuPreview::new(&shared, &pages.general),
             linux_gpu: linux_gpu::LinuxGpu::new(&shared, &pages.general),
             macos: macos::Macos::new(&shared, &pages.general),
+            android: android::Android::new(&shared, &pages.general),
             _account: account::Account::new(&shared, &pages.general),
             _token: token::Token::new(&shared, &pages.general),
             _jail: jail::Jail::new(&shared, &pages.general),
@@ -292,6 +295,7 @@ impl SettingsDialog {
         parts.usb.set_status(status);
         parts.linux_gpu.set_status(status);
         parts.macos.set_status(status);
+        parts.android.set_status(status);
         parts.windows_card.set_status(status);
         parts.copies.set_status(status);
         parts.remove.set_status(status);

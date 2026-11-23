@@ -207,6 +207,10 @@ impl VmPlan {
             backing_files.push(PathBuf::from(disk));
         }
         backing_files.extend(backing_files_of(Path::new(self.throwaway.as_ref().unwrap_or(&self.disk)))?);
+        // A throwaway run's Android data disk is an overlay on the machine's own.
+        if let Some(boot) = self.android_boot() {
+            backing_files.extend(backing_files_of(&boot.data)?);
+        }
         let shared = |file: &&PathBuf| self.shared_folder().is_some_and(|folder| file.starts_with(folder));
         if let Some(file) = backing_files.iter().find(shared) {
             return Err(Failure(format!(

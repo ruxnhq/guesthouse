@@ -93,6 +93,7 @@ pub(super) fn handling(path: &Path, carried: &Machine) -> Option<Handling> {
     let opencore_firmware = opencore.parent().map(|folder| folder.join(OPENCORE_FIRMWARE));
     if [crate::library::DISK_FILE, crate::library::FIRMWARE_FILE].contains(&name.as_ref())
         || (!carried.opencore.is_empty() && (path == opencore || Some(path) == opencore_firmware.as_deref()))
+        || (!carried.android_data.is_empty() && path == Path::new(&carried.android_data))
         || in_folder(path, "tpm").is_some()
     {
         return Some(Handling::AsItIs);

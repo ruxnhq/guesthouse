@@ -163,6 +163,7 @@ fn copy_of(context: &Context, source: &Machine, name: &str, throwaway: bool) -> 
         vars,
         iso: rerooted(&source.iso, &from, &to),
         opencore: rerooted(&source.opencore, &from, &to),
+        android_data: rerooted(&source.android_data, &from, &to),
         mac: unused_mac(context),
         drives: Vec::new(),
         start_with_pc: false,

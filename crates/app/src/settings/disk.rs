@@ -34,7 +34,8 @@ impl Disk {
         grow.set_sensitive(false);
         disk.add_suffix(&grow);
         group.add(&disk);
-        let plain = shared.machine.borrow().kind == Kind::Plain;
+        // An Android machine has no drive for a disc: it boots only from its own disk.
+        let plain = shared.machine.borrow().kind == Kind::Plain && !shared.machine.borrow().android();
         let macos = shared.machine.borrow().macos();
         let title = if macos { "Installer" } else { "ISO" };
         let drive = adw::ActionRow::builder().title(title).subtitle_lines(1).visible(plain).build();

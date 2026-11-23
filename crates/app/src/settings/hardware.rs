@@ -69,12 +69,12 @@ impl Hardware {
             format!("Keeps the VM on CPUs {}.", cpu_list(&cpus))
         });
         group.add(&pin);
-        // Only a GPU machine has ever had sound, and a macOS guest counts as one.
+        // Only a GPU machine has ever had sound, and macOS and Android guests count as one.
         let sound = adw::SwitchRow::builder()
             .title("Sound")
             .subtitle(SOUND_NOTE)
             .active(machine.sound)
-            .visible(machine.kind == Kind::Windows || machine.macos())
+            .visible(machine.kind == Kind::Windows || machine.macos() || machine.android())
             .build();
         group.add(&sound);
         let this = Self { group, cores, ram, vram, pin, pin_possible: !cpus.is_empty(), sound };

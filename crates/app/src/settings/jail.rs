@@ -14,7 +14,12 @@ pub struct Jail;
 impl Jail {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
         let machine = shared.machine.borrow().clone();
-        if !machine.has_gpu() && machine.kind != Kind::Linux && !machine.linux_gpu && !machine.macos() {
+        if !machine.has_gpu()
+            && machine.kind != Kind::Linux
+            && !machine.linux_gpu
+            && !machine.macos()
+            && !machine.android()
+        {
             return Self;
         }
         let group = adw::PreferencesGroup::builder().title("Jail").build();

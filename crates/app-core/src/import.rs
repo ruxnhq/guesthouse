@@ -104,6 +104,12 @@ fn machine_from(
             || Failure::new("The export names its OpenCore image in a way that can't be made safely."),
         )?,
     };
+    let android_data = match carried.android_data.as_str() {
+        "" => String::new(),
+        named => crate::carry::safe_path(named).map(|path| in_folder(&path.to_string_lossy())).ok_or_else(
+            || Failure::new("The export names its Android data disk in a way that can't be made safely."),
+        )?,
+    };
     // Only what is the guest's own or a choice about how it shows is taken, field by field, so a
     // setting added later is this PC's until it's added here.
     let mut machine = Machine {
@@ -131,6 +137,7 @@ fn machine_from(
         nvapi_wrapper_off: carried.nvapi_wrapper_off,
         nvme: carried.nvme,
         opencore,
+        android_data,
         throwaway: carried.throwaway,
         ..Machine::new(&id, name.trim(), &in_folder(DISK_FILE), &vars)
     };
@@ -352,11 +359,16 @@ fn make(
             check_stands_alone(&written)?;
         }
     }
-    let wanted: Vec<PathBuf> = [machine.disk.as_str(), machine.vars.as_str(), machine.opencore.as_str()]
-        .iter()
-        .filter(|path| !path.is_empty())
-        .filter_map(|path| Path::new(path).strip_prefix(machine.folder(context)).ok().map(Path::to_owned))
-        .collect();
+    let wanted: Vec<PathBuf> = [
+        machine.disk.as_str(),
+        machine.vars.as_str(),
+        machine.opencore.as_str(),
+        machine.android_data.as_str(),
+    ]
+    .iter()
+    .filter(|path| !path.is_empty())
+    .filter_map(|path| Path::new(path).strip_prefix(machine.folder(context)).ok().map(Path::to_owned))
+    .collect();
     if let Some(missing) = wanted.iter().find(|path| !seen.contains(*path)) {
         return Err(Failure(format!("The export has no {}, which the machine needs.", missing.display())));
     }

@@ -1,7 +1,7 @@
 //! The dialog that makes a machine from an ISO. Looking inside the ISO decides what it will be. A
 //! macOS machine has no ISO to look into: its installer comes from Apple.
 
-use crate::common::{choose_file, in_background};
+use crate::common::{choose_file, choose_folder, in_background};
 use crate::disk_place_row::DiskPlaceRow;
 use crate::driver_row::DriverRow;
 use crate::recipe_dialog;
@@ -9,6 +9,10 @@ use crate::rows::{bottom_bar, choice_row, number_row, page_heading, row_button};
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::account::{default_user, name_problem, password_problem};
+use guesthouse_app_core::actions::android_card_of;
+use guesthouse_app_core::android_setup::{
+    ANDROID_SIZES, ANDROID_TITLE, MIN_ANDROID_DATA_GIB, NewAndroid, create_android,
+};
 use guesthouse_app_core::card_choice::{CardChoice, default_choice, windows_card_choices};
 use guesthouse_app_core::defaults::{NO_GPU, account_name, sizes_for_disc, suggested_name};
 use guesthouse_app_core::display::DriverPackage;
@@ -66,6 +70,10 @@ const MACOS_ROW_NOTE: &str = "Needs no ISO. Apple's installer is downloaded for 
                               support the first time.";
 const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
+const ANDROID_ROW_NOTE: &str = "Needs no ISO. Choose the folder of an image of Android for VMs.";
+const ANDROID_NAME: &str = "Android";
+const ANDROID_DISK_NOTE: &str =
+    "For Android's apps and their data. Its file starts small and grows as they fill it.";
 /// Said plainly until a guest on an AMD card has drawn with it.
 const AMD_NOT_FINISHED: &str = "starts on the AMD card. GPU-PV on AMD is not finished, so Windows may have no \
                                 GPU there yet";
@@ -82,6 +90,8 @@ struct Parts {
     iso_row: adw::ActionRow,
     /// Whether macOS was chosen, and not a disc.
     macos: Cell<bool>,
+    /// The Android image chosen in place of a disc.
+    android_image: RefCell<Option<String>>,
     verdict: adw::ActionRow,
     hardware: adw::PreferencesGroup,
     name: adw::EntryRow,
@@ -176,6 +186,14 @@ impl NewMachineDialog {
         let use_macos = row_button("Use");
         macos_row.add_suffix(&use_macos);
         disc.add(&macos_row);
+        let android_row = adw::ActionRow::builder().title(ANDROID_TITLE).subtitle(ANDROID_ROW_NOTE).build();
+        let android_preview = gtk::Label::builder().label(PREVIEW).valign(gtk::Align::Center).build();
+        android_preview.add_css_class("dim-label");
+        android_preview.add_css_class("caption-heading");
+        android_row.add_suffix(&android_preview);
+        let choose_android = row_button("Choose");
+        android_row.add_suffix(&choose_android);
+        disc.add(&android_row);
         let verdict = adw::ActionRow::builder().visible(false).activatable(false).build();
         verdict.add_css_class("verdict");
         disc.add(&verdict);
@@ -276,6 +294,7 @@ impl NewMachineDialog {
             create_button,
             iso_row,
             macos: Cell::new(false),
+            android_image: RefCell::default(),
             verdict,
             hardware,
             name,
@@ -323,6 +342,8 @@ impl NewMachineDialog {
         });
         let handle = this.clone();
         use_macos.connect_clicked(move |_| handle.choose_macos());
+        let handle = this.clone();
+        choose_android.connect_clicked(move |_| handle.on_choose_android());
         this
     }
 
@@ -393,6 +414,8 @@ impl NewMachineDialog {
         let parts = &self.0;
         let context = parts.window.context();
         parts.macos.set(true);
+        *parts.android_image.borrow_mut() = None;
+        parts.disk.set_subtitle(DISK_NOTE);
         *parts.iso_path.borrow_mut() = Some(String::new());
         parts.iso_row.set_subtitle("Choose the disc to install from.");
         self.show_verdict(MACOS_TITLE, &how_it_installs(&context));
@@ -421,6 +444,95 @@ impl NewMachineDialog {
             Some(Iso { kind: Kind::Plain, title, edition: String::new(), windows_disc: false });
         parts.hardware.set_sensitive(true);
         self.update();
+    }
+
+    fn on_choose_android(&self) {
+        let window = self.0.window.clone();
+        let failing = window.clone();
+        let this = self.clone();
+        choose_folder(
+            window.widget(),
+            "Choose an Android image",
+            move |path| this.choose_android(path),
+            move |text| failing.problem(&text),
+        );
+    }
+
+    /// An Android image in place of a disc. It needs no install, and the disk is Android's data.
+    pub fn choose_android(&self, image: String) {
+        let parts = &self.0;
+        let context = parts.window.context();
+        parts.macos.set(false);
+        *parts.android_image.borrow_mut() = Some(image.clone());
+        *parts.iso_path.borrow_mut() = Some(String::new());
+        parts.iso_row.set_subtitle("Choose the disc to install from.");
+        let probe = guesthouse_app_core::machine::Machine::new("", "", "", "");
+        let verdict = match android_card_of(&context, &probe) {
+            Ok(card) => format!(
+                "{image}. Starts at Android's setup, drawing on the {} card through the virtio GPU.",
+                card.maker.name()
+            ),
+            Err(failure) => failure.0,
+        };
+        self.show_verdict(ANDROID_TITLE, &verdict);
+        let field = RamField::for_plain(&context, 1, ANDROID_SIZES.ram);
+        parts.cores.adjustment().set_lower(1.0);
+        parts.cores.set_value(ANDROID_SIZES.cores.min(physical_cores(&context.cpus)).into());
+        parts.ram.adjustment().set_lower(field.lower as f64);
+        parts.ram.adjustment().set_upper(field.upper as f64);
+        parts.ram.set_value(field.value as f64);
+        parts.ram.set_sensitive(field.fits);
+        parts.ram.set_subtitle(&field.subtitle);
+        parts.no_room.set(!field.fits);
+        parts.disk.adjustment().set_lower(MIN_ANDROID_DATA_GIB.into());
+        parts.disk.set_value(ANDROID_SIZES.disk.into());
+        parts.disk.set_subtitle(ANDROID_DISK_NOTE);
+        parts.card.set_visible(false);
+        parts.account.set_visible(false);
+        parts.lean_group.set_visible(false);
+        self.fill_recipes(Kind::Plain);
+        parts.no_driver.set(false);
+        if keeps_following_the_disc(&parts.name.text(), &parts.suggested.borrow()) {
+            parts.name.set_text(ANDROID_NAME);
+        }
+        *parts.suggested.borrow_mut() = ANDROID_NAME.to_owned();
+        *parts.iso.borrow_mut() = Some(Iso {
+            kind: Kind::Plain,
+            title: ANDROID_TITLE.to_owned(),
+            edition: String::new(),
+            windows_disc: false,
+        });
+        parts.hardware.set_sensitive(true);
+        self.update();
+    }
+
+    fn create_android(&self, image: String) {
+        let parts = &self.0;
+        parts.create_button.set_sensitive(false);
+        let new = NewAndroid {
+            name: parts.name.text().to_string(),
+            cores: parts.cores.value() as u32,
+            ram_gib: parts.ram.value() as u32,
+            data_gib: parts.disk.value() as u32,
+            image: image.into(),
+        };
+        let context = parts.window.context();
+        let working = context.clone();
+        let this = self.clone();
+        in_background(
+            &context,
+            move || create_android(&working, &new),
+            move |result| match result {
+                Ok(machine) => {
+                    this.0.window.add_machine(machine);
+                    this.0.dialog.close();
+                }
+                Err(text) => {
+                    this.0.window.problem(&text);
+                    this.update();
+                }
+            },
+        );
     }
 
     fn create_macos(&self) {
@@ -455,6 +567,8 @@ impl NewMachineDialog {
 
     pub fn read_iso(&self, path: String) {
         self.0.macos.set(false);
+        *self.0.android_image.borrow_mut() = None;
+        self.0.disk.set_subtitle(DISK_NOTE);
         *self.0.iso_path.borrow_mut() = Some(path.clone());
         *self.0.iso.borrow_mut() = None;
         self.0.iso_row.set_subtitle(&path);
@@ -737,6 +851,9 @@ impl NewMachineDialog {
         let parts = &self.0;
         if parts.macos.get() {
             return self.create_macos();
+        }
+        if let Some(image) = parts.android_image.borrow().clone() {
+            return self.create_android(image);
         }
         let Some(entry) = self.chosen_recipe() else { return self.create(None) };
         // A recipe of the user's own was read by nobody but them, so what it runs is shown first. The

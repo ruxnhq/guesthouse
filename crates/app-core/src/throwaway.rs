@@ -18,7 +18,7 @@ use crate::machine::Machine;
 use crate::random::random_hex;
 use crate::snapshots::copy_tree;
 use crate::tasks::{State, status};
-use crate::vm_args::{Boot, MacosBoot, THROWAWAY_FDS, VmPlan, throwaway_disk};
+use crate::vm_args::{AndroidBoot, Boot, MacosBoot, THROWAWAY_FDS, VmPlan, throwaway_disk};
 use crate::writable_copy::copy_writable;
 use guesthouse_daemon::handover::{KEPT_ABOVE, leave_open_at};
 use rustix::fs::{FlockOperation, flock};
@@ -60,6 +60,8 @@ const PRIVATE: u32 = 0o600;
 /// A macOS guest's own files a run gets copies of, as named in its folder.
 const OPENCORE_FILE: &str = "opencore.qcow2";
 const MACOS_HOME: &str = "gpu-cache";
+/// An Android guest's data disk for the run: an overlay on the machine's own, which it never writes.
+const ANDROID_DATA_FILE: &str = "android-data.qcow2";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 
 /// In a throwaway copy's folder that Duplicate was asked to delete once it has run: `waiting` until
@@ -281,6 +283,8 @@ pub struct ThrowawayRun {
     tpm: PathBuf,
     /// A macOS guest's OpenCore image and its QEMU's home, which it writes to as well.
     macos: Option<(PathBuf, PathBuf)>,
+    /// An Android guest's data disk for the run.
+    android_data: Option<PathBuf>,
     /// Kept while the task lives. Once it has gone, its QEMU running is what keeps the folder.
     _lock: File,
 }
@@ -316,8 +320,25 @@ impl ThrowawayRun {
             fs::create_dir_all(&home)?;
             Some((opencore, home))
         };
+        let android_data = if machine.android_data.is_empty() {
+            None
+        } else {
+            let data = folder.join(ANDROID_DATA_FILE);
+            let _ = fs::remove_file(&data);
+            let made = Command::new("qemu-img")
+                .args(["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", &machine.android_data])
+                .arg(&data)
+                .output()?;
+            if !made.status.success() {
+                return Err(Failure(format!(
+                    "The run's Android data disk could not be made: {}",
+                    String::from_utf8_lossy(&made.stderr).trim()
+                )));
+            }
+            Some(data)
+        };
         let overlay = open_overlay(&machine.id, Path::new(&machine.disk))?;
-        Ok(Self { machine: machine.id.clone(), overlay, vars, tpm, macos, _lock: lock })
+        Ok(Self { machine: machine.id.clone(), overlay, vars, tpm, macos, android_data, _lock: lock })
     }
 
     /// The plan with this run's overlay, firmware settings and TPM in place of the machine's own.
@@ -331,11 +352,14 @@ impl ThrowawayRun {
                 .as_ref()
                 .map_or_else(|| plan.vars.clone(), |vars| vars.to_string_lossy().into_owned()),
             tpm: plan.tpm.as_ref().map(|_| self.tpm.clone()),
-            boot: match (&plan.boot, &self.macos) {
-                (Boot::Macos(boot), Some((opencore, home))) => {
+            boot: match (&plan.boot, &self.macos, &self.android_data) {
+                (Boot::Macos(boot), Some((opencore, home)), _) => {
                     Boot::Macos(MacosBoot { opencore: opencore.clone(), home: home.clone(), ..boot.clone() })
                 }
-                (boot, _) => boot.clone(),
+                (Boot::Android(boot), _, Some(data)) => {
+                    Boot::Android(AndroidBoot { data: data.clone(), ..boot.clone() })
+                }
+                (boot, _, _) => boot.clone(),
             },
             ..plan.clone()
         };

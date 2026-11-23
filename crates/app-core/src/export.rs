@@ -173,6 +173,7 @@ fn with_clean_notes(context: &Context, machine: &Machine, found: &mut Vec<Carrie
 /// out, and the files named as they are in the export.
 fn settings_to_carry(context: &Context, machine: &Machine) -> Machine {
     let opencore = Path::new(&machine.opencore).strip_prefix(machine.folder(context)).ok();
+    let android_data = Path::new(&machine.android_data).strip_prefix(machine.folder(context)).ok();
     Machine {
         disk: DISK_FILE.to_owned(),
         vars: if machine.vars.is_empty() { String::new() } else { FIRMWARE_FILE.to_owned() },
@@ -189,6 +190,9 @@ fn settings_to_carry(context: &Context, machine: &Machine) -> Machine {
         start_without_jail: false,
         vcache_pin: false,
         opencore: opencore.map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+        android_data: android_data.map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+        // The card is this PC's.
+        android_gpu: String::new(),
         ..machine.clone()
     }
 }

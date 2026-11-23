@@ -125,8 +125,8 @@ pub fn card_note(card: &CardShare) -> Option<&'static str> {
              charges its processes with, the daemon's own work included, which is what the card gives it.",
         ),
         GpuMaker::Nvidia => Some(
-            "Each machine's GPU time isn't read on this card, only the whole card's load: its figures come \
-             from the daemon of a Windows machine on the card, of this version or later.",
+            "Each machine's GPU time isn't read on this card now, only the whole card's load. It comes from \
+             the driver, through the daemon of a Windows machine on the card of this version or later.",
         ),
         GpuMaker::Intel => Some("The whole card's load and video memory aren't read on Intel yet."),
         GpuMaker::Amd => None,

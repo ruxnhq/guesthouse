@@ -18,6 +18,8 @@ pub const ROOM: usize = 64;
 /// The writer reads each second, so a table older than this means it has stopped, and a figure in it
 /// is no longer the last second's.
 pub const OLDEST_USABLE: Duration = Duration::from_secs(3);
+/// Clocks can step, so a table stamped up to this far ahead still counts.
+const AHEAD: Duration = Duration::from_secs(1);
 /// The table's layout, in the file's name as with the snapshot's.
 pub const LAYOUT: u32 = 1;
 
@@ -163,11 +165,14 @@ impl SharedProcessTable {
         self.0.publish(to_words(table));
     }
 
-    /// The table as it stands, if it was read in the last few seconds.
+    /// The table as it stands, if it was read in the last few seconds. One stamped later than now is
+    /// not believed either, as it would never grow old.
     pub fn latest(&self) -> Option<ProcessTable> {
         let table = from_words(&self.0.read()?);
-        let age = milliseconds_since_epoch().saturating_sub(table.taken_at);
-        (age <= OLDEST_USABLE.as_millis() as u64).then_some(table)
+        let now = milliseconds_since_epoch();
+        let fresh = table.taken_at <= now.saturating_add(AHEAD.as_millis() as u64)
+            && now.saturating_sub(table.taken_at) <= OLDEST_USABLE.as_millis() as u64;
+        fresh.then_some(table)
     }
 }
 
@@ -213,12 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn an_old_table_is_not_used() {
+    fn an_old_table_or_one_from_later_is_not_used() {
         let path = temporary("old");
         let daemon = SharedProcessTable::open(&path).unwrap();
-        let old = ProcessTable { taken_at: milliseconds_since_epoch() - 10_000, ..measured() };
-        daemon.publish(&old);
-        assert_eq!(daemon.latest(), None);
+        for taken_at in [milliseconds_since_epoch() - 10_000, milliseconds_since_epoch() + 60_000] {
+            daemon.publish(&ProcessTable { taken_at, ..measured() });
+            assert_eq!(daemon.latest(), None);
+        }
         fs::remove_file(path).unwrap();
     }
 

@@ -31,7 +31,9 @@ pub fn machine_part(table: Option<&ProcessTable>, pids: &[u32]) -> (GpuTime, Opt
         return (GpuTime::NotRead, None);
     }
     let bytes = found.iter().filter_map(|process| process.bytes).reduce(u64::saturating_add);
-    let used: Vec<Use> = found.iter().filter_map(|process| process.used).collect();
+    // A table that says its samples weren't read is not believed to hold any.
+    let used: Vec<Use> =
+        found.iter().filter_map(|process| process.used).filter(|_| table.samples_read).collect();
     // Work of two processes can overlap, and the sum can pass all of the time.
     let sum = |part: fn(&Use) -> u32| used.iter().map(part).sum::<u32>().min(WHOLE);
     let time = if !used.is_empty() {

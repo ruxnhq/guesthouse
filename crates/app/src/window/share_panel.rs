@@ -35,9 +35,6 @@ fn layout(cards: &[CardShare]) -> Vec<String> {
 
 fn group_of(card: &CardShare) -> Shown {
     let group = adw::PreferencesGroup::builder().title(&card.name).build();
-    if let Some(note) = card_note(card) {
-        group.set_description(Some(note));
-    }
     let mut rows = vec![row("Whole card")];
     rows.extend(card.machines.iter().map(|machine| row(&machine.name)));
     for found in &rows {
@@ -80,6 +77,8 @@ impl SharePanel {
             shown.0 = wanted;
         }
         for (card, found) in cards.iter().zip(&shown.1) {
+            // Set at each look, as whether a card's figures are read can change while it runs.
+            found.group.set_description(card_note(card));
             let lines =
                 std::iter::once(whole_line(&card.whole)).chain(card.machines.iter().map(machine_line));
             for (line, row) in lines.zip(&found.rows) {

@@ -73,8 +73,8 @@ pub struct CardShare {
     pub card: OnCard,
     pub name: String,
     pub whole: WholeCard,
-    /// The card's daemon published its table of each process's part of the card, for a card whose
-    /// driver counts per process.
+    /// The card's daemon published its table of each process's part of the card, with the driver's
+    /// samples in it, for a card whose driver counts per process.
     pub per_process: bool,
     pub machines: Vec<MachineShare>,
 }
@@ -178,7 +178,7 @@ fn look_with(
             None => cards.push(CardShare {
                 name: card_name(context, &card),
                 whole: whole(context, &card, &one.machine),
-                per_process: per_process.flatten().is_some(),
+                per_process: per_process.flatten().is_some_and(|table| table.samples_read),
                 card,
                 machines: vec![share],
             }),
@@ -355,10 +355,18 @@ mod tests {
         let context = scratch_context(&scratch);
         let (windows, _) = nvidia_machines(&context);
         running_daemon(&context, AMDGPU, 1 << 30);
-        let (cards, _) = look_with(&context, &running(windows), &Looks::new(), Duration::ZERO, |_| None);
+        let (cards, _) =
+            look_with(&context, &running(windows.clone()), &Looks::new(), Duration::ZERO, |_| None);
         assert!(!cards[0].per_process);
         assert_eq!(cards[0].machines[0].time, GpuTime::NotRead);
         assert_eq!(cards[0].machines[0].card_bytes, None);
         assert_eq!(cards[0].machines[0].video.unwrap().video_bytes, 1 << 30, "its books still count");
+        // A table whose samples couldn't be read still has the driver's count, but no time.
+        let unread = ProcessTable { samples_read: false, ..nvidia_table() };
+        let (cards, _) =
+            look_with(&context, &running(windows), &Looks::new(), Duration::ZERO, |_| Some(unread.clone()));
+        assert!(!cards[0].per_process, "the card's note doesn't claim a sample");
+        assert_eq!(cards[0].machines[0].time, GpuTime::NotRead);
+        assert_eq!(cards[0].machines[0].card_bytes, Some(1848 << 20));
     }
 }

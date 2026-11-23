@@ -30,7 +30,11 @@ struct Expected {
     nodes: usize,
     classes: usize,
     copy_caps: u32,
+    /// The channels the test tries, by label: one on each video engine where video runs.
+    channels: &'static [&'static str],
 }
+
+const NO_VIDEO_CHANNELS: &[&str] = &["graphics", "copy"];
 
 const CARDS: [Expected; 3] = [
     Expected {
@@ -41,6 +45,7 @@ const CARDS: [Expected; 3] = [
         nodes: 15,
         classes: 127,
         copy_caps: 0x1A0,
+        channels: NO_VIDEO_CHANNELS,
     },
     Expected {
         card: &FAKE_AMPERE,
@@ -50,6 +55,12 @@ const CARDS: [Expected; 3] = [
         nodes: 13,
         classes: 110,
         copy_caps: 0x1A0,
+        channels: &[
+            "graphics",
+            "copy",
+            "video engine 0x13 (class 0xC7B0)",
+            "video engine 0x1b (class 0xC7B7)",
+        ],
     },
     Expected {
         card: &FAKE_TURING,
@@ -59,6 +70,7 @@ const CARDS: [Expected; 3] = [
         nodes: 14,
         classes: 110,
         copy_caps: 0x120,
+        channels: NO_VIDEO_CHANNELS,
     },
 ];
 
@@ -180,6 +192,15 @@ fn the_report_says_what_was_found_and_what_the_app_would_do() {
 }
 
 #[test]
+fn only_a_generation_whose_video_does_not_run_is_told_its_node_types_are_unset() {
+    for expected in &CARDS {
+        let text = card_lines(0, &findings_on(expected.card));
+        let told = text.contains("node types still unset");
+        assert_eq!(told, !expected.generation.nodes.video_runs, "{text}");
+    }
+}
+
+#[test]
 fn the_report_names_the_classes_a_card_does_not_list() {
     let findings = findings_on(&FakeCard { classes: &[0x902D], ..FAKE_ADA });
     let text = card_lines(0, &findings);
@@ -217,11 +238,15 @@ fn the_channel_test_makes_this_generations_channels_and_no_other() {
         )
         .unwrap();
         let labels: Vec<&str> = results.iter().map(|result| result.label.as_str()).collect();
-        assert_eq!(labels, ["graphics", "copy"], "no video channel where video does not run");
+        assert_eq!(labels, expected.channels, "a video channel only where video runs");
         assert!(results.iter().all(|result| result.outcome == Outcome::NotReleased));
         let made: Vec<u32> = device.rm.allocated().map(|(class, _)| class).collect();
         assert!(made.contains(&expected.generation.channel_class));
         assert!(made.contains(&expected.generation.copy_class));
+        let video = [expected.generation.video_decode_class, expected.generation.video_encode_class];
+        for class in video {
+            assert_eq!(made.contains(&class), expected.generation.nodes.video_runs, "{class:#x}");
+        }
         assert!(!made.contains(&BLACKWELL.channel_class));
         let text = channel_lines(&results);
         assert!(text.contains("graphics: NOT released"), "{text}");

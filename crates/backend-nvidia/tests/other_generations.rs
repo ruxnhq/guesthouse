@@ -1,18 +1,21 @@
 //! A pretend Ada card, a pretend Ampere card and a pretend Turing card, and what a guest should be told about each chip.
 //! This shows the tables and the code around them agree with those values, and nothing about a real
-//! card. The engines the pretend cards list are only there to make the nodes come out.
+//! card. The engines the pretend cards list are only there to make the nodes come out, and on Ampere
+//! to give its video nodes an engine to run on.
 
 #![cfg(target_os = "linux")]
 
 use guesthouse_backend::{Backend, Status, VendorQuery};
 use guesthouse_backend_nvidia::NvidiaBackend;
+use guesthouse_backend_nvidia::answers::nodes::node_list;
 use guesthouse_backend_nvidia::channel::{AREA_SIZE, Channel, ChannelPlace, Engine};
 use guesthouse_backend_nvidia::fake_guest::{message, start_on_card};
 use guesthouse_backend_nvidia::profile::{
-    ADA, AMPERE, GUEST_617, Generation, HOST_615, TURING, generation_for, guest_channel_classes,
+    ADA, AMPERE, BLACKWELL, GUEST_617, Generation, HOST_615, TURING, generation_for, guest_channel_classes,
 };
-use guesthouse_backend_nvidia::pushbuffer::{RingEntry, ring_entry};
+use guesthouse_backend_nvidia::pushbuffer::{RingEntry, ZERO_EXTENDED_BASE, ring_entry};
 use guesthouse_backend_nvidia::record::card::COPY_ENGINE_CAPS;
+use guesthouse_backend_nvidia::rm::classes::CHANNEL_GROUP;
 use guesthouse_backend_nvidia::rm::device::Device;
 use guesthouse_backend_nvidia::rm::fake::FakeRm;
 use guesthouse_backend_nvidia::rm::fake_card::{FAKE_ADA, FAKE_AMPERE, FAKE_TURING, FakeCard};
@@ -47,6 +50,17 @@ const VULKAN_CLIENT: u32 = 4;
 const NODE_ENTRY_SIZE: usize = 40;
 const NODE_RECORD_SIZE: usize = 0x110;
 const NODE_COPY_ENGINE_FIELD: usize = 0x0C;
+/// Where a channel group's parameters name its engine.
+const GROUP_ENGINE_FIELD: usize = 0x0C;
+
+/// The pretend 3050's decoder and encoder: their nodes, and the RM's numbers for the engines.
+const AMPERE_DECODE_NODE: u32 = 2;
+const AMPERE_ENCODE_NODE: u32 = 6;
+const RM_DECODER: u32 = 0x13;
+const RM_ENCODER: u32 = 0x1B;
+/// The decoder and encoder bytes hold the RM's engines from these numbers on, a bit for each.
+const FIRST_ENGINE_IN_DECODER_FLAGS: u32 = 16;
+const FIRST_ENGINE_IN_ENCODER_FLAGS: u32 = 24;
 
 /// What a guest should be told about a card.
 struct Expected {
@@ -197,11 +211,11 @@ const RTX_3050_LAPTOP: Expected = Expected {
     entries: &[
         GRAPHICS,
         OVERLAY,
-        NO_TYPE,
+        plain(0x1A),
         copy(0x0B, 0, 4, 0x10, 0x0A),
         copy(0x0C, 1, 32, 0x10, 0x0B),
         copy(0x0D, 1, 32, 0x10, 0x0C),
-        NO_TYPE,
+        plain(0x13),
         plain(0x21),
         VR,
         copy(0x1D, 0, 4, 0x02, 0x0A),
@@ -350,11 +364,12 @@ fn a_card_that_will_not_say_its_copy_caps_is_refused() {
 }
 
 #[test]
-fn only_graphics_and_copy_nodes_take_a_context() {
-    for (card, _, expected) in CARDS {
+fn only_nodes_whose_engine_runs_take_a_context() {
+    for (card, generation, expected) in CARDS {
         let mut backend = started(card);
         for (node, label) in (0u32..).zip(expected.nodes) {
-            let wanted = ["3D", "copy"].contains(label);
+            let video = generation.nodes.video_runs && ["decode", "encode"].contains(label);
+            let wanted = ["3D", "copy"].contains(label) || video;
             assert_eq!(backend.context_allowed(node, 0), wanted, "{label}");
             assert_eq!(backend.context_allowed(node, VULKAN_CLIENT), wanted, "{label} for Vulkan");
         }
@@ -362,15 +377,41 @@ fn only_graphics_and_copy_nodes_take_a_context() {
 }
 
 #[test]
-fn no_video_runs_and_the_record_offers_none() {
-    for (card, generation, _) in CARDS {
+fn on_ada_and_turing_no_video_runs_and_the_record_offers_none() {
+    for (card, generation) in [(&FAKE_ADA, &ADA), (&FAKE_TURING, &TURING)] {
         let record = record(&started(card));
-        assert!(!generation.nodes.video_runs);
+        assert!(!generation.nodes.video_runs, "{}", generation.name);
         let caps: Vec<u32> = (0..4).map(|index| word(&record, LAYOUT.video_caps + index * 4)).collect();
         assert_eq!(caps[..3], [0; 3]);
         assert_eq!(record[LAYOUT.decoder_flags], 0);
         assert_eq!(record[LAYOUT.encoder_flags], 0);
     }
+}
+
+#[test]
+fn amperes_record_names_its_own_classes_in_the_video_words() {
+    let record = record(&started(&FAKE_AMPERE));
+    let caps: Vec<u32> = (0..3).map(|index| word(&record, LAYOUT.video_caps + index * 4)).collect();
+    assert_eq!(caps, [1 << 28 | 1 << 8, 1 << 20, 1 << 8]);
+    assert_eq!(caps, AMPERE.video_record_flags.caps[..3]);
+}
+
+/// With Blackwell's first word, the guest sends an Ampere card programs for Blackwell's shaders.
+#[test]
+fn amperes_first_video_word_has_no_bit_of_blackwells() {
+    let record = record(&started(&FAKE_AMPERE));
+    assert_eq!(word(&record, LAYOUT.video_caps) & BLACKWELL.video_record_flags.caps[0], 0);
+}
+
+#[test]
+fn amperes_record_flags_the_engines_its_decoder_and_encoder_nodes_run_on() {
+    let backend = started(&FAKE_AMPERE);
+    let record = record(&backend);
+    assert_eq!(record[LAYOUT.decoder_flags], 1 << (RM_DECODER - FIRST_ENGINE_IN_DECODER_FLAGS));
+    assert_eq!(record[LAYOUT.encoder_flags], 1 << (RM_ENCODER - FIRST_ENGINE_IN_ENCODER_FLAGS));
+    let nodes = node_list(FAKE_AMPERE.engines, Some(FAKE_AMPERE.graphics_copy), &AMPERE.nodes);
+    assert_eq!(nodes[AMPERE_DECODE_NODE as usize].video, Some((RM_DECODER, 0)));
+    assert_eq!(nodes[AMPERE_ENCODE_NODE as usize].video, Some((RM_ENCODER, 0)));
 }
 
 /// What NVIDIA's driver puts in the fourth video word on these cards, from their graphics and channel
@@ -480,6 +521,69 @@ fn a_guests_first_submission_runs_on_a_channel_of_this_generation() {
         assert!(rm.allocated().any(|(class, _)| class == generation.channel_class));
         assert!(!rm.allocated().any(|(class, _)| class == 0xCA6F), "no Blackwell class on this card");
         assert_eq!(rm.doorbells().len(), 1);
+    }
+}
+
+/// A hardware queue on a node, and a submission to it with these ring entries as its list.
+fn submit_list(session: &mut Guest, node: u32, entries: &[u64]) -> u32 {
+    let mut request = message(Command::CreateContext, 0x34);
+    set_u32(&mut request, 0x20, node);
+    let context = u32_at(&send(session, &request), 0x18).unwrap();
+    assert_ne!(context, 0, "node {node} takes a context");
+    let mut request = message(Command::CreateHardwareQueue, 0x44 + 0x80);
+    set_u32(&mut request, 0x38, context);
+    set_u32(&mut request, 0x40, 0x80);
+    let queue = u32_at(&send(session, &request), 0x1C).unwrap();
+
+    let mut private = vec![0; LIST_AT];
+    set_u32(&mut private, LIST_OFFSET_FIELD, LIST_AT as u32);
+    set_u32(&mut private, ENTRIES_FIELD, entries.len() as u32);
+    entries.iter().for_each(|entry| private.extend_from_slice(&entry.to_le_bytes()));
+    let mut submission = message(Command::SubmitToHardwareQueue, 0x50);
+    set_u32(&mut submission, 0x18, queue);
+    set_u64(&mut submission, 0x20, 1);
+    submission.extend_from_slice(&private);
+    send(session, &submission);
+    queue
+}
+
+fn group_engines(session: &Guest) -> Vec<u32> {
+    let made = session.backend().device().rm.allocated();
+    made.filter(|(class, _)| *class == CHANNEL_GROUP)
+        .map(|(_, params)| u32_at(params, GROUP_ENGINE_FIELD).unwrap())
+        .collect()
+}
+
+#[test]
+fn work_on_amperes_decoder_and_encoder_runs_on_that_engine_with_amperes_class() {
+    let video = [
+        (AMPERE_DECODE_NODE, RM_DECODER, AMPERE.video_decode_class),
+        (AMPERE_ENCODE_NODE, RM_ENCODER, AMPERE.video_encode_class),
+    ];
+    for (node, engine, class) in video {
+        let mut session = guest_on(&FAKE_AMPERE);
+        submit_list(&mut session, node, &[ring_entry(0x1000, 4)]);
+        assert!(group_engines(&session).contains(&engine), "node {node}");
+        let rm = &session.backend().device().rm;
+        assert!(rm.allocated().any(|(made, _)| made == class), "{class:#x}");
+        assert!(rm.allocated().any(|(made, _)| made == AMPERE.channel_class));
+        assert_eq!(rm.doorbells().len(), 1);
+    }
+}
+
+/// NVENC through CUDA starts its lists this way, on the encoder's queue and on a copy queue, and
+/// Ampere's channel faults on the first entry.
+#[test]
+fn a_list_that_starts_by_setting_the_extended_base_to_zero_runs_on_ampere_without_that_entry() {
+    let extended_base = RingEntry::parse(ZERO_EXTENDED_BASE.to_le_bytes());
+    let copy_node = RTX_3050_LAPTOP.nodes.iter().position(|label| *label == "copy").unwrap() as u32;
+    for node in [AMPERE_ENCODE_NODE, copy_node] {
+        let mut session = guest_on(&FAKE_AMPERE);
+        let queue = submit_list(&mut session, node, &[ZERO_EXTENDED_BASE, ring_entry(0x1000, 4)]);
+        let ran = session.backend().ring_of_list_queue(queue).unwrap();
+        assert!(ran.contains(&RingEntry { address: 0x1000, length: 4 }), "node {node}: {ran:x?}");
+        assert!(!ran.contains(&extended_base), "node {node}: {ran:x?}");
+        assert_eq!(session.backend().device().rm.doorbells().len(), 1);
     }
 }
 

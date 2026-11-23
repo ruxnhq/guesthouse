@@ -32,12 +32,21 @@ pub struct EngineNodes {
 /// fourth caps word gets the bits of the generation's graphics, channel and copy classes on top.
 #[derive(Debug, PartialEq, Eq)]
 pub struct VideoRecordFlags {
-    /// What the card's video engines can do, as four words. The guest's runtimes choose the
-    /// decoders and encoders they offer from these.
+    /// Four words with a bit for each class a card can have. The guest's runtimes choose the
+    /// decoders and encoders they offer from these, and each generation has its own classes, so it
+    /// has its own words.
     pub caps: [u32; 4],
+    /// A bit for each decoder the guest may use: the RM's engine number less
+    /// `FIRST_ENGINE_IN_DECODER_FLAGS`.
     pub decoder: u8,
+    /// The same for encoders, from `FIRST_ENGINE_IN_ENCODER_FLAGS`.
     pub encoder: u8,
 }
+
+/// The decoder and encoder bytes are the third and fourth of a mask of the RM's engine numbers, so
+/// they start at these engines.
+const FIRST_ENGINE_IN_DECODER_FLAGS: u32 = 16;
+const FIRST_ENGINE_IN_ENCODER_FLAGS: u32 = 24;
 
 /// What a generation changes.
 #[derive(Debug, PartialEq, Eq)]
@@ -151,9 +160,9 @@ pub const BLACKWELL: Generation = Generation {
 
 const OVERLAY_NODE: u32 = 0x02;
 
-/// The nodes these generations list go in the order of the card's own list, overlay included. Video
-/// nodes take no context, so none of their commands reach the card, and the record's flags tell the
-/// guest's runtimes not to offer them.
+/// The nodes these generations list go in the order of the card's own list, overlay included. On Ada
+/// and Turing video nodes take no context, so none of their commands reach the card, and the
+/// record's flags tell the guest's runtimes not to offer them.
 const ADA_NODES: EngineNodes = EngineNodes {
     overlay: Some(OVERLAY_NODE),
     decode: &[(0, NODE_TYPE_NOT_SET)],
@@ -162,13 +171,15 @@ const ADA_NODES: EngineNodes = EngineNodes {
     jpeg: &[],
     video_runs: false,
 };
+/// Ampere's decoder and encoder take work, which has run on a GA102. The decoder's node type is the
+/// one Blackwell's first decoder has, and the encoder's is the first encoder's, as in Turing's list.
 const AMPERE_NODES: EngineNodes = EngineNodes {
     overlay: Some(OVERLAY_NODE),
-    decode: &[(0, NODE_TYPE_NOT_SET)],
-    encode: &[(0, NODE_TYPE_NOT_SET)],
+    decode: &[(0, 0x1A)],
+    encode: &[(0, 0x13)],
     optical_flow: &[(0, 0x21)],
     jpeg: &[],
-    video_runs: false,
+    video_runs: true,
 };
 const TURING_NODES: EngineNodes = EngineNodes {
     overlay: Some(OVERLAY_NODE),
@@ -179,6 +190,38 @@ const TURING_NODES: EngineNodes = EngineNodes {
     video_runs: false,
 };
 const NO_VIDEO_FLAGS: VideoRecordFlags = VideoRecordFlags { caps: [0; 4], decoder: 0, encoder: 0 };
+
+// Ampere's words have the bit of each class the guest's video runtimes use, from the table the
+// fourth word's bits are in (record::builder). Blackwell's words on an Ampere card name Blackwell's
+// compute class: NVENC on a Direct3D 11 device then sends a compute program for Blackwell's shaders,
+// which the card refuses, and the picture is black.
+
+/// The copy class, in the first word. With this bit clear, NVENC opens on a Direct3D 11 device but
+/// can't set up an encoder.
+const AMPERE_VIDEO_COPY_CLASS: u32 = 1 << 28;
+/// The decoder's class, in the first word. With this bit clear, decoding on a Direct3D 11 device
+/// doesn't start.
+const AMPERE_VIDEO_DECODER_CLASS: u32 = 1 << 8;
+/// The compute class, in the second word. With this bit clear, NVENC on a Direct3D 11 device fails
+/// with a generic error.
+const AMPERE_VIDEO_COMPUTE_CLASS: u32 = 1 << 20;
+/// The encoder's class, in the third word. With this bit clear, NVENC finds no encode device behind
+/// a Direct3D 11 device.
+const AMPERE_VIDEO_ENCODER_CLASS: u32 = 1 << 8;
+/// The fourth word comes from the generation's classes, as on every generation (record::build).
+const AMPERE_VIDEO_CAPS: [u32; 4] = [
+    AMPERE_VIDEO_COPY_CLASS | AMPERE_VIDEO_DECODER_CLASS,
+    AMPERE_VIDEO_COMPUTE_CLASS,
+    AMPERE_VIDEO_ENCODER_CLASS,
+    0,
+];
+/// The RM's numbers for the one decoder and the one encoder an Ampere card has.
+const AMPERE_RM_DECODER: u32 = 0x13;
+const AMPERE_RM_ENCODER: u32 = 0x1B;
+/// At zero, Direct3D 11 can't make a decoder.
+const AMPERE_DECODER_FLAGS: u8 = 1 << (AMPERE_RM_DECODER - FIRST_ENGINE_IN_DECODER_FLAGS);
+/// At zero, NVENC on a Direct3D 11 device fails with a generic error.
+const AMPERE_ENCODER_FLAGS: u8 = 1 << (AMPERE_RM_ENCODER - FIRST_ENGINE_IN_ENCODER_FLAGS);
 
 /// Ada, which keeps Ampere's channel, copy and doorbell classes. Experimental.
 pub const ADA: Generation = Generation {
@@ -213,7 +256,8 @@ pub const ADA: Generation = Generation {
 };
 
 /// Ampere's 30 series, the GA10x chips. Experimental. The GA100 has no graphics class, and reports
-/// another SM version, so it's refused.
+/// another SM version, so it's refused. Video has run on a GA102: NVENC with H.264 and HEVC, through
+/// CUDA and on a Direct3D 11 device, and Direct3D 11's decoders.
 pub const AMPERE: Generation = Generation {
     name: "Ampere",
     architectures: &[0x170],
@@ -239,7 +283,11 @@ pub const AMPERE: Generation = Generation {
     shader_sets: &[(0x806, 0x7002)],
     nodes: AMPERE_NODES,
     copy_node_flags: None,
-    video_record_flags: NO_VIDEO_FLAGS,
+    video_record_flags: VideoRecordFlags {
+        caps: AMPERE_VIDEO_CAPS,
+        decoder: AMPERE_DECODER_FLAGS,
+        encoder: AMPERE_ENCODER_FLAGS,
+    },
     depth_kinds: DepthKinds::Always,
     page_kinds: PageKinds::InEntries,
     run_on_guest_branches: &[],

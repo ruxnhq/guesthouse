@@ -6,6 +6,7 @@ use crate::common::in_background;
 use crate::notify;
 use gtk::glib;
 use guesthouse_app_core::actions::rebooted;
+use guesthouse_app_core::card_share::look::{self as share, CardShare, Looks, Running};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::ending;
 use guesthouse_app_core::machine::{Machine, load_all};
@@ -16,7 +17,7 @@ use guesthouse_app_core::stopped::note_if_stopped_by_itself;
 use guesthouse_app_core::tasks::{State, Status, free_slot, is_paused, status_since};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TICK: Duration = Duration::from_secs(1);
 /// Seconds between looks at QEMU's run state and at what a VM left behind.
@@ -34,6 +35,10 @@ pub struct RefreshState {
     /// Whether the machines have been looked at once. What a machine already said before the app
     /// started is old news: its card shows it, and nothing announces it again.
     looked: bool,
+    /// Each running machine's card clients at the last look, for the share panel's engine figures.
+    share_looks: Looks,
+    /// What the share panel's times count from.
+    started: Option<Instant>,
 }
 
 struct Report {
@@ -44,6 +49,18 @@ struct Report {
     checked: bool,
     saved: Vec<Machine>,
     vm_running: bool,
+    share: Vec<CardShare>,
+    share_looks: Looks,
+}
+
+/// The machines up now, with the processes they run in, for the share panel.
+fn running_now(machines: &[Machine], statuses: &BTreeMap<String, Status>) -> Vec<Running> {
+    let up = |machine: &Machine| {
+        let found = statuses.get(&machine.id).filter(|found| found.state == State::Running)?;
+        let qemu = found.qemu.map(|seen| seen.pid);
+        Some(Running { machine: machine.clone(), slot: found.slot?, qemu })
+    };
+    machines.iter().filter_map(up).collect()
 }
 
 fn look(
@@ -51,6 +68,8 @@ fn look(
     machines: &[Machine],
     running_before: &BTreeMap<String, (u8, Seen)>,
     checked: bool,
+    share_before: &Looks,
+    started: Instant,
 ) -> Report {
     let status = |machine: &Machine| status_since(context, machine, running_before.get(&machine.id).copied());
     let statuses: BTreeMap<String, Status> =
@@ -66,6 +85,9 @@ fn look(
     };
     let restarted = |machine: &&&Machine| checked && rebooted(context, slot_of(machine));
     let idle = !statuses.values().any(|found| found.busy);
+    // Taken here, just before the clients are read, as the looks above can take a while.
+    let at = started.elapsed();
+    let (share, share_looks) = share::look(context, &running_now(machines, &statuses), share_before, at);
     Report {
         paused: running.iter().filter(paused).map(|machine| (**machine).clone()).collect(),
         rebooted: running.iter().filter(restarted).map(|machine| (**machine).clone()).collect(),
@@ -74,6 +96,8 @@ fn look(
         vm_running: free_slot(context).is_none(),
         checked,
         statuses,
+        share,
+        share_looks,
     }
 }
 
@@ -96,6 +120,8 @@ impl Window {
         state.ticks += 1;
         let checked = state.ticks.is_multiple_of(CHECK_TICKS);
         let running_before = state.running_before.clone();
+        let share_before = state.share_looks.clone();
+        let started = *state.started.get_or_insert_with(Instant::now);
         drop(state);
         let machines: Vec<Machine> =
             self.0.cards.borrow().values().map(|row| row.machine().borrow().clone()).collect();
@@ -104,7 +130,7 @@ impl Window {
         let this = self.clone();
         in_background(
             &context,
-            move || Ok(look(&looking, &machines, &running_before, checked)),
+            move || Ok(look(&looking, &machines, &running_before, checked, &share_before, started)),
             move |result| match result {
                 Ok(report) => this.show_status(report),
                 Err(problem) => this.on_refresh_failed(problem),
@@ -224,12 +250,14 @@ impl Window {
         tray.set_running(report.statuses.iter().filter_map(is_running).collect());
     }
 
-    fn show_status(&self, report: Report) {
+    fn show_status(&self, mut report: Report) {
         {
             let mut state = self.0.refresh.borrow_mut();
             state.reading = false;
             state.problem = None;
+            state.share_looks = std::mem::take(&mut report.share_looks);
         }
+        self.0.library.share_panel().show(&report.share);
         self.0.vm_running.set(report.vm_running);
         if let Some(dialog) = self.0.new_machine.borrow().as_ref() {
             dialog.set_vm_running(report.vm_running);

@@ -2,6 +2,7 @@
 
 use super::Window;
 use super::hero::Hero;
+use super::share_panel::SharePanel;
 use crate::application::APP_ID;
 use crate::rows::name_for_readers;
 use adw::prelude::*;
@@ -20,6 +21,7 @@ const BRAND_SPACING: i32 = 8;
 pub struct LibraryPage {
     pub page: adw::NavigationPage,
     hero: Hero,
+    share: SharePanel,
     rail: gtk::FlowBox,
     problems: gtk::Label,
     stack: gtk::Stack,
@@ -63,6 +65,7 @@ fn main_menu() -> gio::Menu {
 impl LibraryPage {
     pub fn new(description: &str) -> Self {
         let hero = Hero::new();
+        let share = SharePanel::new();
         let rail = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .homogeneous(true)
@@ -85,6 +88,7 @@ impl LibraryPage {
             .margin_end(SIDE_MARGIN)
             .build();
         column.append(hero.widget());
+        column.append(share.widget());
         column.append(&machines);
         column.append(&rail);
         column.append(&problems);
@@ -118,7 +122,7 @@ impl LibraryPage {
         let update = adw::Banner::builder().button_label("Update").action_name("win.update").build();
         toolbar.add_top_bar(&update);
         let page = adw::NavigationPage::builder().title("Guesthouse").tag("library").child(&toolbar).build();
-        Self { page, hero, rail, problems, stack, add, start, update }
+        Self { page, hero, share, rail, problems, stack, add, start, update }
     }
 
     pub fn connect_new_machine(&self, window: &Window) {
@@ -135,6 +139,10 @@ impl LibraryPage {
 
     pub fn hero(&self) -> &Hero {
         &self.hero
+    }
+
+    pub fn share_panel(&self) -> &SharePanel {
+        &self.share
     }
 
     pub fn add(&self, card: &gtk::Box) {

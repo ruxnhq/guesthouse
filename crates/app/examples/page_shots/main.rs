@@ -398,6 +398,9 @@ fn pretend_vm(context: &Context, machine: &Machine) -> Child {
 async fn running_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>, machine: MachineHandle) {
     glib::timeout_future(LONG).await;
     check(&failures, text_of(&window).contains("Running."), "a running VM shows in the library");
+    let text = text_of(&window);
+    check(&failures, text.contains("Sharing the Card"), "a running GPU machine shows how its card is shared");
+    check(&failures, text.contains("GPU time not available"), "a figure with no reading says so");
     shot_after_paint(&window, &folder, "14-library-running").await;
     window.show_settings(machine);
     check(&failures, shows(&window, "The VM must be off").await, "settings say what can't change now");

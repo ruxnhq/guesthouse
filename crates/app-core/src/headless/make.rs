@@ -151,6 +151,22 @@ fn access_for(windows: bool, options: &NewOptions) -> Result<Access> {
     Ok(access)
 }
 
+/// Lean Windows as the recipe starts it, unless told otherwise. What it takes out is shown in full
+/// before the machine is made: by the recipe's own text when the recipe turned it on, and here when
+/// `--lean on` did.
+fn lean_for(windows: bool, options: &NewOptions, extras: &Extras, out: &mut dyn Write) -> Result<bool> {
+    let from_recipe = extras.recipe.as_ref().is_some_and(|chosen| chosen.recipe.lean);
+    let Some(word) = options.lean else { return Ok(from_recipe) };
+    if !windows {
+        return Err(Failure::new("--lean is only for a Windows machine with GPU-PV."));
+    }
+    let lean = on_or_off("--lean", word)?;
+    if lean && !from_recipe {
+        writeln!(out, "{}", crate::lean::what_it_does())?;
+    }
+    Ok(lean)
+}
+
 fn access_text(access: &Access) -> String {
     let on: Vec<&str> =
         Service::ALL.iter().filter(|service| access.is_on(**service)).map(|service| service.name()).collect();
@@ -172,6 +188,7 @@ fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Wr
         options.remote_desktop,
         options.ssh,
         options.set_up_for,
+        options.lean,
     ];
     if others.iter().any(Option::is_some) {
         return Err(Failure::new("A macOS machine takes --disk, --cores and --ram, and nothing else."));
@@ -240,6 +257,7 @@ pub(super) fn new_machine(
     } else if options.yes {
         return Err(Failure::new("--yes goes with --set-up-for."));
     }
+    extras.lean = lean_for(windows, options, &extras, out)?;
     let new = NewMachine {
         name: name.to_owned(),
         iso: iso.to_owned(),
@@ -278,6 +296,9 @@ pub(super) fn new_machine(
     }
     if windows {
         writeln!(out, "{}", access_text(&new.access))?;
+    }
+    if extras.lean {
+        writeln!(out, "It is lean Windows.")?;
     }
     if let Some(chosen) = &extras.recipe {
         writeln!(out, "Its steps run once it is installed and up: {}.", chosen.recipe.name)?;

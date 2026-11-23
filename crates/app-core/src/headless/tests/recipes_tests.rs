@@ -174,3 +174,41 @@ fn running_a_recipe_again_needs_one_and_a_running_machine() {
     assert!(usage_of("recipe").contains("recipe needs a machine."));
     assert!(usage_of("recipes bare").contains("recipes takes no words, only options."));
 }
+
+#[test]
+fn lean_windows_is_off_unless_asked_and_is_shown_in_full_first() {
+    let scratch = Scratch::new();
+    let context = with_recipes(&scratch);
+    let (out, result) = said(&context, &windows_words(&scratch, "Usual"));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(!out.contains("lean"), "{out}");
+    assert!(!crate::lean::is_lean(&context, &load(&context, "usual").unwrap()));
+    let (out, result) = said(&context, &format!("{} --lean on", windows_words(&scratch, "Lean")));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(out.contains("(Microsoft.YourPhone)") && out.contains("It leaves alone:"), "{out}");
+    assert!(out.contains("It is lean Windows."), "{out}");
+    assert!(crate::lean::is_lean(&context, &load(&context, "lean").unwrap()));
+    let (shown, _) = said(&context, "show lean");
+    assert!(shown.contains("lean      on"), "{shown}");
+    let (out, result) = said(&context, &format!("new Ub --iso {} --lean on", plain_disc(&scratch)));
+    assert!(failure_of(result).contains("--lean is only for a Windows machine"), "{out}");
+}
+
+#[test]
+fn a_recipe_that_turns_lean_on_says_so_and_the_user_can_turn_it_off() {
+    let scratch = Scratch::new();
+    let context = with_recipes(&scratch);
+    scratch.write(
+        "program/recipes/slim.toml",
+        GAMES.replace("Games", "Slim").replace("[settings]", "lean = true\n[settings]"),
+    );
+    let (out, result) = said(&context, &format!("{} --set-up-for slim", windows_words(&scratch, "Slim")));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(out.contains("It starts the machine as lean Windows, which you can turn off."), "{out}");
+    assert_eq!(out.matches("(Microsoft.YourPhone)").count(), 1, "the list is shown once: {out}");
+    assert!(crate::lean::is_lean(&context, &load(&context, "slim").unwrap()));
+    let (out, result) =
+        said(&context, &format!("{} --set-up-for slim --lean off", windows_words(&scratch, "Full")));
+    assert_eq!(result, Ok(()), "{out}");
+    assert!(!crate::lean::is_lean(&context, &load(&context, "full").unwrap()));
+}

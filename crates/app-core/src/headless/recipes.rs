@@ -2,7 +2,7 @@
 //! a machine's steps again. A recipe is shown before it is used, as the dialog shows it.
 
 use super::{follow_up, run_task};
-use crate::actions::RECIPE_TASK;
+use crate::actions::{LEAN_TASK, RECIPE_TASK};
 use crate::context::Context;
 use crate::defaults::Sizes;
 use crate::failure::{Failure, Result};
@@ -71,7 +71,7 @@ pub(super) fn sized(
         writeln!(out, "Note: {note}")?;
     }
     let sizes = Usual { cores: fitted.cores, ram_gib: fitted.ram_gib, disk_gib: fitted.disk_gib };
-    Ok((sizes, Extras { vram_gib: fitted.vram_gib, recipe: Some(chosen.clone()) }))
+    Ok((sizes, Extras { vram_gib: fitted.vram_gib, recipe: Some(chosen.clone()), lean: false }))
 }
 
 pub(super) fn usual_of(sizes: &Sizes, cores: u32, ram_gib: u32) -> Usual {
@@ -123,4 +123,28 @@ pub(super) fn run_again(context: &Context, machine: &Machine, wait: bool, out: &
         return Err(follow_up(&found, String::new()));
     }
     Ok(writeln!(out, "The steps of {} ran.", chosen.recipe.name)?)
+}
+
+/// Lean Windows again, in the guest, which has to be running.
+pub(super) fn lean_again(
+    context: &Context,
+    machine: &Machine,
+    wait: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let name = &machine.name;
+    if !crate::lean::is_lean(context, machine) {
+        return Err(Failure(format!("{name} was not made lean.")));
+    }
+    let before = status(context, machine);
+    if before.state != State::Running {
+        return Err(Failure(format!("{name} is {}. Start it first.", before.state.name().to_lowercase())));
+    }
+    let Some(found) = run_task(context, machine, LEAN_TASK, wait, out)? else {
+        return Ok(writeln!(out, "Making {name} lean again. status shows how far it is.")?);
+    };
+    if !found.error.is_empty() {
+        return Err(follow_up(&found, String::new()));
+    }
+    Ok(writeln!(out, "{name} is lean again.")?)
 }

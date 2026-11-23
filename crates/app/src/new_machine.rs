@@ -16,6 +16,7 @@ use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use guesthouse_app_core::host::{RamField, physical_cores};
 use guesthouse_app_core::iso::Iso;
+use guesthouse_app_core::lean::what_it_does;
 use guesthouse_app_core::library::{
     Extras, MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create_with,
 };
@@ -50,6 +51,9 @@ const REMOTE_DESKTOP_NOTE: &str = "Windows' own, on guest port 3389. Sign in wit
 const SSH_NOTE: &str = "OpenSSH Server on guest port 22, for the account above. Your public keys from ~/.ssh go \
                         in too.";
 const NO_RECIPE: &str = "Nothing extra";
+const LEAN_TITLE: &str = "Lean Windows";
+const LEAN_NOTE: &str = "Leaves out apps Windows adds for every account, and keeps some programs from running in \
+                         the background. Show lists all of it, and what it leaves alone.";
 const RECIPE_NOTE: &str = "A recipe sets a few of the machine's settings and gives it software once it is installed. \
                            Nothing runs in the machine until it is.";
 const WIDTH: i32 = 520;
@@ -86,6 +90,11 @@ struct Parts {
     access: adw::PreferencesGroup,
     remote_desktop: adw::SwitchRow,
     ssh: adw::SwitchRow,
+    /// Lean Windows, for a Windows machine. Off unless the user or the chosen recipe turns it on.
+    lean_group: adw::PreferencesGroup,
+    lean: adw::SwitchRow,
+    /// The switch is on because the recipe turned it on, and goes off with the recipe.
+    lean_from_recipe: Cell<bool>,
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     disk: adw::SpinRow,
@@ -201,6 +210,12 @@ impl NewMachineDialog {
             .sensitive(no_openssh.is_none())
             .build();
         access.add(&ssh);
+        let lean_group = adw::PreferencesGroup::builder().visible(false).build();
+        page.add(&lean_group);
+        let lean = adw::SwitchRow::builder().title(LEAN_TITLE).subtitle(LEAN_NOTE).build();
+        let lean_show = row_button("Show");
+        lean.add_suffix(&lean_show);
+        lean_group.add(&lean);
         let cards = windows_card_choices(&context);
         let labels: Vec<&str> = cards.iter().map(|choice| choice.label.as_str()).collect();
         let card = choice_row(CARD_TITLE, &labels);
@@ -254,6 +269,9 @@ impl NewMachineDialog {
             access,
             remote_desktop,
             ssh,
+            lean_group,
+            lean,
+            lean_from_recipe: Cell::new(false),
             cores,
             ram,
             disk,
@@ -276,6 +294,8 @@ impl NewMachineDialog {
         }));
         this.set_vm_running(window.vm_running());
         this.connect(&cancel, &choose);
+        let dialog = this.0.dialog.clone();
+        lean_show.connect_clicked(move |_| recipe_dialog::show(&dialog, LEAN_TITLE, &what_it_does()));
         let handle = this.clone();
         use_macos.connect_clicked(move |_| handle.choose_macos());
         this
@@ -364,6 +384,7 @@ impl NewMachineDialog {
         parts.disk.set_value(MACOS_SIZES.disk.into());
         parts.card.set_visible(false);
         parts.account.set_visible(false);
+        parts.lean_group.set_visible(false);
         self.fill_recipes(Kind::Plain);
         parts.no_driver.set(false);
         if keeps_following_the_disc(&parts.name.text(), &parts.suggested.borrow()) {
@@ -522,6 +543,7 @@ impl NewMachineDialog {
         self.show_account(iso.kind);
         self.fill_recipes(iso.kind);
         self.0.access.set_visible(iso.kind == Kind::Windows);
+        self.0.lean_group.set_visible(iso.kind == Kind::Windows);
         *self.0.iso.borrow_mut() = Some(iso);
         self.0.hardware.set_sensitive(true);
         self.update();
@@ -624,6 +646,9 @@ impl NewMachineDialog {
     fn recipe_changed(&self) {
         let parts = &self.0;
         let Some(iso) = parts.iso.borrow().clone() else { return };
+        if parts.lean_from_recipe.replace(false) {
+            parts.lean.set_active(false);
+        }
         let Some(entry) = self.chosen_recipe() else {
             parts.recipe_show.set_sensitive(false);
             parts.recipe_row.set_subtitle("");
@@ -635,6 +660,11 @@ impl NewMachineDialog {
         let context = parts.window.context();
         let recipe = &entry.recipe;
         parts.recipe_show.set_sensitive(true);
+        // As with the sizes, the recipe's choice goes in the row, and the row is the user's after.
+        if recipe.lean && !parts.lean.is_active() {
+            parts.lean.set_active(true);
+            parts.lean_from_recipe.set(true);
+        }
         let usual = Usual {
             cores: parts.cores.value() as u32,
             ram_gib: parts.ram.value() as u32,
@@ -722,6 +752,7 @@ impl NewMachineDialog {
         let context = parts.window.context();
         // The video memory cap is the one setting here that has no row, so it comes from the recipe,
         // held to what the card allows.
+        let lean = iso.kind == Kind::Windows && parts.lean.is_active();
         let extras = entry.map_or_else(Extras::default, |entry| {
             let asked =
                 SettingsAsked { vram_gib: entry.recipe.settings.vram_gib, ..SettingsAsked::default() };
@@ -731,8 +762,10 @@ impl NewMachineDialog {
             Extras {
                 vram_gib: vram,
                 recipe: Some(Chosen { source: entry.source, file, recipe: entry.recipe }),
+                lean: false,
             }
         });
+        let extras = Extras { lean, ..extras };
         let working = context.clone();
         let this = self.clone();
         in_background(

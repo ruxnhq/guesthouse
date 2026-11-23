@@ -52,6 +52,13 @@ fn visible(text: &str) -> String {
 pub fn what_it_will_run(recipe: &Recipe, source: Source, file: &str) -> String {
     let mut text = format!("{}: {}\n{}\n", recipe.name, recipe.description, origin_text(source, file));
     text.push_str(&settings_text(recipe).unwrap_or_default());
+    if recipe.lean {
+        let _ = write!(
+            text,
+            "\nIt starts the machine as lean Windows, which you can turn off. {}",
+            crate::lean::what_it_does()
+        );
+    }
     if recipe.steps.is_empty() {
         text.push_str("\nIt runs nothing in the machine.");
         return text.trim().to_owned();

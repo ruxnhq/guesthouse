@@ -358,6 +358,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         for service in Service::ALL {
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;
         }
+        line(out, "lean", &switch(crate::lean::is_lean(context, machine)))?;
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
     line(out, "throwaway", &switch(machine.throwaway))?;

@@ -9,7 +9,7 @@ const NAME: &str = "--name";
 const THROWAWAY: &str = "--throwaway";
 const DELETE_WHEN_STOPPED: &str = "--delete-when-stopped";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 13] = [
+const NEW_OPTIONS: [&str; 14] = [
     "--iso",
     "--kind",
     "--disk",
@@ -23,6 +23,7 @@ const NEW_OPTIONS: [&str; 13] = [
     "--remote-desktop",
     "--ssh",
     "--set-up-for",
+    "--lean",
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
 const MINUTES: &str = "--minutes";
@@ -47,6 +48,8 @@ pub(super) struct NewOptions<'a> {
     pub ssh: Option<&'a str>,
     /// A recipe, by its key, its file's name or its name.
     pub set_up_for: Option<&'a str>,
+    /// On or off, for a Windows machine. Off unless the recipe turns it on.
+    pub lean: Option<&'a str>,
     /// Goes ahead with a recipe of the user's own, whose steps `new` shows first.
     pub yes: bool,
 }
@@ -74,6 +77,10 @@ pub(super) enum Command<'a> {
     },
     Recipes,
     RunRecipe {
+        name: &'a str,
+        wait: bool,
+    },
+    Lean {
         name: &'a str,
         wait: bool,
     },
@@ -220,9 +227,14 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
             Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
             Ok(Command::Recipes)
         }
-        "recipe" => {
+        "recipe" | "lean" => {
             let split = Split::new(command, rest, &[], &[NO_WAIT])?;
-            Ok(Command::RunRecipe { name: split.exactly(command, machine, 1)?[0], wait: !split.has(NO_WAIT) })
+            let (name, wait) = (split.exactly(command, machine, 1)?[0], !split.has(NO_WAIT));
+            Ok(if command == "recipe" {
+                Command::RunRecipe { name, wait }
+            } else {
+                Command::Lean { name, wait }
+            })
         }
         "idle" => {
             let split = Split::new(command, rest, &[MINUTES], &[])?;
@@ -305,6 +317,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 remote_desktop: split.value("--remote-desktop"),
                 ssh: split.value("--ssh"),
                 set_up_for: split.value("--set-up-for"),
+                lean: split.value("--lean"),
                 yes: split.has(YES),
             };
             Ok(Command::New { name, options })

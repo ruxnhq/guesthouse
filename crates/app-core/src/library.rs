@@ -272,13 +272,16 @@ pub fn create(context: &Context, new: &NewMachine) -> Result<Machine> {
     create_with(context, new, &Extras::default())
 }
 
-/// What a machine can be made with besides what a [`NewMachine`] says: what a recipe asked of it.
+/// What a machine can be made with besides what a [`NewMachine`] says: what a recipe asked of it, and
+/// lean Windows.
 #[derive(Debug, Clone, Default)]
 pub struct Extras {
     /// The most video memory it may use, in GiB. 0 is no cap.
     pub vram_gib: u32,
     /// The recipe it is made for. Its steps run after the install.
     pub recipe: Option<crate::recipe::Chosen>,
+    /// Made as lean Windows, which only a Windows machine can be.
+    pub lean: bool,
 }
 
 /// [`create`] for a machine that has a recipe. The cap is held to the same limit a setting is, and what
@@ -292,6 +295,9 @@ pub fn create_with(context: &Context, new: &NewMachine, extras: &Extras) -> Resu
             "The recipe {name} is for {}, and this machine is not.",
             chosen.recipe.guest.name()
         )));
+    }
+    if extras.lean && new.kind != Kind::Windows {
+        return Err(Failure::new("Only a Windows machine can be made lean."));
     }
     let machine = Machine { vram_gib: extras.vram_gib, ..planned(context, new) };
     let folder = context.paths.machines.join(&machine.id);
@@ -323,13 +329,15 @@ fn make_disk_folder(machine: &Machine) -> Result<()> {
     })
 }
 
-/// The password, the choices of Remote Desktop and SSH, the recipe if there is one, and the disk.
+/// The password, the choices of Remote Desktop, SSH and lean Windows, the recipe if there is one, and
+/// the disk.
 fn make_files(context: &Context, new: &NewMachine, machine: &Machine, extras: &Extras) -> Result<()> {
     if installs_itself(machine) && !new.password.is_empty() {
         store_password(&machine.password_file(context), &new.password)?;
     }
     if machine.kind == Kind::Windows {
         write_access(context, machine, &new.access)?;
+        crate::lean::write_lean(context, machine, extras.lean)?;
     }
     if let Some(chosen) = &extras.recipe {
         crate::recipe::write_chosen(context, machine, chosen)?;
@@ -1004,7 +1012,7 @@ mod tests {
         let none = create(&context, &new).unwrap();
         assert!(crate::recipe::read_chosen(&context, &none).is_none());
         assert!(!none.folder(&context).join("recipe.json").exists());
-        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("ubuntu")) };
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("ubuntu")), lean: false };
         let made = create_with(&context, &NewMachine { name: "Ub2".into(), ..new }, &extras).unwrap();
         assert_eq!(crate::recipe::read_chosen(&context, &made), extras.recipe);
     }
@@ -1013,7 +1021,7 @@ mod tests {
     fn a_recipe_for_another_kind_makes_nothing() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("windows")) };
+        let extras = Extras { vram_gib: 0, recipe: Some(a_recipe("windows")), lean: false };
         let said = create_with(&context, &plain(&scratch, "Plain", None), &extras).unwrap_err().0;
         assert!(said.contains("is for Windows"), "{said}");
         assert!(load_all(&context).0.is_empty(), "no machine was left behind");
@@ -1033,9 +1041,33 @@ mod tests {
             disk_gib: 64,
             ..plain(&scratch, "Win", Some(&scratch.write("win.iso", "disc").display().to_string()))
         };
-        let said = create_with(&context, &new, &Extras { vram_gib: 999, recipe: None }).unwrap_err().0;
+        let said = create_with(&context, &new, &Extras { vram_gib: 999, ..Extras::default() }).unwrap_err().0;
         assert!(said.contains("video memory cap"), "{said}");
         let made = create_with(&context, &new, &Extras::default()).unwrap();
         assert_eq!(made.vram_gib, 0);
+    }
+
+    #[test]
+    fn only_windows_is_made_lean_and_the_machine_keeps_the_choice() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.install_room = Some(0);
+        fs::create_dir_all(crate::settings::driver_folder(&context)).unwrap();
+        let lean = Extras { lean: true, ..Extras::default() };
+        let said = create_with(&context, &plain(&scratch, "Plain", None), &lean).unwrap_err().0;
+        assert!(said.contains("Only a Windows machine"), "{said}");
+        let new = NewMachine {
+            kind: Kind::Windows,
+            windows_disc: true,
+            cores: 2,
+            ram_gib: 4,
+            disk_gib: 64,
+            ..plain(&scratch, "Win", Some(&scratch.write("win.iso", "disc").display().to_string()))
+        };
+        let made = create_with(&context, &new, &lean).unwrap();
+        assert!(crate::lean::is_lean(&context, &made));
+        let usual =
+            create_with(&context, &NewMachine { name: "Win2".into(), ..new }, &Extras::default()).unwrap();
+        assert!(!usual.folder(&context).join(crate::lean::LEAN_FILE).exists());
     }
 }

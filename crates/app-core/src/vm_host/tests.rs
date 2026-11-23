@@ -478,15 +478,19 @@ fn a_throwaway_run_keeps_its_overlay_for_the_task_and_the_next_task_gets_a_new_o
     task.start(&plan, &machine).unwrap();
     let mark = machine.folder(&context).join(crate::throwaway::DELETE_MARK);
     assert_eq!(fs::read_to_string(mark).unwrap(), "started", "its VM was up");
+    // Each pretend QEMU is left to note its overlay before it is ended: on a slow PC it could be
+    // ended first, and its line would never come.
+    seen(1);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
     task.start(&plan, &machine).unwrap();
+    seen(2);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
     LocalHost::new(&context).start(&plan, &machine).unwrap();
+    let lines = seen(3);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
-    let lines = seen(3);
     assert!(lines.iter().all(|line| line.ends_with(" (deleted)")), "{lines:?}");
     assert_eq!(lines[0], lines[1], "one task, one overlay");
     assert_ne!(lines[1], lines[2], "a new task, a new one");

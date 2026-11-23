@@ -44,7 +44,13 @@ class FakeGuest:
         self.file("opt/nv/built/cudartcheck", "#!/bin/sh\necho 'runtime 12040, seed 1: checked 8 values, 0 wrong'\n",
                   True)
         self.state(f"gpu=on\nversion={V}\ntested=yes\n")
-        self.fake("dpkg-query", "echo 'install ok installed'")
+        # The packages of the install, our package at the host's version, and a `distro` file in the root
+        # for the distro's own NVIDIA packages.
+        self.fake("dpkg-query", f"""case "$*" in
+*libnvidia-compute*) [ ! -e "$NVFWD_ROOT/distro" ] || sed 's/^/ii |/' "$NVFWD_ROOT/distro" ;;
+*nvfwd-host-driver*) echo 'ii |{V}' ;;
+*) echo 'install ok installed' ;;
+esac""")
         self.fake("systemctl", '[ "$1" = get-default ] && echo graphical.target; exit 0')
         self.fake("id", '[ "$1" = -u ] && echo 1000; exit 0')
         self.fake("uname", "echo 7.0")
@@ -221,6 +227,22 @@ class Verdict(unittest.TestCase):
     def test_sensors_that_read_say_nothing(self):
         self.guest.fake("nvidia-smi", """case "$*" in *temperature*) echo 42 ;; *) echo 'GPU 0: RTX' ;; esac""")
         self.assertNotIn("no sensor readings", self.guest.run().stdout)
+
+    def test_apt_knowing_the_hosts_driver_passes(self):
+        self.assertIn(f"PASS dpkg counts the host's driver {V} as installed", self.guest.run().stdout)
+
+    def test_apt_not_knowing_the_hosts_driver_fails(self):
+        self.guest.fake("dpkg-query", """case "$*" in *nvfwd-host-driver*|*libnvidia-compute*) ;; *) echo 'install ok installed' ;; esac""")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL dpkg counts the host's driver", result.stdout)
+
+    def test_the_distros_own_driver_is_named_in_a_warning(self):
+        self.guest.file("distro", "libnvidia-compute-595\nlibnvidia-compute-590\n")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("WARN the distro's own NVIDIA libraries are installed beside the host's "
+                      "(libnvidia-compute-595 libnvidia-compute-590)", result.stdout)
 
     def test_an_untested_driver_is_warned_about(self):
         self.guest.state(f"gpu=on\nversion={V}\ntested=no\n")

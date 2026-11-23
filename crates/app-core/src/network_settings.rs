@@ -5,8 +5,10 @@ use crate::failure::{Failure, Result};
 use crate::library::unused_mac;
 use crate::machine::{Kind, Machine, load_all};
 use crate::network::{self, Forward, InUse, Mode, Protocol};
+use crate::only_through;
 use crate::processes::{qemu_processes, running_vms};
 use crate::slots;
+use crate::vm_args::passt_installed;
 use std::collections::BTreeMap;
 
 /// The machines running in other slots, as far as the library knows them.
@@ -96,6 +98,26 @@ pub fn set_bridge(context: &Context, machine: &mut Machine, text: &str) -> Resul
     machine.save(context)
 }
 
+/// An empty name turns the setting off. The interface needn't be there now, as a VPN may be down.
+pub fn set_only_through(context: &Context, machine: &mut Machine, text: &str) -> Result<()> {
+    let name = text.trim();
+    if let Some(problem) = network::interface_name_problem(name) {
+        return Err(Failure(problem));
+    }
+    machine.only_through = name.to_owned();
+    machine.save(context)
+}
+
+/// An empty address has one found at each start.
+pub fn set_dns(context: &Context, machine: &mut Machine, text: &str) -> Result<()> {
+    let address = text.trim();
+    if let Some(problem) = network::dns_problem(address) {
+        return Err(Failure(problem));
+    }
+    machine.dns = address.to_owned();
+    machine.save(context)
+}
+
 pub fn set_mac(context: &Context, machine: &mut Machine, text: &str) -> Result<()> {
     let mac = network::read_mac(text).unwrap_or_else(|| text.to_owned());
     if let Some(problem) = network::mac_problem(&mac) {
@@ -103,6 +125,35 @@ pub fn set_mac(context: &Context, machine: &mut Machine, text: &str) -> Result<(
     }
     machine.mac = mac;
     machine.save(context)
+}
+
+/// What stops a NAT machine held to one interface: the interface gone, no way to name servers there,
+/// or no passt, which nothing may replace as QEMU's own NAT has no such binding.
+fn only_through_problems(
+    machine: &Machine,
+    passt_installed: bool,
+    dns: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let interface = machine.only_through.trim();
+    let mut found = Vec::new();
+    if machine.network_mode != Mode::Nat || machine.kind == Kind::Linux || interface.is_empty() {
+        return found;
+    }
+    if !passt_installed {
+        found.push(format!(
+            "passt is not installed, and {interface} is the only way out for this machine. \
+             Install passt, or choose Any in the machine's network settings."
+        ));
+    }
+    if !only_through::interface_exists(interface) {
+        found.push(format!("{interface} is not there. Connect the VPN first."));
+    } else if dns(interface).is_none() {
+        found.push(format!(
+            "No DNS server can be found that works through {interface}. {}",
+            only_through::NO_DNS_HELP
+        ));
+    }
+    found
 }
 
 /// What stops this machine's network now. A VM that can't get its forward wouldn't start at all, and
@@ -120,6 +171,9 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
             ));
         }
     }
+    found.extend(only_through_problems(machine, passt_installed(), |interface| {
+        only_through::dns_now(&machine.dns, interface)
+    }));
     for item in &machine.forwards {
         let taken = || {
             let host = u16::try_from(item.host).ok()?;
@@ -175,6 +229,73 @@ mod tests {
         assert!(set_mac(&context, &mut older, "nothing").unwrap_err().0.contains("six pairs"));
         assert!(set_bridge(&context, &mut older, "br0,x").unwrap_err().0.contains("up to 15"));
         assert_eq!((older.mac.as_str(), older.bridge.as_str()), ("", "br0"));
+    }
+
+    #[test]
+    fn the_interface_and_its_dns_server_are_checked_as_they_are_typed() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let mut older = saved(&context);
+        set_only_through(&context, &mut older, " wg0 ").unwrap();
+        set_dns(&context, &mut older, "10.64.0.1").unwrap();
+        let kept = load(&context, "older").unwrap();
+        assert_eq!((kept.only_through.as_str(), kept.dns.as_str()), ("wg0", "10.64.0.1"));
+        assert!(set_only_through(&context, &mut older, "wg 0").unwrap_err().0.contains("up to 15"));
+        assert!(set_dns(&context, &mut older, "fc00::1").unwrap_err().0.contains("IPv4"));
+        set_only_through(&context, &mut older, "").unwrap();
+        set_dns(&context, &mut older, "").unwrap();
+        assert_eq!(load(&context, "older").unwrap().only_through, "");
+        assert_eq!(load(&context, "older").unwrap().dns, "");
+    }
+
+    fn no_dns(_: &str) -> Option<String> {
+        None
+    }
+
+    fn found_dns(_: &str) -> Option<String> {
+        Some("10.64.0.1".into())
+    }
+
+    fn held_to(interface: &str, dns: &str) -> Machine {
+        Machine {
+            only_through: interface.into(),
+            dns: dns.into(),
+            ..Machine::new("held", "Held", "/d", "/v")
+        }
+    }
+
+    #[test]
+    fn a_machine_that_is_not_held_has_no_such_problems() {
+        assert!(only_through_problems(&held_to("", ""), false, no_dns).is_empty());
+        let bridged = Machine { network_mode: Mode::Bridged, ..held_to("no-such0", "") };
+        assert!(only_through_problems(&bridged, false, no_dns).is_empty());
+        let ubuntu = Machine { kind: Kind::Linux, ..held_to("no-such0", "") };
+        assert!(only_through_problems(&ubuntu, false, no_dns).is_empty());
+    }
+
+    #[test]
+    fn an_interface_that_is_not_there_says_to_connect_the_vpn() {
+        let found = only_through_problems(&held_to("no-such0", "10.64.0.1"), true, no_dns);
+        assert_eq!(found, ["no-such0 is not there. Connect the VPN first."]);
+    }
+
+    #[test]
+    fn no_passt_is_a_problem_and_never_a_fallback() {
+        let found = only_through_problems(&held_to("lo", "10.64.0.1"), false, found_dns);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("passt is not installed") && found[0].contains("lo"), "{found:?}");
+    }
+
+    #[test]
+    fn a_server_that_is_found_leaves_nothing_to_say() {
+        assert!(only_through_problems(&held_to("lo", ""), true, found_dns).is_empty());
+    }
+
+    #[test]
+    fn no_server_to_use_says_to_set_one_in_the_settings() {
+        let found = only_through_problems(&held_to("lo", ""), true, no_dns);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("lo") && found[0].contains("network settings"), "{found:?}");
     }
 
     #[test]

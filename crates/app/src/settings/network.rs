@@ -166,7 +166,12 @@ impl Network {
         let off = parts.off.get();
         let installed = passt_installed();
         let bridged = machine.network_mode == Mode::Bridged;
-        parts.mode.set_subtitle(&network::describe(machine.network_mode, machine.passt, installed));
+        parts.mode.set_subtitle(&network::describe(
+            machine.network_mode,
+            machine.passt,
+            installed,
+            &machine.only_through,
+        ));
         let notes = if off {
             parts.mac_problem.borrow().clone().unwrap_or_default()
         } else {

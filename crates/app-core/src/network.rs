@@ -257,7 +257,8 @@ pub fn in_use_of(words: &[Vec<u8>]) -> Option<InUse> {
     let nic = words.windows(2).find(|pair| pair[0] == b"-nic")?;
     let word = &nic[1];
     let has = |needle: &[u8]| word.windows(needle.len()).any(|part| part == needle);
-    Some(if word.starts_with(b"passt,") {
+    // The jail's launcher starts passt, and QEMU has its end of the connection.
+    Some(if word.starts_with(b"passt,") || word.starts_with(b"socket,") {
         InUse::Passt
     } else if word.starts_with(b"bridge,") {
         InUse::Bridge
@@ -268,9 +269,18 @@ pub fn in_use_of(words: &[Vec<u8>]) -> Option<InUse> {
     })
 }
 
-/// What these settings give the guest.
-pub fn describe(mode: Mode, passt: bool, installed: bool) -> String {
+/// What these settings give the guest. `only_through` is the interface everything is held to, or empty.
+pub fn describe(mode: Mode, passt: bool, installed: bool, only_through: &str) -> String {
     match mode {
+        Mode::Nat if !only_through.is_empty() && installed => format!(
+            "All of the guest's traffic goes out through {only_through} and nothing else, with passt. \
+             If {only_through} goes down, the guest has no network. {SECOND_ADAPTER}"
+        ),
+        Mode::Nat if !only_through.is_empty() => {
+            format!(
+                "The guest can only go out through {only_through}, and that needs passt, which is not installed."
+            )
+        }
         Mode::None => {
             "No internet. Guesthouse can still reach the guest, and a shared folder still works.".into()
         }
@@ -419,8 +429,25 @@ mod tests {
 
     #[test]
     fn passt_settings_are_described_as_they_will_work() {
-        assert!(describe(Mode::Nat, true, true).contains("passt"));
-        assert!(describe(Mode::Nat, true, false).contains("not installed"));
+        assert!(describe(Mode::Nat, true, true, "").contains("passt"));
+        assert!(describe(Mode::Nat, true, false, "").contains("not installed"));
+    }
+
+    #[test]
+    fn the_one_interface_is_said_whatever_the_passt_switch_is() {
+        for switch in [false, true] {
+            let text = describe(Mode::Nat, switch, true, "wg0");
+            assert!(text.contains("through wg0 and nothing else") && text.contains("passt"), "{text}");
+        }
+        assert!(describe(Mode::Nat, false, false, "wg0").contains("needs passt"));
+        assert_eq!(describe(Mode::None, false, true, "wg0"), describe(Mode::None, false, true, ""));
+    }
+
+    #[test]
+    fn a_launcher_started_passt_is_passt_too() {
+        let nic = b"socket,model=e1000e,fd=5".to_vec();
+        let words = vec![b"qemu".to_vec(), b"-nic".to_vec(), nic];
+        assert_eq!(in_use_of(&words), Some(InUse::Passt));
     }
 
     #[test]

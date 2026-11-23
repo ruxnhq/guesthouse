@@ -23,6 +23,8 @@ What would clash while both run is new:
 
 While a change is waiting, the machine's folder has `guest.token.next`, the token the guest is to be moved to, and after a Duplicate of a machine whose change was still waiting it can have `guest.token.next.again`, an empty mark that one more change is owed once that one is done, as the copy shares the waiting token, which the original's guest may have already. A copy of a machine with no change waiting gets a waiting token of its own, and each moves in one change. Both go once the changes are done. A copy and an import plan changes of their own, so neither file goes into an export. If the guest refuses the change, the machine's card and `guesthouse-vm show` say so, with what the guest said, as until it goes through the machine shares its token with another. The next start tries again.
 
+A copy is the same Windows, so it is as lean as the original, keeps the record of what [lean Windows](recipes.md#lean-windows) took out and what Windows put back, and Defender in it leaves out the same folders, which its settings and `show` say.
+
 Host drives stay with the original, as two guests can't share a whole drive. Add them to the copy in its settings if it's the copy that should have them.
 
 Ubuntu's host name stays the same, as it's the same for every Ubuntu guest Guesthouse installs, copy or not: `sudo hostnamectl set-hostname NAME` in the guest changes it. The Windows computer name stays the same too, for the same reason, and changing it would need a restart in the middle of the start. Windows' own machine id (its SID) can only be made new by Sysprep, which takes the guest back to its first-run setup, so it stays as well. Two Windows machines on one bridged network show up under one name. The TPM's own identity is the same, so a service that checks it can tell the two apart only by the rest.
@@ -40,6 +42,8 @@ Some things stay, as they aren't the machine's:
 - What the guest writes to its shared folder or to a host drive.
 - Its settings, which you change in the app.
 - Snapshots. Taking one, or going back to one, while the machine is off changes the clean state itself.
+
+On a lean Windows throwaway, the app doesn't look at each start for apps Windows put back: what a run gets back is gone at the next start, and it isn't taken out again and again. Which folders Defender leaves out goes back with the clean state too, so *Scan Them Again* is refused on a throwaway: turn Throwaway off, take them back, and turn it on again. Run Again for lean Windows works for the one run.
 
 A Windows guest's agent token is changed at each start, as soon as Windows' agent answers. Windows' own services, and any program set to start with Windows, run from boot and could read the token on the disk before that. A program you start in the guest only sees the run's own token, which no other run and no other machine takes. A throwaway made from a machine shares that machine's token on its disk until the original has started once since. A machine on SATA isn't moved to NVMe while it's a throwaway, as that change would go with the run. It moves once Throwaway is off again. For the same reason a throwaway takes no snapshot of its own before a start, and a start that fails offers no way back: the next start is clean anyway.
 
@@ -67,6 +71,8 @@ Nothing. A file from somewhere else can be made to look like an export, so an im
 - The settings are read as a machine's settings, and every one that names something of this PC, as a path, a folder, a drive, a port, a bridge or the jail does, comes from here, never from the file. A file from a newer Guesthouse, with settings this one doesn't know, is refused.
 - The disk must be a qcow2 that stands alone. A disk built on another file, or keeping its data in one, could have QEMU read any file of yours, so it's refused. So is a snapshot this app didn't name, as each name becomes the name of a file. qemu-img reads the disk with limits on its memory and time.
 - An agent token or a password that doesn't look like the app's own is left out, and the import says so. The guest is moved to a new agent token at its first start here.
+- Whether the machine is lean Windows, and which apps that took out, are read as the app's own notes and written out again, keeping only names on lean Windows' own list. Lean Windows only ever takes out apps on that list. Its first start here looks again for any Windows put back.
+- Which folders Defender leaves out of its scanning is never taken from the file: it's set in the guest, whatever a file says. So the first start of an imported Windows machine asks the guest, once the start is done, and its settings and `show` say what Defender there leaves out, with *Scan Them Again* to take it back. Until it has answered, nothing is shown. Going back to a snapshot asks again the same way.
 
 An import cut short, by a damaged file, a full drive or the app closing, leaves nothing in the library, and the app clears what it left when it next opens. Import runs in the app, so closing the app stops it, while `guesthouse-vm import` runs until it's done.
 

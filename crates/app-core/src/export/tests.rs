@@ -108,6 +108,7 @@ fn a_throwaway_goes_with_its_clean_notes_and_not_its_last_runs() {
     let mut machine = exportable(&scratch, &context);
     let folder = machine.folder(&context);
     fs::write(folder.join("gpu-identity.json"), "as installed").unwrap();
+    fs::write(folder.join("scan-exclusions.json"), r#"{"folders": ["D:\Games"]}"#).unwrap();
     crate::throwaway::set_throwaway(&context, &mut machine, true).unwrap();
     fs::write(folder.join("gpu-identity.json"), "a run's").unwrap();
     fs::write(folder.join("nvme-refused"), "").unwrap();
@@ -124,7 +125,11 @@ fn a_throwaway_goes_with_its_clean_notes_and_not_its_last_runs() {
             notes.push((member.path.display().to_string(), String::from_utf8_lossy(&data).into_owned()));
         }
     }
-    assert_eq!(notes, [("gpu-identity.json".to_owned(), "as installed".to_owned())]);
+    assert_eq!(
+        notes,
+        [("gpu-identity.json".to_owned(), "as installed".to_owned())],
+        "which folders Defender leaves out is asked of the guest where it lands"
+    );
 }
 
 #[test]

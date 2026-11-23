@@ -38,3 +38,25 @@ fn the_step_goes_last_in_the_specialize_pass_and_nowhere_else() {
 fn an_answer_file_with_no_place_for_it_is_refused() {
     assert!(with_specialize_step("<unattend/>").is_err());
 }
+
+#[test]
+fn an_imported_choice_and_result_are_made_again_from_what_they_hold() {
+    let scratch = Scratch::new();
+    let folder = scratch.path("imported");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join(LEAN_FILE), r#"{"lean": true}"#).unwrap();
+    fs::write(
+        folder.join(RESULT_FILE),
+        r#"{"taken_out": ["Evil.App", "MSTeams"], "put_back": ["Microsoft.Windows.DevHome"], "still_back": "said"}"#,
+    )
+    .unwrap();
+    remake_imported(&folder).unwrap();
+    let kept: Outcome = serde_json::from_str(&fs::read_to_string(folder.join(RESULT_FILE)).unwrap()).unwrap();
+    assert_eq!(kept.taken_out, ["MSTeams"]);
+    assert_eq!(kept.put_back, ["Microsoft.Windows.DevHome"]);
+    assert_eq!(kept.still_back, None, "nothing the other PC's guest said");
+    fs::write(folder.join(LEAN_FILE), r#"{"lean": false, "x": 1}"#).unwrap();
+    fs::write(folder.join(RESULT_FILE), r#"{"taken_out": ["Evil.App"]}"#).unwrap();
+    remake_imported(&folder).unwrap();
+    assert!(!folder.join(LEAN_FILE).exists() && !folder.join(RESULT_FILE).exists());
+}

@@ -20,6 +20,13 @@ use std::path::PathBuf;
 
 /// Beside `machine.json`. A machine without exclusions has none.
 pub const EXCLUSIONS_FILE: &str = "scan-exclusions.json";
+/// Beside it when the app can't know what Defender leaves out in the guest, as after an import or going
+/// back to a snapshot: the next start asks the guest, and the record says what it found.
+pub const LOOK_MARK: &str = "scan-exclusions-look";
+/// The most of what the guest says that is kept: a guest could say anything, and this is read by a
+/// person, so it is cut to a list a page can show.
+const FOUND_MOST: usize = 32;
+const FOUND_LONGEST: usize = 260;
 /// A recipe names a few folders, not a drive's worth.
 pub const MOST: usize = 8;
 const LONGEST: usize = 200;
@@ -87,6 +94,9 @@ struct Kept {
     /// Defender took them. Until then, and if it didn't, every folder is scanned.
     #[serde(default)]
     applied: bool,
+    /// They are what the guest said Defender leaves out, at a start that asked it.
+    #[serde(default)]
+    found: bool,
 }
 
 fn exclusions_file(context: &Context, machine: &Machine) -> PathBuf {
@@ -121,7 +131,9 @@ pub fn state_text(context: &Context, machine: &Machine) -> Option<String> {
         return None;
     }
     let folders = kept.folders.join(", ");
-    Some(if kept.applied {
+    Some(if kept.found {
+        format!("Defender in this guest doesn't scan {folders}, as the guest said at a start.")
+    } else if kept.applied {
         format!("Defender doesn't scan {folders}. Everything else is scanned.")
     } else if machine.installing {
         format!("Defender is to leave out {folders} once Windows is installed.")
@@ -139,7 +151,56 @@ pub fn write_exclusions(context: &Context, machine: &Machine, folders: &[String]
             _ => Ok(()),
         };
     }
-    write_json(&path, &Kept { folders: folders.to_vec(), applied: false })
+    write_json(&path, &Kept { folders: folders.to_vec(), ..Kept::default() })
+}
+
+/// Asks the next start to find out from the guest what Defender leaves out.
+pub fn mark_for_look(folder: &std::path::Path) -> Result<()> {
+    Ok(fs::write(folder.join(LOOK_MARK), "")?)
+}
+
+pub fn needs_look(context: &Context, machine: &Machine) -> bool {
+    machine.folder(context).join(LOOK_MARK).exists()
+}
+
+/// The folders a guest said Defender leaves out, one a line after `folder `, ended by `listed`, as
+/// plain one-line text. Nothing if it didn't say it all.
+pub fn parse_found(said: &str) -> Option<Vec<String>> {
+    if !said.lines().any(|line| line.trim() == "listed") {
+        return None;
+    }
+    let found = said
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("folder "))
+        .map(|folder| folder.chars().filter(|c| !c.is_control()).take(FOUND_LONGEST).collect::<String>())
+        .filter(|folder| !folder.trim().is_empty())
+        .take(FOUND_MOST)
+        .collect();
+    Some(found)
+}
+
+/// Keeps what the guest said, in place of what the app knew, and forgets the mark. A throwaway's
+/// clean state is the disk that was asked, so its clean notes say the same.
+pub fn record_found(context: &Context, machine: &Machine, found: &[String]) -> Result<()> {
+    let mut places = vec![machine.folder(context)];
+    if machine.throwaway {
+        places.push(crate::throwaway::clean_folder(context, machine));
+    }
+    for place in places.iter().filter(|place| place.is_dir()) {
+        let path = place.join(EXCLUSIONS_FILE);
+        if found.is_empty() {
+            match fs::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+        } else {
+            write_json(&path, &Kept { folders: found.to_vec(), applied: true, found: true })?;
+        }
+    }
+    match fs::remove_file(machine.folder(context).join(LOOK_MARK)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 /// The folders as the guest's script is given them, as data.

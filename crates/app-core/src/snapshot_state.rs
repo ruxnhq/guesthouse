@@ -29,6 +29,8 @@ fn files(context: &Context, machine: &Machine) -> Vec<PathBuf> {
         refused,
         intel_desktop::device_off_file(context, machine),
         machine.folder(context).join(recipe::OUTCOME_FILE),
+        machine.folder(context).join(crate::lean::RESULT_FILE),
+        machine.folder(context).join(crate::scan_exclusions::EXCLUSIONS_FILE),
     ];
     let clean = throwaway::clean_folder(context, machine);
     if !(machine.throwaway && clean.is_dir()) {

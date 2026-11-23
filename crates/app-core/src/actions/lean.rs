@@ -176,7 +176,11 @@ fn look(task: &Task) -> Option<Vec<String>> {
 /// no step: what it found and did goes into the machine's record, which its settings and `show` say,
 /// and into the app's log.
 pub(super) fn after_start(task: &mut Task) {
-    if !is_lean(task.context, &task.machine) || task.machine.installing {
+    // A throwaway starts from its clean state each time, so what Windows puts back in a run is gone at
+    // the next start, and looking each run would only take out the same app again and again.
+    let windows = task.machine.kind == crate::machine::Kind::Windows;
+    if !windows || !is_lean(task.context, &task.machine) || task.machine.installing || task.machine.throwaway
+    {
         return;
     }
     let Some(qemu) = task.pid() else { return };

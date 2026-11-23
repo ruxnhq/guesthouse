@@ -60,6 +60,37 @@ pub fn write_lean(context: &Context, machine: &Machine, lean: bool) -> Result<()
     write_json(&lean_file(context, machine), &Chosen { lean })
 }
 
+/// An import's copies of the choice and of what lean Windows did, read as the app's own and written
+/// out again, or left out. What it did keeps only names on the list, and none of what the other PC's
+/// guest said: the first start here looks again.
+pub fn remake_imported(folder: &std::path::Path) -> Result<()> {
+    let choice = folder.join(LEAN_FILE);
+    if let Ok(text) = fs::read_to_string(&choice) {
+        match serde_json::from_str::<Chosen>(&text) {
+            Ok(Chosen { lean: true }) => write_json(&choice, &Chosen { lean: true })?,
+            _ => fs::remove_file(&choice)?,
+        }
+    }
+    let result = folder.join(RESULT_FILE);
+    if let Ok(text) = fs::read_to_string(&result) {
+        let said: Outcome = serde_json::from_str(&text).unwrap_or_default();
+        let on_list = |names: &[String]| -> Vec<String> {
+            APPS.iter().map(|app| app.name.to_owned()).filter(|name| names.contains(name)).collect()
+        };
+        let kept = Outcome {
+            taken_out: on_list(&said.taken_out),
+            put_back: on_list(&said.put_back),
+            still_back: None,
+        };
+        if kept == Outcome::default() {
+            fs::remove_file(&result)?;
+        } else {
+            write_json(&result, &kept)?;
+        }
+    }
+    Ok(())
+}
+
 /// The filled answer file with one command more in the specialize pass, which runs the script on the
 /// disc. The template is never changed, so an answer file without it is the same as before.
 pub fn with_specialize_step(answers: &str) -> Result<String> {

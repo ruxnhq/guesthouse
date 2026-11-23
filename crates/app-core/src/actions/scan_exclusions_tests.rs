@@ -78,3 +78,31 @@ fn scanning_them_again_forgets_them_only_once_defender_has() {
     assert!(agent.requests.lock().unwrap()[1].2.contains("$change = 'remove'"));
     assert!(scan_all(&mut task).unwrap_err().0.contains("already scans"));
 }
+
+#[test]
+fn a_start_after_an_import_asks_the_guest_and_keeps_what_it_says() {
+    let scratch = Scratch::new();
+    let (context, agent, vm) = setting_up(&scratch, &["", "folder D:\\Games\nlisted\n"], &[]);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty(), "no mark, no question");
+    crate::scan_exclusions::mark_for_look(&vm.folder(&context)).unwrap();
+    after_start(&mut task);
+    assert!(crate::scan_exclusions::needs_look(&context, &vm), "a guest that said nothing is asked again");
+    after_start(&mut task);
+    assert!(!crate::scan_exclusions::needs_look(&context, &vm));
+    assert_eq!(crate::scan_exclusions::read_exclusions(&context, &vm), [r"D:\Games"]);
+    assert!(agent.requests.lock().unwrap()[0].2.contains("Get-MpPreference"));
+}
+
+#[test]
+fn a_throwaway_does_not_take_its_folders_back_for_one_run() {
+    let scratch = Scratch::new();
+    let (context, agent, vm) = setting_up(&scratch, &["done 1"], &[r"D:\Games"]);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, SCAN_ALL_TASK, Machine { throwaway: true, ..vm.clone() });
+    assert!(scan_all(&mut task).unwrap_err().0.contains("Turn Throwaway off"));
+    assert!(agent.requests.lock().unwrap().is_empty());
+    assert_eq!(crate::scan_exclusions::read_exclusions(&context, &vm).len(), 1);
+}

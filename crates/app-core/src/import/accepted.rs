@@ -23,11 +23,17 @@
 //!   back says what that disk holds.
 //! - `nvme-trial`, `nvme-refused`, `intel-device-off`: marks, made again empty.
 //! - `machine.json`: from the settings, as [`super::machine_from`] takes them.
+//! - `lean.json`: whether the machine is lean Windows, which only ever takes out apps on the app's
+//!   own list. `lean-result.json`: which of those it took out, with every name not on the list
+//!   dropped, and nothing the other PC's guest said. See [`crate::lean::remake_imported`].
 //! - `throwaway-clean/`: from the notes above, if the settings make it a throwaway.
 //!
 //! Never carried:
 //! - `remote-access.json`: Remote Desktop and SSH are opt-ins that reach this PC, and SSH sends
 //!   your own keys into the guest. They are chosen here.
+//! - `scan-exclusions.json` and `scan-exclusions-look`: which folders Defender leaves out is set in
+//!   the guest, whatever a file says. A Windows import is marked for its first start here to ask the
+//!   guest, and its settings and `show` say what the guest answered.
 //! - `amd-fallback`, `intel-software-desktop`: what the other PC's card did, learnt again here.
 //! - `thumbnail.png`: a picture this PC's image loader would read. The next run makes one.
 //! - `gpu-cache/`: shaders compiled by the other PC's driver, which this PC's would load.
@@ -58,6 +64,7 @@ const TOKENS: [&str; 2] = ["guest.token", "guest.token.next"];
 const PASSWORDS: [&str; 2] = ["windows-password", "seed/desk-password"];
 const MARKS: [&str; 3] = ["nvme-trial", "nvme-refused", "intel-device-off"];
 const DISPLAY_NOTE: &str = "display.json";
+const LEAN_NOTES: [&str; 2] = [crate::lean::LEAN_FILE, crate::lean::RESULT_FILE];
 const IDENTITY_NOTE: &str = "gpu-identity.json";
 const SSH_KEYS: [&str; 2] = ["ssh/id", "ssh/id.pub"];
 const OPENCORE_FIRMWARE: &str = "OVMF_CODE.fd";
@@ -111,7 +118,8 @@ pub(super) fn handling(path: &Path, carried: &Machine) -> Option<Handling> {
         }
     }
     let small = TOKENS.iter().chain(&PASSWORDS).chain(&MARKS).chain(&SSH_KEYS).any(|known| *known == name)
-        || [DISPLAY_NOTE, IDENTITY_NOTE].contains(&name.as_ref());
+        || [DISPLAY_NOTE, IDENTITY_NOTE].contains(&name.as_ref())
+        || LEAN_NOTES.contains(&name.as_ref());
     small.then_some(Handling::Small)
 }
 
@@ -186,6 +194,7 @@ pub(super) fn finish(folder: &Path, notes: &mut Vec<String>) -> Result<()> {
         keep_if(folder, file, wrong, BAD_PASSWORD, notes)?;
     }
     remake_notes(folder)?;
+    crate::lean::remake_imported(folder)?;
     let snapshots = folder.join("snapshots");
     for entry in fs::read_dir(&snapshots).into_iter().flatten().flatten() {
         let path = entry.path();

@@ -403,3 +403,32 @@ fn cores_and_ram_past_what_this_pc_has_are_brought_down_to_it() {
     );
     assert!(made.notes.iter().any(|note| note.contains("cores or RAM")));
 }
+
+#[test]
+fn lean_windows_comes_across_made_again_and_defender_is_asked_of_the_guest() {
+    let scratch = Scratch::new();
+    let context = roomy_pc(&scratch);
+    let files = [
+        ("vars.fd", b"v".to_vec()),
+        ("lean.json", br#"{"lean": true}"#.to_vec()),
+        (
+            "lean-result.json",
+            br#"{"taken_out": ["Microsoft.BingNews", "Evil.App"], "still_back": "x"}"#.to_vec(),
+        ),
+        ("scan-exclusions.json", br#"{"folders": ["C:\\"], "applied": true}"#.to_vec()),
+        ("scan-exclusions-look", b"".to_vec()),
+        (DISK_FILE, qcow2(&scratch, "d", &[])),
+    ];
+    let file = crafted(&scratch, &plain_settings(), &files);
+    let made = imported(&context, &file, None).unwrap();
+    let folder = made.machine.folder(&context);
+    for never in ["scan-exclusions.json", "scan-exclusions-look", "lean.json", "lean-result.json"] {
+        assert!(!folder.join(never).exists(), "{never}: a plain VM has no Windows to be lean or scanned");
+    }
+    let windows = scratch.path("windows-import");
+    fs::create_dir_all(&windows).unwrap();
+    fs::write(windows.join("lean.json"), r#"{"lean": true}"#).unwrap();
+    guest_facts(&windows, Kind::Windows).unwrap();
+    assert!(windows.join(crate::scan_exclusions::LOOK_MARK).exists(), "its first start asks the guest");
+    assert!(windows.join("lean.json").exists());
+}

@@ -635,6 +635,7 @@ pub fn run_task(
     }
     // Also once the start is reported done, and never part of it.
     if result.is_ok() && action == "start" {
+        scan_exclusions::after_start(&mut task);
         lean::after_start(&mut task);
     }
     result

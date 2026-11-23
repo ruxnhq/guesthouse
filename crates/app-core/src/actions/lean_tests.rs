@@ -172,3 +172,13 @@ fn a_guest_that_cannot_say_or_a_machine_not_made_lean_is_left_alone() {
     after_start(&mut task);
     assert!(agent.requests.lock().unwrap().is_empty());
 }
+
+#[test]
+fn a_throwaway_is_not_looked_at_each_run() {
+    let scratch = Scratch::new();
+    let (context, agent, vm) = started_lean(&scratch, &["back Microsoft.Windows.DevHome\nchecked\n"], true);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", Machine { throwaway: true, ..vm });
+    after_start(&mut task);
+    assert!(agent.requests.lock().unwrap().is_empty());
+}

@@ -92,3 +92,29 @@ fn the_words_say_what_it_means_and_name_every_folder() {
     assert!(text.contains("- D:\\Games\n- E:\\Builds"));
     assert!(WHAT_IT_MEANS.contains("not one for files or programs you don't know"));
 }
+
+#[test]
+fn what_the_guest_says_is_kept_as_plain_text_and_ends_the_look() {
+    assert_eq!(parse_found("folder C:\\Games\n"), None, "cut short");
+    assert_eq!(parse_found("listed\n"), Some(vec![]));
+    let found = parse_found("folder C:\\Games\nfolder D:\\a\u{1b}[2Jb\nfolder  \nlisted\n").unwrap();
+    assert_eq!(found, ["C:\\Games", "D:\\a[2Jb"]);
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let vm = Machine { throwaway: true, ..Machine::new("box", "Box", "/d", "") };
+    fs::create_dir_all(crate::throwaway::clean_folder(&context, &vm)).unwrap();
+    mark_for_look(&vm.folder(&context)).unwrap();
+    assert!(needs_look(&context, &vm));
+    record_found(&context, &vm, &found).unwrap();
+    assert!(!needs_look(&context, &vm));
+    let text = state_text(&context, &vm).unwrap();
+    assert_eq!(
+        text,
+        "Defender in this guest doesn't scan C:\\Games, D:\\a[2Jb, as the guest said at a start."
+    );
+    let clean = crate::throwaway::clean_folder(&context, &vm).join(EXCLUSIONS_FILE);
+    assert!(clean.is_file(), "a throwaway's clean state is the disk that was asked");
+    record_found(&context, &vm, &[]).unwrap();
+    assert_eq!(state_text(&context, &vm), None);
+    assert!(!clean.exists());
+}

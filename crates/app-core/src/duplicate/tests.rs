@@ -367,3 +367,22 @@ fn a_copys_first_start_moves_its_guest_to_a_token_of_its_own_in_one_change() {
     let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
     assert_eq!(log.matches("its guest's agent has a new token").count(), 1, "{log}");
 }
+
+#[test]
+fn a_copy_is_the_same_guest_so_it_keeps_lean_windows_and_what_defender_leaves_out() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let source = create(&context, &new_plain(&scratch, "Lean", "")).unwrap();
+    crate::lean::write_lean(&context, &source, true).unwrap();
+    let outcome = crate::lean::Outcome { taken_out: vec!["MSTeams".into()], ..Default::default() };
+    crate::lean::write_outcome(&context, &source, &outcome).unwrap();
+    crate::scan_exclusions::write_exclusions(&context, &source, &[r"D:\Games".to_owned()]).unwrap();
+    crate::scan_exclusions::mark_applied(&context, &source).unwrap();
+    let copy = copy_called(&context, &source, "Lean Copy").unwrap();
+    assert!(crate::lean::is_lean(&context, &copy));
+    assert_eq!(crate::lean::read_outcome(&context, &copy), outcome);
+    assert_eq!(
+        crate::scan_exclusions::state_text(&context, &copy),
+        crate::scan_exclusions::state_text(&context, &source)
+    );
+}

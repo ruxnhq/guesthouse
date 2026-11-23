@@ -35,12 +35,15 @@ const PART_SUFFIX: &str = ".part";
 const SPARE_GIB: f64 = 1.0;
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 /// What an import never takes, so an export leaves it here: the recipe names a file of this PC's,
-/// and the automatic snapshot's record is about this PC's starts. See `import/accepted.rs`.
+/// which folders Defender leaves out is asked of the guest at its first start there, and the automatic
+/// snapshot's record is about this PC's starts. See `import/accepted.rs`.
 /// The mark for a second token change stays too, and so does the one for a copy's new identities in
 /// the guest: the import plans its own of both.
-const STAYS_HERE: [&str; 5] = [
+const STAYS_HERE: [&str; 7] = [
     crate::recipe::CHOSEN_FILE,
     crate::recipe::OUTCOME_FILE,
+    crate::scan_exclusions::EXCLUSIONS_FILE,
+    crate::scan_exclusions::LOOK_MARK,
     crate::auto_snapshot::record::RECORD_FILE,
     crate::token_change::AGAIN_FILE,
     crate::actions::copy_identity::MARK,
@@ -156,7 +159,10 @@ fn with_clean_notes(context: &Context, machine: &Machine, found: &mut Vec<Carrie
     let clean = crate::throwaway::clean_folder(context, machine);
     for entry in fs::read_dir(&clean).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if crate::throwaway::is_guest_note(&name) && entry.file_type()?.is_file() {
+        if crate::throwaway::is_guest_note(&name)
+            && !STAYS_HERE.contains(&name.as_str())
+            && entry.file_type()?.is_file()
+        {
             found.push(carried(&name, &entry.path())?);
         }
     }

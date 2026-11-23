@@ -193,6 +193,11 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
     snapshot_state::restore_disk_place(context, &mut task.machine, saved)?;
     auto_snapshot::record::went_back(context, &task.machine, tag, &snapshot.name);
     crate::actions::copy_identity::went_back(context, &task.machine);
+    // A snapshot from before the app kept which folders Defender leaves out says nothing of them, so
+    // the next start asks the guest.
+    if machine.kind == crate::machine::Kind::Windows {
+        crate::scan_exclusions::mark_for_look(&machine.folder(context))?;
+    }
     Ok(())
 }
 

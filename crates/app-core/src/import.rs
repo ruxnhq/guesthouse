@@ -368,6 +368,7 @@ fn make(
             "{left_out} files of the other PC's that this app doesn't take here were left out."
         ));
     }
+    guest_facts(&folder, machine.kind)?;
     if machine.throwaway {
         crate::throwaway::keep_notes(&folder)?;
     }
@@ -378,6 +379,22 @@ fn make(
     }
     write_json(&folder.join(MACHINE_FILE), machine)?;
     fs::rename(&folder, machine.folder(context))?;
+    Ok(())
+}
+
+/// What lean Windows and Defender are in the guest, as far as this PC can know it. Only Windows has
+/// either. Which folders Defender leaves out is in the guest whatever the export says, so the first
+/// start here asks it.
+fn guest_facts(folder: &Path, kind: Kind) -> Result<()> {
+    if kind == Kind::Windows {
+        return crate::scan_exclusions::mark_for_look(folder);
+    }
+    for file in [crate::lean::LEAN_FILE, crate::lean::RESULT_FILE] {
+        match fs::remove_file(folder.join(file)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
+    }
     Ok(())
 }
 

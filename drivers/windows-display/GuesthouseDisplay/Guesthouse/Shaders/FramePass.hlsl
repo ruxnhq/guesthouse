@@ -27,6 +27,11 @@ cbuffer PassInputs : register(b0)
 
 	float4 sourceToWire[3];
 	float4 cursorToWire[3];
+
+	// Set when the pass would hand each pixel on as it came: an sRGB surface, an SDR wire, and a transform from Windows that
+	// changes nothing.
+	uint unchanged;
+	uint3 spare;
 };
 
 Texture2D<float4> surface : register(t0);
@@ -40,6 +45,12 @@ float LutChannel(float encoded, uint channel)
 	uint below = (uint)position;
 	uint above = min(below + 1, LUT_ENTRIES - 1);
 	return lerp(lut[below][channel], lut[above][channel], position - below);
+}
+
+bool UnderCursor(uint2 pixel)
+{
+	int2 inside = int2(pixel) - int2(cursorX, cursorY);
+	return cursorEnabled != 0 && inside.x >= 0 && inside.y >= 0 && inside.x < (int)cursorWidth && inside.y < (int)cursorHeight;
 }
 
 float3 OverCursor(uint2 pixel, float3 colour)
@@ -66,6 +77,12 @@ void main(uint3 id : SV_DispatchThreadID)
 	}
 
 	float3 texel = surface.Load(int3(id.xy, 0)).rgb;
+	if (unchanged != 0 && !UnderCursor(id.xy))
+	{
+		slot.Store(id.y * pitch + id.x * 4, PackXrgb8888(texel));
+		return;
+	}
+
 	float3 light = DecodeSource(source, texel, sdrWhite);
 	light = ApplyRows(sourceToWire[0], sourceToWire[1], sourceToWire[2], light);
 	if (cursorEnabled != 0)

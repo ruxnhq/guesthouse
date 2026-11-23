@@ -1,5 +1,7 @@
 #include "ColourTransform.h"
 
+#include <cmath>
+
 namespace Guesthouse
 {
 
@@ -56,6 +58,47 @@ const Matrix& ToXyz(Primaries primaries)
 	return primaries == Primaries::Bt2020 ? Bt2020ToXyz : Bt709ToXyz;
 }
 
+}
+
+bool LeavesPixelsAlone(const GammaTransform& transform)
+{
+	// An eighth of an 8-bit step for the table, and for the matrix a margin that moves no 8-bit value, even near black.
+	constexpr double LutSlack = 0.5 / 1023.0;
+	constexpr double MatrixSlack = 1e-5;
+
+	if (transform.matrixEnabled)
+	{
+		for (int row = 0; row < 3; ++row)
+		{
+			for (int column = 0; column < 4; ++column)
+			{
+				const double wanted = row == column ? 1.0 : 0.0;
+				if (std::fabs(static_cast<double>(transform.matrix[row][column]) * transform.scalar - wanted) > MatrixSlack)
+				{
+					return false;
+				}
+			}
+		}
+	}
+	if (transform.lutEnabled)
+	{
+		if (transform.lut.size() != GammaLutEntries)
+		{
+			return false;
+		}
+		for (std::uint32_t entry = 0; entry < GammaLutEntries; ++entry)
+		{
+			const double wanted = static_cast<double>(entry) / (GammaLutEntries - 1);
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				if (std::fabs(transform.lut[entry][channel] - wanted) > LutSlack)
+				{
+					return false;
+				}
+			}
+		}
+	}
+	return true;
 }
 
 Rows ComposeToWire(Primaries source, WireFormat wire, const GammaTransform& transform)

@@ -6,6 +6,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -32,9 +33,13 @@ struct PassConstants
 
 	float sourceToWire[3][4];
 	float cursorToWire[3][4];
+
+	std::uint32_t unchanged;
+	std::uint32_t spare[3];
 };
 
 static_assert(sizeof(PassConstants) % 16 == 0, "D3D11 constant buffers come in 16-byte units");
+static_assert(offsetof(PassConstants, unchanged) == 144, "unchanged starts the cbuffer's tenth 16-byte register");
 
 // The GPU side of the exporter: the ring's buffers, and the compute pass that fills them. It runs on the swap chain's thread only.
 class FramePass

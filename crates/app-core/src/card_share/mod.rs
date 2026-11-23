@@ -5,5 +5,6 @@
 pub mod engine_time;
 pub mod fdinfo;
 pub mod look;
+pub mod process_table;
 pub mod whole_card;
 pub mod words;

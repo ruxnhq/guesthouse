@@ -4,10 +4,12 @@
 //! Each machine's figures come from its own processes. Its daemon's books give the video memory it
 //! holds against its cap, on any maker's card, and the card clients its daemon and QEMU hold give the
 //! time each engine spent on it, where the driver counts that per client, as amdgpu and xe do.
-//! NVIDIA's driver keeps its own per-process figures, which aren't read here yet.
+//! NVIDIA's driver counts per process instead, and the card's daemon publishes those figures in a
+//! table, where its daemon and QEMU are looked up.
 
 use super::engine_time::{Look, shares};
 use super::fdinfo::{Client, clients_of};
+use super::process_table::{machine_part, read_table};
 use super::whole_card::{self, WholeCard};
 use crate::context::Context;
 use crate::daemon::is_own_daemon;
@@ -18,6 +20,7 @@ use crate::render_cards::render_card;
 use crate::settings::read_setup;
 use crate::setup::cards::normal_address;
 use crate::slots;
+use guesthouse_sensors::card_processes::ProcessTable;
 use guesthouse_sensors::guest_use::{GuestUse, SharedGuestUse};
 use guesthouse_sensors::{SharedSnapshot, SnapshotReader};
 use serde_json::Value;
@@ -43,13 +46,26 @@ pub struct Running {
 /// What each machine's clients were at the last look, by machine.
 pub type Looks = BTreeMap<String, Look>;
 
+/// The time a card's engines spent on a machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GpuTime {
+    /// Each engine's share, by the driver's name for it.
+    Engines(BTreeMap<String, u32>),
+    /// The driver keeps a sample only of a process that used the card, and had none of this
+    /// machine's from the last moment, though it lists its processes on the card.
+    NoneSeen,
+    NotRead,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineShare {
     pub name: String,
-    /// Each engine's share, by the driver's name for it. `None` is no reading.
-    pub engines: Option<BTreeMap<String, u32>>,
-    /// The video memory by its daemon's books. `None` is no reading.
+    pub time: GpuTime,
+    /// The video memory by its daemon's books, which the cap is held to. `None` is no reading.
     pub video: Option<GuestUse>,
+    /// The video memory the card's driver charges its processes with, the daemon's own work
+    /// included, where the driver counts it per process. `None` is no reading.
+    pub card_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +73,9 @@ pub struct CardShare {
     pub card: OnCard,
     pub name: String,
     pub whole: WholeCard,
+    /// The card's daemon published its table of each process's part of the card, for a card whose
+    /// driver counts per process.
+    pub per_process: bool,
     pub machines: Vec<MachineShare>,
 }
 
@@ -119,7 +138,20 @@ fn card_name(context: &Context, card: &OnCard) -> String {
 /// Looks at each running machine with a GPU, grouped by card. `at` is when, on a clock that only goes
 /// forward, and `before` the looks the last call gave back.
 pub fn look(context: &Context, running: &[Running], before: &Looks, at: Duration) -> (Vec<CardShare>, Looks) {
+    look_with(context, running, before, at, |card| read_table(card.pci.as_deref()))
+}
+
+/// [`look`], with `table` giving the per-process table of a card whose driver counts per process.
+/// It's asked once for each such card.
+fn look_with(
+    context: &Context,
+    running: &[Running],
+    before: &Looks,
+    at: Duration,
+    mut table: impl FnMut(&OnCard) -> Option<ProcessTable>,
+) -> (Vec<CardShare>, Looks) {
     let mut cards: Vec<CardShare> = Vec::new();
+    let mut tables: Vec<(OnCard, Option<ProcessTable>)> = Vec::new();
     let mut looks = Looks::new();
     for one in running {
         let Some(card) = card_of(context, &one.machine) else { continue };
@@ -128,12 +160,25 @@ pub fn look(context: &Context, running: &[Running], before: &Looks, at: Duration
         let now = Look { at, clients: clients(context, &pids, &card) };
         let engines = before.get(&one.machine.id).and_then(|earlier| shares(earlier, &now));
         looks.insert(one.machine.id.clone(), now);
-        let share = MachineShare { name: one.machine.name.clone(), engines, video };
+        let per_process = if card.maker == GpuMaker::Nvidia {
+            if !tables.iter().any(|(found, _)| *found == card) {
+                tables.push((card.clone(), table(&card)));
+            }
+            tables.iter().find(|(found, _)| *found == card).map(|(_, table)| table.as_ref())
+        } else {
+            None
+        };
+        let (time, card_bytes) = match per_process {
+            Some(table) => machine_part(table, &pids),
+            None => (engines.map_or(GpuTime::NotRead, GpuTime::Engines), None),
+        };
+        let share = MachineShare { name: one.machine.name.clone(), time, video, card_bytes };
         match cards.iter_mut().find(|found| found.card == card) {
             Some(found) => found.machines.push(share),
             None => cards.push(CardShare {
                 name: card_name(context, &card),
                 whole: whole(context, &card, &one.machine),
+                per_process: per_process.flatten().is_some(),
                 card,
                 machines: vec![share],
             }),
@@ -197,13 +242,14 @@ mod tests {
         let (first, looks) = look(&context, &running(amd_machine()), &Looks::new(), at);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].whole.load_percent, Some(99));
-        assert_eq!(first[0].machines[0].engines, None, "one look is no share yet");
+        assert_eq!(first[0].machines[0].time, GpuTime::NotRead, "one look is no share yet");
         assert_eq!(first[0].machines[0].video.unwrap().video_bytes, 1 << 30);
         let busier = AMDGPU.replace("4671345800 ns", "5171345800 ns");
         running_daemon(&context, &busier, 1 << 30);
         let (second, _) = look(&context, &running(amd_machine()), &looks, at + Duration::from_secs(1));
-        let engines = second[0].machines[0].engines.clone().unwrap();
+        let GpuTime::Engines(engines) = &second[0].machines[0].time else { panic!("no engines") };
         assert_eq!((engines["gfx"], engines["dma"]), (50, 0));
+        assert!(!second[0].per_process && second[0].machines[0].card_bytes.is_none());
     }
 
     #[test]
@@ -248,5 +294,71 @@ mod tests {
             card_of(&context, &machine),
             Some(OnCard { maker: GpuMaker::Nvidia, pci: Some("0000:01:00.0".to_owned()) })
         );
+    }
+
+    fn nvidia_machines(context: &Context) -> (Machine, Machine) {
+        let card = serde_json::json!({"card": {"pci": "0000:01:00.0"}});
+        crate::settings::write_setup(context, card.as_object().cloned().unwrap()).unwrap();
+        let mut windows = Machine::new("n", "Games", "/d", "/v");
+        windows.kind = Kind::Windows;
+        let mut ubuntu = Machine::new("u", "Ubuntu", "/d", "/v");
+        ubuntu.kind = Kind::Linux;
+        ubuntu.gpu_preview = true;
+        (windows, ubuntu)
+    }
+
+    /// The measured table, with this test's daemon in place of the real one, and a Linux guest's QEMU.
+    fn nvidia_table() -> ProcessTable {
+        use guesthouse_sensors::card_processes::{Process, Use};
+        let mut table = super::super::process_table::tests::measured(false);
+        table.processes[0].pid = DAEMON;
+        let used = Some(Use { sm: 30, encoder: 0, decoder: 4 });
+        table.processes.push(Process { pid: LINUX_QEMU, used, bytes: Some(1 << 30) });
+        table
+    }
+
+    const LINUX_QEMU: u32 = 601;
+
+    #[test]
+    fn machines_on_an_nvidia_card_are_their_processes_in_its_table() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let (windows, ubuntu) = nvidia_machines(&context);
+        running_daemon(&context, AMDGPU, 778_764_288);
+        let running = vec![
+            Running { machine: windows, slot: 0, qemu: Some(QEMU) },
+            Running { machine: ubuntu, slot: 1, qemu: Some(LINUX_QEMU) },
+        ];
+        let mut asked = 0;
+        let table = |card: &OnCard| {
+            asked += 1;
+            assert_eq!(card.pci.as_deref(), Some("0000:01:00.0"));
+            Some(nvidia_table())
+        };
+        let (cards, _) = look_with(&context, &running, &Looks::new(), Duration::ZERO, table);
+        assert_eq!(asked, 1, "one table for the card");
+        assert_eq!(cards.len(), 1);
+        assert!(cards[0].per_process);
+        let (games, linux) = (&cards[0].machines[0], &cards[0].machines[1]);
+        let GpuTime::Engines(engines) = &games.time else { panic!("no time") };
+        assert_eq!((engines["sm"], engines["enc"], engines["dec"]), (12, 0, 0), "from the first look");
+        assert_eq!(games.video.unwrap().video_bytes, 778_764_288);
+        assert_eq!(games.card_bytes, Some(1848 << 20));
+        let GpuTime::Engines(engines) = &linux.time else { panic!("no time") };
+        assert_eq!((engines["sm"], engines["dec"]), (30, 4));
+        assert_eq!((linux.video, linux.card_bytes), (None, Some(1 << 30)));
+    }
+
+    #[test]
+    fn an_nvidia_card_with_no_table_reads_no_machines_time() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let (windows, _) = nvidia_machines(&context);
+        running_daemon(&context, AMDGPU, 1 << 30);
+        let (cards, _) = look_with(&context, &running(windows), &Looks::new(), Duration::ZERO, |_| None);
+        assert!(!cards[0].per_process);
+        assert_eq!(cards[0].machines[0].time, GpuTime::NotRead);
+        assert_eq!(cards[0].machines[0].card_bytes, None);
+        assert_eq!(cards[0].machines[0].video.unwrap().video_bytes, 1 << 30, "its books still count");
     }
 }

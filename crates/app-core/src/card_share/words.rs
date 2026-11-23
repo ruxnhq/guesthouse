@@ -1,6 +1,6 @@
 //! What the share panel says. A figure with no reading says so, and nothing is filled in from another.
 
-use super::look::MachineShare;
+use super::look::{CardShare, GpuTime, MachineShare};
 use super::whole_card::WholeCard;
 use crate::gpu_maker::GpuMaker;
 use guesthouse_sensors::guest_use::GuestUse;
@@ -10,8 +10,10 @@ const UNKNOWN: &str = "not available";
 const BYTES_PER_GIB: f64 = (1u64 << 30) as f64;
 
 /// The drivers' names for their engines, in the order they're shown, with what people call them.
-/// amdgpu's and i915's names, then xe's.
-const ENGINES: [(&str, &str); 18] = [
+/// NVIDIA's shader cores, then amdgpu's and i915's names, then xe's. NVIDIA's encoder and decoder
+/// go by amdgpu's names.
+const ENGINES: [(&str, &str); 19] = [
+    ("sm", "graphics and compute"),
     ("gfx", "graphics"),
     ("render", "graphics"),
     ("rcs", "graphics"),
@@ -82,8 +84,13 @@ fn engine_words(engines: &BTreeMap<String, u32>) -> String {
     upper_first(&parts.collect::<Vec<_>>().join(", "))
 }
 
-fn video_words(video: Option<&GuestUse>) -> String {
-    let Some(video) = video else { return format!("Video memory {UNKNOWN}") };
+/// The guest's video memory by its daemon's books, against its cap, then what the driver charges the
+/// machine's processes with, where it counts that. The two differ, and each says which it is.
+fn video_words(video: Option<&GuestUse>, card_bytes: Option<u64>) -> String {
+    let by_driver = |bytes: u64| format!("{} by the driver's count", gib(bytes));
+    let Some(video) = video else {
+        return format!("Video memory {}", card_bytes.map_or_else(|| UNKNOWN.to_owned(), by_driver));
+    };
     let mut words = format!("Video memory {}", gib(video.video_bytes));
     match video.cap_bytes {
         Some(cap) => words.push_str(&format!(" of its {} cap", gib(cap))),
@@ -92,24 +99,35 @@ fn video_words(video: Option<&GuestUse>) -> String {
     if video.spilled_bytes > 0 {
         words.push_str(&format!(", and {} in system memory", gib(video.spilled_bytes)));
     }
+    if let Some(bytes) = card_bytes {
+        words.push_str(&format!(", {}", by_driver(bytes)));
+    }
     words
 }
 
 /// One machine's part of the card: the time each engine spent on it, then its video memory.
 pub fn machine_line(share: &MachineShare) -> String {
-    let engines = match &share.engines {
-        Some(engines) if !engines.is_empty() => engine_words(engines),
+    let time = match &share.time {
+        GpuTime::Engines(engines) if !engines.is_empty() => engine_words(engines),
+        GpuTime::NoneSeen => "No GPU time in the last second".to_owned(),
         _ => format!("GPU time {UNKNOWN}"),
     };
-    format!("{engines}. {}", video_words(share.video.as_ref()))
+    format!("{time}. {}", video_words(share.video.as_ref(), share.card_bytes))
 }
 
-/// What a card's maker doesn't let the panel read, said once under the card's name.
-pub fn card_note(maker: GpuMaker) -> Option<&'static str> {
-    match maker {
-        GpuMaker::Nvidia => {
-            Some("Each machine's GPU time isn't read on NVIDIA yet, only the whole card's load.")
-        }
+/// What the figures mean on a card, or what its maker doesn't let the panel read, said once under
+/// the card's name.
+pub fn card_note(card: &CardShare) -> Option<&'static str> {
+    match card.card.maker {
+        GpuMaker::Nvidia if card.per_process => Some(
+            "Each machine's GPU time is the driver's last one-second sample of its processes. Its video \
+             memory is first what the guest has allocated, which its cap holds, then what the driver \
+             charges its processes with, the daemon's own work included, which is what the card gives it.",
+        ),
+        GpuMaker::Nvidia => Some(
+            "Each machine's GPU time isn't read on this card, only the whole card's load: its figures come \
+             from the daemon of a Windows machine on the card, of this version or later.",
+        ),
         GpuMaker::Intel => Some("The whole card's load and video memory aren't read on Intel yet."),
         GpuMaker::Amd => None,
     }
@@ -120,9 +138,10 @@ mod tests {
     use super::*;
 
     fn share(engines: Option<&[(&str, u32)]>, video: Option<GuestUse>) -> MachineShare {
-        let engines =
-            engines.map(|pairs| pairs.iter().map(|(name, share)| ((*name).to_owned(), *share)).collect());
-        MachineShare { name: "Work".to_owned(), engines, video }
+        let time = engines.map_or(GpuTime::NotRead, |pairs| {
+            GpuTime::Engines(pairs.iter().map(|(name, share)| ((*name).to_owned(), *share)).collect())
+        });
+        MachineShare { name: "Work".to_owned(), time, video, card_bytes: None }
     }
 
     fn capped(gib: u64) -> GuestUse {
@@ -173,10 +192,58 @@ mod tests {
         );
     }
 
+    /// The guest's books as they were measured on an RTX 5090, under a light load and idle.
+    fn measured_books(bytes: u64) -> GuestUse {
+        GuestUse { daemon: 1, video_bytes: bytes, spilled_bytes: 0, cap_bytes: Some(4 << 30) }
+    }
+
     #[test]
-    fn only_a_maker_that_keeps_something_back_has_a_note() {
-        assert!(card_note(GpuMaker::Nvidia).unwrap().contains("Each machine"));
-        assert!(card_note(GpuMaker::Intel).is_some());
-        assert_eq!(card_note(GpuMaker::Amd), None);
+    fn a_machine_on_nvidia_says_its_sample_and_both_memory_figures() {
+        let mut loaded =
+            share(Some(&[("sm", 12), ("enc", 0), ("dec", 0)]), Some(measured_books(778_764_288)));
+        loaded.card_bytes = Some(1848 << 20);
+        assert_eq!(
+            machine_line(&loaded),
+            "Graphics and compute 12%, decode 0%, encode 0%. Video memory 0.7 GiB of its 4.0 GiB cap, 1.8 GiB \
+             by the driver's count"
+        );
+        let idle = MachineShare {
+            time: GpuTime::NoneSeen,
+            video: Some(measured_books(281_870_336)),
+            card_bytes: Some(940 << 20),
+            ..loaded
+        };
+        assert_eq!(
+            machine_line(&idle),
+            "No GPU time in the last second. Video memory 0.3 GiB of its 4.0 GiB cap, 0.9 GiB by the driver's \
+             count"
+        );
+    }
+
+    #[test]
+    fn a_linux_guest_on_nvidia_has_only_the_drivers_count() {
+        let linux = MachineShare { card_bytes: Some(1 << 30), ..share(Some(&[("sm", 30)]), None) };
+        assert_eq!(
+            machine_line(&linux),
+            "Graphics and compute 30%. Video memory 1.0 GiB by the driver's count"
+        );
+    }
+
+    fn card(maker: GpuMaker, per_process: bool) -> CardShare {
+        CardShare {
+            card: super::super::look::OnCard { maker, pci: None },
+            name: "card".to_owned(),
+            whole: WholeCard::default(),
+            per_process,
+            machines: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_card_says_what_its_figures_are_or_what_it_keeps_back() {
+        assert!(card_note(&card(GpuMaker::Nvidia, true)).unwrap().contains("one-second sample"));
+        assert!(card_note(&card(GpuMaker::Nvidia, false)).unwrap().contains("isn't read on this card"));
+        assert!(card_note(&card(GpuMaker::Intel, false)).is_some());
+        assert_eq!(card_note(&card(GpuMaker::Amd, false)), None);
     }
 }

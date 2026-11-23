@@ -35,7 +35,7 @@ fn layout(cards: &[CardShare]) -> Vec<String> {
 
 fn group_of(card: &CardShare) -> Shown {
     let group = adw::PreferencesGroup::builder().title(&card.name).build();
-    if let Some(note) = card_note(card.card.maker) {
+    if let Some(note) = card_note(card) {
         group.set_description(Some(note));
     }
     let mut rows = vec![row("Whole card")];

@@ -15,7 +15,9 @@ fn asked(
 #[test]
 fn what_the_recipe_does_not_ask_stays_as_it_was() {
     let scratch = Scratch::new();
-    let context = scratch_context(&scratch);
+    let mut context = scratch_context(&scratch);
+    // A PC with eight cores, whatever the one the test runs on has.
+    context.cpus = crate::host::stand_in::fake_cpus(&scratch, "cpus", &[32768; 16]);
     let fitted = fit(&context, Kind::Windows, &SettingsAsked::default(), USUAL, 8);
     assert_eq!((fitted.cores, fitted.ram_gib, fitted.disk_gib, fitted.vram_gib), (4, 8, 64, 0));
     assert!(fitted.notes.is_empty());

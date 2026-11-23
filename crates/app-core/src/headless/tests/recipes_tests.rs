@@ -13,7 +13,9 @@ const CUDA: &str = "name = \"CUDA\"\ndescription = \"Ubuntu for CUDA.\"\nguest =
                     [steps]\npackages = [\"build-essential\"]\n";
 
 fn with_recipes(scratch: &Scratch) -> Context {
-    let context = with_an_amd_card(scratch);
+    let mut context = with_an_amd_card(scratch);
+    // A PC with eight cores, whatever the one the test runs on has, so a recipe's cores fit.
+    context.cpus = crate::host::stand_in::fake_cpus(scratch, "cpus", &[32768; 16]);
     scratch.write("program/recipes/games.toml", GAMES);
     scratch.write("program/recipes/cuda.toml", CUDA);
     context

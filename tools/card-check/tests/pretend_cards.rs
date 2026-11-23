@@ -30,7 +30,8 @@ struct Expected {
     nodes: usize,
     classes: usize,
     copy_caps: u32,
-    /// The channels the test tries, by label: one on each video engine where video runs.
+    /// The channels the test tries, by label: one on each video engine where video runs, and on the
+    /// optical flow engine where its node takes a context.
     channels: &'static [&'static str],
 }
 
@@ -60,6 +61,7 @@ const CARDS: [Expected; 3] = [
             "copy",
             "video engine 0x13 (class 0xC7B0)",
             "video engine 0x1b (class 0xC7B7)",
+            "video engine 0x33 (class 0xC7FA)",
         ],
     },
     Expected {
@@ -246,6 +248,9 @@ fn the_channel_test_makes_this_generations_channels_and_no_other() {
         let video = [expected.generation.video_decode_class, expected.generation.video_encode_class];
         for class in video {
             assert_eq!(made.contains(&class), expected.generation.nodes.video_runs, "{class:#x}");
+        }
+        if let Some(class) = expected.generation.nodes.optical_flow_class {
+            assert!(made.contains(&class), "{class:#x}");
         }
         assert!(!made.contains(&BLACKWELL.channel_class));
         let text = channel_lines(&results);

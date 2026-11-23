@@ -40,7 +40,7 @@ mod tiling;
 pub mod wakes;
 
 use answers::adapter::{AdapterAnswers, Inputs};
-use answers::nodes::{ENGINE_VIDEO_ENCODE, Node, node_list};
+use answers::nodes::{Node, node_list};
 use answers::perf_data;
 use answers::registry::AdapterRegistry;
 use channel::{ListChannel, VideoEngine};
@@ -308,9 +308,7 @@ impl<R: Rm> NvidiaBackend<R> {
         }
         let node = self.nodes.get(work.node as usize)?;
         let (rm_engine, instance) = node.video?;
-        let encodes = node.engine == ENGINE_VIDEO_ENCODE;
-        let generation = self.generation;
-        let class = if encodes { generation.video_encode_class } else { generation.video_decode_class };
+        let class = node.video_class(self.generation)?;
         Some(VideoEngine { rm_engine, class, instance })
     }
 
@@ -634,7 +632,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     }
 
     /// A context on a video node gets a one in its answer. Measured: left at zero, Direct3D 11 still
-    /// decodes, and `cuvidCreateDecoder` fails.
+    /// decodes, and `cuvidCreateDecoder` fails. The optical flow node's context has only run with it.
     fn finish_context_data(&mut self, node: u32, private: &mut [u8]) {
         if self.answers.node_is_video(node)
             && let Some(field) = private.get_mut(VIDEO_CONTEXT_WORD..VIDEO_CONTEXT_WORD + 4)

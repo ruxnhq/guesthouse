@@ -22,6 +22,9 @@ pub struct EngineNodes {
     pub decode: &'static [IndexedNode],
     pub encode: &'static [IndexedNode],
     pub optical_flow: &'static [IndexedNode],
+    /// The class of a channel on an optical flow engine, where contexts can be made on its nodes.
+    /// With none, they're only listed.
+    pub optical_flow_class: Option<u32>,
     pub jpeg: &'static [IndexedNode],
     /// Whether contexts and channels can be made on the video nodes. If not, they're only listed,
     /// and none of their commands reach the card.
@@ -148,6 +151,7 @@ pub const BLACKWELL: Generation = Generation {
         decode: &[(0, 0x1A), (3, 0x22)],
         encode: &[(1, 0x14), (2, 0x15), (3, 0x36)],
         optical_flow: &[(0, 0x21)],
+        optical_flow_class: None,
         jpeg: &[(3, 0x27)],
         video_runs: true,
         vulkan_video_runs: false,
@@ -173,6 +177,7 @@ const ADA_NODES: EngineNodes = EngineNodes {
     decode: &[(0, NODE_TYPE_NOT_SET)],
     encode: &[(0, NODE_TYPE_NOT_SET), (1, NODE_TYPE_NOT_SET)],
     optical_flow: &[(0, 0x21)],
+    optical_flow_class: None,
     jpeg: &[],
     video_runs: false,
     vulkan_video_runs: false,
@@ -186,11 +191,19 @@ const ADA_NODES: EngineNodes = EngineNodes {
 /// decoded H.264 and encoded H.264 and HEVC through Vulkan Video this way. What Vulkan sends to the
 /// video node a program doesn't use, which is semaphore releases, ran on the engine's channel too.
 /// A program that copies on a video queue family hasn't been run.
+///
+/// The optical flow engine takes a context. Refused one, the guest's driver reports its device as
+/// lost when a Direct3D 12 encoder opens. Given one, ffmpeg's Direct3D 12 encoders ran on the GA102,
+/// H.264 and HEVC with I and P pictures, and sent that node no work. Its class is the one the open
+/// headers have for Ampere, which the card lists. The card check made a channel of it on the GA102's
+/// engine, and its semaphore release ran, as on the decoder and encoder. A program's own work there
+/// hasn't been run.
 const AMPERE_NODES: EngineNodes = EngineNodes {
     overlay: Some(OVERLAY_NODE),
     decode: &[(0, 0x1A)],
     encode: &[(0, 0x13)],
     optical_flow: &[(0, 0x21)],
+    optical_flow_class: Some(0xC7FA),
     jpeg: &[],
     video_runs: true,
     vulkan_video_runs: true,
@@ -200,6 +213,7 @@ const TURING_NODES: EngineNodes = EngineNodes {
     decode: &[(0, NODE_TYPE_NOT_SET)],
     encode: &[(0, 0x13)],
     optical_flow: &[],
+    optical_flow_class: None,
     jpeg: &[],
     video_runs: false,
     vulkan_video_runs: false,
@@ -272,7 +286,8 @@ pub const ADA: Generation = Generation {
 
 /// Ampere's 30 series, the GA10x chips. Experimental. The GA100 has no graphics class, and reports
 /// another SM version, so it's refused. Video has run on a GA102: NVENC with H.264 and HEVC, through
-/// CUDA and on a Direct3D 11 device, Direct3D 11's decoders, and Vulkan Video.
+/// CUDA and on a Direct3D 11 device, Direct3D 11's decoders, Vulkan Video, and Direct3D 12's encoders
+/// without B pictures.
 pub const AMPERE: Generation = Generation {
     name: "Ampere",
     architectures: &[0x170],

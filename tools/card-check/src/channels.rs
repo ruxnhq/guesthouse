@@ -5,7 +5,7 @@
 
 use crate::host::{ListedCard, same_card};
 use crate::survey::Findings;
-use guesthouse_backend_nvidia::answers::nodes::{ENGINE_VIDEO_ENCODE, Node};
+use guesthouse_backend_nvidia::answers::nodes::Node;
 use guesthouse_backend_nvidia::channel::{AREA_SIZE, Channel, ChannelPlace, Engine, VideoEngine};
 use guesthouse_backend_nvidia::profile::{Generation, HostBranch};
 use guesthouse_backend_nvidia::pushbuffer::{increasing, ring_entry};
@@ -111,8 +111,7 @@ fn video_engines(generation: &Generation, nodes: &[Node]) -> Vec<Engine> {
         .iter()
         .filter_map(|node| {
             let (rm_engine, instance) = node.video?;
-            let encodes = node.engine == ENGINE_VIDEO_ENCODE;
-            let class = if encodes { generation.video_encode_class } else { generation.video_decode_class };
+            let class = node.video_class(generation)?;
             Some(Engine::Video(VideoEngine { rm_engine, class, instance }))
         })
         .collect()

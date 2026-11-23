@@ -18,7 +18,9 @@ use guesthouse_backend_nvidia::record::card::COPY_ENGINE_CAPS;
 use guesthouse_backend_nvidia::rm::classes::{CHANNEL_GROUP, ENGINE_COPY_0};
 use guesthouse_backend_nvidia::rm::device::Device;
 use guesthouse_backend_nvidia::rm::fake::FakeRm;
-use guesthouse_backend_nvidia::rm::fake_card::{FAKE_ADA, FAKE_AMPERE, FAKE_TURING, FakeCard};
+use guesthouse_backend_nvidia::rm::fake_card::{
+    FAKE_ADA, FAKE_AMPERE, FAKE_BLACKWELL, FAKE_ENGINES, FAKE_TURING, FakeCard,
+};
 use guesthouse_backend_standin::SparseMemory;
 use guesthouse_core::{Answer, Config, MemoryLimits, ReplyTicket, Session};
 use guesthouse_messages::wire::{set_u32, set_u64, u32_at, u64_at};
@@ -56,11 +58,18 @@ const NODE_COPY_ENGINE_FIELD: usize = 0x0C;
 /// Where a channel group's parameters name its engine.
 const GROUP_ENGINE_FIELD: usize = 0x0C;
 
-/// The pretend 3050's decoder and encoder: their nodes, and the RM's numbers for the engines.
+/// The pretend 3050's decoder, encoder and optical flow engine: their nodes, and the RM's numbers
+/// for the engines.
 const AMPERE_DECODE_NODE: u32 = 2;
 const AMPERE_ENCODE_NODE: u32 = 6;
+const AMPERE_OPTICAL_FLOW_NODE: u32 = 7;
 const RM_DECODER: u32 = 0x13;
 const RM_ENCODER: u32 = 0x1B;
+const RM_OPTICAL_FLOW: u32 = 0x33;
+const OPTICAL_FLOW_LABEL: &str = "OFA_0";
+/// The pretend Blackwell card's engines, and an optical flow engine.
+const BLACKWELL_ENGINES_AND_OPTICAL_FLOW: [u32; 10] =
+    [0x01, 0x0B, 0x0C, 0x0F, 0x13, 0x1C, 0x1D, 0x26, 0x2E, RM_OPTICAL_FLOW];
 /// The decoder and encoder bytes hold the RM's engines from these numbers on, a bit for each.
 const FIRST_ENGINE_IN_DECODER_FLAGS: u32 = 16;
 const FIRST_ENGINE_IN_ENCODER_FLAGS: u32 = 24;
@@ -373,9 +382,37 @@ fn only_nodes_whose_engine_runs_take_a_context() {
         for (node, label) in (0u32..).zip(expected.nodes) {
             let video = generation.nodes.video_runs && ["decode", "encode"].contains(label);
             let wanted = ["3D", "copy"].contains(label) || video;
-            assert_eq!(backend.context_allowed(node, 0), wanted, "{label}");
-            assert_eq!(backend.context_allowed(node, VULKAN_CLIENT), wanted, "{label} for Vulkan");
+            let optical_flow = generation.nodes.optical_flow_class.is_some() && *label == OPTICAL_FLOW_LABEL;
+            for client in [NO_CLIENT, VULKAN_CLIENT] {
+                assert_eq!(backend.context_allowed(node, client), wanted || optical_flow, "{label}");
+            }
         }
+    }
+}
+
+/// The guest's driver makes one when a Direct3D 12 encoder opens, and loses its device if it can't.
+/// Vulkan makes one there for a program that asks for all its queue families.
+#[test]
+fn amperes_optical_flow_node_takes_a_context() {
+    assert_eq!(RTX_3050_LAPTOP.nodes[AMPERE_OPTICAL_FLOW_NODE as usize], OPTICAL_FLOW_LABEL);
+    let mut backend = started(&FAKE_AMPERE);
+    assert!(backend.context_allowed(AMPERE_OPTICAL_FLOW_NODE, NO_CLIENT));
+    assert!(backend.context_allowed(AMPERE_OPTICAL_FLOW_NODE, VULKAN_CLIENT));
+}
+
+#[test]
+fn on_ada_and_blackwell_the_optical_flow_node_is_listed_and_takes_no_context() {
+    assert_eq!(BLACKWELL_ENGINES_AND_OPTICAL_FLOW[..FAKE_ENGINES.len()], FAKE_ENGINES);
+    let blackwell = FakeCard { engines: &BLACKWELL_ENGINES_AND_OPTICAL_FLOW, ..FAKE_BLACKWELL };
+    for card in [&FAKE_ADA, &blackwell] {
+        let mut backend = started(card);
+        let labelled = |node: u32| {
+            answer(&backend, NODE_QUERY, NODE_ANSWER_SIZE, &node.to_le_bytes())
+                .is_some_and(|answer| node_label(&answer) == OPTICAL_FLOW_LABEL)
+        };
+        let node = (0..MOST_NODES).find(|&node| labelled(node)).expect("the node is listed");
+        assert!(!backend.context_allowed(node, NO_CLIENT), "{}", card.name);
+        assert!(!backend.context_allowed(node, VULKAN_CLIENT), "{}", card.name);
     }
 }
 
@@ -415,6 +452,7 @@ fn amperes_record_flags_the_engines_its_decoder_and_encoder_nodes_run_on() {
     let nodes = node_list(FAKE_AMPERE.engines, Some(FAKE_AMPERE.graphics_copy), &AMPERE.nodes);
     assert_eq!(nodes[AMPERE_DECODE_NODE as usize].video, Some((RM_DECODER, 0)));
     assert_eq!(nodes[AMPERE_ENCODE_NODE as usize].video, Some((RM_ENCODER, 0)));
+    assert_eq!(nodes[AMPERE_OPTICAL_FLOW_NODE as usize].video, Some((RM_OPTICAL_FLOW, 0)));
 }
 
 /// What NVIDIA's driver puts in the fourth video word on these cards, from their graphics and channel
@@ -580,6 +618,21 @@ fn work_on_amperes_decoder_and_encoder_runs_on_that_engine_with_amperes_class() 
         assert!(rm.allocated().any(|(made, _)| made == AMPERE.channel_class));
         assert_eq!(rm.doorbells().len(), 1);
     }
+}
+
+/// No work has reached this node on a card. If some does, it goes to the engine it is for.
+#[test]
+fn work_on_amperes_optical_flow_node_runs_on_that_engine_with_its_class() {
+    let class = AMPERE.nodes.optical_flow_class.expect("Ampere has one");
+    assert_eq!(class, 0xC7FA);
+    let mut session = guest_on(&FAKE_AMPERE);
+    submit_list(&mut session, AMPERE_OPTICAL_FLOW_NODE, &[ring_entry(0x1000, 4)]);
+    assert!(group_engines(&session).contains(&RM_OPTICAL_FLOW));
+    assert!(!group_engines(&session).contains(&ENGINE_COPY_0));
+    let rm = &session.backend().device().rm;
+    assert!(rm.allocated().any(|(made, _)| made == class), "{class:#x}");
+    assert!(!rm.allocated().any(|(made, _)| made == AMPERE.video_decode_class));
+    assert_eq!(rm.doorbells().len(), 1);
 }
 
 /// Vulkan Video's commands are the decoder's and the encoder's, which a copy engine refuses.

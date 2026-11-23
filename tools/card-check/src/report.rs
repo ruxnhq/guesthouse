@@ -85,6 +85,7 @@ fn generation_class_lines(findings: &Findings) -> String {
     if generation.nodes.video_runs {
         wanted.extend([generation.video_decode_class, generation.video_encode_class]);
     }
+    wanted.extend(generation.nodes.optical_flow_class);
     let mut missing: Vec<u32> = Vec::new();
     for class in wanted {
         if !findings.classes.contains(&class) && !missing.contains(&class) {

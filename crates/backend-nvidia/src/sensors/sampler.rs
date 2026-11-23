@@ -80,6 +80,11 @@ impl<S: SensorSource> Sampler<S> {
         })
     }
 
+    /// What takes the readings, for a reading of its own on another schedule.
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.source
+    }
+
     /// How long until something is due.
     pub fn time_to_next(&self, now: Instant) -> Duration {
         self.next_fast.min(self.next_slow).saturating_duration_since(now)

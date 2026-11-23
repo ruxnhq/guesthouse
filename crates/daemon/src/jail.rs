@@ -141,7 +141,8 @@ impl Needs {
 #[cfg(feature = "nvidia")]
 impl Needs {
     /// What the real daemon of this slot needs, for the NVIDIA card at `card`. Its readings go in
-    /// that card's file.
+    /// that card's files: the snapshot, and the table of each process's part of the card, both
+    /// owner-only files in shared memory that only the daemon holding the card's lock writes.
     pub fn of_card(
         slot: crate::slot::Slot,
         project: &Path,
@@ -150,9 +151,10 @@ impl Needs {
     ) -> Self {
         let card = card.map(ToString::to_string);
         let snapshot = guesthouse_sensors::snapshot_path_for(card.as_deref());
+        let processes = guesthouse_sensors::card_processes::table_path_for(card.as_deref());
         Self {
             run_folder: slot.run_folder(project),
-            shared_files: vec![snapshot],
+            shared_files: vec![snapshot, processes],
             devices: host_gpu_devices(),
             driver_folder: Some(driver_folder.to_owned()),
             read_files: Vec::new(),
@@ -293,6 +295,25 @@ mod tests {
         assert!(needs.devices.is_empty());
         assert!(!plan.paths.iter().any(|(grant, _)| *grant == Grant::Device));
         assert!(plan.paths.contains(&(Grant::Read, "/lab/arc-b580.card".into())));
+    }
+
+    #[cfg(feature = "nvidia")]
+    #[test]
+    fn an_nvidia_daemon_writes_its_cards_two_shared_files_and_no_other() {
+        let card = guesthouse_backend::PciAddress::parse("0000:01:00.0").unwrap();
+        let slot = crate::slot::Slot::parse(Some("1")).unwrap();
+        let needs = Needs::of_card(slot, Path::new("/project"), Path::new("/store/driver"), Some(&card));
+        let shared = needs.plan().paths.into_iter().filter(|(_, path)| path.starts_with("/dev/shm"));
+        let shared: Vec<_> = shared.map(|(grant, path)| (grant, path.display().to_string())).collect();
+        let user = guesthouse_sensors::snapshot_path().display().to_string();
+        let user = user.rsplit('-').nth(1).unwrap().to_owned();
+        assert_eq!(
+            shared,
+            [
+                (Grant::Write, format!("/dev/shm/gpupv-sensors-{user}-2-0000:01:00.0")),
+                (Grant::Write, format!("/dev/shm/gpupv-processes-{user}-1-0000:01:00.0")),
+            ]
+        );
     }
 
     #[test]

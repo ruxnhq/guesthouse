@@ -202,7 +202,9 @@ NVIDIA limits how many encoding sessions a GeForce card runs at once, and this p
 
 ## Host sensors
 
-`backend-nvidia/src/sensors` reads the card through the vendor's management library, loaded at run time. One daemon per host does this, on its own thread, and writes a snapshot to a small shared file. The message path only reads that snapshot. With no library, or no fresh snapshot, the performance queries give their fixed answers.
+`backend-nvidia/src/sensors` reads the card through the vendor's management library, loaded at run time. One daemon per card does this, on its own thread, and writes a snapshot to a small shared file. The message path only reads that snapshot. With no library, or no fresh snapshot, the performance queries give their fixed answers.
+
+The same thread reads each process on the card once a second, for the app's share panel: the driver's newest one-second sample of each, of the shader cores, the encoder and the decoder, and the video memory the driver charges it with. It writes them to a table beside the snapshot, so one reading serves every guest on the card, and the other daemons never load the library. A sample is only believed if it ended in the last two seconds, as the library hands back old ones too, and a process the driver lists with none used nothing in that time. The table is one more owner-only file in shared memory in the daemon's jail. The daemon writing it serves a guest, so the app holds what it reads there to the table's room and every share to a whole.
 
 ## The app
 

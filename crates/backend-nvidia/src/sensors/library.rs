@@ -3,6 +3,7 @@
 //! It is loaded when the daemon starts and never linked, so a machine without it only goes without
 //! readings. Each getter is looked up alone, so an older library loses that reading and no more.
 
+use super::processes::{ProcessMemory, ProcessSource, Sample, Samples};
 use super::sampler::{FastReadings, SensorSource, SlowReadings};
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::mem;
@@ -11,6 +12,16 @@ use std::ptr;
 pub(super) const LIBRARY_NAME: &CStr = c"libnvidia-ml.so.1";
 
 const SUCCESS: c_int = 0;
+/// What the per-process samples answer when the driver has none newer than asked for.
+const NOT_FOUND: c_int = 6;
+/// The buffer was too small, and the count now says how many there are.
+const INSUFFICIENT_SIZE: c_int = 7;
+/// The library's word for a figure it doesn't have, as in a process's memory.
+const VALUE_NOT_AVAILABLE: u64 = u64::MAX;
+/// A list longer than this is not believed: a card holds a few dozen processes, not thousands.
+const MOST_ENTRIES: usize = 1024;
+/// Room for this many at first, which a desktop and a few guests stay well inside.
+const FIRST_ROOM: usize = 64;
 /// From the API's enumerations.
 const SENSOR_GPU: c_int = 0;
 const CLOCK_GRAPHICS: c_int = 0;
@@ -36,12 +47,41 @@ struct Utilization {
     memory: c_uint,
 }
 
+/// The API's per-process utilization sample: what one process used in one of the driver's sample
+/// periods, which ended at `time_stamp`, in microseconds of the CPU's clock.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct UtilizationSample {
+    pid: c_uint,
+    time_stamp: u64,
+    sm: c_uint,
+    memory: c_uint,
+    encoder: c_uint,
+    decoder: c_uint,
+}
+
+/// The API's process record, as its third set of process lists returns it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct ProcessInfo {
+    pid: c_uint,
+    used_memory: u64,
+    gpu_instance: c_uint,
+    compute_instance: c_uint,
+}
+
+// The layouts the API's header gives these, which a mistake here would read past.
+const _: () = assert!(mem::size_of::<UtilizationSample>() == 32);
+const _: () = assert!(mem::size_of::<ProcessInfo>() == 24);
+
 type Init = unsafe extern "C" fn() -> c_int;
 type HandleByUuid = unsafe extern "C" fn(*const c_char, *mut Device) -> c_int;
 type ReadWord = unsafe extern "C" fn(Device, *mut c_uint) -> c_int;
 type ReadWordOf = unsafe extern "C" fn(Device, c_int, *mut c_uint) -> c_int;
 type ReadMemory = unsafe extern "C" fn(Device, *mut MemoryInfo) -> c_int;
 type ReadUtilization = unsafe extern "C" fn(Device, *mut Utilization) -> c_int;
+type ReadSamples = unsafe extern "C" fn(Device, *mut UtilizationSample, *mut c_uint, u64) -> c_int;
+type ReadProcesses = unsafe extern "C" fn(Device, *mut c_uint, *mut ProcessInfo) -> c_int;
 
 /// The text form of a card's identity, as the library takes it.
 pub(super) fn uuid_text(bytes: &[u8; 16]) -> String {
@@ -63,6 +103,9 @@ pub(super) struct Library {
     power_limit: Option<ReadWord>,
     fan: Option<ReadWord>,
     memory: Option<ReadMemory>,
+    samples: Option<ReadSamples>,
+    compute_processes: Option<ReadProcesses>,
+    graphics_processes: Option<ReadProcesses>,
 }
 
 /// Looks a function up by name.
@@ -109,6 +152,9 @@ impl Library {
                 power_limit: symbol(library, c"nvmlDeviceGetEnforcedPowerLimit"),
                 fan: symbol(library, c"nvmlDeviceGetFanSpeed"),
                 memory: symbol(library, c"nvmlDeviceGetMemoryInfo"),
+                samples: symbol(library, c"nvmlDeviceGetProcessUtilization"),
+                compute_processes: symbol(library, c"nvmlDeviceGetComputeRunningProcesses_v3"),
+                graphics_processes: symbol(library, c"nvmlDeviceGetGraphicsRunningProcesses_v3"),
             })
         }
     }
@@ -135,6 +181,82 @@ impl Library {
         let mut info = MemoryInfo::default();
         // SAFETY: as above.
         (unsafe { self.memory?(self.device, &mut info) } == SUCCESS).then_some(info)
+    }
+}
+
+/// Fills a list the API's way: into room for `room` entries, and once more with room for as many as
+/// it says there are if that was too few. `call` gets the room and the count, and sets the count to
+/// how many it wrote. `Err` is the API's answer when that isn't success.
+fn fill_list<T: Default + Clone>(
+    mut call: impl FnMut(&mut [T], &mut c_uint) -> c_int,
+) -> Result<Vec<T>, c_int> {
+    let mut room = FIRST_ROOM;
+    for _ in 0..2 {
+        let mut list = vec![T::default(); room];
+        let mut count = c_uint::try_from(room).unwrap_or(c_uint::MAX);
+        match call(&mut list, &mut count) {
+            SUCCESS => {
+                list.truncate((count as usize).min(room));
+                return Ok(list);
+            }
+            INSUFFICIENT_SIZE if (count as usize) > room && (count as usize) <= MOST_ENTRIES => {
+                room = count as usize;
+            }
+            answer => return Err(answer),
+        }
+    }
+    Err(INSUFFICIENT_SIZE)
+}
+
+impl Library {
+    fn processes_of(&self, getter: Option<ReadProcesses>) -> Option<Vec<ProcessInfo>> {
+        let getter = getter?;
+        // SAFETY: the signature was vouched for at lookup, the count is the room in `list`, and both
+        // outlive the call.
+        fill_list(|list: &mut [ProcessInfo], count| unsafe { getter(self.device, count, list.as_mut_ptr()) })
+            .ok()
+    }
+}
+
+impl ProcessSource for Library {
+    fn samples_since(&mut self, since: u64) -> Samples {
+        let Some(getter) = self.samples else { return Samples::Unavailable };
+        // SAFETY: as above, with the count before the list in this call.
+        let read = fill_list(|list: &mut [UtilizationSample], count| unsafe {
+            getter(self.device, list.as_mut_ptr(), count, since)
+        });
+        match read {
+            Ok(list) => Samples::Read(
+                list.iter()
+                    .map(|raw| Sample {
+                        pid: raw.pid,
+                        at: raw.time_stamp,
+                        sm: raw.sm,
+                        memory: raw.memory,
+                        encoder: raw.encoder,
+                        decoder: raw.decoder,
+                    })
+                    .collect(),
+            ),
+            Err(NOT_FOUND) => Samples::NoneSince,
+            Err(_) => Samples::Unavailable,
+        }
+    }
+
+    fn processes(&mut self) -> Option<Vec<ProcessMemory>> {
+        let compute = self.processes_of(self.compute_processes);
+        let graphics = self.processes_of(self.graphics_processes);
+        if compute.is_none() && graphics.is_none() {
+            return None;
+        }
+        let all = compute.into_iter().flatten().chain(graphics.into_iter().flatten());
+        Some(
+            all.map(|info| ProcessMemory {
+                pid: info.pid,
+                bytes: (info.used_memory != VALUE_NOT_AVAILABLE).then_some(info.used_memory),
+            })
+            .collect(),
+        )
     }
 }
 

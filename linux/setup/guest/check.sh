@@ -123,13 +123,21 @@ check_cuda_runtime() {
 }
 
 # A refused control comes back as a status inside a call that worked, so a program only says its own error.
-# The device keeps one line for each kind of call it turned down, at most 64, and this names them.
+# The device keeps one line for each kind of call it turned down, at most 64, the last saying when it is full.
+# This names the first few and counts the rest.
 say_refused() {
-    local list=$root/proc/driver/nvidia/nvfwd-refused lines
+    local list=$root/proc/driver/nvidia/nvfwd-refused lines count first more=''
     [ -r "$list" ] || return 0
-    lines=$(grep -c . "$list")
-    [ "$lines" -gt 0 ] || return 0
-    echo "---- the device turned down $lines kinds of call since the VM started: $(paste -sd, "$list" | sed 's/,/, /g')"
+    lines=$(grep -v '^FULL' "$list" | grep .)
+    [ -n "$lines" ] || return 0
+    count=$(echo "$lines" | wc -l)
+    first=$(echo "$lines" | head -n 5 | paste -sd, | sed 's/,/, /g')
+    [ "$count" -le 5 ] || more=" and $((count - 5)) more"
+    if grep -q '^FULL' "$list"; then
+        count="more than $count"
+        more="$more, and more past what the device keeps (the host's calls.log has them)"
+    fi
+    echo "---- the device turned down $count kinds of call since the VM started: $first$more"
 }
 
 check_gpu() {

@@ -9691,3 +9691,65 @@ index cc41fe4..ab1a507 100644
 -- 
 2.56.1
 
+From 5c80f6ad22e7edc6a08e695f053b6d173aeb365d Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 12:08:29 -0800
+Subject: [PATCH 36/36] hw/misc/nvfwd: a full refused list says it is full
+
+The list a guest reads stopped at 64 lines with no sign that more were
+turned down. Its last line is now kept for a fixed one that says so.
+---
+ hw/misc/nvfwd/nvfwd_proto.h | 2 ++
+ hw/misc/nvfwd/refused.c     | 4 +++-
+ hw/misc/nvfwd/refused.h     | 5 ++++-
+ 3 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/nvfwd/nvfwd_proto.h b/hw/misc/nvfwd/nvfwd_proto.h
+index 4b17f2c..8f06fe0 100644
+--- a/hw/misc/nvfwd/nvfwd_proto.h
++++ b/hw/misc/nvfwd/nvfwd_proto.h
+@@ -20,6 +20,8 @@ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_O
+ /* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
+ #define NVFWD_REFUSED_MAX 64u
+ #define NVFWD_REFUSED_LINE 48u
++/* The list's last line once it is full. calls.log on the host has the rest. */
++#define NVFWD_REFUSED_FULL "FULL more were turned down"
+ /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
+ #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
+     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)
+diff --git a/hw/misc/nvfwd/refused.c b/hw/misc/nvfwd/refused.c
+index 66dd600..5be09a1 100644
+--- a/hw/misc/nvfwd/refused.c
++++ b/hw/misc/nvfwd/refused.c
+@@ -6,9 +6,11 @@
+ 
+ void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value)
+ {
+-    if (list->count < NVFWD_REFUSED_MAX) {
++    if (list->count < NVFWD_REFUSED_MAX - 1) {
+         snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s %s 0x%llx", outcome, what,
+                  (unsigned long long)value);
++    } else if (list->count == NVFWD_REFUSED_MAX - 1) {
++        snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s", NVFWD_REFUSED_FULL);
+     }
+ }
+ 
+diff --git a/hw/misc/nvfwd/refused.h b/hw/misc/nvfwd/refused.h
+index ad4fa66..2589009 100644
+--- a/hw/misc/nvfwd/refused.h
++++ b/hw/misc/nvfwd/refused.h
+@@ -14,7 +14,10 @@ typedef struct RefusedList {
+     uint32_t count;
+ } RefusedList;
+ 
+-/* Keeps "outcome what 0xvalue", cut to a line's size, while there's room. */
++/*
++ * Keeps "outcome what 0xvalue", cut to a line's size, while there's room. The last line is kept for
++ * NVFWD_REFUSED_FULL, so a full list says it is full.
++ */
+ void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value);
+ 
+ /* Writes whole lines, each ending in a newline, into `room` bytes at most, and returns the bytes written. */
+-- 
+2.56.1
+

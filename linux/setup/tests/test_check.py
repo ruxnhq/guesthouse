@@ -165,6 +165,22 @@ class Verdict(unittest.TestCase):
         self.assertIn("turned down 2 kinds of call since the VM started: REFUSED ctrl 0x2080a084, OVER limit 0x2b",
                       result.stdout)
 
+    def test_a_long_list_is_cut_to_the_first_few(self):
+        lines = "".join(f"REFUSED ctrl 0x{0x2080f000 + i:x}\n" for i in range(12))
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", lines)
+        out = self.guest.run().stdout
+        self.assertIn("turned down 12 kinds of call since the VM started: REFUSED ctrl 0x2080f000, "
+                      "REFUSED ctrl 0x2080f001, REFUSED ctrl 0x2080f002, REFUSED ctrl 0x2080f003, "
+                      "REFUSED ctrl 0x2080f004 and 7 more\n", out)
+        self.assertNotIn("0x2080f005", out)
+
+    def test_a_full_list_says_there_were_more(self):
+        lines = "".join(f"REFUSED ctrl 0x{0x2080f000 + i:x}\n" for i in range(63)) + "FULL more were turned down\n"
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", lines)
+        out = self.guest.run().stdout
+        self.assertIn("turned down more than 63 kinds of call", out)
+        self.assertIn("and 58 more, and more past what the device keeps (the host's calls.log has them)", out)
+
     def test_nothing_turned_down_says_nothing(self):
         self.guest.file("proc/driver/nvidia/nvfwd-refused", "")
         self.assertNotIn("turned down", self.guest.run().stdout)

@@ -20,6 +20,8 @@ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_O
 /* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
 #define NVFWD_REFUSED_MAX 64u
 #define NVFWD_REFUSED_LINE 48u
+/* The list's last line once it is full. calls.log on the host has the rest. */
+#define NVFWD_REFUSED_FULL "FULL more were turned down"
 /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
 #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)

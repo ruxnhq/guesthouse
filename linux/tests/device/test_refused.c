@@ -27,7 +27,10 @@ static void test_it_stops_at_its_size(void)
     }
     assert(list.count == NVFWD_REFUSED_MAX);
     refused_text(&list, text, sizeof(text));
-    assert(strstr(text, "REFUSED ctrl 0x3f\n") && !strstr(text, "0x40\n"));
+    /* Room for one less than the size, and the last line says the list is full. */
+    assert(strstr(text, "REFUSED ctrl 0x3e\n") && !strstr(text, "0x3f\n"));
+    assert(!strcmp(list.line[NVFWD_REFUSED_MAX - 1], NVFWD_REFUSED_FULL));
+    assert(strstr(text, NVFWD_REFUSED_FULL "\n") == text + strlen(text) - strlen(NVFWD_REFUSED_FULL "\n"));
 }
 
 static void test_a_long_line_is_cut_to_its_size(void)
@@ -45,7 +48,7 @@ static void test_a_long_line_is_cut_to_its_size(void)
 static void test_only_whole_lines_fit_the_room(void)
 {
     memset(&list, 0, sizeof(list));
-    for (unsigned i = 0; i < NVFWD_REFUSED_MAX; i++) {
+    for (unsigned i = 0; i < NVFWD_REFUSED_MAX + 1; i++) {
         refused_add(&list, "REFUSED", "ctrl", 0x20800000u + i);
     }
     for (uint32_t room = 0; room < 200; room++) {

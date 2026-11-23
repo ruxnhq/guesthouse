@@ -29,6 +29,10 @@ const FENCE_POLL: Duration = Duration::from_micros(20);
 const BACKGROUND_POLL: Duration = Duration::from_millis(1);
 /// How often to log where submissions spend their time, when asked to measure that.
 const TIMING_REPORT: Duration = Duration::from_secs(10);
+/// How long to go on looking without sleeping when a read got only part of a frame. QEMU writes a
+/// packet in up to three parts, and the rest follows within microseconds; a sleep and a wake cost
+/// more than that.
+const PARTIAL_FRAME_LIMIT: Duration = Duration::from_micros(100);
 /// How long every channel can stay closed before QEMU counts as gone. A QEMU that's alive connects
 /// again within half a second.
 const QEMU_GONE_AFTER: Duration = Duration::from_secs(5);
@@ -90,6 +94,8 @@ pub struct Server<B, M> {
     scratch: Vec<u8>,
     /// QEMU has connected at some point, so a closed channel means something.
     qemu_seen: bool,
+    /// Since when a channel has held part of a frame, if one does.
+    partial_since: Option<Instant>,
     /// When the last channel closed, if they're all closed.
     all_closed_since: Option<Instant>,
     qemu_gone_after: Duration,
@@ -127,6 +133,7 @@ impl<B: Backend, M: GuestMemory> Server<B, M> {
             wake: None,
             scratch: Vec::new(),
             qemu_seen: false,
+            partial_since: None,
             all_closed_since: None,
             qemu_gone_after: QEMU_GONE_AFTER,
             run_folder: run_folder.to_owned(),
@@ -189,7 +196,11 @@ impl<B: Backend, M: GuestMemory> Server<B, M> {
 
     /// How long to wait for the next message: what's waiting on fences, or the end of the wait for QEMU.
     fn next_timeout(&mut self, now: Instant) -> Option<Duration> {
-        let for_fences = self.fence_timeout(now);
+        let mut for_fences = self.fence_timeout(now);
+        if self.partial_since.is_some_and(|since| now.saturating_duration_since(since) < PARTIAL_FRAME_LIMIT)
+        {
+            for_fences = Some(Duration::ZERO);
+        }
         let Some(since) = self.all_closed_since else { return for_fences };
         let left = self.qemu_gone_after.saturating_sub(now - since);
         Some(for_fences.map_or(left, |timeout| timeout.min(left)))
@@ -250,6 +261,15 @@ impl<B: Backend, M: GuestMemory> Server<B, M> {
                 self.ports[index].connection = Some(Connection { stream, frames: FrameStream::new() });
             }
         }
+        let partial = self
+            .ports
+            .iter()
+            .filter_map(|port| port.connection.as_ref())
+            .any(|open| open.frames.has_partial());
+        self.partial_since = match (partial, self.partial_since) {
+            (false, _) => None,
+            (true, since) => since.or_else(|| Some(Instant::now())),
+        };
         // The guest's channels went first, and the viewer's trouble is only ever the viewer's.
         let session = self.router.session_mut();
         if descriptors[VIEWER_SOCKET].revents != 0 {

@@ -80,7 +80,19 @@ Settings and Edge then say some settings are managed by your organization, as th
 
 It leaves alone, on purpose: Defender, the firewall, SmartScreen, Windows Update, UAC, Secure Boot, the TPM and BitLocker, as Windows sets them; the Store, App Installer and winget, which recipes install with; every Xbox part, Game Bar and the Xbox identity provider, which games and Game Pass need; Edge and the WebView2 runtime; Get Help, which is Windows 11's troubleshooters, and Quick Assist; Photos, Media Player, Notepad, Paint, Calculator, Terminal, Snipping Tool, Camera, Clock, Sound Recorder and Sticky Notes; the runtimes, languages, input methods and accessibility tools; every service and scheduled task. The services that cost something at idle are the search indexer, SysMain, Defender and Update, and each is either kept on purpose or what Start's search needs.
 
-How much faster or smaller it makes a guest hasn't been measured yet. The list says what each item saves in kind, not how much.
+What it saves has been measured once, on one build, so take it as one run and not a promise. A plain and a lean install of Windows 11 Pro, Insider build 26300.9457, on an RTX 5090, each measured once, five minutes after the desktop:
+
+| | Plain | Lean |
+| --- | --- | --- |
+| RAM in use | 2.744 GiB | 2.351 GiB |
+| Processes | 135 | 124 |
+| Used on C: | 24.879 GiB | 23.774 GiB |
+| Provisioned packages | 48 | 36 |
+| Boot time | 17347 ms | 17120 ms |
+| Idle CPU | 0.66% | 0.57% |
+| Install | 8m46 | 9m14 |
+
+Boot time and idle CPU differ by less than one run can tell apart. The lean install took 28.6 s longer.
 
 ## Leaving folders out of virus scanning
 

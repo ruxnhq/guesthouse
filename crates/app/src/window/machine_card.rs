@@ -202,6 +202,7 @@ impl MachineCard {
             &status.error,
             &status.display_problem,
             &status.identity_note,
+            &status.token_note,
             &status.jail_note,
             &status.guest_gpu,
         ];

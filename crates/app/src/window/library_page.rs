@@ -46,6 +46,7 @@ fn brand() -> gtk::Box {
 
 fn main_menu() -> gio::Menu {
     let app_items = gio::Menu::new();
+    app_items.append(Some("Import Machine…"), Some("win.import"));
     app_items.append(Some("Preferences"), Some("win.preferences"));
     let setup_items = gio::Menu::new();
     setup_items.append(Some("Run Setup Again"), Some("win.setup"));

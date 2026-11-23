@@ -4,7 +4,7 @@ use super::{Shared, is_off};
 use crate::common::in_background;
 use crate::rows::{boxed_rows, confirm, icon_button, on_yes, question, row_button};
 use adw::prelude::*;
-use guesthouse_app_core::auto_snapshot::disk_can_hold;
+use guesthouse_app_core::auto_snapshot::{NOT_FOR_THROWAWAY, disk_can_hold};
 use guesthouse_app_core::machine::Kind;
 use guesthouse_app_core::snapshots::{Snapshot, list_snapshots};
 use guesthouse_app_core::tasks::Status;
@@ -110,10 +110,14 @@ impl Snapshots {
         self.show_auto();
     }
 
-    /// A disk that can't hold a snapshot gets none by itself, and the switch says why.
+    /// A disk that can't hold a snapshot, or a throwaway, gets none by itself, and the switch says why.
     fn show_auto(&self) {
         let Some(row) = &self.0.auto else { return };
-        let why = (!self.0.disk_can_hold.get()).then_some(AUTO_DISK);
+        let why = if self.0.shared.machine.borrow().throwaway {
+            Some(NOT_FOR_THROWAWAY)
+        } else {
+            (!self.0.disk_can_hold.get()).then_some(AUTO_DISK)
+        };
         if row.is_sensitive() != why.is_none() || row.subtitle().as_deref() != Some(why.unwrap_or(AUTO_NOTE))
         {
             row.set_sensitive(why.is_none());
@@ -218,6 +222,8 @@ impl Snapshots {
         for row in parts.rows.borrow().iter() {
             row.set_sensitive(can_change);
         }
+        // Throwaway is switched on the General page, and this follows it.
+        self.show_auto();
         if parts.busy.replace(status.busy) != status.busy {
             self.read();
         }

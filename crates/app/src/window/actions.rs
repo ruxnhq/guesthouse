@@ -38,6 +38,7 @@ pub fn add_actions(window: &Window) {
     add(window, "quit", Window::quit);
     add(window, "shortcuts", show_shortcuts);
     add(window, "setup", Window::show_setup);
+    add(window, "import", crate::import::ask);
     add(window, "log", Window::show_log);
     add(window, "about", crate::about::show);
     add(window, "preferences", crate::preferences::show);

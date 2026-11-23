@@ -9,7 +9,7 @@ use guesthouse_app_core::actions::rebooted;
 use guesthouse_app_core::card_share::look::{self as share, CardShare, Looks, Running};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::ending;
-use guesthouse_app_core::machine::{Machine, load_all};
+use guesthouse_app_core::machine::{MACHINE_FILE, Machine, load_all};
 use guesthouse_app_core::process_stat::Seen;
 use guesthouse_app_core::processes::all_leftovers;
 use guesthouse_app_core::slots;
@@ -49,6 +49,8 @@ struct Report {
     checked: bool,
     saved: Vec<Machine>,
     vm_running: bool,
+    /// Throwaway copies that had run and stopped, and were deleted as they were made to be.
+    deleted: Vec<String>,
     share: Vec<CardShare>,
     share_looks: Looks,
 }
@@ -92,6 +94,7 @@ fn look(
         paused: running.iter().filter(paused).map(|machine| (**machine).clone()).collect(),
         rebooted: running.iter().filter(restarted).map(|machine| (**machine).clone()).collect(),
         left: if checked && idle && !machines.is_empty() { all_leftovers(context) } else { BTreeMap::new() },
+        deleted: guesthouse_app_core::throwaway::delete_finished(context),
         saved: load_all(context).0,
         vm_running: free_slot(context).is_none(),
         checked,
@@ -152,10 +155,18 @@ impl Window {
     /// A task changes these on disk, and a stale copy here would write them back.
     fn take_saved(&self, saved: &[Machine]) {
         for machine in saved {
+            // A task made it, as a copy is: it's only seen once it's whole, and it's still there.
+            let made_elsewhere = !self.0.cards.borrow().contains_key(&machine.id)
+                && machine.folder(&self.context()).join(MACHINE_FILE).exists();
+            if made_elsewhere {
+                self.add_machine(machine.clone());
+            }
             if let Some(row) = self.0.cards.borrow().get(&machine.id) {
                 let handle = row.machine();
                 let mut current = handle.borrow_mut();
                 current.installing = machine.installing;
+                // A terminal or a task can make it a throwaway, or an install an ordinary one again.
+                current.throwaway = machine.throwaway;
                 current.iso.clone_from(&machine.iso);
             }
         }
@@ -264,6 +275,9 @@ impl Window {
         self.0.vm_running.set(report.vm_running);
         if let Some(dialog) = self.0.new_machine.borrow().as_ref() {
             dialog.set_vm_running(report.vm_running);
+        }
+        for id in &report.deleted {
+            self.on_removed(id);
         }
         self.take_saved(&report.saved);
         if report.checked {

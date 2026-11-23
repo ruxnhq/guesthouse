@@ -3,6 +3,7 @@
 //! dialogs over.
 
 mod account;
+mod copies;
 mod disk;
 mod display;
 mod drives;
@@ -190,6 +191,7 @@ struct Parts {
     /// Only a machine made for a recipe has one.
     recipe: Option<recipe::Recipe>,
     usb: usb::Usb,
+    copies: copies::Copies,
     remove: remove::Remove,
     /// The names of the pages, down the dialog's side.
     list: gtk::ListBox,
@@ -223,6 +225,7 @@ impl SettingsDialog {
             _jail: jail::Jail::new(&shared, &pages.general),
             // Built in the order they show: Remove stays last on its page.
             recipe: recipe::Recipe::new(&shared, &pages.general),
+            copies: copies::Copies::new(&shared, &pages.general),
             remove: remove::Remove::new(&shared, &pages.general),
             display: display::Display::new(&shared, &pages.display),
             disk: disk::Disk::new(&shared, &pages.storage),
@@ -276,6 +279,7 @@ impl SettingsDialog {
         parts.linux_gpu.set_status(status);
         parts.macos.set_status(status);
         parts.windows_card.set_status(status);
+        parts.copies.set_status(status);
         parts.remove.set_status(status);
     }
 }

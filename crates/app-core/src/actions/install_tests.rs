@@ -275,6 +275,53 @@ fn the_disc_carries_remote_desktop_and_ssh_as_the_machine_was_made() {
     assert_eq!(on_disc(&path, "/OpenSSH-Win64.msi"), b"installer");
 }
 
+fn disc_files(path: &Path) -> Vec<(String, Vec<u8>)> {
+    let listing = Command::new("isoinfo").args(["-J", "-f", "-i"]).arg(path).output().unwrap().stdout;
+    let mut names: Vec<String> = String::from_utf8_lossy(&listing).lines().map(str::to_owned).collect();
+    names.sort();
+    names.into_iter().map(|name| (name.clone(), on_disc(path, &name))).collect()
+}
+
+/// Lean Windows adds two files and one line, and only to a lean machine's disc: off, the disc is the
+/// same to the byte as one made before the choice existed.
+#[test]
+fn only_a_lean_machines_disc_has_lean_windows_on_it() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    with_install_files(&scratch, &context);
+    let real = |name: &str| {
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../guest").join(name)).unwrap()
+    };
+    scratch.write("program/guest/autounattend.xml", real("autounattend.xml"));
+    scratch.write("program/guest/lean.ps1", real("lean.ps1"));
+    let vm = machine(&context);
+    make_answer_disc(&context, &vm).unwrap();
+    let path = answer_disc_path(&context, &vm);
+    let before = disc_files(&path);
+    assert!(
+        before
+            .iter()
+            .all(|(name, bytes)| !name.contains("lean") && !String::from_utf8_lossy(bytes).contains("lean"))
+    );
+    lean::write_lean(&context, &vm, true).unwrap();
+    make_answer_disc(&context, &vm).unwrap();
+    let lean_disc = disc_files(&path);
+    let names: Vec<&str> = lean_disc.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(names.contains(&"/lean.ps1") && names.contains(&"/lean.json"), "{names:?}");
+    let answers = |files: &[(String, Vec<u8>)]| {
+        String::from_utf8(files.iter().find(|(name, _)| name == "/autounattend.xml").unwrap().1.clone())
+            .unwrap()
+    };
+    let with_step = answers(&lean_disc);
+    assert_eq!(lean::with_specialize_step(&answers(&before)).unwrap(), with_step);
+    let data: serde_json::Value =
+        serde_json::from_slice(&lean_disc.iter().find(|(name, _)| name == "/lean.json").unwrap().1).unwrap();
+    assert_eq!(data["apps"].as_array().unwrap().len(), lean::APPS.len());
+    lean::write_lean(&context, &vm, false).unwrap();
+    make_answer_disc(&context, &vm).unwrap();
+    assert_eq!(disc_files(&path), before, "off again is the disc as it was");
+}
+
 /// Stands in for a guest that installs and shuts down.
 #[derive(Default)]
 struct InstalledGuest;

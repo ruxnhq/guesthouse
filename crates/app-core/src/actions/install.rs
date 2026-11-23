@@ -12,6 +12,7 @@ use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
 use crate::gpu_maker::GpuMaker;
 use crate::iso::{self, iso_maker};
+use crate::lean;
 use crate::library::make_disk;
 use crate::machine::{Kind, Machine};
 use crate::monitor::Command as Qmp;
@@ -142,8 +143,14 @@ fn fill_answer_disc(context: &Context, machine: &Machine, files: &Path) -> Resul
     }
     let password = make_password(context, machine)?;
     let zone = zones::host_zone(zones::HOST_ZONE_LINK);
-    let answers =
+    let mut answers =
         answer_file(context, &zone, machine.account(), &password, disc_edition(machine).as_deref())?;
+    // Only a lean machine's disc has these, and only its answer file the line that runs them.
+    if lean::is_lean(context, machine) {
+        copy_writable(context.paths.guest_files().join(lean::SCRIPT), files.join(lean::SCRIPT))?;
+        fs::write(files.join(lean::DATA_ON_DISC), lean::guest_data())?;
+        answers = lean::with_specialize_step(&answers)?;
+    }
     fs::write(files.join("autounattend.xml"), password_is_filled(answers)?)?;
     fs::write(files.join(TOKEN_ON_DISC), make_token(context, machine)? + "\n")?;
     let driver = guest_driver(context, machine).map_err(Failure::new)?;
@@ -299,6 +306,9 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure::new("Windows installed, but its desktop never came up."));
     }
     check_guest(task)?;
+    // While the install's own session is up, as SYSTEM, and before its shutdown makes the next start
+    // the first that counts. It only ever adds a note.
+    super::lean::after_install(task);
     // Here, so the first start is already on the card maker's vendor number and needs no second VM.
     set_up_identity(task);
     task.step("Shutting down Windows");

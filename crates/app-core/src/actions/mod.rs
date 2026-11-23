@@ -21,6 +21,7 @@ mod install;
 mod intel_device;
 mod intel_files;
 mod late_watch;
+mod lean;
 mod macos;
 mod macos_install;
 mod nvme_move;
@@ -94,6 +95,8 @@ const FORCE_POLL: Duration = Duration::from_millis(200);
 pub(crate) const KEY_POLL: Duration = Duration::from_millis(500);
 /// Runs a machine's recipe again, as its settings ask.
 pub const RECIPE_TASK: &str = "recipe";
+/// Makes a lean machine lean again, as its settings ask.
+pub const LEAN_TASK: &str = "lean";
 
 /// The running side of a task: reports steps, and holds what the actions need.
 pub struct Task<'a> {
@@ -564,6 +567,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         }
         crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
         RECIPE_TASK => recipe::run_again(task),
+        LEAN_TASK => lean::run_again(task),
         "install" if task.machine.macos() => macos_install::install(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),

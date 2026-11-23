@@ -61,6 +61,7 @@ pub(super) enum Forwarding<'a> {
 pub(super) enum Command<'a> {
     Help,
     List,
+    Share,
     Status(&'a str),
     Show(&'a str),
     Start {
@@ -199,9 +200,9 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
     let machine = "a machine";
     match command {
         "help" | "-h" | "--help" => Ok(Command::Help),
-        "list" => {
+        "list" | "share" => {
             Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
-            Ok(Command::List)
+            Ok(if command == "list" { Command::List } else { Command::Share })
         }
         "status" | "show" | "stop" | "off" | "log" | "command" => {
             let split = Split::new(command, rest, &[], &[])?;

@@ -15,6 +15,7 @@ guesthouse-vm take-snapshot NAME SNAPSHOT
 guesthouse-vm go-back NAME [SNAPSHOT] [--yes]
 guesthouse-vm delete-snapshot NAME SNAPSHOT [--yes]
 guesthouse-vm idle NAME [--minutes N]
+guesthouse-vm share
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
@@ -64,6 +65,8 @@ A machine counts as idle only when every one of those was read and every one was
 For an Ubuntu machine, a plain VM or a macOS machine, only the CPU time can be read, as nothing in them answers Guesthouse. That is not enough to call one idle, so it says it cannot tell, and says busy if the CPU time is.
 
 The reading sends `guest/idle.ps1` through the agent. The only thing it does in Windows is to start a task in the user's session for a moment, as only a program there can see that session's input. The task, its helper script in `C:\gpupv` and its answer file in the public documents folder are removed when it is done, or at the next reading if one was cut short.
+
+`share` prints how each card with a running machine is shared, in the words of the library page's Sharing the Card panel: the whole card, then each machine's GPU time and video memory. It looks twice, a second apart, as AMD's and Intel's engine times need two looks. On NVIDIA each machine's time is the driver's last one-second sample of its processes, and its video memory is shown twice: what the guest allocated against its cap, and what the driver charges its processes with, which is more, as it includes the daemon's own work. It only reads.
 
 ## Making a machine
 

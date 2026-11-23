@@ -9,6 +9,7 @@ mod make;
 mod pick;
 mod recipes;
 mod setup;
+mod share;
 mod snapshots;
 mod standalone;
 mod steps;
@@ -53,6 +54,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              delete a snapshot, by its name or its tag
   idle MACHINE [--minutes N] read how busy a running machine is, and say if it would count as
                              idle. It changes nothing
+  share                      how each card with a running machine is shared, as the library
+                             page shows it. It changes nothing
 
   new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
@@ -121,6 +124,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
     match parse(arguments)? {
         Command::Help => writeln!(out, "{USAGE}")?,
         Command::List => list(context, out)?,
+        Command::Share => share::run(context, out)?,
         Command::Status(name) => show_status(context, &find(context, name)?, out)?,
         Command::Show(name) => change::show(context, &find(context, name)?, out)?,
         Command::Start { name, wait } => start(context, &find(context, name)?, wait, out)?,

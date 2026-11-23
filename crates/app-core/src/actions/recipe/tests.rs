@@ -456,3 +456,25 @@ fn an_ubuntu_machine_with_no_key_is_told_so_at_once() {
     assert!(stage(&mut task, &recipe).unwrap_err().why.contains("no SSH key"));
     assert!(shell.asked().is_empty());
 }
+
+#[test]
+fn what_the_start_said_is_said_before_the_steps_begin_and_kept_at_the_end() {
+    let scratch = Scratch::new();
+    let mut context = ubuntu_context(&scratch);
+    context.shell = Arc::new(ScriptedShell::answering(vec![ran(""), ran(""), ran(""), ran(""), ran("ok")]));
+    let recipe = chosen("ubuntu", &["git"], None);
+    let vm = ubuntu_machine(&context, &recipe);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "install", vm);
+    task.step("Starting the VM");
+    let note = "Starting without the GPU: no nvfwd device.";
+    task.error = note.into();
+    after_install(&mut task);
+    let said = task.said.lock().unwrap().clone();
+    let at = |what: &str| {
+        said.iter().position(|step| step.starts_with(what)).unwrap_or_else(|| panic!("{said:?}"))
+    };
+    assert!(at("Starting the VM") < at(note) && at(note) < at("Setting up for Box"), "{said:?}");
+    assert_eq!(said.iter().filter(|step| *step == note).count(), 1, "{said:?}");
+    assert_eq!(task.error, note, "the end still says it");
+}

@@ -100,6 +100,12 @@ pub(super) fn after_install(task: &mut Task) {
         task.error = [task.error.as_str(), note].join(" ").trim().to_owned();
         return;
     }
+    // What the start said, such as that it started without the GPU, is about the start, which came
+    // first. Said as a step now, it's read before the steps' own, and it stays in what the task says
+    // at its end.
+    if !task.error.is_empty() && !chosen.recipe.step_names().is_empty() {
+        task.step(&task.error.clone());
+    }
     if let Err(stopped) = stage(task, &chosen) {
         let told = failure_text(&chosen, &stopped);
         task.error = [task.error.as_str(), told.as_str()].join(" ").trim().to_owned();

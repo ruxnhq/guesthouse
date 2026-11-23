@@ -188,6 +188,11 @@ pub fn keep_notes(folder: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether `name`, in a machine's folder, is a note about its guest that a throwaway's run changes.
+pub(crate) fn is_guest_note(name: &str) -> bool {
+    GUEST_NOTES.contains(&name)
+}
+
 /// The notes as they were when it became a throwaway: each kept one back, and any other gone.
 fn restore_notes(context: &Context, machine: &Machine) -> Result<()> {
     let clean = clean_folder(context, machine);

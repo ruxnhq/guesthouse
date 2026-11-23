@@ -562,6 +562,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         "take_snapshot" => take_snapshot(task, text),
         "go_back" => go_back(task, text),
         "delete_snapshot" => delete_snapshot(task, text),
+        crate::export::EXPORT_TASK => crate::export::export(task, text),
         crate::duplicate::DUPLICATE_TASK => {
             let said = |word: &str| arguments.iter().skip(1).any(|given| given == word);
             let throwaway = said(crate::duplicate::THROWAWAY_WORD);

@@ -217,6 +217,7 @@ impl VmPlan {
             fd: PASST_FD,
             pid_file: self.run_folder.join(super::PASST_PID_FILE),
             words: self.passt_words(),
+            only_through: None,
         })
     }
 

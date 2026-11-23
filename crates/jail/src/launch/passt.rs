@@ -8,8 +8,8 @@
 //! may not be allowed to write where the run folder is, as on Fedora, where SELinux holds passt to a
 //! few places.
 
-use super::Passt;
 use super::handover::{keep_only, place, socket_pair};
+use super::{Passt, guard};
 use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
@@ -38,11 +38,20 @@ pub fn start(passt: &Passt) -> io::Result<()> {
     let (ours, theirs) = socket_pair()?;
     let with_name =
         |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", passt.program.display()));
+    // The interface is looked at before passt starts, so its number is from before any socket.
+    let kept_to = match &passt.only_through {
+        Some(only) => Some((only, guard::check(only)?)),
+        None => None,
+    };
     let mut command = Command::new(&passt.program);
     command.args(&passt.words).args([FOREGROUND_WORD, SOCKET_WORD, &theirs.as_raw_fd().to_string()]);
     keep_only(&mut command, theirs.as_raw_fd());
+    let listening = if kept_to.is_some() { Some(guard::listen(&mut command)?) } else { None };
     let mut child = command.stdin(Stdio::null()).spawn().map_err(with_name)?;
     drop(theirs);
+    if let (Some((only, number)), Some(listening)) = (kept_to, listening) {
+        guard::start(only, number, &listening.listener()?)?;
+    }
     let stat = fs::read_to_string(format!("/proc/{}/stat", child.id()))?;
     let started = start_time(&stat).ok_or_else(|| io::Error::other("passt's start time can't be read"))?;
     fs::write(&passt.pid_file, format!("{} {started}\n", child.id()))?;

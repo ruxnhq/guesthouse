@@ -40,6 +40,7 @@ fn verdict(action: Action) -> sock_filter {
         Action::Fail(errno) => RETURN_ERRNO | (errno as u32 & ERRNO_MASK),
         Action::Trap => RETURN_TRAP,
         Action::Kill => RETURN_KILL_PROCESS,
+        Action::Ask => libc::SECCOMP_RET_USER_NOTIF,
     };
     statement(RETURN, k)
 }

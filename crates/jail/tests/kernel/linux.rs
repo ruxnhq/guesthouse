@@ -154,6 +154,7 @@ fn passt_connection() {
         fd: PASST_AT,
         pid_file: pid_file.clone(),
         words: vec!["--quiet".into(), "--one".into()],
+        only_through: None,
     };
     // SAFETY: the variable is set before any thread exists.
     unsafe { env::set_var(PASST_VARIABLE, "1") };

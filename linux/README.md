@@ -39,6 +39,12 @@ After the app updates, the guest takes the new scripts and settings by itself. E
 
 That's where the image is mounted on a boot with the GPU. On one without, mount it there first with `sudo mount -o ro LABEL=NVFWD_DRIVER /opt/nv/driver`.
 
+### The CUDA toolkit and other packages that need the driver
+
+The guest's NVIDIA libraries are the host's, from the image, and Ubuntu doesn't know they're there. So `apt install nvidia-cuda-toolkit` used to bring Ubuntu's own driver libraries with it, `libnvidia-compute-595` on 26.04, of another version than the host's: a second libcuda and NVML in `/usr/lib/x86_64-linux-gnu`, an OpenCL ICD, and from `nvidia-kernel-common` udev rules that load NVIDIA's modules, `nvidia-powerd` and sleep hooks. While the GPU is on, programs still load the host's libcuda and NVML, as the image's folder comes first. OpenCL has no library of the host's, so it would load Ubuntu's.
+
+Now each boot with an image tells dpkg the host's driver is installed: `driver-package.sh` installs `nvfwd-host-driver`, a package with no files at the host's version, which provides `libcuda.so.1` and `libnvidia-ml.so.1` at that version, and `nvidia-opencl-icd`. That is what Ubuntu's CUDA packages ask for, so apt installs the toolkit and nothing of the driver. It's made again when the host's driver changes, and kept on a boot without the GPU. It only provides names: installing Ubuntu's driver on purpose still works, and apt takes `nvfwd-host-driver` away to do it. A guest that already has Ubuntu's libraries keeps them, and `nvfwd-check` names them with a warning. Remove them with apt, which also takes what needs them, restart, and install those again. A guest that has never booted with an image has no `nvfwd-host-driver` yet.
+
 ## A Linux you installed yourself
 
 Any ISO the app doesn't install by itself makes a plain machine, which you install by hand in the viewer. If it's a Linux, its settings have a Linux GPU switch. With it on, the machine starts with the same device, driver image and jail as Ubuntu's, on its own firmware and disk, and with the GPU off it boots as it always did.

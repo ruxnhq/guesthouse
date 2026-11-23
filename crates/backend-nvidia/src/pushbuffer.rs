@@ -11,6 +11,16 @@ const ENTRY_LENGTH_MASK: u32 = 0x1F_FFFF;
 const ENTRY_NO_PREFETCH_OR_FETCH: u64 = 1 << 41;
 const ENTRY_LENGTH_SHIFT_IN_U64: u32 = 42;
 
+/// An entry with no length carries an opcode where the address's high bits would be. This one sets
+/// the extended base for the entries after it, here to zero.
+const ENTRY_OPCODE_SET_EXTENDED_BASE: u64 = 4;
+const ENTRY_OPCODE_SHIFT_IN_U64: u32 = 32;
+pub const ZERO_EXTENDED_BASE: u64 = ENTRY_OPCODE_SET_EXTENDED_BASE << ENTRY_OPCODE_SHIFT_IN_U64;
+
+/// The channel classes made here whose headers have no such opcode: Turing's, and the one Ampere
+/// and Ada share. It came with a later class.
+const CHANNELS_WITH_NO_EXTENDED_BASE: [u32; 2] = [0xC46F, 0xC56F];
+
 const HEADER_INCREASING: u32 = 0x2000_0000;
 const HEADER_COUNT_SHIFT: u32 = 16;
 const HEADER_SUBCHANNEL_SHIFT: u32 = 13;
@@ -38,6 +48,12 @@ impl RingEntry {
             length: high >> ENTRY_LENGTH_SHIFT & ENTRY_LENGTH_MASK,
         }
     }
+}
+
+/// Whether a channel of this class has no opcode for the extended base, and faults on an entry
+/// that sets it.
+pub fn has_no_extended_base(channel_class: u32) -> bool {
+    CHANNELS_WITH_NO_EXTENDED_BASE.contains(&channel_class)
 }
 
 /// Builds a ring entry for `words` commands at a GPU address.
@@ -87,6 +103,20 @@ mod tests {
     fn an_entry_reads_back() {
         let entry = RingEntry::parse(ring_entry(0x12_3456_7890, 7).to_le_bytes());
         assert_eq!(entry, RingEntry { address: 0x12_3456_7890, length: 7 });
+    }
+
+    #[test]
+    fn an_entry_that_sets_the_extended_base_points_at_no_commands() {
+        assert_eq!(RingEntry::parse(ZERO_EXTENDED_BASE.to_le_bytes()).length, 0);
+    }
+
+    #[test]
+    fn only_the_older_channel_classes_have_no_extended_base() {
+        use crate::profile::{ADA, AMPERE, BLACKWELL, TURING};
+        for generation in [&ADA, &AMPERE, &TURING] {
+            assert!(has_no_extended_base(generation.channel_class), "{}", generation.name);
+        }
+        assert!(!has_no_extended_base(BLACKWELL.channel_class));
     }
 
     #[test]

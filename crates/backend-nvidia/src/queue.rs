@@ -5,12 +5,13 @@ use crate::channel::{
     ListFull,
 };
 use crate::list_repair;
-use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry};
+use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry, ZERO_EXTENDED_BASE, has_no_extended_base};
 use crate::ring_position::has_ring_position_flag;
 use crate::ring_request::RingMove;
 use crate::rm::Rm;
 use crate::{NvidiaBackend, UNFINISHED_ENTRIES_LIMIT, memory_error};
 use guesthouse_backend::{HostServices, SpaceId, Work, WorkSource, WorkStart};
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 // The fields of a submission's private data.
@@ -181,6 +182,24 @@ fn command_buffers(host: &dyn HostServices, space: SpaceId, listing: &[u8]) -> V
 fn ring_entries_of(mapping_length: u64) -> Option<u32> {
     let entries = mapping_length / ENTRY_SIZE as u64;
     u32::try_from(1u64 << (u64::BITS - 1 - entries.max(1).leading_zeros())).ok()
+}
+
+/// A list as a channel of this class can run it. The guest's driver starts some lists with an entry
+/// that sets the extended base to zero, whatever card it's on: NVENC through CUDA does, on the
+/// encoder's queue and on a copy queue. A channel with no such opcode faults on the entry, and the
+/// rest of the list never runs. At zero the base changes nothing, so the entry is left out. Any
+/// other entry stays, and so would another base, for the channel to refuse.
+fn without_zero_extended_bases(channel_class: u32, listing: &[u8]) -> Cow<'_, [u8]> {
+    let (entries, rest) = listing.as_chunks::<ENTRY_SIZE>();
+    if !has_no_extended_base(channel_class) || !entries.iter().any(sets_zero_extended_base) {
+        return Cow::Borrowed(listing);
+    }
+    let kept = entries.iter().filter(|entry| !sets_zero_extended_base(entry));
+    Cow::Owned(kept.flatten().chain(rest).copied().collect())
+}
+
+fn sets_zero_extended_base(entry: &[u8; ENTRY_SIZE]) -> bool {
+    u64::from_le_bytes(*entry) == ZERO_EXTENDED_BASE
 }
 
 /// Turns a copy queue's semaphore releases into launches, in the guest's own commands. Says whether
@@ -532,10 +551,15 @@ impl<R: Rm> NvidiaBackend<R> {
             // This submission still ends on the old ring. The move goes with its doorbell.
             self.begin_ring_move(host, work, old_ring, ring_address, entries, end)?;
         }
+        let channel_class = self.generation.channel_class;
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
-        let QueueChannel::Ring { channel, .. } = &mut queue.channel else {
+        let QueueChannel::Ring { channel, ring_address: running } = &mut queue.channel else {
             return Err(WorkStart::Finished);
         };
+        if work.may_run && has_no_extended_base(channel_class) {
+            let size = channel.ring_entries();
+            Self::clear_zero_extended_bases(host, work.space, *running, size, entries, end);
+        }
         let mut invalidated = true;
         if let Some(previous) = queue.position {
             let start = end.wrapping_sub(entries);
@@ -645,6 +669,31 @@ impl<R: Rm> NvidiaBackend<R> {
         }
     }
 
+    /// What [`without_zero_extended_bases`] does for a list, for a submission on a ring the GPU
+    /// reads from the guest. An entry can't be left out there, so it's zeroed where it lies, before
+    /// the doorbell lets the GPU reach it.
+    fn clear_zero_extended_bases(
+        host: &mut dyn HostServices,
+        space: SpaceId,
+        ring: u64,
+        size: u32,
+        entries: u32,
+        end: u32,
+    ) {
+        let Some(span) = host.shared_span(space, ring) else { return };
+        for index in 0..entries.min(size) {
+            let position = end.wrapping_sub(entries).wrapping_add(index) % size;
+            let at = span.guest_address + u64::from(position) * ENTRY_SIZE as u64;
+            let mut entry = [0; ENTRY_SIZE];
+            if host.read_guest(at, &mut entry) == ENTRY_SIZE
+                && sets_zero_extended_base(&entry)
+                && let Err(error) = host.write_u64(at, 0)
+            {
+                log::warn!("a ring entry that sets the extended base can't be cleared: {error}");
+            }
+        }
+    }
+
     fn list_channel(&mut self, host: &mut dyn HostServices, work: &Work<'_>) -> bool {
         if self.queues.contains_key(&work.queue) {
             return matches!(self.queues[&work.queue].channel, QueueChannel::List(_));
@@ -695,11 +744,12 @@ impl<R: Rm> NvidiaBackend<R> {
         }
         self.give_late_local_memory(host, work.queue);
         self.give_guest_pool(work);
+        let listing = without_zero_extended_bases(self.generation.channel_class, listing);
         // A fence that can't be read counts as nothing finished, which only holds work back.
         let finished = host.fence_value(work.fence).unwrap_or(0);
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
         let QueueChannel::List(list) = &mut queue.channel else { return Err(WorkStart::Finished) };
-        list.add(listing, work.fence_gpu_address, work.fence_value, finished).map_err(|full| match full {
+        list.add(&listing, work.fence_gpu_address, work.fence_value, finished).map_err(|full| match full {
             ListFull::ForNow => WorkStart::Busy,
             ListFull::TooLong => {
                 log::warn!("queue {:#x} sent a list that can't fit", work.queue);
@@ -1046,6 +1096,195 @@ mod tests {
     fn a_ring_a_channel_could_not_count_is_not_used() {
         assert_eq!(ring_entries_of(1 << 34), Some(1 << 31));
         assert_eq!(ring_entries_of(1 << 35), None);
+    }
+
+    mod extended_base {
+        use super::*;
+        use crate::fake_guest::{fake_backend, start_on_card};
+        use crate::profile::{AMPERE, BLACKWELL, TURING};
+        use crate::pushbuffer::ring_entry;
+        use crate::rm::fake::FakeRm;
+        use crate::rm::fake_card::FAKE_AMPERE;
+        use guesthouse_backend::{Backend, GpuRange, SharedSpan};
+
+        const COMMANDS: u64 = 0x82_1F23_0000;
+        const GPU_RANGE: GpuRange = GpuRange { start: 0x1_0000_0000, end: 0x2_0000_0000 };
+        const RING: u64 = 0x1_0010_0000;
+        const RING_ENTRIES: u32 = 8;
+        const CHANNEL_AREA: u64 = 0x1_0040_0000;
+        /// The pretend cards' graphics node, whose queues run on the guest's ring.
+        const GRAPHICS_NODE: u32 = 0;
+        /// The same opcode with a base that isn't zero.
+        const ANOTHER_EXTENDED_BASE: u64 = ZERO_EXTENDED_BASE | 1 << 8;
+
+        fn listing(entries: &[u64]) -> Vec<u8> {
+            entries.iter().flat_map(|entry| entry.to_le_bytes()).collect()
+        }
+
+        #[test]
+        fn a_zero_extended_base_is_left_out_of_a_list_for_a_channel_that_has_none() {
+            let sent = listing(&[ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27)]);
+            for generation in [&AMPERE, &TURING] {
+                let kept = without_zero_extended_bases(generation.channel_class, &sent);
+                assert_eq!(kept, listing(&[ring_entry(COMMANDS, 27)]), "{}", generation.name);
+            }
+        }
+
+        #[test]
+        fn a_channel_that_has_the_extended_base_gets_the_list_as_it_came() {
+            let sent = listing(&[ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27)]);
+            let kept = without_zero_extended_bases(BLACKWELL.channel_class, &sent);
+            assert!(matches!(kept, Cow::Borrowed(_)), "and nothing was copied");
+            assert_eq!(kept, sent);
+        }
+
+        #[test]
+        fn a_list_with_no_extended_base_is_not_copied() {
+            let sent = listing(&[ring_entry(COMMANDS, 27), ring_entry(COMMANDS + 0x100, 4)]);
+            let kept = without_zero_extended_bases(AMPERE.channel_class, &sent);
+            assert!(matches!(kept, Cow::Borrowed(_)));
+        }
+
+        #[test]
+        fn any_other_entry_without_commands_stays_in_a_list() {
+            let odd = [ANOTHER_EXTENDED_BASE, ZERO_EXTENDED_BASE | 1 << 63, 0, 5 << 32];
+            let sent = listing(&[&odd[..], &[ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27)]].concat());
+            let kept = without_zero_extended_bases(AMPERE.channel_class, &sent);
+            assert_eq!(kept, listing(&[&odd[..], &[ring_entry(COMMANDS, 27)]].concat()));
+        }
+
+        #[test]
+        fn the_end_of_a_list_that_is_not_a_whole_entry_stays() {
+            let mut sent = listing(&[ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27)]);
+            sent.extend_from_slice(&[7, 7, 7]);
+            let kept = without_zero_extended_bases(AMPERE.channel_class, &sent);
+            assert_eq!(kept[..ENTRY_SIZE], ring_entry(COMMANDS, 27).to_le_bytes());
+            assert_eq!(kept[ENTRY_SIZE..], [7, 7, 7]);
+        }
+
+        /// Plays a guest whose ring is in shared pages at its own address.
+        struct RingHost {
+            ring: Vec<u64>,
+        }
+
+        impl RingHost {
+            fn index(address: u64) -> usize {
+                ((address - RING) / ENTRY_SIZE as u64) as usize
+            }
+        }
+
+        impl HostServices for RingHost {
+            fn take_gpu_addresses(
+                &mut self,
+                _: u64,
+                _: u64,
+            ) -> Result<u64, guesthouse_backend::BackendError> {
+                Ok(CHANNEL_AREA)
+            }
+            fn read_at_gpu_address(&self, _: SpaceId, _: u64, _: &mut [u8]) -> Option<usize> {
+                None
+            }
+            fn shared_span(&self, _: SpaceId, address: u64) -> Option<SharedSpan> {
+                let mapping_length = self.ring.len() as u64 * ENTRY_SIZE as u64;
+                (address == RING).then_some(SharedSpan {
+                    guest_address: RING,
+                    offset_in_mapping: 0,
+                    mapping_length,
+                })
+            }
+            fn guest_span(&self, _: SpaceId, _: u64) -> Option<guesthouse_backend::GuestSpan> {
+                None
+            }
+            fn read_guest_span(&self, _: SpaceId, _: u64, _: &mut [u8]) -> Option<usize> {
+                None
+            }
+            fn write_guest_span(&mut self, _: SpaceId, _: u64, _: u32) -> bool {
+                true
+            }
+            fn write_u32(&mut self, _: u64, _: u32) -> Result<(), MemoryError> {
+                Ok(())
+            }
+            fn write_u64(&mut self, address: u64, value: u64) -> Result<(), MemoryError> {
+                self.ring[Self::index(address)] = value;
+                Ok(())
+            }
+            fn read_guest(&self, address: u64, out: &mut [u8]) -> usize {
+                out.copy_from_slice(&self.ring[Self::index(address)].to_le_bytes());
+                out.len()
+            }
+            fn fence_value(&self, _: u64) -> Result<u64, MemoryError> {
+                Ok(0)
+            }
+        }
+
+        fn cleared(ring: [u64; RING_ENTRIES as usize], entries: u32, end: u32) -> Vec<u64> {
+            let mut host = RingHost { ring: ring.to_vec() };
+            NvidiaBackend::<FakeRm>::clear_zero_extended_bases(
+                &mut host,
+                SpaceId(1),
+                RING,
+                RING_ENTRIES,
+                entries,
+                end,
+            );
+            host.ring
+        }
+
+        #[test]
+        fn a_zero_extended_base_on_a_guests_ring_is_zeroed_where_it_lies() {
+            let work = ring_entry(COMMANDS, 27);
+            let ring = [0, 0, ZERO_EXTENDED_BASE, work, 0, 0, 0, 0];
+            assert_eq!(cleared(ring, 2, 4), [0, 0, 0, work, 0, 0, 0, 0]);
+        }
+
+        #[test]
+        fn only_this_submissions_entries_on_a_ring_are_looked_at() {
+            let work = ring_entry(COMMANDS, 27);
+            let ring = [0, ZERO_EXTENDED_BASE, work, work, ZERO_EXTENDED_BASE, 0, 0, 0];
+            assert_eq!(cleared(ring, 2, 4), ring);
+        }
+
+        #[test]
+        fn a_submission_that_wraps_the_ring_is_cleared_on_both_sides() {
+            let work = ring_entry(COMMANDS, 27);
+            let ring = [ZERO_EXTENDED_BASE, work, 0, 0, 0, 0, work, ZERO_EXTENDED_BASE];
+            assert_eq!(cleared(ring, 4, 2), [0, work, 0, 0, 0, 0, work, 0]);
+        }
+
+        #[test]
+        fn another_base_stays_on_a_ring_for_the_channel_to_refuse() {
+            let ring = [ANOTHER_EXTENDED_BASE, ring_entry(COMMANDS, 27), 0, 0, 0, 0, 0, 0];
+            assert_eq!(cleared(ring, 2, 2), ring);
+        }
+
+        /// The guest's ring after a first submission of a zero extended base and one entry of
+        /// commands, at positions 1 and 2. The prelude takes the place before them.
+        fn ring_after_a_submission(mut backend: NvidiaBackend<FakeRm>) -> Vec<u64> {
+            let ring = vec![0, ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27), 0, 0, 0, 0, 0];
+            let mut host = RingHost { ring };
+            let space = backend.create_address_space(&[GPU_RANGE]).unwrap();
+            let mut private = vec![0; SMALLEST_PRIVATE_DATA];
+            private[ENTRIES..ENTRIES + 4].copy_from_slice(&2u32.to_le_bytes());
+            private[RING_END..RING_END + 4].copy_from_slice(&3u32.to_le_bytes());
+            private[RING_ADDRESS..RING_ADDRESS + 8].copy_from_slice(&RING.to_le_bytes());
+            let started =
+                backend.start_work(&mut host, &Work { space, node: GRAPHICS_NODE, ..work(&private) });
+            assert_eq!(started, WorkStart::Started { doorbell: 3, work: 2 });
+            host.ring
+        }
+
+        #[test]
+        fn a_submission_on_a_ring_has_lost_its_zero_extended_base_on_ampere_when_it_starts() {
+            let backend = start_on_card(FakeRm::new(), &FAKE_AMPERE, FAKE_AMPERE.device as u16);
+            let ring = ring_after_a_submission(backend.map_err(|refusal| refusal.0).unwrap());
+            assert_eq!(ring[1..3], [0, ring_entry(COMMANDS, 27)]);
+        }
+
+        #[test]
+        fn a_submission_on_a_ring_keeps_its_extended_base_on_blackwell() {
+            let ring = ring_after_a_submission(fake_backend(FakeRm::new()));
+            assert_eq!(ring[1..3], [ZERO_EXTENDED_BASE, ring_entry(COMMANDS, 27)]);
+        }
     }
 
     mod moves {

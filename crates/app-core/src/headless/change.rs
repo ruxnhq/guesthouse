@@ -4,8 +4,9 @@
 use super::args::Forwarding;
 use super::run_task;
 use crate::context::Context;
-use crate::display::{forget_note, read_state};
+use crate::display::{Driver, DriverPackage, forget_note, read_state};
 use crate::failure::{Failure, Result};
+use crate::gpu_identity::{Shown, maker_name, read_state as read_identity};
 use crate::gpu_maker::GpuMaker;
 use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
@@ -303,6 +304,32 @@ fn switch(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// The display driver as the settings page says it, in a few words. Going back to a snapshot puts
+/// back what its disk had, so this is how to check one from a terminal.
+fn driver_text(context: &Context, machine: &Machine) -> String {
+    let state = read_state(context, machine);
+    match state.driver {
+        Driver::Installed if state.restart_owed => "in Windows, from its next restart".to_owned(),
+        Driver::Installed => "in Windows".to_owned(),
+        Driver::Failed if state.reason.is_empty() => "taken out, as it failed".to_owned(),
+        Driver::Failed => format!("taken out, as it failed: {}", state.reason),
+        Driver::Absent if DriverPackage::find(context).is_some() => "goes in at the next start".to_owned(),
+        Driver::Absent => "none in this build".to_owned(),
+    }
+}
+
+/// The vendor and device number the next start shows Windows, and whose they are.
+fn vendor_text(context: &Context, machine: &Machine) -> String {
+    let identity = read_identity(context, machine);
+    let shown = identity.shown.identity(machine);
+    let whose = match identity.shown {
+        Shown::Microsoft => "Microsoft's".to_owned(),
+        Shown::Maker => format!("{}'s", maker_name(machine)),
+    };
+    let restart = if identity.restarts_windows() { ", and Windows restarts once on it" } else { "" };
+    format!("{:04x}:{:04x}, {whose}{restart}", shown.vendor, shown.device)
+}
+
 pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
     line(out, "name", &machine.name)?;
     line(out, "id", &machine.id)?;
@@ -322,6 +349,10 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "auto-snapshot", &auto)?;
         if machine.windows_maker() == Some(GpuMaker::Nvidia) {
             line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
+        }
+        if machine.has_gpu() {
+            line(out, "display-driver", &driver_text(context, machine))?;
+            line(out, "vendor-id", &vendor_text(context, machine))?;
         }
         let access = read_access(context, machine);
         for service in Service::ALL {

@@ -87,7 +87,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 ## Settings
 
-`show` lists a machine's settings, with the port forwards. `set` changes one:
+`show` lists a machine's settings, with the port forwards. For a Windows machine it also says how its display driver stands and which vendor ID its next start shows Windows, as the settings page does. Going back to a snapshot puts both back as that disk had them, so `show` is how to check one. `set` changes one:
 
 | Setting | Value | Machines |
 |---|---|---|

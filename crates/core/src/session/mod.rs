@@ -111,6 +111,17 @@ pub struct TableSizes {
     pub deferred: usize,
 }
 
+/// See [`Session::video_use`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoUse {
+    /// The video memory the guest's allocations hold.
+    pub on_card: u64,
+    /// The system memory allocations hold that the card had no room for.
+    pub spilled: u64,
+    /// The cap they are held to, if any.
+    pub cap: Option<u64>,
+}
+
 /// Everything the host knows about one guest. See the crate documentation.
 pub struct Session<B, M> {
     pub(crate) backend: B,
@@ -347,6 +358,16 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             resource_users: self.resource_users.len(),
             shared_objects: self.shared_objects.len(),
             deferred: self.deferred.len(),
+        }
+    }
+
+    /// What the guest's allocations hold, by the same count the cap is checked against. It goes
+    /// through every allocation, so it's for now and then, not for each message.
+    pub fn video_use(&self) -> VideoUse {
+        VideoUse {
+            on_card: self.video_in_use(),
+            spilled: self.spilled_in_use(),
+            cap: self.config.limits.video_cap,
         }
     }
 

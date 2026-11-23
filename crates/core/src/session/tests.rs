@@ -705,6 +705,15 @@ mod allocations {
     }
 
     #[test]
+    fn the_video_use_is_what_the_cap_counts() {
+        let mut session = session_with(Some(0x3000));
+        assert_eq!(session.video_use(), crate::VideoUse { on_card: 0, spilled: 0, cap: Some(0x3000) });
+        let reply = send(&mut session, &create_message(0, &[private(0x2000)]));
+        assert_eq!(status_of(&reply), SUCCESS);
+        assert_eq!(session.video_use().on_card, 0x2000);
+    }
+
+    #[test]
     fn a_cap_refusal_says_why_in_the_log() {
         // Marathon's on a 4 GiB cap: 30 MiB more, with nearly all of it in use.
         let warning = super::allocation::cap_warning(4 << 30, (4 << 30) - (16 << 20), 30 << 20);

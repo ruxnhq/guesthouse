@@ -4,11 +4,16 @@
 //! process of the same user can read it: a daemon answering a guest's performance queries, or the
 //! app showing the host's figures over a guest's screen. A reader takes no lock and never waits.
 //! What reads the card, and when, is the reader's own business and lives elsewhere.
+//!
+//! [`guest_use`] is the same kind of file for one guest: the video memory its daemon's books say it
+//! holds, kept in its run folder for the app's share panel.
 
 // Linux only: it uses mmap, flock and getuid. Other systems get an empty crate.
 #![cfg(target_os = "linux")]
 
+pub mod guest_use;
 mod shared;
+pub mod words;
 
 pub use shared::SharedSnapshot;
 

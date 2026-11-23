@@ -562,6 +562,11 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         "take_snapshot" => take_snapshot(task, text),
         "go_back" => go_back(task, text),
         "delete_snapshot" => delete_snapshot(task, text),
+        crate::duplicate::DUPLICATE_TASK => {
+            let said = |word: &str| arguments.iter().skip(1).any(|given| given == word);
+            let throwaway = said(crate::duplicate::THROWAWAY_WORD);
+            crate::duplicate::duplicate(task, text, throwaway, said(crate::duplicate::DELETE_WORD))
+        }
         other => Err(Failure(format!("There is no action called {}.", shell_quote(other)))),
     }
 }

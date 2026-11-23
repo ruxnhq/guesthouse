@@ -22,6 +22,7 @@ pub mod defaults;
 pub mod disk_image;
 pub mod display;
 pub mod driver_modes;
+pub mod duplicate;
 pub mod ending;
 pub mod failure;
 pub mod firmware;

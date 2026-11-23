@@ -36,8 +36,8 @@ pub const NO_DRIVER_FILES: &str = "Windows needs NVIDIA's driver first. Run Setu
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 const NO_FIRMWARE: &str = "QEMU's UEFI firmware isn't installed. Install ovmf, which Fedora calls edk2-ovmf.";
 /// The file a disk is called in its machine's folder.
-const DISK_FILE: &str = "disk.qcow2";
-const FIRMWARE_FILE: &str = "vars.fd";
+pub const DISK_FILE: &str = "disk.qcow2";
+pub const FIRMWARE_FILE: &str = "vars.fd";
 
 /// Makes the first entry from the VM from before the library. Its files stay where they are.
 /// Anything in the folder stops this, which includes the mark that the user removed this entry.
@@ -62,7 +62,9 @@ pub fn new_id(context: &Context, name: &str) -> String {
     let words = lower.split(|letter: char| !letter.is_ascii_alphanumeric()).filter(|word| !word.is_empty());
     let base = words.collect::<Vec<_>>().join("-");
     let base = if base.is_empty() { "machine".to_owned() } else { base };
-    let taken = sorted_names(&context.paths.machines);
+    let mut taken = sorted_names(&context.paths.machines);
+    // A copy still being made has its name already.
+    taken.extend(sorted_names(&crate::duplicate::staging_root(context)));
     let mut found = base.clone();
     let mut number = 1;
     while taken.contains(&found) {

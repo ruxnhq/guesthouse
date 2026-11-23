@@ -31,7 +31,7 @@ pub const MIN_RAM_GIB: u32 = 4;
 /// The AHCI controller has six ports. The disk and two discs have the first three, and the rest
 /// are for drives.
 pub const MAX_DRIVES: usize = 3;
-const MACHINE_FILE: &str = "machine.json";
+pub const MACHINE_FILE: &str = "machine.json";
 const NETWORK_BY_NAME_FILE: &str = "network-by-name";
 const OTHER_MAKER: &str =
     "Windows here was installed for the card it has now. For a card from another maker, make a new machine.";
@@ -689,7 +689,8 @@ pub fn load(context: &Context, id: &str) -> Result<Machine> {
 pub fn load_all(context: &Context) -> (Vec<Machine>, Vec<String>) {
     let (mut machines, mut errors) = (Vec::new(), Vec::new());
     for name in sorted_names(&context.paths.machines) {
-        if context.paths.machines.join(&name).is_dir() {
+        // A hidden folder is the app's own work in progress, such as a copy not yet whole.
+        if !name.starts_with('.') && context.paths.machines.join(&name).is_dir() {
             match load(context, &name) {
                 Ok(machine) => machines.push(machine),
                 Err(error) => errors.push(error.0),

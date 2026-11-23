@@ -708,11 +708,14 @@ fn the_profile_store_script_goes_to_the_guest_and_a_failure_is_said() {
     let mut task = placing_task(&context, &host);
     place_profile_store(&mut task).unwrap();
     assert_eq!(task.error, "");
+    task.machine.window_speed_off = true;
     place_profile_store(&mut task).unwrap();
     assert!(task.error.contains("settings store"));
     let asked = agent.requests.lock().unwrap();
     assert_eq!(asked.len(), 2);
-    assert_eq!(asked[0].2, "make the store");
+    // The present method follows "Faster programs in a window".
+    assert_eq!(asked[0].2, "$on = $true\nmake the store");
+    assert_eq!(asked[1].2, "$on = $false\nmake the store");
 }
 
 #[test]

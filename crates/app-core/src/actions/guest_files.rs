@@ -87,7 +87,9 @@ fn run_placing_script(task: &Task, store: Option<&str>) -> String {
 }
 
 /// The folder NVIDIA's settings store lives in, with the driver's own profile database in it. A guest
-/// that has it keeps it, as the files change once a program has used them.
+/// that has it keeps it, as the files change once a program has used them. The same script sets the
+/// driver's Vulkan and OpenGL present method by the machine's "Faster programs in a window", as that
+/// is the store it writes.
 pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
     let script = match guest_script(task.context, PROFILES_SCRIPT) {
         Ok(script) => script,
@@ -96,14 +98,21 @@ pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
             return Ok(());
         }
     };
+    let script = format!("$on = ${}\n{script}", task.machine.window_speed());
     let said = task.ask_guest(&script, PROFILES_SECONDS);
     if said.contains(FAILED_MARK) {
         task.error = "NVIDIA's settings store did not reach Windows. The log says why.".to_owned();
     }
-    if !said.trim().starts_with("kept") {
+    if !all_kept(&said) {
         write_log(task.context, &format!("profile store: {}", said.trim()))?;
     }
     Ok(())
+}
+
+/// Whether the script said something, and every line of it is about something left as it was.
+fn all_kept(said: &str) -> bool {
+    let mut lines = said.lines().map(str::trim).filter(|line| !line.is_empty()).peekable();
+    lines.peek().is_some() && lines.all(|line| line.starts_with("kept"))
 }
 
 /// Windows is up by now, so anything that goes wrong here is said and doesn't stop the machine.
@@ -329,6 +338,15 @@ fn place_listed_files(task: &mut Task, list: &str, store: Option<&str>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_script_that_changed_nothing_is_left_out_of_the_log() {
+        assert!(all_kept("kept C:\\ProgramData\\NVIDIA Corporation\\Drs\r\nkept the present method\r\n"));
+        assert!(!all_kept("kept C:\\ProgramData\\NVIDIA Corporation\\Drs\r\npresent method set to DXGI\r\n"));
+        assert!(!all_kept("made C:\\ProgramData\\NVIDIA Corporation\\Drs\r\nkept the present method\r\n"));
+        assert!(!all_kept("FAILED present method: NVAPI has no function\r\n"));
+        assert!(!all_kept(""), "no answer is not an answer");
+    }
 
     #[test]
     fn nvidias_system32_nvapi_is_left_out_and_the_32_bit_one_stays() {

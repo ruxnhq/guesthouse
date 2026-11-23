@@ -54,6 +54,17 @@ The script is meant to be read first, and [what it does](docs/install.md) is wri
 
 Get the installer from **[guesthouse.ruxn.com](https://guesthouse.ruxn.com/#download)**. [How it works on Windows](docs/windows-host.md).
 
+## What a machine can do
+
+On Linux hosts, from 0.8.0.
+
+- **Duplicate, throwaway, export.** Copy a machine in a second, run one that forgets everything when it stops, or move one to another PC as a single file. [Copies](docs/copies.md).
+- **Ready-made machines.** Pick a recipe at install and the machine comes set up, with Steam on Windows or the CUDA toolkit on Ubuntu. Or write your own. [Recipes](docs/recipes.md).
+- **Lean Windows.** Install Windows without the apps most people never open in a VM. Off unless you choose it. [What it takes out](docs/recipes.md#lean-windows).
+- **Snapshots before a risky start.** A machine can save a snapshot by itself before a change that may leave Windows unable to come up, such as a new display driver. Off by default.
+- **See how the card is shared.** The library shows each running machine's part of the card.
+- **No window needed.** Everything above is in `guesthouse-vm` too. [The commands](docs/headless.md).
+
 ## Is it safe?
 
 Programs in a VM can't read each other's memory, and the guest only ever talks to Guesthouse's daemon, which checks what it's sent and runs jailed. A guest can still slow the card down for everyone, and a bug in the GPU driver is a bug in your kernel, so only run guests you trust. [The full picture](docs/security.md).

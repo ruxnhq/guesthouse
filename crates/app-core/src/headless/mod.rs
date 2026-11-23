@@ -3,6 +3,7 @@
 
 mod args;
 mod change;
+mod copies;
 mod idle;
 mod make;
 mod pick;
@@ -64,11 +65,19 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
   recipes                    the recipes a machine can be set up for
   recipe MACHINE [--no-wait] run a machine's recipe steps again, in the running guest
+  duplicate MACHINE [--name NAME] [--throwaway [--delete-when-stopped]] [--no-wait]
+                             a copy of a machine that is off, with its own disk.
+                             A throwaway starts clean each time, and one made with
+                             --delete-when-stopped is deleted once it has run and stopped
+  export MACHINE FILE [--no-wait]
+                             the machine in one file, for Guesthouse on another PC
+  import FILE [--name NAME]  a machine from such a file
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
                              dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh,
                              auto-snapshot
+                             throwaway
                              only-through is an interface's name, such as wg0, or off. dns is an
                              IPv4 address, or auto
   forward MACHINE add|remove tcp|udp HOST GUEST
@@ -141,6 +150,14 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::DeleteSnapshot { name, snapshot, yes } => {
             snapshots::delete(context, &find(context, name)?, snapshot, yes, out)?
         }
+        Command::Duplicate { name, copy, throwaway, delete, wait } => {
+            let source = find(context, name)?;
+            copies::duplicate(context, &source, copies::Copy { name: copy, throwaway, delete }, wait, out)?
+        }
+        Command::Export { name, file, wait } => {
+            copies::export(context, &find(context, name)?, file, wait, out)?
+        }
+        Command::Import { file, name } => copies::import(context, file, name, out)?,
     }
     Ok(())
 }
@@ -163,6 +180,10 @@ fn state_text(found: &Status) -> String {
 }
 
 fn list(context: &Context, out: &mut dyn Write) -> Result<()> {
+    crate::duplicate::sweep_abandoned(context);
+    for id in crate::throwaway::delete_finished(context) {
+        writeln!(out, "{id} had run and stopped, and was deleted, as it was made to be.")?;
+    }
     let (machines, unreadable) = load_all(context);
     let rows: Vec<[String; 4]> = machines
         .iter()

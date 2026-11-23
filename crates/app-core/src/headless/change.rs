@@ -22,7 +22,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 18] = [
+const SETTINGS: [&str; 19] = [
     "cores",
     "ram",
     "vram",
@@ -41,6 +41,7 @@ const SETTINGS: [&str; 18] = [
     "remote-desktop",
     "ssh",
     "auto-snapshot",
+    "throwaway",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -232,6 +233,10 @@ pub(super) fn set(
             set_dns(context, &mut machine, address)?;
             return said(out, key, value);
         }
+        "throwaway" => {
+            crate::throwaway::set_throwaway(context, &mut machine, on_or_off(key, value)?)?;
+            return said(out, key, value);
+        }
         "share" => {
             not_for_ubuntu(&machine)?;
             must_be_off(context, &machine)?;
@@ -250,7 +255,11 @@ pub(super) fn set(
     if matches!(key, "screen" | "refresh") {
         apply_display(context, &machine, out)?;
     }
-    said(out, key, value)
+    said(out, key, value)?;
+    if key == "auto-snapshot" && machine.throwaway {
+        writeln!(out, "It has no effect while Throwaway is on, as a throwaway starts clean each time.")?;
+    }
+    Ok(())
 }
 
 fn protocol_of(word: &str) -> Result<Protocol> {
@@ -308,7 +317,9 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
-        line(out, "auto-snapshot", &switch(machine.auto_snapshot_on()))?;
+        let auto =
+            if machine.throwaway { "none, as it's a throwaway" } else { switch(machine.auto_snapshot_on()) };
+        line(out, "auto-snapshot", &auto)?;
         if machine.windows_maker() == Some(GpuMaker::Nvidia) {
             line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
         }
@@ -318,6 +329,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         }
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
+    line(out, "throwaway", &switch(machine.throwaway))?;
     if machine.kind != Kind::Linux {
         line(out, "network", &machine.network_mode.name())?;
         if machine.network_mode == Mode::Nat {
@@ -343,6 +355,9 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
     }
     if machine.installing {
         writeln!(out, "Its install has not finished.")?;
+    }
+    if let Some(note) = crate::token_change::refused_note(context, machine) {
+        writeln!(out, "{note}")?;
     }
     Ok(())
 }

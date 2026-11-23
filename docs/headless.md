@@ -25,6 +25,9 @@ guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
 guesthouse-vm recipes
 guesthouse-vm recipe NAME [--no-wait]
+guesthouse-vm duplicate NAME [--name NAME] [--throwaway [--delete-when-stopped]] [--no-wait]
+guesthouse-vm export NAME FILE [--no-wait]
+guesthouse-vm import FILE [--name NAME]
 
 guesthouse-vm show NAME
 guesthouse-vm set NAME SETTING VALUE
@@ -78,6 +81,10 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 `remove` says what it would delete, and does it when you add `--yes`. A machine whose disk is outside its folder only loses its entry, and the disk stays.
 
+`duplicate` copies a machine that is off. It says what the copy costs, then follows the copy like `start`, and the copy is called NAME Copy unless `--name` says otherwise. `--throwaway` makes the copy a throwaway, which starts clean every time, and `--delete-when-stopped` has it deleted once it has run and stopped, as `set NAME throwaway on` does for any installed machine. [Copies](copies.md) says what a copy keeps and what's new, and how a throwaway works.
+
+`export` writes a machine that is off to one file, for Guesthouse on another PC, and follows the task like `start`. `import` makes a machine of such a file, called what it was called there unless `--name` says otherwise, and says what it changed on the way. [Copies](copies.md) says what goes in the file and how an import checks it.
+
 ## Settings
 
 `show` lists a machine's settings, with the port forwards. `set` changes one:
@@ -90,6 +97,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `window-speed` | on or off: whether programs in a window are shown without a copy of every frame, and on NVIDIA whether Vulkan and OpenGL present through DXGI | Windows |
 | `dlss` | on or off: whether Guesthouse's NVAPI wrapper, which DLSS needs, is in System32 in place of NVIDIA's. Off for a game whose anti-cheat refuses the unsigned wrapper | Windows on an NVIDIA card |
 | `start-unjailed` | on or off: on lets a machine with a GPU start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
+| `throwaway` | on or off: on makes the machine start clean every time, from its disk as it is now, as Throwaway does in the app. [Copies](copies.md) says what goes and what stays. Only while it's off and installed | all |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |
 | `network` | nat, none or bridged | not Ubuntu |
@@ -104,7 +112,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
-`auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which.
+`auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which. A throwaway takes none, whatever it says, and `show` says so.
 
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
 
@@ -121,7 +129,7 @@ A start with none of these due takes none, and costs a few small reads. The snap
 
 If that start then fails, `start` says so and tells you the snapshot, and `go-back NAME` goes back to it. It shows what is lost and does it with `--yes`. The machine must be off. A later start that works clears the offer, and so does going back. `snapshots NAME` lists them all, with the automatic one marked.
 
-`snapshots NAME` gives each snapshot's tag in brackets. `take-snapshot NAME SNAPSHOT` takes one by that name, as Take Snapshot does in the app. `go-back NAME SNAPSHOT` goes back to the snapshot of that name, or of that tag when two share a name, and `delete-snapshot NAME SNAPSHOT` deletes it. Both say what is lost and do it only with `--yes`. All three refuse where the app's Snapshots page does: while the machine is running or busy with a task, and before its install has finished. Linux machines (Ubuntu) and plain machines take none: an Ubuntu machine has no firmware file for a snapshot to keep, and a plain machine has no change that the app makes to its guest.
+`snapshots NAME` gives each snapshot's tag in brackets. `take-snapshot NAME SNAPSHOT` takes one by that name, as Take Snapshot does in the app. `go-back NAME SNAPSHOT` goes back to the snapshot of that name, or of that tag when two share a name, and `delete-snapshot NAME SNAPSHOT` deletes it. Both say what is lost and do it only with `--yes`. All three refuse where the app's Snapshots page does: while the machine is running, a throwaway's run included, or busy with a task, and before its install has finished. On a throwaway, which is off, they change its clean state, as [Copies](copies.md) says. Linux machines (Ubuntu) and plain machines take none: an Ubuntu machine has no firmware file for a snapshot to keep, and a plain machine has no change that the app makes to its guest.
 
 A change made to a running Windows with no start after it, such as installing the display driver from the settings, takes no snapshot, as there is no moment to take one. Starting a machine with your own QEMU command from `command` takes none either.
 

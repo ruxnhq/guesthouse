@@ -5,6 +5,9 @@ use std::fmt;
 
 const NO_WAIT: &str = "--no-wait";
 const YES: &str = "--yes";
+const NAME: &str = "--name";
+const THROWAWAY: &str = "--throwaway";
+const DELETE_WHEN_STOPPED: &str = "--delete-when-stopped";
 /// The options of `new` that take a value.
 const NEW_OPTIONS: [&str; 13] = [
     "--iso",
@@ -117,6 +120,22 @@ pub(super) enum Command<'a> {
         name: &'a str,
         snapshot: &'a str,
         yes: bool,
+    },
+    Duplicate {
+        name: &'a str,
+        copy: Option<&'a str>,
+        throwaway: bool,
+        delete: bool,
+        wait: bool,
+    },
+    Export {
+        name: &'a str,
+        file: &'a str,
+        wait: bool,
+    },
+    Import {
+        file: &'a str,
+        name: Option<&'a str>,
     },
 }
 
@@ -246,6 +265,27 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
         "remove" => {
             let split = Split::new(command, rest, &[], &[YES])?;
             Ok(Command::Remove { name: split.exactly(command, machine, 1)?[0], yes: split.has(YES) })
+        }
+        "export" => {
+            let split = Split::new(command, rest, &[], &[NO_WAIT])?;
+            let [name, file] = split.exactly(command, "a machine and a file", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::Export { name, file, wait: !split.has(NO_WAIT) })
+        }
+        "import" => {
+            let split = Split::new(command, rest, &[NAME], &[])?;
+            Ok(Command::Import { file: split.exactly(command, "a file", 1)?[0], name: split.value(NAME) })
+        }
+        "duplicate" => {
+            let split = Split::new(command, rest, &[NAME], &[NO_WAIT, THROWAWAY, DELETE_WHEN_STOPPED])?;
+            let name = split.exactly(command, machine, 1)?[0];
+            let (copy, throwaway, wait) = (split.value(NAME), split.has(THROWAWAY), !split.has(NO_WAIT));
+            let delete = split.has(DELETE_WHEN_STOPPED);
+            if delete && !throwaway {
+                return Err(mistake("--delete-when-stopped is for a --throwaway copy."));
+            }
+            Ok(Command::Duplicate { name, copy, throwaway, delete, wait })
         }
         "new" => {
             let split = Split::new(command, rest, &NEW_OPTIONS, &[YES])?;

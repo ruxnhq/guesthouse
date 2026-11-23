@@ -45,6 +45,14 @@ fn the_setting_is_shown_by_its_default_and_kept_when_changed() {
     make(&context, "plain", "Plain", Kind::Plain);
     assert!(refused(&context, "set plain auto-snapshot on").contains("only for a Windows machine"));
     assert!(!said(&context, "show plain").0.contains("auto-snapshot"));
+    let mut throwaway = load(&context, "win").unwrap();
+    throwaway.throwaway = true;
+    throwaway.save(&context).unwrap();
+    assert!(said(&context, "show win").0.contains("auto-snapshot none, as it's a throwaway\n"));
+    assert_eq!(
+        said(&context, "set win auto-snapshot on").0,
+        "auto-snapshot is now on.\nIt has no effect while Throwaway is on, as a throwaway starts clean each time.\n"
+    );
 }
 
 #[test]

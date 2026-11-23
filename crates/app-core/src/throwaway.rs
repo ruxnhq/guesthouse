@@ -21,13 +21,15 @@ use crate::tasks::{State, status};
 use crate::vm_args::{Boot, MacosBoot, THROWAWAY_FDS, VmPlan, throwaway_disk};
 use crate::writable_copy::copy_writable;
 use guesthouse_daemon::handover::{KEPT_ABOVE, leave_open_at};
+use rustix::fs::{FlockOperation, flock};
 use rustix::io::fcntl_dupfd_cloexec;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// What a run is given fresh, in the machine's folder: the firmware settings, the TPM, and the
 /// agent's token for this run.
@@ -79,8 +81,42 @@ pub fn run_token_file(context: &Context, machine: &Machine) -> PathBuf {
     run_folder(context, machine).join(RUN_TOKEN_FILE)
 }
 
-/// Folders of the machine's own that a copy or an export leaves out: a run's, which goes anyway.
-pub const RUN_ONLY: [&str; 1] = [RUN_FOLDER];
+/// Held by the task that makes a run, for as long as it lives, so a look that takes away an ended
+/// run's folder never takes one a start is making.
+const RUN_LOCK: &str = "throwaway.lock";
+
+/// What of the machine's own a copy or an export leaves out: a run's, which goes anyway.
+pub const RUN_ONLY: [&str; 2] = [RUN_FOLDER, RUN_LOCK];
+
+/// A look holds the lock for a few file operations. Another task of the same machine never runs
+/// beside a start, so a lock still held after this is one a start should not wait on for ever.
+const RUN_LOCK_WAIT: Duration = Duration::from_secs(10);
+const RUN_LOCK_POLL: Duration = Duration::from_millis(50);
+
+/// The lock on making a run of this machine, if it's free now.
+fn lock_runs(context: &Context, machine: &Machine) -> io::Result<Option<File>> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(PRIVATE)
+        .open(machine.folder(context).join(RUN_LOCK))?;
+    Ok(flock(&file, FlockOperation::NonBlockingLockExclusive).is_ok().then_some(file))
+}
+
+/// The same for a start, which waits while a look takes away the last run's folder.
+fn wait_for_run_lock(context: &Context, machine: &Machine) -> Result<File> {
+    let end = Instant::now() + RUN_LOCK_WAIT;
+    loop {
+        if let Some(lock) = lock_runs(context, machine)? {
+            return Ok(lock);
+        }
+        if Instant::now() >= end {
+            return Err(Failure::new("Something else holds this throwaway's run. Try the start again."));
+        }
+        std::thread::sleep(RUN_LOCK_POLL);
+    }
+}
 
 /// Makes the machine a throwaway or an ordinary machine again. What's on its disk now is the
 /// clean state.
@@ -133,15 +169,18 @@ pub fn note_started(context: &Context, machine: &Machine) {
 }
 
 /// Deletes each throwaway copy that was marked to go once it has run, has run, and is off with
-/// nothing at work on it. Whichever of the app, `guesthouse-vm` or a start task looks next does
-/// this, so nothing has to stay running for it. Returns the ids deleted.
+/// nothing at work on it, and takes away the folder an ended run left, with that run's token. Whichever
+/// of the app, `guesthouse-vm` or a start task looks next does this, so nothing has to stay running
+/// for it. Returns the ids deleted.
 pub fn delete_finished(context: &Context) -> Vec<String> {
     let mut deleted = Vec::new();
     for machine in crate::machine::load_all(context).0 {
         let mark = machine.folder(context).join(DELETE_MARK);
         let has_run = fs::read_to_string(&mark).is_ok_and(|said| said.trim() == STARTED);
-        // Looked at every second by the app, so only a marked one is looked at further.
+        // Looked at every second by the app, so only a marked one, or one with a run's folder, is
+        // looked at further.
         if !(machine.throwaway && has_run) {
+            clear_ended_run(context, &machine);
             continue;
         }
         let found = status(context, &machine);
@@ -165,6 +204,27 @@ pub fn delete_finished(context: &Context) -> Vec<String> {
         }
     }
     deleted
+}
+
+/// Takes away the run folder of a machine whose run has ended: its QEMU is gone and no task of it is
+/// at work. The token in it is dead by then, but it's a secret left lying about. A start making a run
+/// holds the lock, so one being made is never taken.
+fn clear_ended_run(context: &Context, machine: &Machine) {
+    let folder = run_folder(context, machine);
+    if !folder.is_dir() {
+        return;
+    }
+    let Ok(Some(_held)) = lock_runs(context, machine) else { return };
+    let found = status(context, machine);
+    if found.state != State::Off || found.busy {
+        return;
+    }
+    if let Err(error) = fs::remove_dir_all(&folder) {
+        let _ = crate::log::write_log(
+            context,
+            &format!("{}: the folder of its ended run stays: {error}", machine.id),
+        );
+    }
 }
 
 /// An install, as Start Over runs on a throwaway, writes a new clean state to the disk itself, as a
@@ -219,11 +279,14 @@ pub struct ThrowawayRun {
     tpm: PathBuf,
     /// A macOS guest's OpenCore image and its QEMU's home, which it writes to as well.
     macos: Option<(PathBuf, PathBuf)>,
+    /// Kept while the task lives. Once it has gone, its QEMU running is what keeps the folder.
+    _lock: File,
 }
 
 impl ThrowawayRun {
     /// Everything a run starts from, made fresh.
     pub fn prepare(context: &Context, machine: &Machine) -> Result<Self> {
+        let lock = wait_for_run_lock(context, machine)?;
         let folder = run_folder(context, machine);
         let _ = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder)?;
@@ -252,7 +315,7 @@ impl ThrowawayRun {
             Some((opencore, home))
         };
         let overlay = open_overlay(&machine.id, Path::new(&machine.disk))?;
-        Ok(Self { machine: machine.id.clone(), overlay, vars, tpm, macos })
+        Ok(Self { machine: machine.id.clone(), overlay, vars, tpm, macos, _lock: lock })
     }
 
     /// The plan with this run's overlay, firmware settings and TPM in place of the machine's own.

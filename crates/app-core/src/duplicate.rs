@@ -40,11 +40,12 @@ const OTHER_DRIVE_NOTE: &str = "other-drive";
 const OTHER_DRIVE_PREFIX: &str = ".duplicate-";
 /// What stays with the original: what an install or a report left, caches the guest makes again, and
 /// a token change that's the original's own.
-pub(crate) const NOT_COPIED: [&str; 11] = [
+pub(crate) const NOT_COPIED: [&str; 12] = [
     crate::token_change::LOCK_FILE,
     crate::token_change::REFUSED_FILE,
     crate::throwaway::DELETE_MARK,
     crate::throwaway::RUN_ONLY[0],
+    crate::throwaway::RUN_ONLY[1],
     MACHINE_FILE,
     "answer.iso",
     "answer-disc.new",

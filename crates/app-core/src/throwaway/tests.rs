@@ -344,3 +344,50 @@ fn an_overlay_is_this_users_alone_and_only_this_machines_leftovers_go() {
     let mode = fs::metadata(by_descriptor(&run.overlay()[0])).unwrap().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[test]
+fn an_ended_runs_folder_and_its_token_go_at_the_next_look_and_never_while_the_run_lives() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = throwaway(&scratch, &context);
+    let run = ThrowawayRun::prepare(&context, &machine).unwrap();
+    fs::write(run_token_file(&context, &machine), "the run's\n").unwrap();
+    assert!(delete_finished(&context).is_empty());
+    assert!(run_token_file(&context, &machine).exists(), "a run being made or started is kept");
+    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    let words = run.applied_to(&plan).qemu_arguments();
+    drop(run);
+    // The task that started it has gone, and its QEMU runs on.
+    let qemu = context.paths.qemu.display().to_string();
+    let socket = format!("unix:{}/qmp.sock,server=on", context.paths.run_folder(slots::first()).display());
+    let mut running: Vec<&str> = vec![&qemu, "-qmp", &socket];
+    running.extend(words.iter().map(String::as_str));
+    fake_process(&context, 61, &running, &[], "");
+    delete_finished(&context);
+    assert!(run_token_file(&context, &machine).exists(), "kept while its QEMU lives");
+    fs::remove_dir_all(context.processes.join("61")).unwrap();
+    // A task of the machine's at work, such as a start that has not made its run yet.
+    let task = context.paths.binary(crate::tasks::TASK_PROGRAM).display().to_string();
+    fake_process(&context, 62, &[&task, "start", &machine.id], &[], "");
+    let record = crate::tasks::TaskRecord {
+        action: "start".into(),
+        machine: machine.id.clone(),
+        pid: 62,
+        step: String::new(),
+        error: String::new(),
+    };
+    crate::tasks::write_task(&context, Some(slots::first()), &record).unwrap();
+    delete_finished(&context);
+    assert!(run_folder(&context, &machine).exists(), "kept while a task of the machine's is at work");
+    fs::remove_dir_all(context.processes.join("62")).unwrap();
+    // Another test's child, forked and not yet started, can hold a copy of the lock for a moment, and
+    // then the look after takes the folder.
+    let mut looks = 0;
+    while run_folder(&context, &machine).exists() && looks < 500 {
+        assert!(delete_finished(&context).is_empty(), "the machine itself stays");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        looks += 1;
+    }
+    assert!(!run_folder(&context, &machine).exists());
+    assert!(load(&context, &machine.id).unwrap().throwaway);
+}

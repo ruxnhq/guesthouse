@@ -487,6 +487,8 @@ fn a_throwaway_run_keeps_its_overlay_for_the_task_and_the_next_task_gets_a_new_o
     seen(2);
     end_pretend_program(&qemu);
     end_pretend_program(&daemon);
+    // The next task of the machine comes once this one has ended.
+    drop(task);
     LocalHost::new(&context).start(&plan, &machine).unwrap();
     let lines = seen(3);
     end_pretend_program(&qemu);

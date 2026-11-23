@@ -10,13 +10,15 @@ mod forwarding_jail;
 mod macos;
 mod nic;
 mod own_linux;
+mod passt_age;
 mod qemu_jail;
 mod standalone;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
-pub use nic::PASST_PID_FILE;
+pub use nic::{PASST_PID_FILE, passt_probe_words};
+pub use passt_age::PasstAge;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
@@ -97,8 +99,11 @@ pub struct NetworkPlan {
     pub bridge: String,
     pub mac: String,
     pub forwards: Vec<Forward>,
-    /// The host's DNS server, which passt passes on.
+    /// The host's DNS server, which passt passes on, or for a passt too old for that one off the PC
+    /// that the guest asks itself.
     pub resolver: Option<String>,
+    /// Which of the app's words this PC's passt takes.
+    pub passt_age: PasstAge,
 }
 
 /// Everything QEMU's arguments are built from.
@@ -184,6 +189,7 @@ impl VmPlan {
         let drives = Self::drives_for(machine, &boot);
         let tools = context.paths.store.join("iso/tools.iso");
         let passt = machine.network_mode == Mode::Nat && machine.passt && passt_installed();
+        let passt_age = if passt { passt_age_now().unwrap_or_default() } else { PasstAge::default() };
         Self {
             boot,
             slot,
@@ -214,7 +220,12 @@ impl VmPlan {
                 bridge: machine.bridge.clone(),
                 mac: machine.mac.clone(),
                 forwards: machine.forwards.clone(),
-                resolver: if passt { host_resolver() } else { None },
+                resolver: match (passt, passt_age) {
+                    (false, _) => None,
+                    (true, PasstAge::NoDnsHost) => passt_age::outside_resolver_now(),
+                    (true, _) => host_resolver(),
+                },
+                passt_age,
             },
             tools_disc: tools.is_file().then_some(tools),
             sound: None,
@@ -265,6 +276,22 @@ fn is_program(path: &Path) -> bool {
 
 pub fn passt_installed() -> bool {
     on_path("passt")
+}
+
+/// Which of the app's words this PC's passt takes, or `None` if it takes none or isn't there.
+pub fn passt_age_now() -> Option<PasstAge> {
+    passt_age::age_now(passt_probe_words)
+}
+
+/// Why a machine on passt can't start on this PC's passt, if it can't. passt missing isn't one: the
+/// machine then uses QEMU's own NAT.
+pub fn passt_start_problem() -> Option<String> {
+    if !passt_installed() {
+        return None;
+    }
+    let age = passt_age_now();
+    let outside = (age == Some(PasstAge::NoDnsHost)).then(passt_age::outside_resolver_now).flatten();
+    passt_age::start_problem(age, outside.as_deref())
 }
 
 fn host_resolver() -> Option<String> {

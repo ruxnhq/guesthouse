@@ -206,6 +206,45 @@ fn passt_has_its_own_addresses_and_the_private_link() {
 }
 
 #[test]
+fn passt_without_loopback_none_is_given_no_map_gw_by_qemu_and_the_launcher() {
+    let (_scratch, mut plan) = plan(&windows(), Boot::Gpu);
+    plan.network.passt = true;
+    plan.network.resolver = Some("127.0.0.53".into());
+    plan.network.passt_age = PasstAge::NoLoopbackNone;
+    let nic = value_after(&plan.qemu_arguments(), "-nic");
+    assert!(nic.contains(",gateway=10.0.3.2,param=--no-map-gw,dns=10.0.3.3,"), "{nic}");
+    assert!(nic.ends_with("dns-forward=10.0.3.3,dns-host=127.0.0.53") && !nic.contains("map-host-loopback"));
+    let words = plan.passt_words();
+    assert!(words.contains(&"--no-map-gw".to_owned()) && !words.contains(&"--map-host-loopback".to_owned()));
+    assert!(words.windows(2).any(|two| two == ["--dns-host", "127.0.0.53"]), "{words:?}");
+}
+
+#[test]
+fn passt_without_dns_host_tells_the_guest_the_hosts_resolver() {
+    let (_scratch, mut plan) = plan(&windows(), Boot::Gpu);
+    plan.network.passt = true;
+    plan.network.resolver = Some("192.168.1.1".into());
+    plan.network.passt_age = PasstAge::NoDnsHost;
+    let nic = value_after(&plan.qemu_arguments(), "-nic");
+    assert!(nic.ends_with(",gateway=10.0.3.2,param=--no-map-gw,dns=192.168.1.1"), "{nic}");
+    let words = plan.passt_words();
+    assert_eq!(&words[words.len() - 3..], ["--no-map-gw", "--dns", "192.168.1.1"]);
+    assert!(!words.iter().any(|word| word.starts_with("--dns-")), "{words:?}");
+}
+
+#[test]
+fn each_age_is_asked_with_its_own_words() {
+    let current = passt_probe_words(PasstAge::Current);
+    assert!(current.windows(2).any(|two| two == ["--map-host-loopback", "none"]), "{current:?}");
+    assert!(current.contains(&"--dns-host".to_owned()));
+    let middle = passt_probe_words(PasstAge::NoLoopbackNone);
+    assert!(middle.contains(&"--no-map-gw".to_owned()) && middle.contains(&"--dns-host".to_owned()));
+    let oldest = passt_probe_words(PasstAge::NoDnsHost);
+    assert!(oldest.contains(&"--no-map-gw".to_owned()));
+    assert!(!oldest.iter().any(|word| word == "--dns-host" || word == "--map-host-loopback"), "{oldest:?}");
+}
+
+#[test]
 fn the_disk_is_on_nvme_only_for_a_machine_on_it_and_the_cds_stay_on_sata() {
     let (_scratch, on_nvme) = plan(&Machine { nvme: true, ..windows() }, Boot::Gpu);
     assert!(on_nvme.nvme, "the plan has it from the machine");

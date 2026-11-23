@@ -120,6 +120,9 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
             ));
         }
     }
+    if machine.network_mode == Mode::Nat && machine.passt {
+        found.extend(crate::vm_args::passt_start_problem());
+    }
     for item in &machine.forwards {
         let taken = || {
             let host = u16::try_from(item.host).ok()?;

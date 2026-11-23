@@ -404,6 +404,19 @@ mod tests {
     }
 
     #[test]
+    fn held_to_an_interface_its_passt_is_the_launchers_with_no_jail_too() {
+        let mut mac = plan(boot(""));
+        mac.network.passt = true;
+        mac.network.only_through =
+            Some(crate::only_through::OnlyThrough { interface: "wg0".into(), ipv6: false });
+        let command = mac.qemu_command();
+        assert_eq!(command[..2], [mac.launcher.display().to_string(), "--open-only".to_owned()]);
+        let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
+        assert_eq!(command[guard + 1], "wg0");
+        assert!(value_after(&mac.qemu_arguments(), "-netdev").starts_with("socket,id=net0,fd="));
+    }
+
+    #[test]
     fn it_has_the_machines_network_share_sound_and_drives() {
         let mut mac = plan(boot(""));
         mac.network.passt = true;

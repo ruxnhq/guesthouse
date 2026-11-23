@@ -188,7 +188,9 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
 
 /// What this running machine's network really is, or `None` if it's off. It may not be what the
 /// settings say now: they can change while it runs, and passt can be removed. A passt held to one
-/// interface has its guard leave a file in the run folder once that interface has gone.
+/// interface has its guard leave a file in the run folder once that interface has gone. Only a start
+/// with a guard clears that file, so one left by an earlier machine says nothing of a machine that
+/// isn't held to an interface.
 pub fn network_in_use(context: &Context, machine: &Machine) -> Option<InUse> {
     let running = running_vms(context);
     let (slot, qemu) = running.iter().find(|(_, qemu)| qemu.runs(machine))?;
@@ -196,7 +198,8 @@ pub fn network_in_use(context: &Context, machine: &Machine) -> Option<InUse> {
     let cut = slots::all()
         .find(|known| known.number() == *slot)
         .is_some_and(|slot| context.paths.run_folder(slot).join(CUT_FILE).exists());
-    Some(if found == InUse::Passt && cut { InUse::Cut } else { found })
+    let held = !machine.only_through.is_empty();
+    Some(if found == InUse::Passt && held && cut { InUse::Cut } else { found })
 }
 
 #[cfg(test)]

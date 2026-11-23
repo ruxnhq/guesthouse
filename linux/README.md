@@ -96,7 +96,7 @@ Another point release of the same branch gets a warning and a try. In order, you
 1. The app wants NVIDIA's source at your exact version, and says how to get it.
 2. The tables made from that source have to match the ones in the device. If a driver moved a field the device checks, the GPU stays off, as QEMU would need a new build. They're the same at 615.71.09, 615.71.10 and 615.78.08. Branch 620 has tables of its own, made from 620.70.06, and the device picks by the loaded driver's version.
 3. The guest builds its modules against your driver. A change there fails the build, which turns the GPU off and names the log.
-4. The guest runs CUDA and Vulkan before it calls the GPU on. A call the allow list doesn't have shows up here: the GPU goes off, the plain desktop comes up, and the VM's `calls.log` has a `REFUSED` line for it.
+4. The guest runs CUDA and Vulkan before it calls the GPU on. A call the allow list doesn't have shows up here: the GPU goes off, the plain desktop comes up, and the VM's `calls.log` has a `REFUSED` line for it. A call refused later, from a program the boot doesn't run, reaches that program as an error inside a call that worked, so it only says its own error. `nvfwd-check` names every kind of call the device has turned down since the VM started, which the guest can read in `/proc/driver/nvidia/nvfwd-refused`.
 5. The sensor daemon only knows one exact version, so on any other `nvidia-smi` shows N/A. Everything else works.
 
 ## How far to trust a guest
@@ -133,4 +133,4 @@ QEMU still opens `/dev/nvidia*` itself, and its filter doesn't look at ioctl num
 
 `make -C linux/tests/device QEMU=/path/to/patched/qemu BUILD=/somewhere` runs the device's checks with no GPU and no VM, under ASan and UBSan. It needs `libasan`, `libubsan` and glib's headers.
 
-`tests/` has small programs for CUDA, Vulkan and OpenGL, and `sensorrate`, which shows that sensor calls wait for the call rate. The CUDA and Vulkan ones count wrong values, and `glbench` writes an image to compare with a run on the host.
+`tests/` has small programs for CUDA, Vulkan and OpenGL, and `sensorrate`, which shows that sensor calls wait for the call rate. The CUDA and Vulkan ones count wrong values, and `glbench` writes an image to compare with a run on the host. `cudavec` goes through CUDA's driver API and `cudartcheck` through the CUDA runtime, which is what a program built with `nvcc` uses and which asks the driver for more as it starts. The runtime comes with a CUDA toolkit, not the driver, so on a guest without one `nvfwd-check` skips it and says so.

@@ -384,7 +384,7 @@ fn an_ended_runs_folder_and_its_token_go_at_the_next_look_and_never_while_the_ru
     assert!(delete_finished(&context).is_empty());
     assert!(run_token_file(&context, &machine).exists(), "a run being made or started is kept");
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
-    let words = run.applied_to(&plan).qemu_arguments();
+    let words = run.applied_to(&plan).unwrap().qemu_arguments();
     drop(run);
     // The task that started it has gone, and its QEMU runs on.
     let qemu = context.paths.qemu.display().to_string();

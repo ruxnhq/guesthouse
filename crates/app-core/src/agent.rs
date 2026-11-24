@@ -124,7 +124,7 @@ pub fn import_token(context: &Context, machine: &Machine, file: &Path) -> Result
     Ok(())
 }
 
-fn read_token(context: &Context, machine: &Machine) -> Option<String> {
+pub(crate) fn read_token(context: &Context, machine: &Machine) -> Option<String> {
     // A throwaway run's guest is moved to a token of its own at each start.
     let text = fs::read_to_string(crate::token_change::token_in_use(context, machine)).ok()?;
     Some(text.trim().to_owned())
@@ -160,9 +160,21 @@ fn helper_stop(context: &Context, name: &str) -> Result<String> {
 /// What starts a helper: the helper's own file in Base64, and its start script. Any helper of the
 /// same name is ended first, as one left by an earlier viewer holds the port the new one needs.
 pub(crate) fn helper_start(context: &Context, name: &str) -> Result<String> {
+    helper_start_with(context, name, &[])
+}
+
+/// The same, with more files for the guest to have: each is a variable the start script finds set, and
+/// the file it holds in Base64. A file that is not in the program folder is left out.
+pub(crate) fn helper_start_with(context: &Context, name: &str, more: &[(&str, &str)]) -> Result<String> {
     let helper = base64_encode(&fs::read(context.paths.guest_files().join(format!("{name}.ps1")))?);
     let start = guest_script(context, &format!("{name}-start.ps1"))?;
-    Ok(format!("{}\n$helper = '{helper}'\n{start}", helper_stop(context, name)?))
+    let mut extra = String::new();
+    for (variable, file) in more {
+        if let Ok(data) = fs::read(context.paths.guest_files().join(file)) {
+            extra += &format!("${variable} = '{}'\n", base64_encode(&data));
+        }
+    }
+    Ok(format!("{}\n$helper = '{helper}'\n{extra}{start}", helper_stop(context, name)?))
 }
 
 pub(crate) fn stop_helper(context: &Context, machine: &Machine, slot: Option<Slot>, name: &str) {

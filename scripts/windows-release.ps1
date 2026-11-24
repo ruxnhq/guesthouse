@@ -6,11 +6,15 @@
 # 2. builds the app, then the installer with scripts\windows-setup.ps1, into
 #    target\windows-release\VERSION\, and checks the installer against its .sha256;
 # 3. writes guesthouse-windows-latest.json beside them, which the app reads to offer the update;
-# 4. tags the commit windows-vVERSION, pushes the tag, and makes a GitHub release with the installer
-#    and its .sha256, which isn't marked latest, as that's the Linux host's;
-# 5. publishes the installer, its .sha256 and, last of all, guesthouse-windows-latest.json to the
-#    file drop (the R2 bucket ruxn-files, at pub/guesthouse/, served as files.ruxn.com/p/guesthouse/)
-#    with the cf CLI, and downloads the installer back to check it.
+#    It also gets the source of the WinFsp the installer carries, which windows\winfsp.json pins, and
+#    checks it against the pin: WinFsp is under the GPLv3, which asks whoever passes on its installer
+#    to offer its source as well;
+# 4. tags the commit windows-vVERSION, pushes the tag, and makes a GitHub release with the installer,
+#    its .sha256 and WinFsp's source, which isn't marked latest, as that's the Linux host's;
+# 5. publishes WinFsp's source unless it's there already, then the installer, its .sha256 and, last of
+#    all, guesthouse-windows-latest.json to the file drop (the R2 bucket ruxn-files, at
+#    pub/guesthouse/, served as files.ruxn.com/p/guesthouse/) with the cf CLI, and downloads the
+#    installer back to check it.
 # -DryRun does 1 to 3 and publishes nothing. RELEASING.md says what comes before and after.
 # It needs git, cargo, gh and cf on PATH, each signed in.
 param([switch]$DryRun)
@@ -66,6 +70,16 @@ $sha = Get-Sha256 $setup
 $said = ((Get-Content -Raw -LiteralPath $sums) -split '\s+')[0]
 if ($said -ne $sha) { throw "$sums says $said, and the installer's SHA-256 is $sha." }
 
+# WinFsp's source, as the pin names it, beside the installer.
+$winfsp = (Get-Content -Raw -LiteralPath 'windows\winfsp.json' | ConvertFrom-Json).source
+$winfspSource = Join-Path $out $winfsp.file
+Invoke-Native "downloading WinFsp's source" {
+    & $curl --fail --silent --location --proto =https --output $winfspSource $winfsp.url
+}
+if ((Get-Sha256 $winfspSource) -ne $winfsp.sha256.ToLowerInvariant()) {
+    throw "$($winfsp.url) isn't the WinFsp source windows\winfsp.json pins ($($winfsp.sha256))."
+}
+
 # 3. What the app reads to offer the update.
 $latest = Join-Path $out 'guesthouse-windows-latest.json'
 [ordered]@{
@@ -85,11 +99,17 @@ if ($DryRun) {
 Invoke-Native 'the tag' { git tag -a $tag -m "Windows host $version" $commit }
 Invoke-Native 'pushing the tag' { git push origin $tag }
 Invoke-Native 'the GitHub release' {
-    gh release create $tag $setup $sums --repo $repo --verify-tag --latest=false --title "Windows $version" `
-        --notes "The Windows host's installer, $installer. Its SHA-256 is $sha. It's also at $base/$installer."
+    gh release create $tag $setup $sums $winfspSource --repo $repo --verify-tag --latest=false --title "Windows $version" `
+        --notes "The Windows host's installer, $installer. Its SHA-256 is $sha. It's also at $base/$installer. It carries WinFsp, under the GPLv3, whose source is $($winfsp.file), here and at $base/$($winfsp.file)."
 }
 
-# 5. The file drop, the latest file last, so the app never offers an installer that isn't there.
+# 5. The file drop: WinFsp's source first, once, as a published file never changes; the latest file
+# last, so the app never offers an installer that isn't there.
+if (-not (Test-Published $winfsp.file)) {
+    Invoke-Native "publishing $($winfsp.file)" {
+        cf r2 objects put "$prefix/$($winfsp.file)" --bucket-name $bucket --file $winfspSource --content-type application/gzip
+    }
+}
 foreach ($file in @($setup, $sums, $latest)) {
     $name = Split-Path -Leaf $file
     Invoke-Native "publishing $name" {

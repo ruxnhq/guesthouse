@@ -180,6 +180,12 @@ function Read-WinfspPin {
     if (-not $pin.version) { throw "$file has no version" }
     if (-not $entry -or -not $entry.file -or -not $entry.url) { throw "$file has no installer.file and installer.url" }
     if ($entry.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "$file pins no SHA-256 for $($entry.file) (it says '$($entry.sha256)')." }
+    # Its source, which the release publishes beside the installer, as GPLv3 asks of whoever passes on
+    # its installer.
+    $source = $pin.source
+    if (-not $source -or -not $source.file -or -not $source.url -or $source.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "$file has no source.file, source.url and source.sha256 for WinFsp's source."
+    }
     $pin
 }
 
@@ -226,11 +232,12 @@ function Add-Winfsp($Pin, [string]$To) {
     New-Item -ItemType Directory -Force $guest | Out-Null
     Copy-Item -LiteralPath $msi (Join-Path $guest 'winfsp.msi')
     Copy-Item -LiteralPath (Join-Path $root 'windows\installer\WinFsp-License.txt') $guest
+    $sourceAt = "https://files.ruxn.com/p/guesthouse/$($Pin.source.file)"
     $lines = @(
         '',
         '## WinFsp in this installer',
         '',
-        "This installer carries WinFsp $($Pin.version) ($(Split-Path -Leaf $msi)), WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp, as its project released it and unmodified, as ``guest\winfsp.msi``. It is under the GNU General Public License, version 3, with WinFsp's exception for free and open source software that permits distributing its installer unmodified; ``guest\WinFsp-License.txt`` is its licence. The service puts both in a Windows guest that has a shared folder, which installs WinFsp and mounts the folder as a drive."
+        "This installer carries WinFsp $($Pin.version) ($(Split-Path -Leaf $msi)), WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp, as its project released it and unmodified, as ``guest\winfsp.msi``. It is under the GNU General Public License, version 3, and passed on under the GPLv3's own terms; ``guest\WinFsp-License.txt`` is its licence. Its complete source, the source of WinFsp $($Pin.version) as its project tagged it (v$($Pin.version)), is at $sourceAt (SHA-256 $($Pin.source.sha256)) and beside this installer in its GitHub release, at no charge, for as long as this installer is offered. ``guest\guesthouse-guest-share.exe``, which loads WinFsp's DLL in the guest, is Guesthouse's own, under GPL-2.0-or-later, and is passed on under the GPLv3; its source is Guesthouse's repository, https://github.com/ruxnhq/guesthouse. The service puts these in a Windows guest that has a shared folder, which installs WinFsp and mounts the folder as a drive."
     )
     Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
 }

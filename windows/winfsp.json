@@ -4,5 +4,10 @@
     "file": "winfsp-2.2.26323.msi",
     "url": "https://github.com/winfsp/winfsp/releases/download/v2.2/winfsp-2.2.26323.msi",
     "sha256": "36ce01f9eedbbe6842b7fb4bedc79d7d4f71983e8aceb6877b46a07b331c7e19"
+  },
+  "source": {
+    "file": "winfsp-2.2-source.tar.gz",
+    "url": "https://github.com/winfsp/winfsp/archive/refs/tags/v2.2.tar.gz",
+    "sha256": "33f080ed987c1b4e13d5c5cb11fe9f432d503de46e481bdb220822ed3c1e9f4c"
   }
 }

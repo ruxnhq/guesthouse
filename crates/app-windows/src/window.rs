@@ -889,7 +889,9 @@ fn shares_words(system: System) -> &'static str {
     match system {
         System::Windows => {
             "Each is a drive of its own from S:, linked on the guest's desktop as Shared folder, Shared folder 2 \
-             and on, from its next start. The machine's own account is let into each folder. At most 8."
+             and on, from its next start. The machine's own account is let into each folder. At most 8. The \
+             guest mounts them with WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, \
+             github.com/winfsp/winfsp."
         }
         System::Linux => {
             "At /mnt/shared in the guest, then /mnt/shared2 and on, from its next start. The machine's own \

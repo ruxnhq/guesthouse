@@ -58,7 +58,7 @@ It's on by default. With `GUESTHOUSE_AMD_GL_COPY=1` in the environment the app o
 
 Off by default since 0.7.7. With `GUESTHOUSE_AMD_GIVE_WAY=1` in the environment the app or `guesthouse-vm` starts the machine from, a guest gives way when it sees others waiting for the card. It then sends one piece of work at a time instead of several, so a small app on the host, in a container or in another VM waits for one of the guest's at most, not for all of them. With nobody else on the card nothing changes, and the guest's own programs, such as Windows' compositor beside a game, don't count as others.
 
-In 0.7.6 it was on for everyone and also paused after each piece of work. A guest alone on the card could then give way to itself, and on a tester's Radeon 780M GravityMark ran at under a third of 0.7.5's score (#327). That's fixed, but not yet tried on a card that shows it. A small app gets less than it did in 0.7.6 beside a busy guest, and more than with the switch off.
+In 0.7.6 it was on for everyone and also paused after each piece of work. A guest alone on the card could then give way to itself, and on a tester's Radeon 780M GravityMark ran at under a third of 0.7.5's score (#327). That's fixed: on the same 780M, GravityMark alone now scores the same with the switch on as with it off. A small app gets less than it did in 0.7.6 beside a busy guest, and more than with the switch off.
 
 ## Hardware video
 

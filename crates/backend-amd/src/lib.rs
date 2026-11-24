@@ -1060,8 +1060,6 @@ fn ranges_fit(ranges: &[GpuRange], start: u64, end: u64) -> bool {
     ranges.iter().all(|range| range.start >= start && range.end <= end && range.start <= range.end)
 }
 
-/// Where in this process a command buffer lies, if it lies in guest pages, which the CPU reads
-/// where they are. A guest writes its commands with its CPU, so that is where they are.
 /// How often finished runs are judged for giving way at most, as it looks at every space's runs.
 const JUDGE_EVERY: Duration = Duration::from_millis(1);
 
@@ -1093,6 +1091,8 @@ fn settle_shares(spaces: &mut HashMap<SpaceId, Space>, own: &mut share::OwnEnds)
     }
 }
 
+/// Where in this process a command buffer lies, if it lies in guest pages, which the CPU reads
+/// where they are. A guest writes its commands with its CPU, so that is where they are.
 fn guest_command_bytes(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> Option<*const u8> {
     let (buffer, offset) = space.locate(ib.address)?;
     let bo = memory.values().find(|bo| bo.handle == buffer)?;

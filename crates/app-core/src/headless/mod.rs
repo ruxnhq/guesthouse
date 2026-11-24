@@ -1,6 +1,7 @@
 //! `guesthouse-vm`: the machines from a terminal, with no window. It does what the app's buttons do, by
 //! the same calls, so a machine started here is the app's to stop and the other way round.
 
+mod app;
 mod args;
 mod change;
 mod copies;
@@ -55,8 +56,12 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              delete a snapshot, by its name or its tag
   idle MACHINE [--minutes N] read how busy a running machine is, and say if it would count as
                              idle. It changes nothing
-  windows MACHINE [--json]   the windows a running Windows guest has open, a line each, or with
-                             --json the guest's own list. It changes nothing
+  windows MACHINE [--json]   the app windows of a running Windows guest that has app-windows on, a
+                             line each, or with --json the helper's own layout. If the helper in the
+                             guest is not running, it is started for the look and ended after
+  app MACHINE PROGRAM        start a program in a running Windows guest that has app-windows on, by
+                             its path in the guest, such as C:\\Windows\\notepad.exe. The helper is
+                             started if it is not running, and left running
   share                      how each card with a running machine is shared, as the library
                              page shows it. It changes nothing
 
@@ -87,7 +92,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
                              dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh,
-                             auto-snapshot
+                             app-windows, auto-snapshot
                              throwaway
                              only-through is an interface's name, such as wg0, or off. dns is an
                              IPv4 address, or auto
@@ -146,6 +151,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
         Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,
         Command::Windows { name, json } => windows::run(context, &find(context, name)?, json, out)?,
+        Command::App { name, program } => app::run(context, &find(context, name)?, program, out)?,
         Command::Standalone(name) => standalone::command(context, &find(context, name)?, out)?,
         Command::New { name, options } => make::new_machine(context, name, &options, out)?,
         Command::Set { name, key, value } => change::set(context, find(context, name)?, key, value, out)?,

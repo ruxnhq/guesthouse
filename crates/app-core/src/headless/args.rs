@@ -103,10 +103,15 @@ pub(super) enum Command<'a> {
         name: &'a str,
         minutes: Option<&'a str>,
     },
-    /// The windows a running Windows guest has open. `json` is the helper's own answer, not lines.
+    /// The cells of a running Windows guest's app windows. `json` is the helper's own layout, not lines.
     Windows {
         name: &'a str,
         json: bool,
+    },
+    /// Starts a program of the guest, by its path in the guest.
+    App {
+        name: &'a str,
+        program: &'a str,
     },
     New {
         name: &'a str,
@@ -259,6 +264,13 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
         "windows" => {
             let split = Split::new(command, rest, &[], &[JSON])?;
             Ok(Command::Windows { name: split.exactly(command, machine, 1)?[0], json: split.has(JSON) })
+        }
+        "app" => {
+            let split = Split::new(command, rest, &[], &[])?;
+            let [name, program] = split.exactly(command, "a machine and a program", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::App { name, program })
         }
         "start" | "install" => {
             let split = Split::new(command, rest, &[], &[NO_WAIT])?;

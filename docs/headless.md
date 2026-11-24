@@ -16,6 +16,7 @@ guesthouse-vm go-back NAME [SNAPSHOT] [--yes]
 guesthouse-vm delete-snapshot NAME SNAPSHOT [--yes]
 guesthouse-vm idle NAME [--minutes N]
 guesthouse-vm windows NAME [--json]
+guesthouse-vm app NAME PROGRAM
 guesthouse-vm share
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
@@ -72,11 +73,13 @@ For an Ubuntu machine, a plain VM or a macOS machine, only the CPU time can be r
 
 The reading sends `guest/idle.ps1` through the agent. The only thing it does in Windows is to start a task in the user's session for a moment, as only a program there can see that session's input. The task, its helper script in `C:\gpupv` and its answer file in the public documents folder are removed when it is done, or at the next reading if one was cut short.
 
-`windows` lists the windows a running Windows machine has open, one line each, topmost first: its z-order place, handle, program, title, size and position, and in brackets whether it is the foreground window, minimized, a tool window, a popup, and which window owns it. `--json` prints the guest's own answer as it came, which also has each window's process id, class, and both rectangles (the one the user sees, from DWM's extended frame bounds, and the one Windows gives the window with its invisible border). It only reads, and it is the first step towards showing one program of a guest as a window of its own.
+`windows` lists the app windows a running Windows machine has, one line each: the guest's handle for it, program, title, size and position of the window itself, and in brackets whether it has the focus, is minimized or hidden under an overflow cell, which popup it is of which window, and where its picture is on the guest's screen when that is not where the window is. `--json` prints the helper's last layout as it sent it, which also has each window's process id, class, the title bar's height and the width of its buttons, and whether it can be resized. It is the first step towards showing one program of a guest as a window of its own.
 
-A helper in the user's session, `guest/windows.ps1`, answers. If it isn't running, the command starts it through the agent for the question and ends it after, so it takes a few seconds more then. With nobody logged in to the guest there is no session for the helper, and the command says so. The helper listens on loopback in the guest only, on port 8769, so nothing is forwarded.
+`app NAME PROGRAM` starts a program in a running Windows machine, by its path in the guest, such as `C:\Windows\notepad.exe`, and says what the helper answered. It starts the program in the guest only: the guest keeps the window where its helper parks it.
 
-It leaves out what no user would call an app window: windows that aren't visible or that DWM cloaks (a hidden helper window, a UWP app's window on another virtual desktop or one Windows keeps suspended), windows with no area, the console's hidden PseudoConsoleWindow, and the desktop and taskbars. Menus, tooltips and drop-downs are windows of their own, and are listed as popups with their owner.
+Both need `set NAME app-windows on` first, which is off for every machine until then, and both say so if it is off. With it on, QEMU gets a forward of its own on this PC, to port 8769 in the guest, as the files helper has one, and the machine needs a start for that. A machine that was started before it was turned on has no such forward, and the commands say to restart it. A helper in the user's session, `guest/app-windows.ps1` with `guest/app-windows.cs`, answers: the app sends it the machine's token first, then both sides send lines of JSON. If it isn't running, `app` starts it through the agent and leaves it running, and `windows` starts it for the look and ends it after, so no helper that a look started is left running. It takes a few seconds more then. With nobody logged in to the guest there is no session for the helper, and the command says so. The helper takes one connection at a time, and a second one replaces the first, so running either command while a window of the machine's own app windows is open makes that one connect again a moment later.
+
+The helper leaves out what no user would call an app window. Menus, tooltips and drop-downs are windows of their own, and are listed as popups with the window they belong to.
 
 `share` prints how each card with a running machine is shared, in the words of the library page's Sharing the Card panel: the whole card, then each machine's GPU time and video memory. It looks twice, a second apart, as AMD's and Intel's engine times need two looks. On NVIDIA each machine's time is the driver's last one-second sample of its processes, and its video memory is shown twice: what the guest allocated against its cap, and what the driver charges its processes with, which is more, as it includes the daemon's own work. It only reads.
 
@@ -129,9 +132,10 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `share` | a folder, or `none` | not Ubuntu |
 | `auto-snapshot` | on or off: whether a start takes a snapshot first when it has a risky change to make | Windows |
 | `remote-desktop` | on or off | Windows |
+| `app-windows` | on or off: whether the machine gets a way in for the app windows helper, and the commands `windows` and `app` work. It counts from the next start. | Windows |
 | `ssh` | on or off | Windows |
 
-These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
+These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop`, `ssh` and `app-windows`. `app-windows` can be changed at any time, and a running machine has it from its next start. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
 `auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which. A throwaway takes none, whatever it says, and `show` says so.
 

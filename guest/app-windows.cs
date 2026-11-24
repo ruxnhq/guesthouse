@@ -1532,10 +1532,12 @@ public class AppWindows : Form
                     foreach (string word in MinorWords) if (name.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0) minor = true;
                     if (!first) sb.Append(',');
                     first = false;
+                    // The shortcut's own icon carries the arrow Windows puts on shortcuts, so the program's is taken where there is one.
+                    string target = TargetOf(app.Value);
                     sb.Append("{\"id\":"); Js(sb, app.Key);
                     sb.Append(",\"name\":"); Js(sb, name);
-                    sb.Append(",\"target\":"); Js(sb, TargetOf(app.Value));
-                    sb.Append(",\"icon\":"); Js(sb, icons ? IconOf(app.Value) : "");
+                    sb.Append(",\"target\":"); Js(sb, target);
+                    sb.Append(",\"icon\":"); Js(sb, icons ? IconOf(File.Exists(target) ? target : app.Value) : "");
                     sb.Append(",\"minor\":").Append(B(minor)).Append('}');
                 }
                 link.Send(sb.Append("]}").ToString());

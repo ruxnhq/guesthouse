@@ -135,6 +135,12 @@ impl<T: Read + Write> Client<T> {
         self.fids.alloc()
     }
 
+    /// Gives back a fid from `new_fid` that never reached the server, as when a walk found
+    /// nothing. A fid the server holds is given back by `clunk`.
+    pub fn release_fid(&mut self, fid: u32) {
+        self.fids.release(fid);
+    }
+
     fn next_tag(&mut self) -> u16 {
         self.tag = self.tag.wrapping_add(1);
         if self.tag == NOTAG {

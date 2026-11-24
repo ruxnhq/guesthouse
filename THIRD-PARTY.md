@@ -23,6 +23,7 @@ Everything in this repo is under GPL-2.0-or-later, apart from what's listed here
 - A macOS machine runs on a part that isn't in this repo or in a release. The app fetches it when a macOS machine first needs it. It holds [reims-vgpu](https://github.com/steelbrain/reims-vgpu)'s QEMU and library and [reims-util](https://github.com/steelbrain/reims-util), each built from its author's source as it is, and the option ROM and guest drivers that reims-vgpu's repo has ready built. Those are under GPL-2.0-or-later or LGPL-3.0-or-later, and the QEMU under QEMU's own licences. `packaging/build-macos-part.sh` names the commits, and the part's release has the source of all of it. When a machine is made, reims-util fetches OpenCore, OcBinaryData and OVMF from their own projects. macOS comes from Apple, under Apple's licence.
 - An Android machine runs Guesthouse's build of LineageOS, which isn't in this repo or in a release. The app fetches it from files.ruxn.com when an Android machine is made, and `android/` here is how it's built. It holds LineageOS and the Android Open Source Project, mostly under the Apache License 2.0, with the Linux kernel under GPL-2.0 and other parts under their own licences; [microG](https://github.com/microg/GmsCore), under the Apache License 2.0; and [Digitalis](https://github.com/DigitalisX64), under the Apache License 2.0. Each image has the pinned manifest of the sources it was built from beside it on files.ruxn.com. The image holds no Google apps or services. It isn't an official LineageOS build.
 - `linux/layer/zink_on_nvidia.c` and `linux/cast/glx_dri3.c` are mine, under the MIT licence, so that their fixes can go to Mesa.
+- The Windows guest's share program, `crates/share-windows/`, loads [WinFsp](https://winfsp.dev) at run time and doesn't link it or carry it. The layouts of the structures and the callback table in `crates/share-windows/src/ffi.rs`, and its sizes and field offsets, are those of the pre-generated bindings in `winfsp_wrs_sys` 0.4.1 by Scille, under the MIT licence, whose notice is below. They in turn are WinFsp's own headers' (`winfsp/fsctl.h` and `winfsp/winfsp.h`, GPLv3 with the FLOSS exception), which are the source of the layouts. The structures are written out again here, in Rust, with their own names. The Hyper-V socket address and the Plan 9 attach arguments follow App Sandbox's `tools/agent/p9copy.c` (MIT, its notice is below).
 
 The guest's modules build against NVIDIA's headers and `nvidia-drm` from NVIDIA's own source, which you get yourself. A driver image carries the host's own driver files into a VM on your machine. None of that is in this repo.
 
@@ -431,6 +432,32 @@ SOFTWARE.
 MIT License
 
 Copyright (c) 2026 James Stringer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## winfsp_wrs_sys
+
+```
+MIT License
+
+Copyright (c) Scille (the winfsp_wrs_sys authors, @Scille/parsec-dev and @Scille/rust-code-owners)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

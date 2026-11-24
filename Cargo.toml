@@ -23,6 +23,7 @@ default-members = [
     "crates/p9",
     "crates/replay",
     "crates/sensors",
+    "crates/share-windows",
     "crates/service-windows",
     "crates/transport",
     "tools/card-check",

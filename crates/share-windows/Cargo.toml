@@ -1,0 +1,35 @@
+[package]
+name = "guesthouse-guest-share"
+description = "A Windows guest's folder share: a 9P2000.L client over a Hyper-V socket, mounted as a drive through WinFsp, so a host folder served by Hyper-V's Plan 9 device is live and writable in the guest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Built for Windows it is guesthouse-guest-share.exe. Elsewhere it builds only so its tests run.
+[lib]
+name = "guesthouse_guest_share"
+
+[[bin]]
+name = "guesthouse-guest-share"
+path = "src/main.rs"
+
+[dependencies]
+guesthouse-p9 = { path = "../p9" }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Hypervisor",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+]
+
+[lints]
+workspace = true

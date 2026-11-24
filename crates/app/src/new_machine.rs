@@ -9,6 +9,7 @@ use crate::rows::{bottom_bar, choice_row, number_row, row_button};
 use crate::settings::SettingsDialog;
 use crate::window::Window;
 use adw::prelude::*;
+use gtk::glib;
 use guesthouse_app_core::account::{default_user, name_problem, password_problem};
 use guesthouse_app_core::actions::android_card_of;
 use guesthouse_app_core::android_setup::{
@@ -17,6 +18,7 @@ use guesthouse_app_core::android_setup::{
 use guesthouse_app_core::card_choice::{CardChoice, default_choice, windows_card_choices};
 use guesthouse_app_core::defaults::{NO_GPU, account_name, sizes_for_disc, suggested_name};
 use guesthouse_app_core::display::DriverPackage;
+use guesthouse_app_core::downloads::{fetch_checked, ubuntu_disc, ubuntu_disc_here};
 use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use guesthouse_app_core::host::{RamField, physical_cores};
@@ -72,11 +74,14 @@ const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
 const ANDROID_ROW_NOTE: &str = "Choose the folder of an image of Android for VMs.";
 const NO_DISC_YET: &str = "None chosen yet.";
+const UBUNTU_DOWNLOAD: &str = "Download Ubuntu Server 26.04 from Ubuntu, about 3 GB, or choose your own.";
 /// What a draft's files are called, so its settings show what a machine of its kind has.
 const DRAFT_MARK: &str = "draft";
 const DETAILS: &str = "details";
 const HEADING_SPACING: i32 = 4;
 const HEADING_MARGIN: i32 = 12;
+const GROUP_SPACING: i32 = 18;
+const PAGE_WIDTH: i32 = 560;
 const CARD_SPACING: i32 = 10;
 const CARD_ICON_SIZE: i32 = 32;
 const ANDROID_NAME: &str = "Android";
@@ -96,6 +101,8 @@ struct Parts {
     dialog: adw::Dialog,
     create_button: gtk::Button,
     iso_row: adw::ActionRow,
+    /// Fetches Ubuntu's disc, for an Ubuntu machine, in place of choosing one.
+    download: gtk::Button,
     /// The Android image, in the disc's place for an Android machine.
     image_row: adw::ActionRow,
     /// Play services through microG, for Android.
@@ -239,7 +246,7 @@ impl Pick {
     fn disc_note(self) -> &'static str {
         match self {
             Self::Windows => "Choose a Windows 10 or 11 disc. Its edition and language are read from it.",
-            Self::Ubuntu => "Choose an Ubuntu disc. It installs with no hands, and gets the GPU.",
+            Self::Ubuntu => "It installs with no hands, and gets the GPU.",
             _ => "Choose the disc to install from. A system Guesthouse doesn't know runs on the CPU.",
         }
     }
@@ -338,10 +345,21 @@ impl NewMachineDialog {
         let cancel = gtk::Button::with_label("Cancel");
         let cancel_choice = gtk::Button::with_label("Cancel");
         let header = adw::HeaderBar::builder().show_title(false).build();
-        let page = adw::PreferencesPage::new();
+        // One column that scrolls whole, heading and all, so there's no scroller inside the dialog.
+        let page = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(GROUP_SPACING)
+            .margin_top(HEADING_MARGIN)
+            .margin_bottom(HEADING_MARGIN * 2)
+            .margin_start(HEADING_MARGIN)
+            .margin_end(HEADING_MARGIN)
+            .build();
         let disc = adw::PreferencesGroup::new();
-        page.add(&disc);
+        page.append(&disc);
         let iso_row = adw::ActionRow::builder().title("Disc").subtitle(NO_DISC_YET).build();
+        let download = row_button("Download");
+        download.set_visible(false);
+        iso_row.add_suffix(&download);
         let choose = row_button("Choose");
         iso_row.add_suffix(&choose);
         disc.add(&iso_row);
@@ -363,7 +381,7 @@ impl NewMachineDialog {
         verdict_text.add_css_class("dim-label");
         let hardware = adw::PreferencesGroup::new();
         hardware.set_sensitive(false);
-        page.add(&hardware);
+        page.append(&hardware);
         let name = adw::EntryRow::builder().title("Name").build();
         hardware.add(&name);
         let cores = hardware_row(&hardware, "Cores", 1.0, physical_cores(&context.cpus).max(1).into());
@@ -379,7 +397,7 @@ impl NewMachineDialog {
         all_settings.add_suffix(&open_settings);
         hardware.add(&all_settings);
         let account = adw::PreferencesGroup::builder().title("Account").visible(false).build();
-        page.add(&account);
+        page.append(&account);
         let user = adw::EntryRow::builder().title("User name").build();
         account.add(&user);
         let password = adw::PasswordEntryRow::builder().title("Password").build();
@@ -389,7 +407,7 @@ impl NewMachineDialog {
             .description(ACCESS_NOTE)
             .visible(false)
             .build();
-        page.add(&access);
+        page.append(&access);
         let remote_desktop = adw::SwitchRow::builder()
             .title(Service::RemoteDesktop.name())
             .subtitle(REMOTE_DESKTOP_NOTE)
@@ -406,13 +424,13 @@ impl NewMachineDialog {
             .build();
         access.add(&ssh);
         let lean_group = adw::PreferencesGroup::builder().visible(false).build();
-        page.add(&lean_group);
+        page.append(&lean_group);
         let lean = adw::SwitchRow::builder().title(LEAN_TITLE).subtitle(LEAN_NOTE).build();
         let lean_show = row_button("Show");
         lean.add_suffix(&lean_show);
         lean_group.add(&lean);
         let skip_scanning_group = adw::PreferencesGroup::builder().visible(false).build();
-        page.add(&skip_scanning_group);
+        page.append(&skip_scanning_group);
         let skip_scanning = adw::SwitchRow::builder()
             .title(SKIP_SCANNING_TITLE)
             .subtitle(WHAT_IT_MEANS)
@@ -430,7 +448,7 @@ impl NewMachineDialog {
         hardware.add(&card);
         let driver_row = DriverRow::new(window, &hardware);
         let recipes_group = adw::PreferencesGroup::builder().description(RECIPE_NOTE).visible(false).build();
-        page.add(&recipes_group);
+        page.append(&recipes_group);
         let recipe_row = choice_row("Set up for", &[NO_RECIPE]);
         let recipe_show = row_button("Show");
         recipe_show.set_sensitive(false);
@@ -454,10 +472,18 @@ impl NewMachineDialog {
             .build();
         heading.append(&verdict_title);
         heading.append(&verdict_text);
-        column.append(&heading);
-        column.append(&page);
+        let scrolled = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        scrolled.append(&heading);
+        scrolled.append(&adw::Clamp::builder().child(&page).maximum_size(PAGE_WIDTH).build());
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&scrolled)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .build();
+        column.append(&scroller);
+        // Only there when it has something to say, so it leaves no gap above the buttons.
+        note.set_visible(false);
         column.append(&note);
-        page.set_vexpand(true);
         let toolbar = adw::ToolbarView::new();
         toolbar.set_content(Some(&column));
         toolbar.add_top_bar(&header);
@@ -477,6 +503,7 @@ impl NewMachineDialog {
             dialog,
             create_button,
             iso_row,
+            download: download.clone(),
             image_row,
             play,
             settings_changes: RefCell::default(),
@@ -535,6 +562,8 @@ impl NewMachineDialog {
         choose_android.connect_clicked(move |_| handle.on_choose_android());
         let handle = this.clone();
         open_settings.connect_clicked(move |_| handle.open_all_settings());
+        let handle = this.clone();
+        download.connect_clicked(move |_| handle.download_ubuntu());
         let dialog = this.0.dialog.clone();
         cancel_choice.connect_clicked(move |_| {
             dialog.close();
@@ -588,6 +617,7 @@ impl NewMachineDialog {
         } else {
             String::new()
         };
+        self.0.note.set_visible(!note.is_empty());
         self.0.note.set_label(&note);
         self.update();
     }
@@ -828,6 +858,45 @@ impl NewMachineDialog {
         }
     }
 
+    /// Fetches Ubuntu's server disc from Ubuntu, checked against the checksum it publishes, and reads it
+    /// as if it had been chosen. A disc fetched before is used as it is.
+    fn download_ubuntu(&self) {
+        let parts = &self.0;
+        parts.download.set_sensitive(false);
+        parts.create_button.set_sensitive(false);
+        let (progress, steps) = async_channel::unbounded::<String>();
+        let row = parts.iso_row.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(step) = steps.recv().await {
+                row.set_subtitle(&step);
+            }
+        });
+        let context = parts.window.context();
+        let working = context.clone();
+        let this = self.clone();
+        in_background(
+            &context,
+            move || {
+                let disc = ubuntu_disc(&working.paths)?;
+                let what = format!("Downloading {}", disc.name);
+                fetch_checked(&disc.url, &disc.sha256, &disc.file, &what, &|step| {
+                    let _ = progress.try_send(step.to_owned());
+                })?;
+                Ok(disc.file)
+            },
+            move |result| {
+                this.0.download.set_sensitive(true);
+                match result {
+                    Ok(file) => this.read_iso(file.to_string_lossy().into_owned()),
+                    Err(text) => {
+                        this.0.iso_row.set_subtitle(UBUNTU_DOWNLOAD);
+                        this.0.window.problem(&text);
+                    }
+                }
+            },
+        );
+    }
+
     /// Every setting of the machine to be, on the settings' own pages. What changes there is kept and
     /// applied once the machine is made; the sizes and the switches on this page follow it.
     fn open_all_settings(&self) {
@@ -877,16 +946,23 @@ impl NewMachineDialog {
         parts.iso_row.set_visible(disc);
         parts.image_row.set_visible(kind == Pick::Android);
         parts.play.set_visible(kind == Pick::Android);
+        parts.download.set_visible(kind == Pick::Ubuntu);
         match kind {
             Pick::Macos => self.choose_macos(),
             Pick::Android => {
                 self.show_verdict(ANDROID_TITLE, ANDROID_ROW_NOTE);
-                self.on_choose_android();
             }
             Pick::Import => {}
-            Pick::Windows | Pick::Ubuntu | Pick::Other => {
+            Pick::Ubuntu => {
                 self.show_verdict(kind.title(), kind.disc_note());
-                self.on_choose();
+                let context = parts.window.context();
+                match ubuntu_disc_here(&context.paths) {
+                    Some(disc) => self.read_iso(disc.to_string_lossy().into_owned()),
+                    None => parts.iso_row.set_subtitle(UBUNTU_DOWNLOAD),
+                }
+            }
+            Pick::Windows | Pick::Other => {
+                self.show_verdict(kind.title(), kind.disc_note());
             }
         }
     }

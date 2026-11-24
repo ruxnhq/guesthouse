@@ -23,6 +23,7 @@ pub mod daemon;
 pub mod defaults;
 pub mod disk_image;
 pub mod display;
+pub mod downloads;
 pub mod driver_modes;
 pub mod duplicate;
 pub mod ending;

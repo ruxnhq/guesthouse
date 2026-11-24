@@ -185,7 +185,7 @@ image.machine-thumbnail {
 
 /* The toolbar's own bar round it had this padding too, from when they shared a class. */
 .page-buttons {
-  padding: 20px 0 36px;
+  padding: 12px 0 20px;
 }
 
 /* What the chosen disc was read as, set apart from the rows round it. */

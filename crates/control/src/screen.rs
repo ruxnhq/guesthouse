@@ -28,9 +28,60 @@ pub fn unhex(text: &str) -> Option<Vec<u8>> {
 /// which stays on as a second display.
 const PLACEMENT: &str = "main";
 
-/// Writes the viewer's identity into `state\identity` and gives the arguments that start remoteman's
-/// viewer on the guest's screen, `connect ADDRESS:PORT --expect … --identity … --placement main
-/// --state STATE`.
+/// Switches the guest's sound and clipboard on in the viewer's own settings in `state`, as remoteman's
+/// viewer keeps them (`viewer-settings`, for computers it meets from now on, and `viewer-computers`,
+/// one `[computer]` section for each it knows, `key=value` lines): a session with the computer at
+/// `address` then starts with its sound played here and its clipboard shared. Everything else the
+/// viewer saved stays as it is, lines it doesn't know included. Files need no switch of the viewer's.
+fn media_on(state: &Path, address: &str) -> io::Result<()> {
+    fs::create_dir_all(state)?;
+    let read = |name: &str| fs::read_to_string(state.join(name)).unwrap_or_default();
+    let settings = set_lines(&read("viewer-settings"), &[("sound", "yes"), ("clipboard", "yes")]);
+    fs::write(state.join("viewer-settings"), settings)?;
+    let computers = read("viewer-computers");
+    if computers.lines().any(|line| line.strip_prefix("address=") == Some(address)) {
+        let mut out = String::new();
+        let mut section: Vec<&str> = Vec::new();
+        let flush = |section: &mut Vec<&str>, out: &mut String| {
+            if section.iter().any(|line| line.strip_prefix("address=") == Some(address)) {
+                let text = section.join("\n") + "\n";
+                out.push_str(&set_lines(&text, &[("sound", "yes"), ("clipboard", "yes")]));
+            } else if !section.is_empty() {
+                out.push_str(&(section.join("\n") + "\n"));
+            }
+            section.clear();
+        };
+        for line in computers.lines() {
+            if line == "[computer]" {
+                flush(&mut section, &mut out);
+            }
+            section.push(line);
+        }
+        flush(&mut section, &mut out);
+        fs::write(state.join("viewer-computers"), out)?;
+    }
+    Ok(())
+}
+
+/// `text`'s `key=value` lines with these keys set, each in place if it's there and added at the end
+/// if not; every other line as it was.
+fn set_lines(text: &str, set: &[(&str, &str)]) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    for (key, value) in set {
+        let line = format!("{key}={value}");
+        match lines.iter_mut().find(|l| l.split_once('=').is_some_and(|(k, _)| k == *key)) {
+            Some(found) => *found = line,
+            None => lines.push(line),
+        }
+    }
+    lines.iter().map(|l| format!("{l}\n")).collect()
+}
+
+/// Writes the viewer's identity into `state\identity`, switches the guest's sound and clipboard on
+/// in the viewer's settings there, and gives the arguments that start remoteman's viewer on the
+/// guest's screen, `connect ADDRESS:PORT --expect … --identity … --placement main --sound --state
+/// STATE`. `--sound` is the viewer's own switch for a session's sound; the guest's host decides
+/// whether its clipboard and files are on.
 pub fn connect_command(
     state: &Path,
     address: &str,
@@ -53,6 +104,7 @@ pub fn connect_command(
     let (certificate_file, key_file) = (identity.join("cert.der"), identity.join("key.der"));
     fs::write(&certificate_file, certificate)?;
     fs::write(&key_file, key)?;
+    media_on(state, &format!("{address}:{port}"))?;
     Ok(vec![
         "connect".into(),
         format!("{address}:{port}").into(),
@@ -63,6 +115,7 @@ pub fn connect_command(
         key_file.into(),
         "--placement".into(),
         PLACEMENT.into(),
+        "--sound".into(),
         "--state".into(),
         state.into(),
     ])
@@ -98,12 +151,39 @@ mod tests {
             key.clone().into(),
             "--placement".into(),
             "main".into(),
+            "--sound".into(),
             "--state".into(),
             state.clone().into(),
         ];
         assert_eq!(args, expected);
         assert_eq!(fs::read(certificate).unwrap(), [1, 2]);
         assert_eq!(fs::read(key).unwrap(), [3, 4]);
+        let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn the_viewers_settings_get_sound_and_clipboard_and_keep_the_rest() {
+        let state = std::env::temp_dir().join(format!("gh-viewer-media-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state);
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("viewer-settings"), "placement=main\nsound=no\nfuture-key=x\n").unwrap();
+        let computers = "[computer]\nname=other\naddress=10.0.0.9:7791\nsound=no\nclipboard=no\n\
+                         [computer]\nname=guest\naddress=172.29.1.2:7791\nsound=no\nclipboard=no\nwake=yes\nodd=1\n";
+        fs::write(state.join("viewer-computers"), computers).unwrap();
+        let fingerprint = "ab".repeat(32);
+        connect_command(&state, "172.29.1.2", 7791, &fingerprint, "0102", "0304").unwrap();
+        assert_eq!(
+            fs::read_to_string(state.join("viewer-settings")).unwrap(),
+            "placement=main\nsound=yes\nfuture-key=x\nclipboard=yes\n"
+        );
+        assert_eq!(
+            fs::read_to_string(state.join("viewer-computers")).unwrap(),
+            "[computer]\nname=other\naddress=10.0.0.9:7791\nsound=no\nclipboard=no\n\
+             [computer]\nname=guest\naddress=172.29.1.2:7791\nsound=yes\nclipboard=yes\nwake=yes\nodd=1\n"
+        );
+        // Again: nothing changes.
+        connect_command(&state, "172.29.1.2", 7791, &fingerprint, "0102", "0304").unwrap();
+        assert_eq!(fs::read_to_string(state.join("viewer-computers")).unwrap().matches("yes").count(), 3);
         let _ = fs::remove_dir_all(state);
     }
 

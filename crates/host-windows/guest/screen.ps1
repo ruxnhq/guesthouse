@@ -62,6 +62,43 @@ function Save-ToDisk {
     Write-VolumeCache -DriveLetter C -ErrorAction SilentlyContinue
 }
 
+# remoteman's host keeps files and the clipboard off unless its owner says otherwise. Here the owner
+# is Guesthouse, and the only viewer that may connect is the one this guest trusts, so both are on,
+# at every start. remoteman's host reads its switches from allowed.json in its state folder when it
+# starts, so they are merged into that file first (every other switch it saved stays as it is), and
+# once the host is up `ctl allow ... on` turns them on in the running host, which keeps them too.
+function Set-SharingFile {
+    $file = Join-Path $state 'allowed.json'
+    try {
+        $saved = $null
+        if (Test-Path -LiteralPath $file) {
+            $saved = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json -ErrorAction Stop
+        }
+        if (-not $saved) { $saved = [pscustomobject]@{} }
+        foreach ($key in 'files', 'clipboard') {
+            $saved | Add-Member -NotePropertyName $key -NotePropertyValue $true -Force
+        }
+        New-Item -ItemType Directory -Path $state -Force | Out-Null
+        # No byte order mark: remoteman's host doesn't read one.
+        [System.IO.File]::WriteAllText($file, ($saved | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+        Send-Line "screen: files and clipboard are on in $file"
+    } catch {
+        Send-Line "screen: couldn't write ${file}: $($_.Exception.Message)"
+    }
+}
+
+function Enable-Sharing {
+    foreach ($what in 'clipboard', 'files') {
+        $said = ''
+        for ($try = 0; $try -lt 20; $try += 1) {
+            $said = ((& $hostExe ctl --port 7791 allow $what on 2>&1) | Out-String).Trim()
+            if ($said -eq 'ok') { break }
+            Start-Sleep -Seconds 3
+        }
+        Send-Line "screen: allow $what on: $said"
+    }
+}
+
 # remoteman's installer is run again whenever the host brings a different one, a different viewer
 # to trust or a different encoder, and whenever its service isn't there, whatever the guest's note
 # of the last install says. Run again, it keeps the host's identity, so its fingerprint stays.
@@ -90,6 +127,7 @@ if ($missing -or -not (Test-Path -LiteralPath $hostExe) -or $installed -ne $want
     Send-Line 'screen: remoteman host installed'
 }
 
+Set-SharingFile
 $status = Get-Service -Name $service -ErrorAction SilentlyContinue
 if ($status -and $status.Status -ne 'Running') {
     try { Start-Service -Name $service -ErrorAction Stop } catch { Send-Line "screen: remoteman's service didn't start: $($_.Exception.Message)" }
@@ -145,6 +183,9 @@ if ($fingerprint) {
 } else {
     Send-Line "screen: remoteman's host didn't say its fingerprint"
 }
+
+# The host is up: files and the clipboard on in it as it runs (its file is read only at its start).
+if ($fingerprint) { Enable-Sharing }
 
 # For a while after it starts, remoteman's own logs go to the serial port as they're written, with
 # whether anything listens on its port, so the host sees how it starts while it does: what it wrote

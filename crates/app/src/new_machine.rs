@@ -70,6 +70,10 @@ const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
 const ANDROID_ROW_NOTE: &str = "Choose the folder of an image of Android for VMs.";
 const NO_DISC_YET: &str = "None chosen yet.";
+const PLAY_NOTE: &str = "microG stands in for Google's Play services, so apps that need them sign in, get \
+                         notifications and find your location. Apps come from Aurora Store or F-Droid rather \
+                         than the Play Store, and apps that check Play Integrity may refuse to run. It can be \
+                         turned off and on later in the machine's settings, and keeps its data.";
 const DETAILS: &str = "details";
 const HEADING_SPACING: i32 = 4;
 const HEADING_MARGIN: i32 = 12;
@@ -94,6 +98,8 @@ struct Parts {
     iso_row: adw::ActionRow,
     /// The Android image, in the disc's place for an Android machine.
     image_row: adw::ActionRow,
+    /// Play services through microG, for Android.
+    play: adw::SwitchRow,
     /// The group with the disc or image, which macOS has no need of.
     disc: adw::PreferencesGroup,
     /// The two steps: what the machine runs, then its details.
@@ -328,6 +334,13 @@ impl NewMachineDialog {
         let choose_android = row_button("Choose");
         image_row.add_suffix(&choose_android);
         disc.add(&image_row);
+        let play = adw::SwitchRow::builder()
+            .title("Play Services")
+            .subtitle("Through microG, open source")
+            .visible(false)
+            .build();
+        crate::rows::explain(&play, PLAY_NOTE);
+        disc.add(&play);
         let verdict_title = gtk::Label::builder().xalign(0.0).wrap(true).build();
         verdict_title.add_css_class("page-title");
         let verdict_text = gtk::Label::builder().xalign(0.0).wrap(true).build();
@@ -442,6 +455,7 @@ impl NewMachineDialog {
             create_button,
             iso_row,
             image_row,
+            play,
             disc,
             navigation,
             details,
@@ -673,6 +687,7 @@ impl NewMachineDialog {
             cores: parts.cores.value() as u32,
             ram_gib: parts.ram.value() as u32,
             data_gib: parts.disk.value() as u32,
+            play: parts.play.is_active(),
             image: image.into(),
         };
         let context = parts.window.context();
@@ -732,6 +747,7 @@ impl NewMachineDialog {
         self.0.disc.set_visible(true);
         self.0.iso_row.set_visible(true);
         self.0.image_row.set_visible(false);
+        self.0.play.set_visible(false);
         self.0.macos.set(false);
         *self.0.android_image.borrow_mut() = None;
         self.0.disk.set_subtitle(DISK_NOTE);
@@ -780,6 +796,7 @@ impl NewMachineDialog {
         parts.disc.set_visible(kind != Pick::Macos);
         parts.iso_row.set_visible(disc);
         parts.image_row.set_visible(kind == Pick::Android);
+        parts.play.set_visible(kind == Pick::Android);
         match kind {
             Pick::Macos => self.choose_macos(),
             Pick::Android => {

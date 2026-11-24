@@ -138,6 +138,7 @@ fn machine_from(
         nvme: carried.nvme,
         opencore,
         android_data,
+        android_play: carried.android_play,
         throwaway: carried.throwaway,
         ..Machine::new(&id, name.trim(), &in_folder(DISK_FILE), &vars)
     };

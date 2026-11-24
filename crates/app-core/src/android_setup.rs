@@ -32,6 +32,8 @@ pub struct NewAndroid {
     pub cores: u32,
     pub ram_gib: u32,
     pub data_gib: u32,
+    /// Play services through microG.
+    pub play: bool,
     /// The image: its system disk, the folder that holds it, or the UTM bundle that does.
     pub image: PathBuf,
 }
@@ -62,6 +64,7 @@ fn planned(context: &Context, new: &NewAndroid) -> Machine {
         cores: new.cores,
         ram_gib: new.ram_gib,
         android_data: file_in(&folder, DATA_FILE),
+        android_play: new.play,
         mac: unused_mac(context),
         ..Machine::new(
             &id,
@@ -165,7 +168,14 @@ mod tests {
     fn a_planned_android_is_a_plain_machine_with_a_data_disk_beside_its_own() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let new = NewAndroid { name: "Phone".into(), cores: 2, ram_gib: 2, data_gib: 32, image: "/i".into() };
+        let new = NewAndroid {
+            name: "Phone".into(),
+            cores: 2,
+            ram_gib: 2,
+            data_gib: 32,
+            play: false,
+            image: "/i".into(),
+        };
         let machine = planned(&context, &new);
         let folder = context.paths.machines.join("phone");
         assert!(machine.android() && !machine.installing && machine.kind == Kind::Plain);
@@ -182,6 +192,7 @@ mod tests {
             cores: 2,
             ram_gib: 2,
             data_gib: 32,
+            play: false,
             image: scratch.path("not-an-image"),
         };
         let problems = create_problems(&context, &new, &planned(&context, &new));

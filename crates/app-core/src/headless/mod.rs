@@ -64,7 +64,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              [--set-up-for RECIPE [--yes]] [--lean on|off]
                              [--skip-scanning on|off]
   new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
-  new NAME --kind android --iso IMAGE [--disk GIB] [--cores N] [--ram GIB]
+  new NAME --kind android --iso IMAGE [--play on|off] [--disk GIB] [--cores N] [--ram GIB]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere

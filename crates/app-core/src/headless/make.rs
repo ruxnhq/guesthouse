@@ -202,6 +202,7 @@ fn access_text(access: &Access) -> String {
 fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Write) -> Result<()> {
     let others = [
         options.iso,
+        options.play,
         options.user,
         options.amd_card,
         options.amd_driver,
@@ -247,7 +248,7 @@ fn new_android(context: &Context, name: &str, options: &NewOptions, out: &mut dy
     ];
     if others.iter().any(Option::is_some) {
         return Err(Failure::new(
-            "An Android machine takes --iso, --disk, --cores and --ram, and nothing else.",
+            "An Android machine takes --iso, --play, --disk, --cores and --ram, and nothing else.",
         ));
     }
     let image = options.iso.ok_or_else(|| Failure::new("An Android machine needs --iso PATH, its image."))?;
@@ -261,6 +262,7 @@ fn new_android(context: &Context, name: &str, options: &NewOptions, out: &mut dy
         cores: number("--cores", options.cores, ANDROID_SIZES.cores.min(physical_cores(&context.cpus)))?,
         ram_gib: number("--ram", options.ram, ram)?,
         data_gib: number("--disk", options.disk, ANDROID_SIZES.disk)?,
+        play: options.play.map(|word| on_or_off("--play", word)).transpose()?.unwrap_or(false),
         image: image.into(),
     };
     let machine = create_android(context, &new)?;
@@ -279,6 +281,9 @@ pub(super) fn new_machine(
     }
     if options.kind.is_some_and(|kind| kind.eq_ignore_ascii_case(ANDROID_KIND)) {
         return new_android(context, name, options, out);
+    }
+    if options.play.is_some() {
+        return Err(Failure::new("--play is for an Android machine."));
     }
     let iso = options.iso.ok_or_else(|| Failure::new("new needs --iso PATH, the disc to install from."))?;
     let disc = disc_offered(context, iso, options.kind, out)?;

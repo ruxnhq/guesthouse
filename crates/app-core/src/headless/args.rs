@@ -9,7 +9,7 @@ const NAME: &str = "--name";
 const THROWAWAY: &str = "--throwaway";
 const DELETE_WHEN_STOPPED: &str = "--delete-when-stopped";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 15] = [
+const NEW_OPTIONS: [&str; 16] = [
     "--iso",
     "--kind",
     "--disk",
@@ -25,6 +25,7 @@ const NEW_OPTIONS: [&str; 15] = [
     "--set-up-for",
     "--lean",
     "--skip-scanning",
+    "--play",
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
 const MINUTES: &str = "--minutes";
@@ -51,6 +52,8 @@ pub(super) struct NewOptions<'a> {
     pub set_up_for: Option<&'a str>,
     /// On or off, for a Windows machine. Off unless the recipe turns it on.
     pub lean: Option<&'a str>,
+    /// Play services through microG, for an Android machine.
+    pub play: Option<&'a str>,
     /// On or off: whether Defender leaves out the folders the recipe names. Always off unless said.
     pub skip_scanning: Option<&'a str>,
     /// Goes ahead with a recipe of the user's own, whose steps `new` shows first.
@@ -326,6 +329,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 set_up_for: split.value("--set-up-for"),
                 lean: split.value("--lean"),
                 skip_scanning: split.value("--skip-scanning"),
+                play: split.value("--play"),
                 yes: split.has(YES),
             };
             Ok(Command::New { name, options })

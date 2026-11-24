@@ -38,6 +38,9 @@ const INTEL_ICD_PREFIX: &str = "intel_icd";
 /// NVIDIA's Vulkan driver opens this beside the card's own nodes.
 const NVIDIA_MODESET: &str = "nvidia-modeset";
 const RENDER_NODES: &str = "dri";
+/// The SKU's first word, so a guest can tell Guesthouse's choices from a SKU of its own.
+const CHOICES_MARK: &str = "guesthouse";
+const PLAY_CHOICE: &str = "microg";
 
 /// The card an Android guest draws on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +106,8 @@ pub struct AndroidBoot {
     pub card: AndroidCard,
     /// A folder of the machine's for the drivers' compiled shaders, so a start doesn't build them again.
     pub cache: PathBuf,
+    /// Play services through microG.
+    pub play: bool,
 }
 
 impl VmPlan {
@@ -126,6 +131,16 @@ impl VmPlan {
             "-m",
             &self.ram,
         ])
+    }
+
+    /// The machine's choices, as words in the SMBIOS SKU, which the image's GRUB reads and puts on the
+    /// kernel's line for its setup app.
+    fn android_choices(boot: &AndroidBoot) -> Vec<String> {
+        let mut choices = vec![CHOICES_MARK];
+        if boot.play {
+            choices.push(PLAY_CHOICE);
+        }
+        words(&["-smbios", &format!("type=1,sku={}", choices.join(" "))])
     }
 
     fn android_disks(&self, boot: &AndroidBoot) -> Vec<String> {
@@ -216,6 +231,7 @@ impl VmPlan {
         let boot = self.android_boot()?;
         let mut arguments = self.qemu_files_arguments();
         arguments.extend(self.android_machine());
+        arguments.extend(Self::android_choices(boot));
         arguments.extend(self.android_disks(boot));
         arguments.extend(self.android_nic());
         arguments.extend(self.android_screen(boot));
@@ -275,6 +291,7 @@ mod tests {
                 nodes: vec!["/dev/dri/renderD129".into()],
             },
             cache: "/m/droid/gpu-cache".into(),
+            play: maker == GpuMaker::Nvidia,
         }
     }
 
@@ -310,6 +327,9 @@ mod tests {
             "dbus,p2p=yes,gl=on,rendernode=/dev/dri/renderD129"
         );
         assert!(!arguments.iter().any(|word| word.contains("ahci")), "no SATA, Android has no driver for it");
+        assert_eq!(value_after(&arguments, "-smbios", "type=1").unwrap(), "type=1,sku=guesthouse");
+        let play = plan(GpuMaker::Nvidia).qemu_arguments();
+        assert_eq!(value_after(&play, "-smbios", "type=1").unwrap(), "type=1,sku=guesthouse microg");
     }
 
     #[test]

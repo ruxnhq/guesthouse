@@ -282,6 +282,10 @@ pub struct Machine {
     /// the first AMD or Intel one. Left out of the file when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub android_gpu: String,
+    /// Play services through microG, for an Android machine. Its image has microG, off unless this is.
+    /// Left out of the file when off.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub android_play: bool,
     /// A snapshot before a start that changes Windows: see [`crate::auto_snapshot`]. Nothing here is
     /// what [`crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON`] says, and the user's choice is written.
     /// Left out of the file until then, so an older build can still read it.
@@ -345,6 +349,7 @@ impl Machine {
             opencore: String::new(),
             android_data: String::new(),
             android_gpu: String::new(),
+            android_play: false,
             auto_snapshot: None,
             throwaway: false,
         }

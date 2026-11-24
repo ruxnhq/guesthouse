@@ -9845,3 +9845,79 @@ index 9bda572..9eefb28 100644
 -- 
 2.56.1
 
+From 7ecd37fd8f1f524c1c728925a19a956026c72a53 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Tue, 24 Nov 2026 06:41:35 -0800
+Subject: [PATCH] hw/misc/nvfwd: the card snoops the guest's cache on every
+ mapping
+
+The guest's pages are cached on its CPU whatever it asks for, as an
+Intel host keeps them write-back. NVIDIA's Vulkan driver maps its
+GPFIFO, pushbuffers and semaphores as system memory without snooping,
+so the card read empty GPFIFO entries from RAM while the guest's
+writes were still in the cache. Vulkan waited 11 s and failed in
+vkCreateDevice.
+
+The device now sets the snoop flag on every RM_MAP_MEMORY_DMA it
+passes on, and gives the guest its own flags back. NVIDIA's driver
+says the flag only matters for system memory and does nothing where
+the platform snoops anyway.
+
+Found and measured by s3k000 on an RTX 3080 Ti.
+---
+ hw/misc/nvfwd/forward.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 0c42a2b..fec8b5a 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -25,6 +25,10 @@
+ #define NOT_USED_BY_CLIENTS 0xffffffffull /* the limit the driver reports for that class */
+ #define CLASS_SENSOR_PAGE 0xde
+ #define CTRL_SENSOR_POLL 0xde0001
++#define ESC_RM_MAP_MEMORY_DMA 0x57
++#define RM_MAP_DMA_BYTES 64u /* NVOS46_PARAMETERS */
++#define RM_MAP_DMA_FLAGS 32
++#define MAP_DMA_CACHE_SNOOP 0x10u /* NVOS46_FLAGS_CACHE_SNOOP_ENABLE */
+ 
+ /* ---- guest pages as one host range ---- */
+ 
+@@ -308,6 +312,24 @@ static void refuse_pageable_access(Bounce *b)
+     bounce_patch(b, UVM_INITIALIZE_FLAGS, &flags, sizeof(flags));
+ }
+ 
++/*
++ * The guest's pages are cached on its CPU, whatever caching it asks for: on an Intel host KVM keeps
++ * them write-back. A card mapping system memory without snooping then reads RAM while the guest's
++ * writes are still in the cache, and the guest reads its cached copy of what the card wrote. So the
++ * card always snoops. NVIDIA's driver says the flag only matters for system memory, and does nothing
++ * on a platform that snoops anyway. The guest gets its own flags back.
++ */
++static void snoop_cpu_cache(Bounce *b, uint32_t arg_at)
++{
++    uint32_t flags;
++
++    memcpy(&flags, b->data + arg_at + RM_MAP_DMA_FLAGS, sizeof(flags));
++    if (!(flags & MAP_DMA_CACHE_SNOOP) && b->patches < NVFWD_MAX_FIX) {
++        flags |= MAP_DMA_CACHE_SNOOP;
++        bounce_patch(b, arg_at + RM_MAP_DMA_FLAGS, &flags, sizeof(flags));
++    }
++}
++
+ /* The driver checks a mapping against this too. Here it costs nothing. */
+ static void note_map_access(NvfwdState *s, const struct nvfwd_req *r, const uint8_t *arg)
+ {
+@@ -411,6 +433,9 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+         r->ret = rc;
+         return;
+     }
++    if (!uvm && nr == ESC_RM_MAP_MEMORY_DMA && size == RM_MAP_DMA_BYTES) {
++        snoop_cpu_cache(b, call.arg_at);
++    }
+     /* Before the sensor objects: a mask change there is a call on the host, through the daemon. */
+     throttle(s);
+     if (s->sensors && !uvm) {
+-- 
+2.56.1
+

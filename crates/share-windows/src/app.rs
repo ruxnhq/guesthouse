@@ -190,7 +190,7 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
     // another folder's copy of this program may take one between the look and the mount.
     let drives = match &args.drive {
         Some(drive) => vec![drive.clone()],
-        None => logic::free_drives(used),
+        None => logic::drives_to_try(used, args.prefer.as_deref()),
     };
     if drives.is_empty() {
         return Err("every drive from S: to Z: is in use".into());

@@ -255,6 +255,22 @@ pub fn free_drives(used: u32) -> Vec<String> {
         .collect()
 }
 
+/// The drives to try, in order, when none is asked for: `prefer` first if it's free, then the free
+/// ones of S: to Z:. Each folder of a machine's prefers its own letter, so they keep their drives
+/// whichever of them starts first.
+pub fn drives_to_try(used: u32, prefer: Option<&str>) -> Vec<String> {
+    let mut drives = free_drives(used);
+    if let Some(prefer) = prefer {
+        let letter = prefer.as_bytes()[0];
+        let free = used & (1 << (letter - b'A')) == 0;
+        drives.retain(|drive| drive != prefer);
+        if free {
+            drives.insert(0, prefer.to_owned());
+        }
+    }
+    drives
+}
+
 /// The mount point that has WinFsp mount a drive, `S:`, through the Mount Manager: `\\.\S:`.
 pub fn mount_manager_point(drive: &str) -> String {
     format!(r"\\.\{drive}")
@@ -277,6 +293,8 @@ pub struct Args {
     pub share: String,
     pub read_only: bool,
     pub drive: Option<String>,
+    /// The drive tried first when none is asked for, if it's free.
+    pub prefer: Option<String>,
     pub log: Option<PathBuf>,
     pub check: bool,
 }
@@ -288,7 +306,8 @@ pub enum Command {
 }
 
 pub const USAGE: &str = "\
-guesthouse-guest-share --port PORT --share NAME [--read-only] [--drive LETTER:] [--log FILE] [--check]
+guesthouse-guest-share --port PORT --share NAME [--read-only] [--drive LETTER: | --prefer LETTER:]
+                       [--log FILE] [--check]
 
 Mounts the host folder that Hyper-V's Plan 9 server shares as NAME, which it serves on vsock PORT,
 as a drive in this Windows guest, through WinFsp.
@@ -297,6 +316,7 @@ as a drive in this Windows guest, through WinFsp.
   --share NAME     the share's name, as the host gave it to the Plan 9 device
   --read-only      refuse every write
   --drive LETTER:  the drive to mount as; the first free of S: to Z: if not given
+  --prefer LETTER: the drive to try first when --drive isn't given, then the free ones of S: to Z:
   --log FILE       also write what happens to FILE
   --check          only connect, attach and list the share's root, then exit
   --help           this text
@@ -308,6 +328,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, St
     let mut share = None;
     let mut read_only = false;
     let mut drive = None;
+    let mut prefer = None;
     let mut log = None;
     let mut check = false;
     let mut args = args.into_iter();
@@ -329,6 +350,13 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, St
                         .ok_or_else(|| format!("--drive {text:?} is not a drive letter"))?,
                 );
             }
+            "--prefer" => {
+                let text = value("--prefer")?;
+                prefer = Some(
+                    normalize_drive(&text)
+                        .ok_or_else(|| format!("--prefer {text:?} is not a drive letter"))?,
+                );
+            }
             "--log" => log = Some(PathBuf::from(value("--log")?)),
             "--check" => check = true,
             other => return Err(format!("unknown argument {other:?}")),
@@ -339,6 +367,7 @@ pub fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, St
         share: share.filter(|s| !s.is_empty()).ok_or("--share is required")?,
         read_only,
         drive,
+        prefer,
         log,
         check,
     }))
@@ -546,6 +575,16 @@ mod tests {
     }
 
     #[test]
+    fn a_preferred_drive_is_tried_first_when_its_free() {
+        assert_eq!(drives_to_try(0, Some("U:"))[..3], ["U:", "S:", "T:"]);
+        assert_eq!(drives_to_try(0, Some("U:")).len(), 8);
+        // Taken, it isn't tried; one below S: is tried first too.
+        assert_eq!(drives_to_try(1 << 20, Some("U:"))[0], "S:");
+        assert_eq!(drives_to_try(0, Some("M:"))[..2], ["M:", "S:"]);
+        assert_eq!(drives_to_try(0, None), free_drives(0));
+    }
+
+    #[test]
     fn a_drive_is_mounted_through_the_mount_manager() {
         assert_eq!(mount_manager_point("S:"), r"\\.\S:");
     }
@@ -579,7 +618,7 @@ mod tests {
     #[test]
     fn the_command_line_is_read() {
         let Command::Run(args) =
-            parse("--port 564 --share files --read-only --drive t --log C:\\x.log --check").unwrap()
+            parse("--port 564 --share files --read-only --drive t --prefer u --log C:\\x.log --check").unwrap()
         else {
             panic!("not a run")
         };
@@ -587,6 +626,7 @@ mod tests {
         assert_eq!(args.share, "files");
         assert!(args.read_only && args.check);
         assert_eq!(args.drive.as_deref(), Some("T:"));
+        assert_eq!(args.prefer.as_deref(), Some("U:"));
         assert_eq!(args.log, Some(PathBuf::from("C:\\x.log")));
         let Command::Run(args) = parse("--share a --port 1").unwrap() else { panic!() };
         assert!(!args.read_only && !args.check && args.drive.is_none() && args.log.is_none());

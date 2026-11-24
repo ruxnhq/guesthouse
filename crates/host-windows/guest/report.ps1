@@ -188,9 +188,18 @@ function Get-ShareDrive($Slot) {
     return $null
 }
 
-# Puts the folder's task right whenever it isn't what's wanted, as the report's own task is, and
-# starts it if it isn't running.
-function Set-ShareTask($Slot, [string]$Arguments) {
+# What a folder's program is run with. Each prefers its own letter, the first S: and the Nth the Nth
+# from it, so they keep their drives whichever of their tasks Windows starts first at boot.
+function Get-ShareArguments($Share) {
+    $prefer = [char]([int][char]'S' + $Share.Slot.Number - 1)
+    $arguments = "--port $($Share.Port) --share $($Share.Name) --prefer ${prefer}:"
+    if ($Share.ReadOnly) { $arguments += ' --read-only' }
+    "$arguments --log $($Share.Slot.Log)"
+}
+
+# Puts the folder's task right whenever it isn't what's wanted, as the report's own task is, which
+# stops a copy running as it was. Only then, unless -NoStart, starts it if it isn't running.
+function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
     $task = Get-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue
     $wrong = -not $task -or
         $task.Actions[0].Execute -ne $shareProgram -or $task.Actions[0].Arguments -ne $Arguments -or
@@ -207,7 +216,9 @@ function Set-ShareTask($Slot, [string]$Arguments) {
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
         Register-ScheduledTask -TaskName $Slot.Task -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
     }
-    if ((Get-ScheduledTask -TaskName $Slot.Task).State -ne 'Running') { Start-ScheduledTask -TaskName $Slot.Task }
+    if (-not $NoStart -and (Get-ScheduledTask -TaskName $Slot.Task).State -ne 'Running') {
+        Start-ScheduledTask -TaskName $Slot.Task
+    }
 }
 
 # The folders the host gives, each with its number. A line that isn't one is said and passed over.
@@ -268,13 +279,15 @@ if ($shares.Count) {
     # from S: and the next the one after. A minute is waited for them all, not for each, so the
     # report isn't held long when the host isn't serving them; a folder started after the minute
     # still mounts, and its link is made at the next start.
+    # Every task is put right before any is started, so one still running as it was before can't
+    # hold the drive another prefers now.
+    foreach ($share in $(if ($ready) { $shares } else { @() })) {
+        try { Set-ShareTask $share.Slot (Get-ShareArguments $share) -NoStart } catch {}
+    }
     $waited = [Diagnostics.Stopwatch]::StartNew()
     foreach ($share in $(if ($ready) { $shares } else { @() })) {
         try {
-            $arguments = "--port $($share.Port) --share $($share.Name)"
-            if ($share.ReadOnly) { $arguments += ' --read-only' }
-            $arguments += " --log $($share.Slot.Log)"
-            Set-ShareTask $share.Slot $arguments
+            Set-ShareTask $share.Slot (Get-ShareArguments $share)
 
             # The program says "mounted at S:" in its log once the drive is there.
             $drive = Get-ShareDrive $share.Slot

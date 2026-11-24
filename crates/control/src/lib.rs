@@ -11,6 +11,7 @@
 
 pub mod client;
 pub mod events;
+pub mod report;
 pub mod screen;
 pub mod updates;
 

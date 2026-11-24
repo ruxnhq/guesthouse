@@ -9,6 +9,7 @@
 //! the pipe, and the work done by `guesthouse-host-windows`.
 
 pub mod machines;
+pub mod report_parts;
 pub mod requests;
 pub mod store;
 #[cfg(windows)]

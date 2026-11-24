@@ -2,6 +2,7 @@
 //! ([`pipe`]), the folder the machines are kept in ([`folder`]), and the work, which is
 //! `guesthouse-host-windows`'s.
 
+mod collect;
 mod folder;
 mod pipe;
 mod scm;

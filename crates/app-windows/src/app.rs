@@ -15,7 +15,8 @@ use std::sync::mpsc::Sender;
 use guesthouse_control::client::Unreached;
 use guesthouse_control::updates::Latest;
 use guesthouse_control::{
-    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, State, System, valid_name,
+    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, Share, State, System, valid_name,
+    valid_user,
 };
 use windows_reactor::*;
 
@@ -31,6 +32,32 @@ const LOG_LIMIT: usize = 500;
 const MEMORY_MB: f64 = 8192.0;
 const PROCESSORS: f64 = 4.0;
 const SIZE_GB: f64 = 128.0;
+
+/// The editions the form offers, by the name DISM gives each. The first, empty, takes Pro if the
+/// image has it and its first edition if not.
+pub const EDITIONS: [&str; 6] = [
+    "",
+    "Windows 11 Pro",
+    "Windows 11 Home",
+    "Windows 11 Pro for Workstations",
+    "Windows 11 Education",
+    "Windows 11 Enterprise",
+];
+
+/// Where a folder chosen in the picker goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FolderFor {
+    /// The new machine's form.
+    Form,
+    /// The shown machine's page.
+    Machine,
+}
+
+/// The share a folder field and its read-only box say, once the field holds a path.
+fn share_of(folder: &str, read_only: bool) -> Option<Share> {
+    let folder = folder.trim().trim_matches('"');
+    (!folder.is_empty()).then(|| Share { folder: PathBuf::from(folder), read_only })
+}
 
 /// What the app starts with.
 #[derive(Clone, PartialEq)]
@@ -159,6 +186,15 @@ pub struct Form {
     pub processors: Option<f64>,
     pub size_gb: Option<f64>,
     pub card: Card,
+    /// The place in `EDITIONS` of the edition chosen.
+    pub edition: usize,
+    /// The guest's administrator. Empty is the service's default.
+    pub user: String,
+    pub tpm: bool,
+    pub network: bool,
+    /// The folder to share, as typed or picked. Empty shares none.
+    pub share_folder: String,
+    pub share_read_only: bool,
 }
 
 impl Default for Form {
@@ -170,6 +206,12 @@ impl Default for Form {
             processors: Some(PROCESSORS),
             size_gb: Some(SIZE_GB),
             card: Card::Default,
+            edition: 0,
+            user: String::new(),
+            tpm: true,
+            network: true,
+            share_folder: String::new(),
+            share_read_only: false,
         }
     }
 }
@@ -178,11 +220,10 @@ impl Form {
     /// The machine to ask for, once every field holds something that can be sent. Whether the
     /// numbers suit this PC is the service's to say.
     pub fn machine(&self) -> Option<NewMachine> {
-        let whole =
-            |value: Option<f64>| value.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.round() as u64);
         let name = self.name.trim();
         let image = self.image.trim().trim_matches('"');
-        if !valid_name(name) || image.is_empty() {
+        let user = self.user.trim();
+        if !valid_name(name) || image.is_empty() || !(user.is_empty() || valid_user(user)) {
             return None;
         }
         Some(NewMachine {
@@ -192,6 +233,11 @@ impl Form {
             processors: u32::try_from(whole(self.processors)?).ok()?,
             size_gb: whole(self.size_gb)?,
             card: self.card.clone(),
+            edition: EDITIONS.get(self.edition).copied().unwrap_or_default().to_owned(),
+            user: user.to_owned(),
+            tpm: self.tpm,
+            network: self.network,
+            share: share_of(&self.share_folder, self.share_read_only),
         })
     }
 }
@@ -203,6 +249,9 @@ pub fn settings_of(machine: &Machine) -> MachineSettings {
         processors: machine.processors,
         card: machine.chosen_card.clone(),
         nvapi_wrapper: machine.nvapi_wrapper,
+        tpm: machine.tpm,
+        network: machine.network,
+        share: machine.share.clone(),
     }
 }
 
@@ -216,6 +265,14 @@ pub struct Draft {
     pub processors: Option<f64>,
     pub card: Card,
     pub nvapi_wrapper: bool,
+    pub tpm: bool,
+    pub network: bool,
+    /// The folder to share, as typed or picked. Empty shares none.
+    pub share_folder: String,
+    pub share_read_only: bool,
+    /// The size the disk is to grow to, which is asked for on its own, with Grow, as it can't be
+    /// undone.
+    pub size_gb: Option<f64>,
     /// Asked for, and not answered yet.
     pub saving: bool,
     /// Why the service said no, until they're changed again.
@@ -230,6 +287,15 @@ impl Draft {
             processors: Some(machine.processors as f64),
             card: machine.chosen_card.clone(),
             nvapi_wrapper: machine.nvapi_wrapper,
+            tpm: machine.tpm,
+            network: machine.network,
+            share_folder: machine
+                .share
+                .as_ref()
+                .map(|share| share.folder.display().to_string())
+                .unwrap_or_default(),
+            share_read_only: machine.share.as_ref().is_some_and(|share| share.read_only),
+            size_gb: machine.size_gb.map(|gb| gb as f64),
             saving: false,
             refused: None,
         }
@@ -238,19 +304,32 @@ impl Draft {
     /// The settings to ask for, once each number is one. Whether they suit this PC is the
     /// service's to say, as it is for a new machine.
     pub fn settings(&self) -> Option<MachineSettings> {
-        let whole =
-            |value: Option<f64>| value.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.round() as u64);
         Some(MachineSettings {
             memory_mb: whole(self.memory_mb)?,
             processors: u32::try_from(whole(self.processors)?).ok()?,
             card: self.card.clone(),
             nvapi_wrapper: self.nvapi_wrapper,
+            tpm: self.tpm,
+            network: self.network,
+            share: share_of(&self.share_folder, self.share_read_only),
         })
     }
 
     /// Whether the person has changed something from what `machine`'s settings say.
     pub fn changed(&self, machine: &Machine) -> bool {
         self.settings() != Some(settings_of(machine))
+    }
+
+    /// The size to grow `machine`'s disk to, if it's one it could grow to: larger than it is now,
+    /// or any size when that isn't known, as the service says if it's too small.
+    pub fn growth(&self, machine: &Machine) -> Option<u64> {
+        let wanted = whole(self.size_gb)?;
+        machine.size_gb.is_none_or(|now| wanted > now).then_some(wanted)
+    }
+
+    /// Whether a size to grow to has been typed that isn't the disk's now.
+    fn size_typed(&self, machine: &Machine) -> bool {
+        self.size_gb != machine.size_gb.map(|gb| gb as f64)
     }
 }
 
@@ -269,6 +348,21 @@ pub fn nvidia(card: &Card, cards: &[CardInfo]) -> bool {
 /// wrapper is NVAPI's, which only NVIDIA's Windows driver has.
 pub fn offers_dlss(system: System, card: &Card, cards: &[CardInfo]) -> bool {
     system == System::Windows && nvidia(card, cards)
+}
+
+/// A number field's value as a whole number, once it's one that can be sent.
+fn whole(value: Option<f64>) -> Option<u64> {
+    value.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.round() as u64)
+}
+
+/// A snapshot whose Revert or Delete is being asked about, as each can't be undone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SnapshotAsk {
+    pub machine: String,
+    pub id: u64,
+    pub label: String,
+    /// Going back to it, or deleting it.
+    pub revert: bool,
 }
 
 /// A new machine being made, or made: its events, and how it ended once it has.
@@ -299,6 +393,10 @@ pub struct Main {
     pub deleting: Option<String>,
     /// A newer Windows host, once the file drop says there is one, until it's put aside.
     pub update: Option<Latest>,
+    /// The snapshot whose Revert or Delete is being asked about.
+    pub snapshot_ask: Option<SnapshotAsk>,
+    /// The label typed for the next snapshot of the shown machine.
+    pub snapshot_label: String,
     pub form: Form,
     /// The selected machine's settings, as the person is changing them.
     pub draft: Option<Draft>,
@@ -362,6 +460,16 @@ pub enum Message {
     Size(Option<f64>),
     /// A card was chosen, by its place in the list: Default, each card, then None.
     Card(Option<usize>),
+    /// An edition was chosen, by its place in `EDITIONS`.
+    Edition(Option<usize>),
+    User(String),
+    Tpm(bool),
+    Network(bool),
+    ShareFolder(String),
+    ShareReadOnly(Option<bool>),
+    /// Open the folder picker, for the form or the machine's page.
+    BrowseFolder(FolderFor),
+    PickedFolder(FolderFor, Option<PathBuf>),
     Create,
     /// The selected machine's settings, as the person changes them.
     SetMemory(Option<f64>),
@@ -371,6 +479,21 @@ pub enum Message {
     SetDlss(bool),
     SaveSettings,
     UndoSettings,
+    SetTpm(bool),
+    SetNetwork(bool),
+    SetShareFolder(String),
+    SetShareReadOnly(Option<bool>),
+    /// The size to grow the disk to, which Grow asks for.
+    SetSize(Option<f64>),
+    /// Ask the service to let the disk grow to the size in the field.
+    Grow,
+    SnapshotLabel(String),
+    TakeSnapshot,
+    /// Ask about going back to the snapshot with this ID.
+    RevertSnapshot(u64),
+    /// Ask about deleting the snapshot with this ID.
+    DeleteSnapshot(u64),
+    SnapshotAnswered(ContentDialogResult),
     NewsClosed,
     /// A newer Windows host is out.
     Update(Latest),
@@ -434,7 +557,10 @@ impl Main {
         let keep = self.draft.as_ref().is_some_and(|draft| {
             draft.machine == machine.name
                 && machine.state == State::Stopped
-                && (draft.saving || draft.refused.is_some() || draft.changed(machine))
+                && (draft.saving
+                    || draft.refused.is_some()
+                    || draft.changed(machine)
+                    || draft.size_typed(machine))
         });
         if !keep {
             self.draft = Some(Draft::of(machine));
@@ -468,12 +594,31 @@ impl Main {
                 machine.processors = settings.processors;
                 machine.chosen_card = settings.card;
                 machine.nvapi_wrapper = settings.nvapi_wrapper;
+                machine.tpm = settings.tpm;
+                machine.network = settings.network;
+                machine.share = settings.share;
             }
             self.follow_draft();
             return;
         }
         draft.saving = true;
         self.ask(|name| Job::Change(name, settings));
+    }
+
+    fn grow(&mut self) {
+        let Some(machine) = self.machine() else { return };
+        let Some(size_gb) = self.draft.as_ref().and_then(|draft| draft.growth(machine)) else { return };
+        self.ask(|name| Job::Grow(name, size_gb));
+    }
+
+    fn browse_folder(&mut self, target: FolderFor) {
+        let window = self.window.clone();
+        let opened = crate::system::pick_folder(self.hwnd, move |path| {
+            let _ = window.tell(Message::PickedFolder(target, path));
+        });
+        if !opened {
+            self.tell("The folder picker didn't open. Type the folder's path instead.", true);
+        }
     }
 
     fn tell(&mut self, text: impl Into<String>, bad: bool) {
@@ -499,6 +644,8 @@ impl Main {
         self.account = None;
         self.draft = None;
         self.follow_draft();
+        self.snapshot_label.clear();
+        self.snapshot_ask = None;
         if let Some(name) = self.selected.clone().filter(|_| self.live) {
             self.watch_id += 1;
             self.watch = Some(bridge::watch(self.watch_id, name, self.window.clone()));
@@ -551,6 +698,31 @@ impl Main {
                 }
             }
             (Job::Delete(name), Ok(Answer::Ok)) => self.tell(format!("{name} is deleted."), false),
+            (Job::Snapshot(name, label), Ok(Answer::Ok)) => {
+                if self.selected.as_deref() == Some(name.as_str()) {
+                    self.snapshot_label.clear();
+                }
+                self.tell(
+                    format!("Taking the snapshot {label} of {name}. Its log says when it's done."),
+                    false,
+                );
+            }
+            (Job::Grow(name, size_gb), Ok(Answer::Ok)) => {
+                if let Ok(status) = &mut self.seen
+                    && let Some(machine) = status.machines.iter_mut().find(|machine| machine.name == name)
+                {
+                    machine.size_gb = Some(size_gb);
+                }
+                if let Some(draft) = self.draft.as_mut().filter(|draft| draft.machine == name) {
+                    draft.size_gb = Some(size_gb as f64);
+                }
+                self.tell(
+                    format!(
+                        "{name}'s disk may grow to {size_gb} GB. The guest takes the room at its next start."
+                    ),
+                    false,
+                );
+            }
             (_, Ok(Answer::Ok)) => {}
             (_, Ok(Answer::Refused { reason })) => self.tell(reason, true),
             (_, Ok(_)) => self.tell(Unreached::Garbled.words(), true),
@@ -706,6 +878,8 @@ impl Component for Main {
             news: None,
             deleting: None,
             update: None,
+            snapshot_ask: None,
+            snapshot_label: String::new(),
             form: Form::default(),
             draft: None,
             making: None,
@@ -818,6 +992,21 @@ impl Component for Main {
                 }
             }
             Message::Card(None) => {}
+            Message::Edition(Some(index)) if index < EDITIONS.len() => self.form.edition = index,
+            Message::Edition(_) => {}
+            Message::User(user) => self.form.user = user,
+            Message::Tpm(on) => self.form.tpm = on,
+            Message::Network(on) => self.form.network = on,
+            Message::ShareFolder(folder) => self.form.share_folder = folder,
+            Message::ShareReadOnly(checked) => self.form.share_read_only = checked.unwrap_or(false),
+            Message::BrowseFolder(target) => self.browse_folder(target),
+            Message::PickedFolder(_, None) => {}
+            Message::PickedFolder(FolderFor::Form, Some(path)) => {
+                self.form.share_folder = path.display().to_string();
+            }
+            Message::PickedFolder(FolderFor::Machine, Some(path)) => {
+                self.edit(|draft| draft.share_folder = path.display().to_string());
+            }
             Message::Create => self.create(),
             Message::SetMemory(value) => self.edit(|draft| draft.memory_mb = value),
             Message::SetProcessors(value) => self.edit(|draft| draft.processors = value),
@@ -832,6 +1021,47 @@ impl Component for Main {
             Message::UndoSettings => {
                 self.draft = None;
                 self.follow_draft();
+            }
+            Message::SetTpm(on) => self.edit(|draft| draft.tpm = on),
+            Message::SetNetwork(on) => self.edit(|draft| draft.network = on),
+            Message::SetShareFolder(folder) => self.edit(|draft| draft.share_folder = folder),
+            Message::SetShareReadOnly(checked) => {
+                self.edit(|draft| draft.share_read_only = checked.unwrap_or(false))
+            }
+            Message::SetSize(value) => self.edit(|draft| draft.size_gb = value),
+            Message::Grow => self.grow(),
+            Message::SnapshotLabel(label) => self.snapshot_label = label,
+            Message::TakeSnapshot => {
+                let label = self.snapshot_label.trim().to_owned();
+                if !label.is_empty() {
+                    self.ask(|name| Job::Snapshot(name, label));
+                }
+            }
+            Message::RevertSnapshot(id) | Message::DeleteSnapshot(id) => {
+                let revert = matches!(message, Message::RevertSnapshot(_));
+                if let Some(machine) = self.machine()
+                    && let Some(snapshot) = machine.snapshots.iter().find(|snapshot| snapshot.id == id)
+                {
+                    self.snapshot_ask = Some(SnapshotAsk {
+                        machine: machine.name.clone(),
+                        id,
+                        label: snapshot.label.clone(),
+                        revert,
+                    });
+                }
+            }
+            Message::SnapshotAnswered(result) => {
+                if let Some(ask) = self.snapshot_ask.take()
+                    && result == ContentDialogResult::Primary
+                    && self.live
+                {
+                    let job = if ask.revert {
+                        Job::Revert(ask.machine, ask.id)
+                    } else {
+                        Job::DeleteSnapshot(ask.machine, ask.id)
+                    };
+                    let _ = self.jobs.send(job);
+                }
             }
             Message::NewsClosed => self.news = None,
             Message::Update(latest) => self.update = Some(latest),
@@ -866,6 +1096,12 @@ mod tests {
             card: Some("NVIDIA GeForce RTX 5090".to_owned()),
             chosen_card: Card::Default,
             nvapi_wrapper: true,
+            tpm: true,
+            network: true,
+            share: None,
+            size_gb: Some(128),
+            snapshots: Vec::new(),
+            working: None,
             address: None,
         }
     }

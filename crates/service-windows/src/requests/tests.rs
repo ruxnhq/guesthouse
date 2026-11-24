@@ -9,11 +9,14 @@ struct Pretend {
     linux_installer: Option<PathBuf>,
     ended: Mutex<Vec<String>>,
     booted: Mutex<Vec<BootSettings>>,
+    prepared: Mutex<Vec<PrepareSettings>>,
+    grown: Mutex<Vec<u64>>,
 }
 
 impl Work for Pretend {
     fn prepare(&self, settings: &PrepareSettings, sink: &dyn Sink) -> Result<(), String> {
         sink.note("making the disk");
+        self.prepared.lock().unwrap().push(settings.clone());
         if self.fail_prepare {
             return Err("the image is broken".into());
         }
@@ -58,6 +61,34 @@ impl Work for Pretend {
     fn console_access(&self) -> Vec<String> {
         vec!["S-1-5-21-1-2-3-1001".into()]
     }
+
+    fn grow(&self, _: &Path, size_gb: u64) -> Result<(), String> {
+        self.grown.lock().unwrap().push(size_gb);
+        Ok(())
+    }
+
+    fn disk_size_gb(&self, _: &Path) -> Option<u64> {
+        Some(200)
+    }
+
+    fn disks(&self) -> &dyn Disks {
+        &FileDisks
+    }
+}
+
+/// Disks as small files that name their parent, which is enough for the service's part. The disk
+/// work itself is tested in host-windows' snapshots.
+struct FileDisks;
+
+impl Disks for FileDisks {
+    fn differencing(&self, child: &Path, parent: &Path) -> Result<(), String> {
+        assert!(parent.is_file(), "made on a disk that's there");
+        fs::write(child, format!("on {}", parent.display())).map_err(|error| error.to_string())
+    }
+
+    fn merge_into_parent(&self, _: &Path) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A window that keeps every answer, may read every file unless told otherwise, and may close.
@@ -78,6 +109,10 @@ impl Connection for Window {
 
     fn may_read(&mut self, path: &Path) -> Result<(), String> {
         if self.readable { Ok(()) } else { Err(format!("You may not read {}.", path.display())) }
+    }
+
+    fn may_share(&mut self, path: &Path, _: bool) -> Result<Held, String> {
+        self.may_read(path).map(|()| Box::new(()) as Held)
     }
 }
 
@@ -114,6 +149,11 @@ fn new_machine(setup: &Setup, name: &str) -> NewMachine {
         processors: 1,
         size_gb: 128,
         card: Card::Default,
+        edition: String::new(),
+        user: String::new(),
+        tpm: true,
+        network: true,
+        share: None,
     }
 }
 
@@ -324,6 +364,9 @@ fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
         processors: 1,
         card: Card::Named("Radeon Graphics".into()),
         nvapi_wrapper: false,
+        tpm: true,
+        network: true,
+        share: None,
     };
     assert_eq!(change(service, wanted.clone()), [Answer::Ok]);
     let machine = &status(service)[0];
@@ -343,12 +386,55 @@ fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
     wait_for(service, "win", State::Stopped);
 }
 
+fn hardware(memory_mb: u64, card: Card) -> MachineSettings {
+    MachineSettings {
+        memory_mb,
+        processors: 1,
+        card,
+        nvapi_wrapper: true,
+        tpm: true,
+        network: true,
+        share: None,
+    }
+}
+
+#[test]
+fn a_stopped_machine_is_changed_and_boots_with_it_next() {
+    let setup = setup("change-boots", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    let change = |hardware| ask(service, Request::Change { name: "WIN".into(), settings: hardware });
+
+    let card = Card::Named("Radeon Graphics".into());
+    assert_eq!(change(hardware(16384, card.clone())), [Answer::Ok]);
+    let machine = &status(service)[0];
+    assert_eq!(
+        (machine.memory_mb, machine.card.as_deref(), &machine.chosen_card),
+        (16384, Some("Radeon Graphics"), &card)
+    );
+    let kept = &service.machines().store.load()[0].1;
+    assert_eq!((kept.memory_mb, &kept.card), (16384, &card), "it's kept for the service's next start");
+
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    let booted = service.work.booted.lock().unwrap()[0].clone();
+    assert_eq!((booted.memory_mb, booted.gpu), (16384, GpuChoice::Matching("Radeon Graphics".into())));
+
+    // Not while it runs, and its address, which the guest said, outlasts a change.
+    assert!(matches!(change(hardware(8192, Card::None)).as_slice(), [Answer::Refused { .. }]));
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+    assert_eq!(change(hardware(8192, Card::None)), [Answer::Ok]);
+    let machine = &status(service)[0];
+    assert_eq!((machine.card.as_deref(), machine.address.as_deref()), (None, Some("172.29.1.2")));
+}
+
 #[test]
 fn a_change_is_kept_to_the_services_rules() {
     let setup = setup("change-rules", Pretend::default());
     let service = &setup.service;
     ask(service, Request::Create { machine: new_machine(&setup, "win") });
-    let fine = MachineSettings { memory_mb: 8192, processors: 1, card: Card::None, nvapi_wrapper: true };
+    let fine = hardware(8192, Card::None);
     for (wrong, words) in [
         (MachineSettings { memory_mb: 1024, ..fine.clone() }, "MB of memory"),
         (MachineSettings { processors: 0, ..fine.clone() }, "processors"),
@@ -364,4 +450,328 @@ fn a_change_is_kept_to_the_services_rules() {
     assert!(matches!(nobody.as_slice(), [Answer::Refused { .. }]));
     assert_eq!(change(service, fine), [Answer::Ok]);
     assert_eq!(status(service)[0].card, None);
+}
+
+#[test]
+fn a_change_is_kept_to_the_services_rules_for_share_and_size_too() {
+    let setup = setup("change-rules-more", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    let refused = |hardware| {
+        matches!(
+            ask(service, Request::Change { name: "win".into(), settings: hardware }).as_slice(),
+            [Answer::Refused { .. }]
+        )
+    };
+    assert!(refused(hardware(1, Card::Default)));
+    assert!(refused(hardware(u64::MAX, Card::Default)));
+    assert!(refused(MachineSettings { processors: 0, ..hardware(8192, Card::Default) }));
+    assert!(refused(hardware(8192, Card::Named("A card this PC hasn't".into()))));
+    assert!(matches!(
+        ask(service, Request::Change { name: "ubuntu".into(), settings: hardware(8192, Card::Default) })
+            .as_slice(),
+        [Answer::Refused { .. }]
+    ));
+    assert_eq!(status(service)[0].memory_mb, 8192, "nothing refused was kept");
+}
+
+#[test]
+fn an_ubuntu_guest_keeps_its_card_but_not_its_size() {
+    let root = std::env::temp_dir().join(format!("gh-requests-change-iso-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let iso = root.join("ubuntu.iso");
+    fs::write(&iso, b"ubuntu").unwrap();
+    let setup = setup("change-linux", Pretend { linux_installer: Some(iso), ..Pretend::default() });
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "ubuntu") });
+    let change = |hardware| ask(service, Request::Change { name: "ubuntu".into(), settings: hardware });
+
+    assert!(matches!(change(hardware(8192, Card::None)).as_slice(), [Answer::Refused { .. }]));
+    assert!(matches!(
+        change(hardware(8192, Card::Named("Radeon Graphics".into()))).as_slice(),
+        [Answer::Refused { .. }]
+    ));
+    // The default card by its name is the same card.
+    let same = Card::Named("NVIDIA GeForce RTX 5090".into());
+    assert_eq!(change(hardware(16384, same.clone())), [Answer::Ok]);
+    assert_eq!(status(service)[0].chosen_card, same);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_card_thats_gone_from_the_pc_doesnt_stop_a_change_of_size() {
+    let setup = setup("change-gone", Pretend::default());
+    let service = &setup.service;
+    let gone = Card::Named("A card taken out".into());
+    ask(
+        service,
+        Request::Create { machine: NewMachine { card: gone.clone(), ..new_machine(&setup, "win") } },
+    );
+    assert_eq!(
+        ask(service, Request::Change { name: "win".into(), settings: hardware(16384, gone) }),
+        [Answer::Ok]
+    );
+}
+
+#[test]
+fn a_new_machine_is_made_with_its_user_and_edition_and_boots_with_its_switches() {
+    let setup = setup("switches", Pretend::default());
+    let service = &setup.service;
+    let folder = setup.root.join("shared");
+    fs::create_dir_all(&folder).unwrap();
+    let share = Share { folder: folder.clone(), read_only: true };
+    let machine = NewMachine {
+        user: "pat".into(),
+        edition: " Windows 11 Home ".into(),
+        tpm: false,
+        network: false,
+        share: Some(share.clone()),
+        ..new_machine(&setup, "win")
+    };
+    assert_eq!(ask(service, Request::Create { machine }).last(), Some(&Answer::Done { reason: None }));
+    let prepared = service.work.prepared.lock().unwrap()[0].clone();
+    assert_eq!((prepared.user.as_str(), prepared.edition.as_str()), ("pat", "Windows 11 Home"));
+    let shown = &status(service)[0];
+    assert_eq!(
+        (shown.tpm, shown.network, &shown.share, shown.size_gb),
+        (false, false, &Some(share), Some(128))
+    );
+
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    let booted = service.work.booted.lock().unwrap()[0].clone();
+    assert_eq!((booted.tpm, booted.network), (false, false));
+    assert_eq!(booted.share, Some(host_settings::Share { folder, read_only: true }));
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn with_no_user_named_the_guest_has_the_default_one() {
+    let setup = setup("default-user", Pretend::default());
+    ask(&setup.service, Request::Create { machine: new_machine(&setup, "win") });
+    let prepared = setup.service.work.prepared.lock().unwrap()[0].clone();
+    assert_eq!((prepared.user.as_str(), prepared.edition.as_str()), (DEFAULT_USER, ""));
+}
+
+#[test]
+fn a_user_edition_or_share_the_rules_refuse_makes_no_machine() {
+    let setup = setup("create-refused", Pretend::default());
+    let refused = |machine: NewMachine| {
+        matches!(ask(&setup.service, Request::Create { machine }).as_slice(), [Answer::Refused { .. }])
+    };
+    assert!(refused(NewMachine { user: "Administrator".into(), ..new_machine(&setup, "x") }));
+    assert!(refused(NewMachine { edition: r"..\x".into(), ..new_machine(&setup, "x") }));
+    let missing = Share { folder: setup.root.join("missing"), read_only: false };
+    assert!(refused(NewMachine { share: Some(missing), ..new_machine(&setup, "x") }));
+    let remote = Share { folder: PathBuf::from(r"\\server\share"), read_only: false };
+    assert!(refused(NewMachine { share: Some(remote), ..new_machine(&setup, "x") }));
+    assert!(status(&setup.service).is_empty());
+}
+
+#[test]
+fn a_share_the_user_may_not_open_is_refused_on_a_change_but_an_unchanged_one_isnt_checked() {
+    let setup = setup("change-share", Pretend::default());
+    let service = &setup.service;
+    let folder = setup.root.join("shared");
+    fs::create_dir_all(&folder).unwrap();
+    let share = Some(Share { folder, read_only: false });
+    let machine = NewMachine { share: share.clone(), ..new_machine(&setup, "win") };
+    ask(service, Request::Create { machine });
+    let asked_by_another = |hardware: MachineSettings| {
+        let (answers, received) = channel();
+        let request = Request::Change { name: "win".into(), settings: hardware };
+        service.answer(request, &mut Window { answers, readable: false, gone: false });
+        received.try_iter().collect::<Vec<_>>()
+    };
+    let other = Some(Share { folder: setup.root.clone(), read_only: false });
+    assert!(matches!(
+        asked_by_another(MachineSettings { share: other, ..hardware(8192, Card::Default) }).as_slice(),
+        [Answer::Refused { .. }]
+    ));
+    let kept = MachineSettings { share: share.clone(), network: false, ..hardware(16384, Card::Default) };
+    assert_eq!(asked_by_another(kept), [Answer::Ok]);
+    assert_eq!((status(service)[0].memory_mb, status(service)[0].network), (16384, false));
+    assert_eq!(asked_by_another(hardware(16384, Card::Default)), [Answer::Ok], "a share can always go");
+    assert_eq!(status(service)[0].share, None);
+}
+
+#[test]
+fn a_stopped_machines_disk_only_grows() {
+    let setup = setup("grow", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    let grow = |size_gb| ask(service, Request::Grow { name: "win".into(), size_gb });
+    assert!(matches!(grow(64).as_slice(), [Answer::Refused { .. }]), "smaller than its 128 GB");
+    assert!(matches!(grow(u64::MAX).as_slice(), [Answer::Refused { .. }]));
+    assert_eq!(grow(128), [Answer::Ok]);
+    assert!(service.work.grown.lock().unwrap().is_empty(), "the same size asks nothing of the disk");
+    assert_eq!(grow(256), [Answer::Ok]);
+    assert_eq!(*service.work.grown.lock().unwrap(), [256]);
+    assert_eq!(status(service)[0].size_gb, Some(256));
+    assert_eq!(service.machines().store.load()[0].1.size_gb, Some(256));
+
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    assert!(matches!(grow(512).as_slice(), [Answer::Refused { .. }]), "not while it runs");
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn a_machine_from_before_its_size_was_kept_has_it_read_from_its_disk() {
+    let setup = setup("old-size", Pretend::default());
+    let store = setup.service.machines().store.clone();
+    store.make("old").unwrap();
+    store.save("old", &Settings::basic(8192, 1, Card::Default)).unwrap();
+    let again = Service::new(store, Pretend::default());
+    assert_eq!(again.machines().lock()["old"].settings.size_gb, Some(200));
+    assert_eq!(again.machines().store.load()[0].1.size_gb, Some(200));
+}
+
+#[test]
+fn a_share_is_checked_again_as_whoever_starts_the_machine() {
+    let setup = setup("start-share", Pretend::default());
+    let service = &setup.service;
+    let folder = setup.root.join("shared");
+    fs::create_dir_all(&folder).unwrap();
+    let machine =
+        NewMachine { share: Some(Share { folder, read_only: false }), ..new_machine(&setup, "win") };
+    ask(service, Request::Create { machine });
+    let (answers, received) = channel();
+    service
+        .answer(Request::Start { name: "win".into() }, &mut Window { answers, readable: false, gone: false });
+    assert_eq!(received.try_iter().collect::<Vec<_>>(), [Answer::Ok], "it still starts");
+    wait_for(service, "win", State::Running);
+    assert_eq!(service.work.booted.lock().unwrap()[0].share, None, "but shares nothing");
+    let (history, _) = service.machines().watch("win").unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|event| matches!(event, Event::Problem(words) if words.contains("shares no folder")))
+    );
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn turning_the_network_off_forgets_the_guests_address() {
+    let setup = setup("network-off", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+    assert!(status(service)[0].address.is_some());
+    let off = MachineSettings { network: false, ..hardware(8192, Card::Default) };
+    assert_eq!(ask(service, Request::Change { name: "win".into(), settings: off }), [Answer::Ok]);
+    assert_eq!(status(service)[0].address, None);
+}
+
+/// A made machine, set up as its first boot would, with nothing going on.
+fn set_up(setup: &Setup, name: &str) {
+    ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
+    let disk = setup.service.machines().store.disk(name);
+    Record { installed: true, ..Record::default() }.save(&disk).unwrap();
+}
+
+/// Waits for the service to finish what it's doing to a machine in the background.
+fn wait_idle(service: &Arc<Service<Pretend>>, name: &str) {
+    for _ in 0..400 {
+        if service.machines().lock()[name].idle() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!("{name} stayed busy");
+}
+
+fn shown_snapshots(service: &Arc<Service<Pretend>>) -> Vec<SnapshotInfo> {
+    status(service)[0].snapshots.clone()
+}
+
+#[test]
+fn a_set_up_machine_has_snapshots_taken_gone_back_to_and_deleted() {
+    let setup = setup("snapshots", Pretend::default());
+    let service = &setup.service;
+    set_up(&setup, "win");
+    let snapshot = |label: &str| ask(service, Request::Snapshot { name: "win".into(), label: label.into() });
+
+    assert_eq!(snapshot(" clean "), [Answer::Ok]);
+    wait_idle(service, "win");
+    let shown = shown_snapshots(service);
+    assert_eq!((shown.len(), shown[0].label.as_str(), shown[0].current), (1, "clean", true));
+    assert!(
+        matches!(
+            ask(service, Request::Grow { name: "win".into(), size_gb: 512 }).as_slice(),
+            [Answer::Refused { .. }]
+        ),
+        "a disk with snapshots doesn't grow"
+    );
+
+    snapshot("later");
+    wait_idle(service, "win");
+    let first = shown_snapshots(service)[0].id;
+    assert_eq!(ask(service, Request::Revert { name: "win".into(), id: first }), [Answer::Ok]);
+    wait_idle(service, "win");
+    let shown = shown_snapshots(service);
+    assert_eq!(shown.iter().map(|s| s.current).collect::<Vec<_>>(), [true, false]);
+
+    for snapshot in shown {
+        assert_eq!(
+            ask(service, Request::DeleteSnapshot { name: "win".into(), id: snapshot.id }),
+            [Answer::Ok]
+        );
+        wait_idle(service, "win");
+    }
+    assert!(shown_snapshots(service).is_empty());
+    assert_eq!(
+        ask(service, Request::Grow { name: "win".into(), size_gb: 512 }),
+        [Answer::Ok],
+        "it grows again"
+    );
+    let (history, _) = service.machines().watch("win").unwrap();
+    assert!(history.contains(&Event::Note("Took the snapshot clean.".into())));
+}
+
+#[test]
+fn snapshots_are_kept_to_the_services_rules() {
+    let setup = setup("snapshot-rules", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "new") });
+    let refused = |request| matches!(ask(service, request).as_slice(), [Answer::Refused { .. }]);
+    assert!(refused(Request::Snapshot { name: "new".into(), label: "x".into() }), "not before it's set up");
+
+    set_up(&setup, "win");
+    assert!(refused(Request::Snapshot { name: "win".into(), label: "  ".into() }));
+    assert!(refused(Request::Snapshot { name: "win".into(), label: "a\nb".into() }));
+    assert!(refused(Request::Snapshot { name: "win".into(), label: "x".repeat(61) }));
+    assert!(refused(Request::Revert { name: "win".into(), id: 7 }), "only an ID it has");
+    assert!(refused(Request::DeleteSnapshot { name: "win".into(), id: 0 }));
+
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    assert!(refused(Request::Snapshot { name: "win".into(), label: "x".into() }), "not while it runs");
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn a_busy_machine_says_so_and_does_nothing_else_meanwhile() {
+    let setup = setup("busy", Pretend::default());
+    let service = &setup.service;
+    set_up(&setup, "win");
+    service.machines().lock().get_mut("win").unwrap().busy = Some("Deleting the snapshot x".into());
+    assert_eq!(status(service)[0].working.as_deref(), Some("Deleting the snapshot x"));
+    for request in [
+        Request::Start { name: "win".into() },
+        Request::Delete { name: "win".into() },
+        Request::Snapshot { name: "win".into(), label: "y".into() },
+    ] {
+        match ask(service, request).as_slice() {
+            [Answer::Refused { reason }] => assert!(reason.contains("deleting the snapshot x"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
 }

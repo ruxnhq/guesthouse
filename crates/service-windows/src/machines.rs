@@ -24,18 +24,20 @@ pub struct Entry {
     pub state: State,
     /// Set while the machine runs: once asks its guest to shut down, again stops it at once.
     pub stop: Option<Arc<AtomicBool>>,
+    /// What's being done to the stopped machine, such as taking a snapshot, if anything.
+    pub busy: Option<String>,
     history: VecDeque<Event>,
     watchers: Vec<SyncSender<Event>>,
 }
 
 impl Entry {
     pub fn new(settings: Settings, state: State) -> Self {
-        Entry { settings, state, stop: None, history: VecDeque::new(), watchers: Vec::new() }
+        Entry { settings, state, stop: None, busy: None, history: VecDeque::new(), watchers: Vec::new() }
     }
 
     /// Whether nothing is being done with the machine, so it may be started or deleted.
     pub fn idle(&self) -> bool {
-        self.state == State::Stopped && self.stop.is_none()
+        self.state == State::Stopped && self.stop.is_none() && self.busy.is_none()
     }
 }
 
@@ -140,13 +142,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let store = Store::new(root);
         store.make("win").unwrap();
-        let settings = Settings {
-            memory_mb: 8192,
-            processors: 4,
-            card: Card::Default,
-            address: None,
-            nvapi_wrapper: true,
-        };
+        let settings = Settings::basic(8192, 4, Card::Default);
         store.save("win", &settings).unwrap();
         Machines::new(store)
     }

@@ -2,7 +2,7 @@
 //! only the system and administrators may open. A machine's folder holds its disks, the record and
 //! the account `prepare` leaves beside them, and its settings, which say what it was made with.
 
-use guesthouse_control::{Card, valid_name};
+use guesthouse_control::{Card, Share, valid_name};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,10 +24,38 @@ pub struct Settings {
     /// Whether an NVIDIA guest gets the NVAPI wrapper. Older machines have it, as it was on for all.
     #[serde(default = "on")]
     pub nvapi_wrapper: bool,
+    /// A machine from before these had a TPM, a network and no share.
+    #[serde(default = "on")]
+    pub tpm: bool,
+    #[serde(default = "on")]
+    pub network: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<Share>,
+    /// The largest its disk may grow to. A machine from before this has it read from its disk when
+    /// the service starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_gb: Option<u64>,
 }
 
 fn on() -> bool {
     true
+}
+
+impl Settings {
+    /// A machine's settings with only these, as tests and the oldest machines have them.
+    pub fn basic(memory_mb: u64, processors: u32, card: Card) -> Self {
+        Settings {
+            memory_mb,
+            processors,
+            card,
+            address: None,
+            nvapi_wrapper: true,
+            tpm: true,
+            network: true,
+            share: None,
+            size_gb: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +163,15 @@ mod tests {
     }
 
     fn settings() -> Settings {
-        Settings { memory_mb: 8192, processors: 4, card: Card::Default, address: None, nvapi_wrapper: true }
+        Settings::basic(8192, 4, Card::Default)
+    }
+
+    #[test]
+    fn a_machine_from_before_its_switches_has_a_tpm_and_a_network() {
+        let old: Settings =
+            serde_json::from_str(r#"{"memory_mb": 8192, "processors": 4, "card": {"card": "default"}}"#)
+                .unwrap();
+        assert_eq!(old, settings());
     }
 
     #[test]

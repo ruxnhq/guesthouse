@@ -24,6 +24,30 @@ pub fn index_of(listing: &str, edition: &str) -> Option<u32> {
     editions(listing).into_iter().find(|(_, name)| name.eq_ignore_ascii_case(edition)).map(|(index, _)| index)
 }
 
+/// The edition a machine is given when none is named.
+pub const DEFAULT_EDITION: &str = "Windows 11 Pro";
+
+/// The edition to apply, as index and name: the one named, whatever its case, or with no name Pro
+/// if the image has it and its first edition if not, so an image of Home alone still works.
+pub fn choose(listing: &str, edition: &str) -> Result<(u32, String), String> {
+    let editions = editions(listing);
+    let wanted = edition.trim();
+    let found = if wanted.is_empty() {
+        let pro = editions.iter().find(|(_, name)| name.eq_ignore_ascii_case(DEFAULT_EDITION));
+        pro.or(editions.first()).cloned()
+    } else {
+        editions.iter().find(|(_, name)| name.eq_ignore_ascii_case(wanted)).cloned()
+    };
+    found.ok_or_else(|| {
+        let names: Vec<&str> = editions.iter().map(|(_, name)| name.as_str()).collect();
+        if names.is_empty() {
+            "DISM listed no editions in the image.".to_owned()
+        } else {
+            format!("The image has no {wanted}. It has: {}. Pick one of them.", names.join(", "))
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +80,15 @@ The operation completed successfully.
     fn an_edition_is_found_by_name_whatever_its_case() {
         assert_eq!(index_of(LISTING, "windows 11 pro"), Some(6));
         assert_eq!(index_of(LISTING, "Windows 11 Education"), None);
+    }
+
+    #[test]
+    fn with_no_edition_named_pro_is_chosen_and_else_the_first() {
+        assert_eq!(choose(LISTING, "").unwrap(), (6, "Windows 11 Pro".to_owned()));
+        assert_eq!(choose(LISTING, " windows 11 home ").unwrap(), (1, "Windows 11 Home".to_owned()));
+        let home_only = LISTING.replace("Windows 11 Pro", "Windows 11 Home Single Language");
+        assert_eq!(choose(&home_only, "").unwrap(), (1, "Windows 11 Home".to_owned()));
+        let refused = choose(LISTING, "Windows 11 Education").unwrap_err();
+        assert!(refused.contains("Windows 11 Home, Windows 11 Pro"), "{refused}");
     }
 }

@@ -48,7 +48,7 @@ options:
   --no-jail                Reads the guest's serial port in this process, not in the jailed
                            relay beside it.
   --size-gb N              prepare: the disk's largest size (128).
-  --edition NAME           prepare: the edition in the image (Windows 11 Pro).
+  --edition NAME           prepare: the edition in the image (Pro if it has it, else its first).
   --user NAME              prepare: the guest's administrator (guesthouse). Its password goes in a file
                            beside the disk.";
 
@@ -99,7 +99,7 @@ impl Default for Options {
             for_minutes: None,
             until_report: false,
             size_gb: 128,
-            edition: "Windows 11 Pro".into(),
+            edition: String::new(),
             user: "guesthouse".into(),
         }
     }
@@ -141,6 +141,8 @@ impl Options {
             // port and the report.
             console_access: Vec::new(),
             nvapi_wrapper: self.nvapi_wrapper,
+            // Sharing a folder is the app's, through the service.
+            share: None,
         }
     }
 }

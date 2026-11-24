@@ -49,6 +49,8 @@ fn machine() -> ComputeSystem {
                 mouse: Some(Empty {}),
                 com_ports: [("0".to_owned(), ComPort { named_pipe: r"\\.\pipe\a-com1".into() })].into(),
                 network_adapters: BTreeMap::new(),
+                plan9: None,
+                virtual_smb: None,
             },
             guest_state: None,
             security_settings: Some(SecuritySettings {
@@ -160,4 +162,34 @@ fn the_network_documents_use_hcn_names() {
 #[test]
 fn a_query_for_basic_properties_is_empty() {
     assert_eq!(serde_json::to_value(PropertyQuery::basic()).unwrap(), json!({}));
+}
+
+#[test]
+fn shares_are_spelled_the_way_hcs_reads_them() {
+    let mut document = machine();
+    document.virtual_machine.devices.plan9 = Some(Plan9 {
+        shares: vec![Plan9Share {
+            name: "shared".into(),
+            access_name: "shared".into(),
+            path: r"D:\files".into(),
+            port: PLAN9_PORT,
+            flags: PLAN9_READ_ONLY | PLAN9_LINUX_METADATA,
+        }],
+    });
+    document.virtual_machine.devices.virtual_smb = Some(VirtualSmb {
+        shares: vec![VirtualSmbShare {
+            name: "shared".into(),
+            path: r"D:\files".into(),
+            options: VirtualSmbShareOptions::for_share(false),
+        }],
+    });
+    let devices = &serde_json::to_value(document).unwrap()["VirtualMachine"]["Devices"];
+    assert_eq!(
+        devices["Plan9"],
+        json!({"Shares": [{"Name": "shared", "AccessName": "shared", "Path": r"D:\files", "Port": 564, "Flags": 5}]})
+    );
+    assert_eq!(
+        devices["VirtualSmb"],
+        json!({"Shares": [{"Name": "shared", "Path": r"D:\files", "Options": {}}]})
+    );
 }

@@ -8,7 +8,7 @@ use crate::events::{Event, Sink};
 use crate::machine::{Guest, Machine};
 use crate::record::{Record, files_disk};
 use crate::screen;
-use crate::settings::{BootSettings, GpuChoice};
+use crate::settings::{BootSettings, GpuChoice, Share};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
 use guesthouse_hcs::gpu::{self, Card};
@@ -40,7 +40,54 @@ pub fn machine(
         network,
         guest: record.guest,
         console_access: settings.console_access.clone(),
+        share: settings.share.clone(),
     }
+}
+
+/// Where a Windows guest finds what the host shares: `report.ps1` reads this file, from the root of
+/// its Windows volume, and links the share onto the desktop. With no share it isn't there.
+pub const SHARE_FILE: &str = r"Guesthouse\share.txt";
+
+/// Lets a stopped machine's disk grow to `size_gb`. The guest's own last partition is grown into
+/// the room at its next start: `report.ps1` does it in Windows, and `gpu.sh` in Ubuntu.
+pub fn grow_disk(disk: &Path, size_gb: u64) -> Result<(), String> {
+    need_elevation()?;
+    if crate::snapshots::made_on_another(disk)? {
+        return Err("A disk with snapshots can't grow, as it's made on them. Delete them first.".into());
+    }
+    let bytes = size_gb * prepare::BYTES_PER_GB;
+    let opened = VirtualDisk::open(disk, Kind::Vhdx).map_err(|error| error.to_string())?;
+    let now = opened.size().map_err(|error| error.to_string())?;
+    if bytes < now {
+        return Err(format!(
+            "The disk is {} GB already, and a disk only grows: a smaller one would cut into the guest's partitions.",
+            now / prepare::BYTES_PER_GB
+        ));
+    }
+    if bytes == now {
+        return Ok(());
+    }
+    opened.grow(bytes).map_err(|error| error.to_string())
+}
+
+/// Snapshots' disks, through virtdisk.dll.
+pub struct RealDisks;
+
+impl crate::snapshots::Disks for RealDisks {
+    fn differencing(&self, child: &Path, parent: &Path) -> Result<(), String> {
+        guesthouse_hcs::disk::create_differencing_vhdx(child, parent).map_err(|error| error.to_string())
+    }
+
+    fn merge_into_parent(&self, child: &Path) -> Result<(), String> {
+        let opened = VirtualDisk::open(child, Kind::Vhdx).map_err(|error| error.to_string())?;
+        opened.merge_into_parent().map_err(|error| error.to_string())
+    }
+}
+
+/// The largest a machine's disk may grow to now, in whole GB.
+pub fn disk_size_gb(disk: &Path) -> Result<u64, String> {
+    let opened = VirtualDisk::open(disk, Kind::Vhdx).map_err(|error| error.to_string())?;
+    Ok(opened.size().map_err(|error| error.to_string())? / prepare::BYTES_PER_GB)
 }
 
 /// A Linux guest's files disk, and its installer until it has installed.
@@ -120,12 +167,11 @@ fn refresh_windows_disk(
     disk: &Path,
     card: Option<&Card>,
     nvapi_wrapper: bool,
+    share: Option<&Share>,
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let setup = screen_setup();
-    if card.is_none() && setup.is_none() {
-        return Ok(());
-    }
+    // Attached at every boot, even with nothing else to give, as the share's file may have to go.
     let mut attached = VirtualDisk::open(disk, Kind::Vhdx).map_err(|error| error.to_string())?;
     attached.attach(false).map_err(|error| error.to_string())?;
     let windows = volumes(&attached)?
@@ -145,6 +191,18 @@ fn refresh_windows_disk(
     let report = windows.root.join(crate::guest::REPORT_PATH);
     std::fs::write(&report, crate::guest::REPORT)
         .map_err(|error| format!("{}: {error}", report.display()))?;
+    let share_file = windows.root.join(SHARE_FILE);
+    match share {
+        Some(_) => {
+            let path =
+                format!(r"{}\{}", guesthouse_hcs::schema::VIRTUAL_SMB_ROOT, crate::settings::SHARE_NAME);
+            std::fs::write(&share_file, path + "\r\n")
+                .map_err(|error| format!("{}: {error}", share_file.display()))?;
+        }
+        None => {
+            let _ = std::fs::remove_file(&share_file);
+        }
+    }
     match setup {
         Some(setup) => give_screen(disk, &windows.root, &setup, card, sink),
         None => Ok(()),

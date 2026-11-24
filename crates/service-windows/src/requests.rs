@@ -6,12 +6,14 @@
 use crate::machines::{Entry, Machines};
 use crate::store::{Settings, Store, usable_name};
 use guesthouse_control::{
-    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, Request, State, System,
+    Answer, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NewMachine, Request, Share,
+    SnapshotInfo, State, System, valid_edition, valid_user,
 };
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::machine::Guest;
 use guesthouse_host_windows::record::Record;
-use guesthouse_host_windows::settings::{BootSettings, GpuChoice, PrepareSettings};
+use guesthouse_host_windows::settings::{self as host_settings, BootSettings, GpuChoice, PrepareSettings};
+use guesthouse_host_windows::snapshots::{self, Disks};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -40,6 +42,12 @@ pub trait Work: Send + Sync + 'static {
     fn end(&self, id: &str);
     /// Who may open a machine's console: the user signed in at the console, and administrators.
     fn console_access(&self) -> Vec<String>;
+    /// Lets a stopped machine's disk grow to `size_gb`, and never shrinks it.
+    fn grow(&self, disk: &Path, size_gb: u64) -> Result<(), String>;
+    /// The largest the disk may grow to now, in GB, if it can be read.
+    fn disk_size_gb(&self, disk: &Path) -> Option<u64>;
+    /// Snapshots' disks.
+    fn disks(&self) -> &dyn Disks;
 }
 
 /// The app window a request came from.
@@ -50,7 +58,16 @@ pub trait Connection {
     /// Whether the user asking may read the file at `path`, as the service, which may read any file,
     /// opens only what the user could.
     fn may_read(&mut self, path: &Path) -> Result<(), String>;
+    /// Whether the user asking may share the folder at `path`: read it, write it unless
+    /// `read_only`, and change who may open it. Sharing it lets the machine's own account open it,
+    /// which the service does as the system, so only a folder the user could do that to is shared.
+    /// It must be the folder itself, by its own path, and not a link to another. What comes back
+    /// holds the folder open, so nothing can put another in its place while it's held.
+    fn may_share(&mut self, path: &Path, read_only: bool) -> Result<Held, String>;
 }
+
+/// The folder a check holds open, for as long as it's kept.
+pub type Held = Box<dyn std::any::Any + Send>;
 
 /// HCS's ID for a machine, which also names its pipes. `boot` stops any machine with its ID that's
 /// still there, so it's never another program's.
@@ -72,6 +89,19 @@ impl<W: Work> Service<W> {
         let names: Vec<String> = machines.lock().keys().cloned().collect();
         for name in names {
             work.end(&vm_id(&name));
+            // A snapshot a crash cut short is finished or undone before anything uses the disk.
+            if let Err(error) = snapshots::repair(&machines.store.disk(&name)) {
+                eprintln!("{name}'s snapshots couldn't be put right: {error}");
+            }
+            // A machine from before its disk's size was kept has it read once.
+            let mut entries = machines.lock();
+            let entry = entries.get_mut(&name).expect("listed just now");
+            if entry.settings.size_gb.is_none()
+                && let Some(size_gb) = work.disk_size_gb(&machines.store.disk(&name))
+            {
+                entry.settings.size_gb = Some(size_gb);
+                let _ = machines.store.save(&name, &entry.settings);
+            }
         }
         Arc::new(Service {
             machines,
@@ -91,14 +121,18 @@ impl<W: Work> Service<W> {
         let answer = match request {
             Request::Status => self.status(),
             Request::Create { machine } => return self.create(machine, connection),
-            Request::Start { name } => self.start(&name),
+            Request::Start { name } => self.start(&name, connection),
             Request::Stop { name } => self.stop(&name),
             Request::End { name } => self.end(&name),
             Request::Screen { name } => self.screen(&name),
             Request::Delete { name } => self.delete(&name),
+            Request::Change { name, settings } => self.change(&name, settings, connection),
+            Request::Grow { name, size_gb } => self.grow(&name, size_gb),
+            Request::Snapshot { name, label } => self.take_snapshot(&name, label),
+            Request::Revert { name, id } => self.revert(&name, id),
+            Request::DeleteSnapshot { name, id } => self.delete_snapshot(&name, id),
             Request::Account { name } => self.account(&name),
             Request::Watch { name } => return self.watch(&name, connection),
-            Request::Change { name, settings } => self.change(&name, settings),
         };
         let _ = connection.send(&answer);
     }
@@ -165,6 +199,21 @@ impl<W: Work> Service<W> {
                     },
                     chosen_card: entry.settings.card.clone(),
                     nvapi_wrapper: entry.settings.nvapi_wrapper,
+                    tpm: entry.settings.tpm,
+                    network: entry.settings.network,
+                    share: entry.settings.share.clone(),
+                    size_gb: entry.settings.size_gb,
+                    snapshots: snapshots::list(&self.machines.store.disk(name))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|snapshot| SnapshotInfo {
+                            id: snapshot.id,
+                            label: snapshot.label,
+                            taken: snapshot.taken,
+                            current: snapshot.current,
+                        })
+                        .collect(),
+                    working: entry.busy.clone(),
                     address: entry.settings.address.clone(),
                 }
             })
@@ -180,40 +229,6 @@ impl<W: Work> Service<W> {
         }
         (!(1..=most).contains(&processors))
             .then(|| format!("A machine has 1 to {most} processors, as many as this PC has."))
-    }
-
-    /// Changes what a machine is given at each boot, while it isn't running, and keeps it.
-    fn change(&self, asked: &str, wanted: MachineSettings) -> Answer {
-        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
-        if let Some(reason) = Self::size_refusal(wanted.memory_mb, wanted.processors) {
-            return Answer::Refused { reason };
-        }
-        if let Card::Named(card) = &wanted.card
-            && !self.cards().iter().any(|known| &known.name == card)
-        {
-            return Answer::Refused { reason: format!("This PC has no card called {card} to share.") };
-        }
-        let mut entries = self.machines.lock();
-        let entry = entries.get_mut(&name).expect("found just now");
-        if !entry.idle() {
-            return Answer::Refused {
-                reason: format!("{name} is {}. Its settings change while it's off.", words(entry.state)),
-            };
-        }
-        let settings = Settings {
-            memory_mb: wanted.memory_mb,
-            processors: wanted.processors,
-            card: wanted.card,
-            nvapi_wrapper: wanted.nvapi_wrapper,
-            ..entry.settings.clone()
-        };
-        match self.machines.store.save(&name, &settings) {
-            Ok(()) => {
-                entry.settings = settings;
-                Answer::Ok
-            }
-            Err(reason) => Answer::Refused { reason },
-        }
     }
 
     /// Why `machine` can't be made, if it can't.
@@ -232,6 +247,23 @@ impl<W: Work> Service<W> {
         }
         if !(SIZE_GB.0..=SIZE_GB.1).contains(&machine.size_gb) {
             return Some(format!("A machine's disk is {} to {} GB.", SIZE_GB.0, SIZE_GB.1));
+        }
+        if !machine.user.is_empty() && !valid_user(&machine.user) {
+            return Some(
+                "A guest's user is up to 20 lowercase letters, digits, - and _, starting with a letter, and \
+                 not one of Windows' own accounts."
+                    .into(),
+            );
+        }
+        if !valid_edition(&machine.edition) {
+            return Some(
+                "An edition is named with letters, digits and spaces, as Windows names them.".into(),
+            );
+        }
+        if let Some(share) = &machine.share
+            && let Err(reason) = share_refusal(share, connection)
+        {
+            return Some(reason);
         }
         let image = &machine.image;
         if !image.is_absolute() || image.to_string_lossy().starts_with(r"\\") {
@@ -270,6 +302,10 @@ impl<W: Work> Service<W> {
             card: machine.card.clone(),
             address: None,
             nvapi_wrapper: true,
+            tpm: machine.tpm,
+            network: machine.network,
+            share: machine.share.clone(),
+            size_gb: Some(machine.size_gb),
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Preparing));
         let (_, events) = self.machines.watch(&name).expect("the machine was just added");
@@ -306,9 +342,12 @@ impl<W: Work> Service<W> {
         let sink = self.machines.sink(&name);
         let store = &self.machines.store;
         let disk = store.disk(&name);
+        let user = if machine.user.is_empty() { DEFAULT_USER.to_owned() } else { machine.user.clone() };
         let settings = PrepareSettings {
             size_gb: machine.size_gb,
             gpu: gpu_choice(&machine.card),
+            user,
+            edition: machine.edition.trim().to_owned(),
             ..PrepareSettings::new(disk.clone(), machine.image.clone())
         };
         let made = self
@@ -334,14 +373,14 @@ impl<W: Work> Service<W> {
         made
     }
 
-    fn start(self: &Arc<Self>, asked: &str) -> Answer {
+    fn start(self: &Arc<Self>, asked: &str, connection: &mut dyn Connection) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
         let stop = Arc::new(AtomicBool::new(false));
         {
             let mut entries = self.machines.lock();
             let entry = entries.get_mut(&name).expect("found just now");
             if !entry.idle() {
-                return Answer::Refused { reason: format!("{name} is {}.", words(entry.state)) };
+                return Answer::Refused { reason: format!("{name} is {}.", busy_words(entry)) };
             }
             entry.stop = Some(Arc::clone(&stop));
             entry.state = State::Starting;
@@ -350,12 +389,29 @@ impl<W: Work> Service<W> {
         let disk = store.disk(&name);
         drop_installer(store, &name, &disk);
         let entry_settings = self.machines.lock()[&name].settings.clone();
+        // The share is checked again at every start, as whoever is starting the machine, and held
+        // open while it runs: what was checked when it was chosen could have been put in a link's
+        // place since, and the boot gives the folder to the machine as the system.
+        let mut held = None;
+        let share = entry_settings.share.as_ref().and_then(|share| match share_refusal(share, connection) {
+            Ok(folder) => {
+                held = Some(folder);
+                Some(host_settings::Share { folder: share.folder.clone(), read_only: share.read_only })
+            }
+            Err(reason) => {
+                self.machines.tell(&name, Event::Problem(format!("This boot shares no folder: {reason}")));
+                None
+            }
+        });
         let settings = BootSettings {
             memory_mb: entry_settings.memory_mb,
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
             console_access: self.work.console_access(),
             nvapi_wrapper: entry_settings.nvapi_wrapper,
+            tpm: entry_settings.tpm,
+            network: entry_settings.network,
+            share,
             ..BootSettings::new(&vm_id(&name), disk)
         };
         let service = Arc::clone(self);
@@ -364,6 +420,7 @@ impl<W: Work> Service<W> {
             if let Err(error) = service.work.boot(&settings, Arc::clone(&sink), stop) {
                 sink.problem(error);
             }
+            drop(held);
             let mut entries = service.machines.lock();
             if let Some(entry) = entries.get_mut(&name) {
                 entry.stop = None;
@@ -432,7 +489,7 @@ impl<W: Work> Service<W> {
         let mut entries = self.machines.lock();
         let entry = &entries[&name];
         if !entry.idle() {
-            return Answer::Refused { reason: format!("{name} is {}. Stop it first.", words(entry.state)) };
+            return Answer::Refused { reason: format!("{name} is {}. Stop it first.", busy_words(entry)) };
         }
         match self.machines.store.remove(&name) {
             Ok(()) => {
@@ -441,6 +498,260 @@ impl<W: Work> Service<W> {
             }
             Err(reason) => Answer::Refused { reason },
         }
+    }
+
+    /// Gives a stopped machine what `wanted` says from its next start. A Windows guest's disk
+    /// isn't touched: each boot puts the driver of the card it's given on it, and picks the screen's
+    /// encoder for that card. An Ubuntu guest's files disk was made only as large as its card's
+    /// driver needed, so its card can't change to another.
+    fn change(&self, asked: &str, wanted: MachineSettings, connection: &mut dyn Connection) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(reason) = Self::size_refusal(wanted.memory_mb, wanted.processors) {
+            return Answer::Refused { reason };
+        }
+        let (before, shared_before) = {
+            let entries = self.machines.lock();
+            (entries[&name].settings.card.clone(), entries[&name].settings.share.clone())
+        };
+        // A share is checked again only when it changes: the user who shared it may not be the
+        // one asking now, and needn't be for its memory to change.
+        if wanted.share != shared_before
+            && let Some(share) = &wanted.share
+            && let Err(reason) = share_refusal(share, connection)
+        {
+            return Answer::Refused { reason };
+        }
+        if wanted.card != before {
+            // Asked before the machines are held, as the cards can take a moment to read.
+            let cards = self.cards();
+            if let Card::Named(card) = &wanted.card
+                && !cards.iter().any(|known| known.name == *card)
+            {
+                return Answer::Refused { reason: format!("This PC has no card called {card} to share.") };
+            }
+            let record = Record::load(&self.machines.store.disk(&name)).unwrap_or_default();
+            if record.guest == Guest::Linux && resolved(&wanted.card, &cards) != resolved(&before, &cards) {
+                return Answer::Refused {
+                    reason: format!(
+                        "{name}'s files disk was made for the driver of the card it had, so an Ubuntu \
+                         guest's card can't change to another yet. Its memory and processors can."
+                    ),
+                };
+            }
+        }
+        let saved = {
+            let mut entries = self.machines.lock();
+            let entry = entries.get_mut(&name).expect("found just now");
+            if !entry.idle() {
+                return Answer::Refused {
+                    reason: format!("{name} is {}. Its settings change while it's off.", busy_words(entry)),
+                };
+            }
+            let changed = Settings {
+                memory_mb: wanted.memory_mb,
+                processors: wanted.processors,
+                card: wanted.card,
+                nvapi_wrapper: wanted.nvapi_wrapper,
+                tpm: wanted.tpm,
+                network: wanted.network,
+                share: wanted.share,
+                // With no network, the guest's last address leads nowhere.
+                address: entry.settings.address.clone().filter(|_| wanted.network),
+                ..entry.settings.clone()
+            };
+            if changed == entry.settings {
+                return Answer::Ok;
+            }
+            // Kept on disk first, so what the service says is what the next start of the service
+            // reads.
+            if let Err(error) = self.machines.store.save(&name, &changed) {
+                return Answer::Refused { reason: format!("The change couldn't be kept: {error}") };
+            }
+            entry.settings = changed.clone();
+            changed
+        };
+        let card = match &saved.card {
+            Card::Default => "the default card".to_owned(),
+            Card::Named(card) => card.clone(),
+            Card::None => "no card".to_owned(),
+        };
+        let mut words = format!(
+            "Changed: from its next start it has {} MB of memory, {} processors and {card}",
+            saved.memory_mb, saved.processors
+        );
+        if !saved.nvapi_wrapper {
+            words.push_str(", NVIDIA's own NVAPI in place of the wrapper DLSS needs");
+        }
+        if !saved.tpm {
+            words.push_str(", no TPM");
+        }
+        if !saved.network {
+            words.push_str(", no network");
+        }
+        match &saved.share {
+            Some(share) => {
+                let how = if share.read_only { "read-only" } else { "to read and write" };
+                words.push_str(&format!(", and {} shared {how}.", share.folder.display()));
+            }
+            None => words.push_str(", and no shared folder."),
+        }
+        self.machines.tell(&name, Event::Note(words));
+        Answer::Ok
+    }
+
+    /// Lets a stopped machine's disk grow. The machines are held while it does, so nothing starts
+    /// the machine meanwhile; growing a disk that grows as it's written only changes its header.
+    fn grow(&self, asked: &str, size_gb: u64) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if !(SIZE_GB.0..=SIZE_GB.1).contains(&size_gb) {
+            return Answer::Refused {
+                reason: format!("A machine's disk is {} to {} GB.", SIZE_GB.0, SIZE_GB.1),
+            };
+        }
+        let mut entries = self.machines.lock();
+        let entry = entries.get_mut(&name).expect("found just now");
+        if !entry.idle() {
+            return Answer::Refused { reason: format!("{name} is {}. Stop it first.", busy_words(entry)) };
+        }
+        // Deleted snapshots count too: the disk is made on them until they've gone.
+        if snapshots::made_on_another(&self.machines.store.disk(&name)).unwrap_or(true) {
+            return Answer::Refused {
+                reason: format!(
+                    "{name}'s disk is made on its snapshots, so it can't grow. Delete them first."
+                ),
+            };
+        }
+        match entry.settings.size_gb {
+            Some(now) if size_gb < now => {
+                return Answer::Refused {
+                    reason: format!(
+                        "{name}'s disk is {now} GB, and a disk only grows: a smaller one would cut into the guest's partitions."
+                    ),
+                };
+            }
+            Some(now) if size_gb == now => return Answer::Ok,
+            _ => {}
+        }
+        if let Err(reason) = self.work.grow(&self.machines.store.disk(&name), size_gb) {
+            return Answer::Refused { reason };
+        }
+        entry.settings.size_gb = Some(size_gb);
+        let saved = self.machines.store.save(&name, &entry.settings);
+        drop(entries);
+        if let Err(error) = saved {
+            self.machines.tell(
+                &name,
+                Event::Problem(format!("The disk grew, but its size couldn't be kept: {error}")),
+            );
+        }
+        self.machines.tell(
+            &name,
+            Event::Note(format!(
+                "Its disk may grow to {size_gb} GB now. The guest's own partition takes the room at its next start."
+            )),
+        );
+        Answer::Ok
+    }
+
+    fn take_snapshot(self: &Arc<Self>, asked: &str, label: String) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        let label = label.trim().to_owned();
+        if label.is_empty()
+            || label.chars().count() > snapshots::LONGEST_LABEL
+            || label.chars().any(char::is_control)
+        {
+            return Answer::Refused {
+                reason: format!(
+                    "A snapshot's label is 1 to {} characters on one line.",
+                    snapshots::LONGEST_LABEL
+                ),
+            };
+        }
+        let disk = self.machines.store.disk(&name);
+        if !Record::load(&disk).unwrap_or_default().installed {
+            return Answer::Refused {
+                reason: format!(
+                    "{name} isn't set up yet. A machine has snapshots once its first boot has set it up."
+                ),
+            };
+        }
+        if snapshots::list(&disk).map_or(0, |list| list.len()) >= snapshots::MOST {
+            return Answer::Refused {
+                reason: format!(
+                    "{name} has {} snapshots, the most a machine has. Delete one first.",
+                    snapshots::MOST
+                ),
+            };
+        }
+        let doing = format!("Taking the snapshot {label}");
+        self.in_background(&name, doing, move |service, disk| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_secs());
+            snapshots::take(disk, &label, now, service.work.disks())
+                .map(|_| format!("Took the snapshot {label}."))
+        })
+    }
+
+    fn revert(self: &Arc<Self>, asked: &str, id: u64) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        let Some(label) = self.snapshot_label(&name, id) else { return no_snapshot(&name, id) };
+        self.in_background(&name, format!("Going back to the snapshot {label}"), move |service, disk| {
+            snapshots::revert(disk, id, service.work.disks())
+                .map(|()| format!("Went back to the snapshot {label}. What the machine held since is gone."))
+        })
+    }
+
+    fn delete_snapshot(self: &Arc<Self>, asked: &str, id: u64) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        let Some(label) = self.snapshot_label(&name, id) else { return no_snapshot(&name, id) };
+        self.in_background(&name, format!("Deleting the snapshot {label}"), move |service, disk| {
+            snapshots::delete(disk, id, service.work.disks())
+                .map(|()| format!("Deleted the snapshot {label}."))
+        })
+    }
+
+    /// The label of one of a machine's snapshots. Only an ID the index has is ever used, as it ends
+    /// up in a path the service writes.
+    fn snapshot_label(&self, name: &str, id: u64) -> Option<String> {
+        let list = snapshots::list(&self.machines.store.disk(name)).ok()?;
+        list.into_iter().find(|snapshot| snapshot.id == id).map(|snapshot| snapshot.label)
+    }
+
+    /// Does `work` to a stopped machine on a thread of its own, as merging a disk can take minutes,
+    /// with the machine marked busy so nothing else is done to it meanwhile. The answer is that it
+    /// has begun; how it ended goes to the machine's log.
+    fn in_background(
+        self: &Arc<Self>,
+        name: &str,
+        doing: String,
+        work: impl FnOnce(&Service<W>, &Path) -> Result<String, String> + Send + 'static,
+    ) -> Answer {
+        {
+            let mut entries = self.machines.lock();
+            let entry = entries.get_mut(name).expect("found by the caller");
+            if !entry.idle() {
+                return Answer::Refused {
+                    reason: format!("{name} is {}. Stop it first.", busy_words(entry)),
+                };
+            }
+            entry.busy = Some(doing.clone());
+        }
+        self.machines.tell(name, Event::Note(format!("{doing}.")));
+        let service = Arc::clone(self);
+        let name = name.to_owned();
+        thread::spawn(move || {
+            let disk = service.machines.store.disk(&name);
+            let ended = work(&service, &disk);
+            if let Some(entry) = service.machines.lock().get_mut(&name) {
+                entry.busy = None;
+            }
+            match ended {
+                Ok(words) => service.machines.tell(&name, Event::Note(words)),
+                Err(error) => service.machines.tell(&name, Event::Problem(error)),
+            }
+        });
+        Answer::Ok
     }
 
     fn account(&self, asked: &str) -> Answer {
@@ -483,6 +794,42 @@ fn gpu_choice(card: &Card) -> GpuChoice {
         Card::Default => GpuChoice::Default,
         Card::Named(name) => GpuChoice::Matching(name.clone()),
         Card::None => GpuChoice::None,
+    }
+}
+
+/// Why `share` can't be shared, if it can't: a folder on this PC's own drives, which the user asking
+/// may read, write unless it's read-only, and give others into.
+fn share_refusal(share: &Share, connection: &mut dyn Connection) -> Result<Held, String> {
+    let folder = &share.folder;
+    if !folder.is_absolute() || folder.to_string_lossy().starts_with(r"\\") {
+        return Err(format!("{} isn't a folder on this PC's own drives.", folder.display()));
+    }
+    // Asked as the user first, as for an image.
+    let held = connection.may_share(folder, share.read_only)?;
+    if !folder.is_dir() {
+        return Err(format!("{} isn't a folder.", folder.display()));
+    }
+    Ok(held)
+}
+
+/// The name of the card `card` means on this PC now, if any.
+fn resolved<'a>(card: &'a Card, cards: &'a [CardInfo]) -> Option<&'a str> {
+    match card {
+        Card::Default => cards.iter().find(|known| known.default).map(|known| known.name.as_str()),
+        Card::Named(name) => Some(name),
+        Card::None => None,
+    }
+}
+
+fn no_snapshot(name: &str, id: u64) -> Answer {
+    Answer::Refused { reason: format!("{name} has no snapshot {id}.") }
+}
+
+/// Where a machine stands, in words, with what's being done to it if it's busy.
+fn busy_words(entry: &Entry) -> String {
+    match &entry.busy {
+        Some(doing) => doing.to_lowercase(),
+        None => words(entry.state).to_owned(),
     }
 }
 

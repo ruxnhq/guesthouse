@@ -71,17 +71,14 @@ pub fn prepare(settings: &PrepareSettings, sink: &dyn Sink) -> Result<(), String
             .arg("/Get-WimInfo")
             .raw_arg(format!("/WimFile:\"{}\"", wim.display())),
     )?;
-    let index = wim_info::index_of(&listing, &settings.edition).ok_or_else(|| {
-        let names: Vec<String> = wim_info::editions(&listing).into_iter().map(|(_, name)| name).collect();
-        format!("The image has no {}. It has: {}. Pick one of them.", settings.edition, names.join(", "))
-    })?;
+    let (index, edition) = wim_info::choose(&listing, &settings.edition)?;
 
     sink.note(format!("Making {} ({} GB at most).", disk.display(), settings.size_gb));
     disk::create_vhdx(&disk, settings.size_gb * BYTES_PER_GB).map_err(|error| error.to_string())?;
     let made = fill(
         &disk,
         &wim,
-        index,
+        (index, &edition),
         settings,
         card.as_ref().and_then(|card| card.driver_folder.as_deref()),
         sink,
@@ -109,7 +106,7 @@ fn attach_iso(image: &Path) -> Result<(VirtualDisk, PathBuf), String> {
 fn fill(
     disk_path: &Path,
     wim: &Path,
-    index: u32,
+    (index, edition): (u32, &str),
     settings: &PrepareSettings,
     driver: Option<&Path>,
     sink: &dyn Sink,
@@ -131,7 +128,7 @@ fn fill(
     )?;
     let windows_root = PathBuf::from(format!("{windows}:\\"));
 
-    sink.note(format!("Applying {} from {}. This takes a while.", settings.edition, wim.display()));
+    sink.note(format!("Applying {edition} from {}. This takes a while.", wim.display()));
     run(Command::new(system_program("dism.exe"))
         .arg("/Apply-Image")
         .raw_arg(format!("/ImageFile:\"{}\"", wim.display()))

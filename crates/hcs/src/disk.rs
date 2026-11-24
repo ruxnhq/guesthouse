@@ -16,11 +16,15 @@ use windows_sys::Win32::Storage::Vhd::{
     ATTACH_VIRTUAL_DISK_FLAG_READ_ONLY, ATTACH_VIRTUAL_DISK_PARAMETERS, ATTACH_VIRTUAL_DISK_PARAMETERS_0,
     ATTACH_VIRTUAL_DISK_PARAMETERS_0_0, ATTACH_VIRTUAL_DISK_VERSION_1, AttachVirtualDisk,
     CREATE_VIRTUAL_DISK_FLAG_NONE, CREATE_VIRTUAL_DISK_PARAMETERS, CREATE_VIRTUAL_DISK_VERSION_2,
-    CreateVirtualDisk, DETACH_VIRTUAL_DISK_FLAG_NONE, DetachVirtualDisk, GetVirtualDiskPhysicalPath,
-    OPEN_VIRTUAL_DISK_FLAG_NONE, OPEN_VIRTUAL_DISK_PARAMETERS, OPEN_VIRTUAL_DISK_RW_DEPTH_DEFAULT,
-    OPEN_VIRTUAL_DISK_VERSION_1, OPEN_VIRTUAL_DISK_VERSION_2, OpenVirtualDisk, VIRTUAL_DISK_ACCESS_NONE,
-    VIRTUAL_DISK_ACCESS_READ, VIRTUAL_STORAGE_TYPE, VIRTUAL_STORAGE_TYPE_DEVICE_ISO,
-    VIRTUAL_STORAGE_TYPE_DEVICE_VHDX, VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
+    CreateVirtualDisk, DETACH_VIRTUAL_DISK_FLAG_NONE, DetachVirtualDisk, GET_VIRTUAL_DISK_INFO,
+    GET_VIRTUAL_DISK_INFO_SIZE, GetVirtualDiskInformation, GetVirtualDiskPhysicalPath,
+    MERGE_VIRTUAL_DISK_FLAG_NONE, MERGE_VIRTUAL_DISK_PARAMETERS, MERGE_VIRTUAL_DISK_VERSION_2,
+    MergeVirtualDisk, OPEN_VIRTUAL_DISK_FLAG_NONE, OPEN_VIRTUAL_DISK_PARAMETERS,
+    OPEN_VIRTUAL_DISK_RW_DEPTH_DEFAULT, OPEN_VIRTUAL_DISK_VERSION_1, OPEN_VIRTUAL_DISK_VERSION_2,
+    OpenVirtualDisk, RESIZE_VIRTUAL_DISK_FLAG_NONE, RESIZE_VIRTUAL_DISK_PARAMETERS,
+    RESIZE_VIRTUAL_DISK_VERSION_1, ResizeVirtualDisk, VIRTUAL_DISK_ACCESS_NONE, VIRTUAL_DISK_ACCESS_READ,
+    VIRTUAL_STORAGE_TYPE, VIRTUAL_STORAGE_TYPE_DEVICE_ISO, VIRTUAL_STORAGE_TYPE_DEVICE_VHDX,
+    VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
@@ -91,6 +95,39 @@ pub fn create_vhdx(path: &Path, size_bytes: u64) -> Result<()> {
         )
     };
     check_win32(error, &format!("Making the disk {}", path.display()))?;
+    // SAFETY: the handle is ours and isn't used after this.
+    unsafe { CloseHandle(handle) };
+    Ok(())
+}
+
+/// Makes a VHDX that holds only what's written after it's made, and reads the rest from `parent`,
+/// which must not change from then on. Its size is the parent's. Fails if the file is there already.
+pub fn create_differencing_vhdx(path: &Path, parent: &Path) -> Result<()> {
+    let storage = Kind::Vhdx.storage_type();
+    let parent_text = wide(parent);
+    // SAFETY: an all-zero parameter block is valid, and the fields this needs are set below. A size
+    // and sector sizes of zero take the parent's, as a differencing disk must.
+    let mut parameters: CREATE_VIRTUAL_DISK_PARAMETERS = unsafe { std::mem::zeroed() };
+    parameters.Version = CREATE_VIRTUAL_DISK_VERSION_2;
+    parameters.Anonymous.Version2.ParentPath = parent_text.as_ptr();
+    let text = wide(path);
+    let mut handle: HANDLE = null_mut();
+    // SAFETY: every pointer is to a value that outlives the call, both paths end in a zero, and
+    // version 2 takes no access mask.
+    let error = unsafe {
+        CreateVirtualDisk(
+            &storage,
+            text.as_ptr(),
+            VIRTUAL_DISK_ACCESS_NONE,
+            null_mut(),
+            CREATE_VIRTUAL_DISK_FLAG_NONE,
+            0,
+            &parameters,
+            null(),
+            &mut handle,
+        )
+    };
+    check_win32(error, &format!("Making the disk {} on {}", path.display(), parent.display()))?;
     // SAFETY: the handle is ours and isn't used after this.
     unsafe { CloseHandle(handle) };
     Ok(())
@@ -182,6 +219,45 @@ impl VirtualDisk {
     /// The volumes on the attached disk.
     pub fn volumes(&self) -> Result<Vec<Volume>> {
         volumes_on(self.kind.device_type(), self.device_number()?)
+    }
+
+    /// The largest the disk may grow to, in bytes, as the guest sees it.
+    pub fn size(&self) -> Result<u64> {
+        let mut info = GET_VIRTUAL_DISK_INFO { Version: GET_VIRTUAL_DISK_INFO_SIZE, ..Default::default() };
+        let mut bytes = size_of::<GET_VIRTUAL_DISK_INFO>() as u32;
+        // SAFETY: the buffer is the whole structure, as `bytes` says, and the size's part of it
+        // needs nothing past it.
+        let error = unsafe { GetVirtualDiskInformation(self.handle, &mut bytes, &mut info, null_mut()) };
+        check_win32(error, &format!("Reading the size of {}", self.path.display()))?;
+        // SAFETY: asked for its size, the disk filled in the size's part of the union.
+        Ok(unsafe { info.Anonymous.Size.VirtualSize })
+    }
+
+    /// Writes what this differencing disk holds into its parent, so the parent then reads as this
+    /// disk does. Any other disk made on the parent no longer reads as it did, so this is only for a
+    /// parent nothing else is made on. The disk itself is left as it was.
+    pub fn merge_into_parent(&self) -> Result<()> {
+        let mut parameters =
+            MERGE_VIRTUAL_DISK_PARAMETERS { Version: MERGE_VIRTUAL_DISK_VERSION_2, ..Default::default() };
+        // Depth 1 is this disk and 2 its parent.
+        parameters.Anonymous.Version2.MergeSourceDepth = 1;
+        parameters.Anonymous.Version2.MergeTargetDepth = 2;
+        // SAFETY: the handle is open, the parameters outlive the call, and it waits to finish.
+        let error =
+            unsafe { MergeVirtualDisk(self.handle, MERGE_VIRTUAL_DISK_FLAG_NONE, &parameters, null()) };
+        check_win32(error, &format!("Merging {} into its parent", self.path.display()))
+    }
+
+    /// Lets the disk grow to `size_bytes`. A disk is only made larger here: the guest's partitions
+    /// sit at the start, so a smaller size could cut into them.
+    pub fn grow(&self, size_bytes: u64) -> Result<()> {
+        let mut parameters =
+            RESIZE_VIRTUAL_DISK_PARAMETERS { Version: RESIZE_VIRTUAL_DISK_VERSION_1, ..Default::default() };
+        parameters.Anonymous.Version1.NewSize = size_bytes;
+        // SAFETY: the handle is open, the parameters outlive the call, and it waits to finish.
+        let error =
+            unsafe { ResizeVirtualDisk(self.handle, RESIZE_VIRTUAL_DISK_FLAG_NONE, &parameters, null()) };
+        check_win32(error, &format!("Growing {}", self.path.display()))
     }
 }
 
@@ -441,5 +517,46 @@ mod tests {
         assert_eq!(device_number_in(r"\\.\PhysicalDrive3"), Some(3));
         assert_eq!(device_number_in(r"\\.\CDROM12"), Some(12));
         assert_eq!(device_number_in(r"\\.\PhysicalDrive"), None);
+    }
+    /// Makes, reads and grows a disk file, with nothing attached, which needs no elevation.
+    #[test]
+    fn a_disk_grows_and_says_its_new_size() {
+        const GB: u64 = 1 << 30;
+        let path = std::env::temp_dir().join(format!("gh-grow-{}.vhdx", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        create_vhdx(&path, GB).unwrap();
+        let opened = VirtualDisk::open(&path, Kind::Vhdx).unwrap();
+        assert_eq!(opened.size().unwrap(), GB);
+        opened.grow(3 * GB).unwrap();
+        drop(opened);
+        assert_eq!(VirtualDisk::open(&path, Kind::Vhdx).unwrap().size().unwrap(), 3 * GB);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A chain as snapshots make it, with nothing attached: a child made on a disk, the child moved
+    /// aside and still finding its parent, a grandchild made on it, and the grandchild merged into it.
+    #[test]
+    fn a_differencing_chain_is_made_moved_and_merged() {
+        const GB: u64 = 1 << 30;
+        let folder = std::env::temp_dir().join(format!("gh-chain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(folder.join("snapshots")).unwrap();
+        let (base, child, moved, grandchild) = (
+            folder.join("base.vhdx"),
+            folder.join("child.vhdx"),
+            folder.join("snapshots").join("1.vhdx"),
+            folder.join("grandchild.vhdx"),
+        );
+        create_vhdx(&base, 2 * GB).unwrap();
+        create_differencing_vhdx(&child, &base).unwrap();
+        assert_eq!(VirtualDisk::open(&child, Kind::Vhdx).unwrap().size().unwrap(), 2 * GB);
+        std::fs::rename(&child, &moved).unwrap();
+        VirtualDisk::open(&moved, Kind::Vhdx).expect("a moved child still finds its parent");
+        create_differencing_vhdx(&grandchild, &moved).unwrap();
+        VirtualDisk::open(&grandchild, Kind::Vhdx).unwrap().merge_into_parent().unwrap();
+        std::fs::rename(&moved, &grandchild).unwrap();
+        assert_eq!(VirtualDisk::open(&grandchild, Kind::Vhdx).unwrap().size().unwrap(), 2 * GB);
+        assert!(create_differencing_vhdx(&folder.join("orphan.vhdx"), &folder.join("missing.vhdx")).is_err());
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

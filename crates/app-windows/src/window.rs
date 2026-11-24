@@ -12,7 +12,10 @@ use guesthouse_control::client::Unreached;
 use guesthouse_control::{Card, CardInfo, Machine, State, System};
 use windows_reactor::*;
 
-use crate::app::{self, Account, ConsoleState, DELETE_KEY, Draft, Kind, Line, Main, Message, NEW_TAG, Page};
+use crate::app::{
+    self, Account, ConsoleState, DELETE_KEY, Draft, EDITIONS, FolderFor, Kind, Line, Main, Message, NEW_TAG,
+    Page,
+};
 
 /// The app's icon, the same as the GTK app's, for where it's shown large.
 const LOGO_SVG: &[u8] =
@@ -70,6 +73,13 @@ mod glyph {
     pub const UNDO: &str = "\u{E7A7}";
     pub const GAME: &str = "\u{E7FC}";
     pub const DOWNLOAD: &str = "\u{E896}";
+    pub const SHIELD: &str = "\u{EA18}";
+    pub const NETWORK: &str = "\u{E968}";
+    pub const SHARE: &str = "\u{E8F7}";
+    pub const PERSON: &str = "\u{E77B}";
+    pub const GROW: &str = "\u{E740}";
+    pub const SNAPSHOT: &str = "\u{E722}";
+    pub const BACK: &str = "\u{E7A7}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -119,9 +129,10 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
         Border::new().grid_row(1).content(body),
         news.grid_row(1),
     ));
-    match &main.deleting {
-        Some(name) => content.content_dialog(delete_dialog(name, context)),
-        None => content.into(),
+    match (&main.deleting, &main.snapshot_ask) {
+        (Some(name), _) => content.content_dialog(delete_dialog(name, context)),
+        (None, Some(ask)) => content.content_dialog(snapshot_dialog(ask, context)),
+        (None, None) => content.into(),
     }
 }
 
@@ -287,6 +298,7 @@ fn machine_page(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
     if let Some(draft) = main.draft.as_ref().filter(|draft| draft.machine == machine.name) {
         sections.push(settings_section(main, machine, draft, context));
     }
+    sections.push(group("Snapshots", snapshot_rows(main, machine, context)));
     sections.push(log_section(main, context));
     page(sections)
 }
@@ -320,7 +332,7 @@ fn header(machine: &Machine, context: &ViewContext<Main>) -> View {
         );
 
     let start = button("Start", glyph::START, context.message(Message::Start), true)
-        .is_enabled(state == State::Stopped);
+        .is_enabled(state == State::Stopped && machine.working.is_none());
     // Asked again while it shuts down, the service stops it at once.
     let stop_words = if state == State::Stopping { "Stop now" } else { "Stop" };
     let stop = button(stop_words, glyph::STOP, context.message(Message::Stop), false)
@@ -361,10 +373,61 @@ fn status_rows(machine: &Machine) -> Vec<View> {
     let working = matches!(state, State::Preparing | State::Starting | State::Stopping);
     let ring: Option<View> =
         working.then(|| ProgressRing::new().is_active(true).width(20.0).height(20.0).into());
-    vec![
-        row(glyph::POWER, app::state_words(state), &[line], ring),
-        row(glyph::SETUP, "Setup", &[&setup_words(machine)], None),
-    ]
+    let mut rows = vec![row(glyph::POWER, app::state_words(state), &[line], ring)];
+    if let Some(doing) = &machine.working {
+        let ring = ProgressRing::new().is_active(true).width(20.0).height(20.0);
+        rows.push(row(
+            glyph::SNAPSHOT,
+            doing,
+            &["Nothing else can be done to it until this is done."],
+            Some(ring.into()),
+        ));
+    }
+    rows.push(row(glyph::SETUP, "Setup", &[&setup_words(machine)], None));
+    rows
+}
+
+/// The machine's snapshots, and taking another. Each is of a stopped machine that has been set up.
+fn snapshot_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> Vec<View> {
+    let free = machine.state == State::Stopped && machine.working.is_none();
+    let take_words = if !machine.set_up {
+        "A machine has snapshots once its first boot has set it up."
+    } else if machine.state != State::Stopped {
+        "Stop it to take a snapshot. A snapshot keeps its disk, its firmware and its TPM as they are."
+    } else {
+        "Keeps its disk, its firmware and its TPM as they are now, to go back to. Its disk can't grow while it has snapshots."
+    };
+    let label = TextBox::new()
+        .placeholder_text("A label, such as Before the update")
+        .text(main.snapshot_label.as_str())
+        .is_enabled(free && machine.set_up)
+        .width(280.0)
+        .automation_name("Snapshot label")
+        .on_text_changed(context.callback(|text: Rc<str>| Message::SnapshotLabel(text.to_string())));
+    let take = button("Take", glyph::SNAPSHOT, context.message(Message::TakeSnapshot), false)
+        .is_enabled(free && machine.set_up && !main.snapshot_label.trim().is_empty())
+        .automation_name("Take a snapshot");
+    let right = StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((label, take));
+    let mut rows = vec![row(glyph::SNAPSHOT, "Take a snapshot", &[take_words], Some(right.into()))];
+    for snapshot in machine.snapshots.iter().rev() {
+        let mut lines = vec![crate::system::local_time(snapshot.taken)];
+        if snapshot.current {
+            lines.push("It runs on from here.".to_owned());
+        }
+        let back =
+            button("Go back", glyph::BACK, context.message(Message::RevertSnapshot(snapshot.id)), false)
+                .is_enabled(free)
+                .automation_name(format!("Go back to {}", snapshot.label));
+        let delete =
+            button("Delete", glyph::DELETE, context.message(Message::DeleteSnapshot(snapshot.id)), false)
+                .is_enabled(free)
+                .automation_name(format!("Delete the snapshot {}", snapshot.label));
+        let buttons =
+            StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((back, delete));
+        let words: Vec<&str> = lines.iter().map(String::as_str).collect();
+        rows.push(row(glyph::SNAPSHOT, &snapshot.label, &words, Some(buttons.into())));
+    }
+    rows
 }
 
 /// What the first boot does, and where this machine is in that.
@@ -515,12 +578,13 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
         row(
             glyph::CARD,
             "Card",
-            &[CARD_NOTE],
+            // An Ubuntu guest's files disk was made for its card's driver, so the service keeps its card.
+            &[if machine.system == System::Linux { CARD_KEPT_NOTE } else { CARD_NOTE }],
             Some(card_box(
                 main,
                 &main.settings_cards(),
                 &draft.card,
-                open,
+                open && machine.system == System::Windows,
                 context.callback(Message::SetCard),
             )),
         ),
@@ -533,6 +597,44 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
             .on_toggled(context.callback(Message::SetDlss));
         rows.push(row(glyph::GAME, "DLSS", &[DLSS_NOTE], Some(switch.into())));
     }
+    rows.push(row(
+        glyph::SHIELD,
+        "TPM",
+        &[tpm_words(Some(machine.system))],
+        Some(toggle("TPM", draft.tpm, open, context.callback(Message::SetTpm))),
+    ));
+    rows.push(row(
+        glyph::NETWORK,
+        "Network",
+        &["Through Windows' own network for its machines. Without it the guest has no address to reach it on."],
+        Some(toggle("Network", draft.network, open, context.callback(Message::SetNetwork))),
+    ));
+    rows.push(row_under(
+        glyph::SHARE,
+        "Shared folder",
+        share_words(Some(machine.system)),
+        share_view(
+            TextBox::new()
+                .placeholder_text("None. A folder of this PC's to share")
+                .text(draft.share_folder.as_str())
+                .is_enabled(open)
+                .automation_name("Shared folder")
+                .on_text_changed(context.callback(|text: Rc<str>| Message::SetShareFolder(text.to_string()))),
+            button(
+                "Browse…",
+                glyph::FOLDER,
+                context.message(Message::BrowseFolder(FolderFor::Machine)),
+                false,
+            )
+            .is_enabled(open),
+            CheckBox::new()
+                .content("Read-only")
+                .is_checked(draft.share_read_only)
+                .is_enabled(open)
+                .on_is_checked_changed(context.callback(Message::SetShareReadOnly)),
+        ),
+    ));
+    rows.push(disk_row(machine, draft, stopped, context));
 
     let changed = draft.changed(machine);
     let save = button("Save", glyph::SAVE, context.message(Message::SaveSettings), true)
@@ -561,6 +663,10 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
 /// What a card is to the guest, under the card's list.
 const CARD_NOTE: &str = "The card the guest shares with this PC. Default is whichever has the most memory of its own \
                          when it boots.";
+
+/// Why an Ubuntu guest's card can't change, under the card's list.
+const CARD_KEPT_NOTE: &str = "The card the guest shares with this PC. An Ubuntu guest's files disk was made for its \
+                              card's driver, so it keeps the card it was made with.";
 
 /// The DLSS switch's note, in the Linux app's words.
 const DLSS_NOTE: &str = "NVIDIA's NVAPI won't tell DLSS which card it's on in a virtual machine, so Guesthouse puts \
@@ -605,6 +711,71 @@ fn card_box(
         .automation_name("Card")
         .on_selection_changed(changed)
         .into()
+}
+
+/// The disk's size, which only grows, and is asked for on its own as it can't be undone.
+fn disk_row(machine: &Machine, draft: &Draft, stopped: bool, context: &ViewContext<Main>) -> View {
+    let now = match machine.size_gb {
+        Some(gb) => format!("Now {gb} GB at most, and it only takes what the guest writes."),
+        None => "Its size isn't known to the service.".to_owned(),
+    };
+    let field = NumberBox::new()
+        .value(draft.size_gb)
+        .minimum(1.0)
+        .small_change(16.0)
+        .spin_button_placement_mode(NumberBoxSpinButtonPlacementMode::Inline)
+        .is_enabled(stopped)
+        .width(180.0)
+        .automation_name("Disk (GB)")
+        .on_value_changed(context.callback(Message::SetSize));
+    let grow = button("Grow", glyph::GROW, context.message(Message::Grow), false)
+        .is_enabled(stopped && machine.working.is_none() && draft.growth(machine).is_some())
+        .automation_name("Grow the disk");
+    let right = StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((field, grow));
+    row(
+        glyph::DISK,
+        "Disk (GB)",
+        &[&now, "A disk only grows. The guest's own partition takes the room at its next start."],
+        Some(right.into()),
+    )
+}
+
+/// What a TPM is for, for a system or for either.
+fn tpm_words(system: Option<System>) -> &'static str {
+    match system {
+        Some(System::Linux) => "Only a Windows guest is given one, so this changes nothing for Ubuntu.",
+        _ => {
+            "Windows 11 asks for one to set up. Without it, BitLocker and Windows Hello in the guest have none."
+        }
+    }
+}
+
+/// Where the shared folder shows in the guest, for a system or for either.
+fn share_words(system: Option<System>) -> &'static str {
+    match system {
+        Some(System::Windows) => {
+            "On the guest's desktop as Shared folder, from its next start. The machine's own account is let into the folder."
+        }
+        Some(System::Linux) => {
+            "At /mnt/shared in the guest, from its next start. The machine's own account is let into the folder."
+        }
+        None => {
+            "On a Windows guest's desktop as Shared folder, and at /mnt/shared in Ubuntu. The machine's own account is let into the folder."
+        }
+    }
+}
+
+fn toggle(name: &str, on: bool, enabled: bool, toggled: Callback<bool>) -> View {
+    ToggleSwitch::new().is_on(on).is_enabled(enabled).automation_name(name).on_toggled(toggled).into()
+}
+
+/// A folder's field with its Browse button, and its read-only box under them.
+fn share_view(field: TextBox, browse: Button, read_only: CheckBox) -> View {
+    let line = Grid::new()
+        .columns([GridLength::STAR, GridLength::Auto])
+        .column_spacing(8.0)
+        .children((field, browse.grid_column(1)));
+    StackPanel::new().spacing(8.0).children((line, read_only)).into()
 }
 
 fn log_section(main: &Main, context: &ViewContext<Main>) -> View {
@@ -692,7 +863,50 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
         "A Windows 11 ISO, or its install.wim or install.esd, or an Ubuntu Server ISO.",
         image.into(),
     );
-    sections.push(group("Machine", vec![name_row, image_row]));
+    let user_ok = form.user.trim().is_empty() || guesthouse_control::valid_user(form.user.trim());
+    let user = TextBox::new()
+        .placeholder_text(guesthouse_control::DEFAULT_USER)
+        .text(form.user.as_str())
+        .width(280.0)
+        .is_enabled(!busy)
+        .automation_name("User")
+        .on_text_changed(context.callback(|text: Rc<str>| Message::User(text.to_string())));
+    let user_row = row_with(
+        glyph::PERSON,
+        "User",
+        caption(if user_ok {
+            "The guest's administrator. Its password is made for it."
+        } else {
+            "Up to 20 lowercase letters, digits, - and _, starting with a letter, and not one of Windows' own."
+        })
+        .foreground(if user_ok { ThemeBrush::SecondaryText } else { ThemeBrush::SystemCritical }),
+        Some(user.into()),
+    );
+    let editions: Vec<String> =
+        EDITIONS
+            .iter()
+            .map(|edition| {
+                if edition.is_empty() {
+                    "Pro, or the image's first".to_owned()
+                } else {
+                    (*edition).to_owned()
+                }
+            })
+            .collect();
+    let edition = ComboBox::new()
+        .items_source(editions)
+        .selected_index(Some(form.edition))
+        .is_enabled(!busy)
+        .width(280.0)
+        .automation_name("Edition")
+        .on_selection_changed(context.callback(Message::Edition));
+    let edition_row = row(
+        glyph::WINDOWS,
+        "Edition",
+        &["Which of a Windows image's editions to install. An Ubuntu image has one."],
+        Some(edition.into()),
+    );
+    sections.push(group("Machine", vec![name_row, image_row, user_row, edition_row]));
 
     let number = |name: &str, value: Option<f64>, step: f64, changed: Callback<Option<f64>>| -> View {
         number_box(name, value, step, !busy, changed)
@@ -724,12 +938,45 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
     let cards = card_box(main, &main.card_choices(), &form.card, !busy, context.callback(Message::Card));
     sections.push(group("Graphics", vec![row(glyph::CARD, "Card", &[CARD_NOTE], Some(cards))]));
 
+    sections.push(group(
+        "Devices",
+        vec![
+            row(glyph::SHIELD, "TPM", &[tpm_words(None)], Some(toggle("TPM", form.tpm, !busy, context.callback(Message::Tpm)))),
+            row(
+                glyph::NETWORK,
+                "Network",
+                &["Through Windows' own network for its machines. Without it the guest has no address to reach it on."],
+                Some(toggle("Network", form.network, !busy, context.callback(Message::Network))),
+            ),
+            row_under(
+                glyph::SHARE,
+                "Shared folder",
+                share_words(None),
+                share_view(
+                    TextBox::new()
+                        .placeholder_text("None. A folder of this PC's to share")
+                        .text(form.share_folder.as_str())
+                        .is_enabled(!busy)
+                        .automation_name("Shared folder")
+                        .on_text_changed(context.callback(|text: Rc<str>| Message::ShareFolder(text.to_string()))),
+                    button("Browse…", glyph::FOLDER, context.message(Message::BrowseFolder(FolderFor::Form)), false)
+                        .is_enabled(!busy),
+                    CheckBox::new()
+                        .content("Read-only")
+                        .is_checked(form.share_read_only)
+                        .is_enabled(!busy)
+                        .on_is_checked_changed(context.callback(Message::ShareReadOnly)),
+                ),
+            ),
+        ],
+    ));
+
     let ready = form.machine().is_some() && !busy;
     let mut foot: Vec<View> =
         vec![button("Make it", glyph::ADD, context.message(Message::Create), true).is_enabled(ready).into()];
     if !ready && !busy {
         foot.push(
-            caption("Give it a name and an image first.")
+            caption("Give it a name and an image first, and a user the rules above take if you name one.")
                 .vertical_alignment(VerticalAlignment::Center)
                 .into(),
         );
@@ -783,6 +1030,36 @@ fn card_words(card: &Card, cards: &[CardInfo]) -> String {
         }
         Card::None => "None".to_owned(),
     }
+}
+
+fn snapshot_dialog(ask: &app::SnapshotAsk, context: &ViewContext<Main>) -> ContentDialog {
+    let (title, words, button) = if ask.revert {
+        (
+            format!("Go back to {}?", ask.label),
+            format!(
+                "{} gets its disk, its firmware and its TPM as they were in this snapshot. What it holds now and \
+                 hasn't kept in a snapshot is gone, and that can't be undone.",
+                ask.machine
+            ),
+            "Go back",
+        )
+    } else {
+        (
+            format!("Delete the snapshot {}?", ask.label),
+            "It can't be gone back to after this. Its space comes back once no other snapshot, or the machine \
+             itself, is made on it."
+                .to_owned(),
+            "Delete",
+        )
+    };
+    ContentDialog::new()
+        .title(title)
+        .content(TextBlock::new().text(words).text_wrapping(TextWrapping::Wrap))
+        .primary_button_text(button)
+        .close_button_text("Cancel")
+        .default_button(ContentDialogButton::Close)
+        .is_open(true)
+        .on_closed(context.callback(Message::SnapshotAnswered))
 }
 
 fn delete_dialog(name: &str, context: &ViewContext<Main>) -> ContentDialog {

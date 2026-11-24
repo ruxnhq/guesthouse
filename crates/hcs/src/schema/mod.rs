@@ -20,6 +20,13 @@ pub const SECURE_BOOT_WINDOWS: &str = "1734c6e8-3154-4dda-ba5f-a874cc483422";
 /// What HCS calls the place in a running machine where its GPU is set.
 pub const GPU_RESOURCE_PATH: &str = "VirtualMachine/ComputeTopology/Gpu";
 
+/// The port a Linux guest reaches the host's Plan 9 shares on, over a Hyper-V socket, as Linux
+/// guests that HCS runs for containers do.
+pub const PLAN9_PORT: u32 = 564;
+/// How a Windows guest names the host's virtual SMB shares: this, then the share's name. It's the
+/// one name the guest's virtual SMB redirector answers to.
+pub const VIRTUAL_SMB_ROOT: &str = r"\\?\VMSMB\VSMB-{dcc079ae-60ba-4d07-847c-3493609c0870}";
+
 /// The share of a card a machine asks for in `GpuAssignment::List`. HCS takes it as the most a
 /// partition may have, and this asks for all of it, as the card is shared by time anyway.
 pub const WHOLE_CARD: u16 = u16::MAX;
@@ -166,6 +173,80 @@ pub struct Devices {
     /// Network cards by name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub network_adapters: BTreeMap<String, NetworkAdapter>,
+    /// The host's folders a Linux guest mounts with 9p.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan9: Option<Plan9>,
+    /// The host's folders a Windows guest opens as virtual SMB shares.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_smb: Option<VirtualSmb>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Plan9 {
+    pub shares: Vec<Plan9Share>,
+}
+
+/// A host folder served to a Linux guest by 9p, on a Hyper-V socket port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Plan9Share {
+    pub name: String,
+    /// What the guest asks for as the mount's `aname`.
+    pub access_name: String,
+    pub path: String,
+    pub port: u32,
+    /// `PLAN9_READ_ONLY` and the others, or'd together.
+    pub flags: u32,
+}
+
+/// The guest can't change the share. These are hcsshim's `Plan9ShareFlags`.
+pub const PLAN9_READ_ONLY: u32 = 0x1;
+/// Keeps Linux's owners and modes on the host's files, as hcsshim asks for every share.
+pub const PLAN9_LINUX_METADATA: u32 = 0x4;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct VirtualSmb {
+    pub shares: Vec<VirtualSmbShare>,
+}
+
+/// A host folder served to a Windows guest by virtual SMB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct VirtualSmbShare {
+    pub name: String,
+    pub path: String,
+    pub options: VirtualSmbShareOptions,
+}
+
+/// Only what Guesthouse sets. Backup privilege, which would let the guest past the folder's own
+/// permissions, is never asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct VirtualSmbShareOptions {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// Lets the host's own programs read a file while the guest has it open.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub share_read: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cache_io: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pseudo_oplocks: bool,
+}
+
+impl VirtualSmbShareOptions {
+    /// What hcsshim's `DefaultVSMBOptions` gives a share: a writable one nothing, and a read-only
+    /// one reads shared with the host's programs, its reads cached, and oplocks only pretended.
+    pub fn for_share(read_only: bool) -> Self {
+        VirtualSmbShareOptions {
+            read_only,
+            share_read: read_only,
+            cache_io: read_only,
+            pseudo_oplocks: read_only,
+        }
+    }
 }
 
 /// A device with nothing to set.

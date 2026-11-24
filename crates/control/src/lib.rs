@@ -47,6 +47,18 @@ pub enum Request {
     Screen { name: String },
     /// Deletes a machine that isn't running, with its disks.
     Delete { name: String },
+    /// Lets a stopped machine's disk grow to `size_gb`. A disk only grows. The guest's last
+    /// partition takes the room at its next start.
+    Grow { name: String, size_gb: u64 },
+    /// Takes a snapshot of a stopped machine that has been set up. The answer comes once it's begun;
+    /// `Machine::working` says it's going on, and `Watch` how it ended.
+    Snapshot { name: String, label: String },
+    /// Gives a stopped machine its disk, firmware and TPM as they were in snapshot `id`. What it held
+    /// since is gone. Begun as `Snapshot` is.
+    Revert { name: String, id: u64 },
+    /// Deletes snapshot `id`. Its space comes back once no other disk is made on it. Begun as
+    /// `Snapshot` is.
+    DeleteSnapshot { name: String, id: u64 },
     /// The guest's administrator and password, for Remote Desktop or SSH.
     Account { name: String },
     /// A machine's recent events, then each new one, until the app closes the pipe.
@@ -64,6 +76,13 @@ pub struct MachineSettings {
     /// Whether an NVIDIA guest gets Guesthouse's NVAPI wrapper, which DLSS needs, in place of
     /// NVIDIA's NVAPI. Some games' anti-cheat refuses it, as it isn't signed.
     pub nvapi_wrapper: bool,
+    /// An app from before these sends none of them, which reads as a TPM, a network and no share.
+    #[serde(default = "on")]
+    pub tpm: bool,
+    #[serde(default = "on")]
+    pub network: bool,
+    #[serde(default)]
+    pub share: Option<Share>,
 }
 
 /// What a new machine is made from and given.
@@ -78,6 +97,48 @@ pub struct NewMachine {
     /// The disk's largest size; it only takes what the guest writes.
     pub size_gb: u64,
     pub card: Card,
+    /// The Windows edition in the image, by name. Empty takes Pro if the image has it, and its
+    /// first edition if not. An Ubuntu image has none.
+    #[serde(default)]
+    pub edition: String,
+    /// The guest's administrator. Empty is `DEFAULT_USER`.
+    #[serde(default)]
+    pub user: String,
+    #[serde(default = "on")]
+    pub tpm: bool,
+    #[serde(default = "on")]
+    pub network: bool,
+    #[serde(default)]
+    pub share: Option<Share>,
+}
+
+/// The guest's administrator when none is named.
+pub const DEFAULT_USER: &str = "guesthouse";
+
+/// A folder of this PC's the guest sees: on its desktop in Windows, and at /mnt/shared in Ubuntu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Share {
+    pub folder: PathBuf,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+/// Whether `name` can be a guest's administrator in both systems: Ubuntu's rule for a user, which
+/// Windows takes too, and not one of Windows' own accounts, which are disabled.
+pub fn valid_user(name: &str) -> bool {
+    const LONGEST: usize = 20;
+    const WINDOWS_OWN: [&str; 4] = ["administrator", "defaultaccount", "guest", "wdagutilityaccount"];
+    let mut characters = name.chars();
+    name.len() <= LONGEST
+        && characters.next().is_some_and(|first| first.is_ascii_lowercase())
+        && characters.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        && !WINDOWS_OWN.contains(&name)
+}
+
+/// Whether `edition` can name an edition: Windows' editions are letters, digits and spaces.
+pub fn valid_edition(edition: &str) -> bool {
+    const LONGEST: usize = 64;
+    edition.len() <= LONGEST && edition.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ')
 }
 
 /// Which card a machine is given.
@@ -148,8 +209,35 @@ pub struct Machine {
     /// Whether an NVIDIA guest gets the NVAPI wrapper, which is on unless turned off.
     #[serde(default = "on")]
     pub nvapi_wrapper: bool,
+    #[serde(default = "on")]
+    pub tpm: bool,
+    #[serde(default = "on")]
+    pub network: bool,
+    #[serde(default)]
+    pub share: Option<Share>,
+    /// The largest its disk may grow to, if the service knows.
+    #[serde(default)]
+    pub size_gb: Option<u64>,
+    /// Its snapshots, oldest first.
+    #[serde(default)]
+    pub snapshots: Vec<SnapshotInfo>,
+    /// What the service is doing to it while it's stopped, such as taking a snapshot, if anything.
+    /// Nothing else can be done to it meanwhile.
+    #[serde(default)]
+    pub working: Option<String>,
     /// The address the guest last reported, for Remote Desktop or SSH.
     pub address: Option<String>,
+}
+
+/// One of a machine's snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    pub id: u64,
+    pub label: String,
+    /// When it was taken, in seconds since 1970 in UTC.
+    pub taken: u64,
+    /// Whether the machine runs on from it now, as it does just after it's taken or gone back to.
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,15 +331,61 @@ mod tests {
             processors: 4,
             size_gb: 128,
             card: Card::Named("NVIDIA GeForce RTX 5090".into()),
+            edition: String::new(),
+            user: String::new(),
+            tpm: true,
+            network: true,
+            share: None,
         };
         let value = serde_json::to_value(Request::Create { machine: new }).unwrap();
         assert_eq!(value["machine"]["card"], json!({"card": "named", "name": "NVIDIA GeForce RTX 5090"}));
+        let older: Request = serde_json::from_value(json!({"ask": "change", "name": "win", "settings": {
+            "memory_mb": 16384, "processors": 8, "card": {"card": "none"}, "nvapi_wrapper": true
+        }}))
+        .unwrap();
+        let settings = MachineSettings {
+            memory_mb: 16384,
+            processors: 8,
+            card: Card::None,
+            nvapi_wrapper: true,
+            tpm: true,
+            network: true,
+            share: None,
+        };
+        assert_eq!(
+            older,
+            Request::Change { name: "win".into(), settings },
+            "an older app's change still reads, with a TPM, a network and no share"
+        );
+        let made: NewMachine = serde_json::from_value(json!({
+            "name": "u", "image": "u.iso", "memory_mb": 8192, "processors": 4, "size_gb": 128,
+            "card": {"card": "default"}
+        }))
+        .unwrap();
+        assert!(made.tpm && made.network && made.share.is_none() && made.user.is_empty());
+    }
+
+    #[test]
+    fn a_machine_from_a_service_without_its_chosen_card_reads_as_default() {
+        let machine: Machine = serde_json::from_value(json!({
+            "name": "win", "system": "windows", "state": "stopped", "set_up": true,
+            "memory_mb": 8192, "processors": 4, "card": "NVIDIA GeForce RTX 5090", "address": null
+        }))
+        .unwrap();
+        assert_eq!(machine.chosen_card, Card::Default);
     }
 
     #[test]
     fn a_change_carries_the_settings_and_an_older_status_reads_with_defaults() {
-        let settings =
-            MachineSettings { memory_mb: 16384, processors: 8, card: Card::Default, nvapi_wrapper: false };
+        let settings = MachineSettings {
+            memory_mb: 16384,
+            processors: 8,
+            card: Card::Default,
+            nvapi_wrapper: false,
+            tpm: true,
+            network: true,
+            share: None,
+        };
         let value = serde_json::to_value(Request::Change { name: "win".into(), settings }).unwrap();
         assert_eq!(value["ask"], json!("change"));
         assert_eq!(value["settings"]["nvapi_wrapper"], json!(false));
@@ -297,6 +431,17 @@ mod tests {
         );
         assert_eq!(address_in("address: 1: lo    inet 127.0.0.1/8 scope host lo"), None);
         assert_eq!(address_in("card: NVIDIA GeForce RTX 5090"), None);
+    }
+
+    #[test]
+    fn a_user_is_one_both_systems_take() {
+        assert!(valid_user("guesthouse"));
+        assert!(valid_user("a-b_2"));
+        for name in ["", "Admin", "2a", "a b", "administrator", "guest", "averyveryverylongusername"] {
+            assert!(!valid_user(name), "{name}");
+        }
+        assert!(valid_edition("Windows 11 Pro for Workstations"));
+        assert!(!valid_edition("Windows\\11"));
     }
 
     #[test]

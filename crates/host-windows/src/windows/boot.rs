@@ -68,6 +68,8 @@ pub fn boot(settings: &BootSettings, sink: Arc<dyn Sink>, stop: Arc<AtomicBool>)
 fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> Result<(), String> {
     need_elevation()?;
     let disk = absolute(&settings.disk)?;
+    // A snapshot cut short by a crash is finished or undone first, so the disk is there to boot.
+    crate::snapshots::repair(&disk)?;
     if !disk.is_file() {
         return Err(format!("There is no disk at {}. prepare makes one.", disk.display()));
     }
@@ -83,15 +85,28 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
             sink.problem(format!("{error}"));
         }
     }
+    // A shared folder that has gone isn't worth not booting for, so the machine boots without it.
+    let share = settings.share.clone().filter(|share| {
+        let there = share.folder.is_dir();
+        if !there {
+            sink.problem(format!(
+                "The shared folder {} isn't there, so this boot shares nothing.",
+                share.folder.display()
+            ));
+        }
+        there
+    });
     let mut record = Record::load(&disk)?;
     if record.mac.is_none() {
         record.mac = Some(network::mac_from(&host::new_guid().map_err(|error| error.to_string())?));
         record.save(&disk)?;
     }
     match record.guest {
-        Guest::Windows => refresh_windows_disk(&disk, card.as_ref(), settings.nvapi_wrapper, sink.as_ref())?,
+        Guest::Windows => {
+            refresh_windows_disk(&disk, card.as_ref(), settings.nvapi_wrapper, share.as_ref(), sink.as_ref())?
+        }
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref(), sink.as_ref())?;
+            linux::refresh_disk(&files_disk(&disk), card.as_ref(), share.as_ref(), sink.as_ref())?;
             if !record.installed {
                 sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }
@@ -99,13 +114,24 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     }
     let mac = record.mac.clone().expect("the record has a MAC by now");
     let (_endpoint, adapter) = if settings.network { plug_in(&mac, sink.as_ref())? } else { (None, None) };
-    let machine = machine(settings, disk, &record, adapter);
+    let mut machine = machine(settings, disk, &record, adapter);
+    machine.share = share;
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
     let mut opened = vec![machine.disk.clone(), machine.guest_state_path(), machine.runtime_state_path()];
     opened.extend(machine.more_disks.iter().map(|disk| PathBuf::from(&disk.path)));
+    // The disks of the snapshots its disk is made on, which the machine reads too.
+    opened.extend(crate::snapshots::chain(&machine.disk)?);
     for path in &opened {
         system::grant_vm_access(&machine.name, path).map_err(|error| error.to_string())?;
+    }
+    // The machine's own account opens the shared folder too, as it does its disks. A folder it
+    // can't be let into isn't worth not booting for, so the machine boots without it.
+    if let Some(share) = &machine.share
+        && let Err(error) = system::grant_vm_access(&machine.name, &share.folder)
+    {
+        sink.problem(format!("This boot shares no folder, as the machine couldn't be let into it: {error}"));
+        machine.share = None;
     }
 
     let document = machine.document();

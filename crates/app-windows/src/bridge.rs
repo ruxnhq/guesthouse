@@ -45,6 +45,13 @@ pub enum Job {
     Screen(String),
     /// What a stopped machine is given at each boot from now on.
     Change(String, MachineSettings),
+    /// Let a stopped machine's disk grow to this many GB.
+    Grow(String, u64),
+    /// Take a snapshot with this label.
+    Snapshot(String, String),
+    /// Go back to the snapshot with this ID.
+    Revert(String, u64),
+    DeleteSnapshot(String, u64),
 }
 
 impl Job {
@@ -56,6 +63,10 @@ impl Job {
             Job::Delete(name) => Request::Delete { name },
             Job::Account(name) => Request::Account { name },
             Job::Screen(name) => Request::Screen { name },
+            Job::Grow(name, size_gb) => Request::Grow { name, size_gb },
+            Job::Snapshot(name, label) => Request::Snapshot { name, label },
+            Job::Revert(name, id) => Request::Revert { name, id },
+            Job::DeleteSnapshot(name, id) => Request::DeleteSnapshot { name, id },
         }
     }
 }

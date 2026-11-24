@@ -17,6 +17,16 @@ pub enum GpuChoice {
     None,
 }
 
+/// A folder of the host's the guest sees, under the name `SHARE_NAME`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Share {
+    pub folder: PathBuf,
+    pub read_only: bool,
+}
+
+/// What the host's shared folder is called, to HCS and in the guest.
+pub const SHARE_NAME: &str = "shared";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepareSettings {
     /// The new disk, which must not be there yet.
@@ -25,7 +35,8 @@ pub struct PrepareSettings {
     pub image: PathBuf,
     /// The guest's administrator.
     pub user: String,
-    /// The Windows edition in the image.
+    /// The Windows edition in the image, by name. Empty takes Pro if the image has it, and its
+    /// first edition if not.
     pub edition: String,
     /// The disk's largest size.
     pub size_gb: u64,
@@ -56,6 +67,9 @@ pub struct BootSettings {
     /// DLSS needs it; some games' anti-cheat refuses it, as it isn't signed. Off, NVIDIA's goes back.
     #[serde(default = "on")]
     pub nvapi_wrapper: bool,
+    /// A folder of the host's the guest sees, if any.
+    #[serde(default)]
+    pub share: Option<Share>,
 }
 
 fn on() -> bool {
@@ -90,6 +104,7 @@ impl BootSettings {
             until_report: false,
             console_access: Vec::new(),
             nvapi_wrapper: true,
+            share: None,
         }
     }
 }

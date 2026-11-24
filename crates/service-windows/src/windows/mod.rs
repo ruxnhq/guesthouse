@@ -15,7 +15,7 @@ use guesthouse_hcs::host;
 use guesthouse_hcs::system::ComputeSystem;
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::settings::{BootSettings, PrepareSettings};
-use guesthouse_host_windows::windows::{boot, prepare};
+use guesthouse_host_windows::windows::{self as host_work, boot, prepare};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -67,6 +67,20 @@ impl Work for HostWork {
     fn console_access(&self) -> Vec<String> {
         let user = pipe::console_user().or_else(security::own_user);
         user.into_iter().chain([security::ADMINISTRATORS.to_owned()]).collect()
+    }
+
+    fn grow(&self, disk: &Path, size_gb: u64) -> Result<(), String> {
+        host_work::grow_disk(disk, size_gb)
+    }
+
+    fn disk_size_gb(&self, disk: &Path) -> Option<u64> {
+        host_work::disk_size_gb(disk)
+            .inspect_err(|error| log(&format!("The size of {} couldn't be read: {error}", disk.display())))
+            .ok()
+    }
+
+    fn disks(&self) -> &dyn guesthouse_host_windows::snapshots::Disks {
+        &host_work::RealDisks
     }
 
     fn end(&self, id: &str) {

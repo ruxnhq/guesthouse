@@ -115,6 +115,44 @@ Start-Service -Name w32time -ErrorAction SilentlyContinue
 $synced = (& w32tm.exe /resync /force 2>&1 | Out-String).Trim() -replace '\s+', ' '
 Send-Line "clock: $([DateTime]::UtcNow.ToString('o')) UTC after asking the time service: $synced"
 
+# The disk can be made larger while the machine is stopped, so Windows' partition, the last on it,
+# takes whatever room it has at every start.
+try {
+    $most = (Get-PartitionSupportedSize -DriveLetter C -ErrorAction Stop).SizeMax
+    $now = (Get-Partition -DriveLetter C -ErrorAction Stop).Size
+    if ($most - $now -gt 64MB) {
+        Resize-Partition -DriveLetter C -Size $most -ErrorAction Stop
+        Send-Line "disk: C: grown to $([math]::Round($most / 1GB)) GB"
+    }
+} catch {
+    Send-Line "disk: C: couldn't grow: $($_.Exception.Message)"
+}
+
+# The host's shared folder, when it gives one, is linked on everyone's desktop. The host writes the
+# file naming it at each boot, and takes the file away when the machine has no share, and then the
+# link goes too. Only the link is ever deleted, never what it points to.
+$shareFile = 'C:\Guesthouse\share.txt'
+$shareLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Shared folder'
+$linked = Get-Item -LiteralPath $shareLink -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $shareFile) {
+    $target = (Get-Content -LiteralPath $shareFile -TotalCount 1).Trim()
+    if (Test-Path -LiteralPath $target) {
+        if (-not $linked) {
+            try {
+                New-Item -ItemType SymbolicLink -Path $shareLink -Target $target -ErrorAction Stop | Out-Null
+            } catch {
+                Send-Line "share: the desktop's link couldn't be made: $($_.Exception.Message)"
+            }
+        }
+        Send-Line "share: at $shareLink"
+    } else {
+        Send-Line "share: $target isn't reachable in this guest"
+    }
+} elseif ($linked -and $linked.LinkType -eq 'SymbolicLink') {
+    # Not recursive, so only the link goes.
+    [System.IO.Directory]::Delete($shareLink, $false)
+}
+
 # The guest's screen, when the host gave it one, before the last line, as the host takes that line
 # to mean the guest is set up.
 $screenScript = 'C:\Guesthouse\screen\screen.ps1'

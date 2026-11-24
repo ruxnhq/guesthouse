@@ -12,7 +12,7 @@
 //! (the service said no to them). Nothing is sent to the service, whatever is pressed.
 
 use guesthouse_control::client::Unreached;
-use guesthouse_control::{Card, CardInfo, Machine, State, System};
+use guesthouse_control::{Card, CardInfo, Machine, SnapshotInfo, State, System};
 use windows_reactor::WindowTheme;
 
 use super::{Account, Form, Kind, Line, Main, Making, Page};
@@ -147,6 +147,25 @@ fn status() -> Status {
         card: card.map(str::to_owned),
         chosen_card: card.map_or(Card::None, |card| Card::Named(card.to_owned())),
         nvapi_wrapper: true,
+        tpm: system == System::Windows,
+        network: true,
+        share: None,
+        size_gb: Some(256),
+        // The stopped Windows machine has two, so the section has rows to look at.
+        snapshots: if name == "win11" {
+            vec![
+                SnapshotInfo { id: 1, label: "Set up".to_owned(), taken: 1_795_000_000, current: false },
+                SnapshotInfo {
+                    id: 2,
+                    label: "Before the driver update".to_owned(),
+                    taken: 1_795_600_000,
+                    current: true,
+                },
+            ]
+        } else {
+            Vec::new()
+        },
+        working: None,
         address: address.map(str::to_owned),
     };
     let card = |name: &str, memory_mb, default| CardInfo { name: name.to_owned(), memory_mb, default };

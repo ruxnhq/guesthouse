@@ -10,10 +10,12 @@
 
 use super::log;
 use super::security::{Descriptor, SYSTEM, is_administrator, last_error, own_user, token_user, wide};
-use crate::requests::{Connection, Service, Work};
+use crate::requests::{Connection, Held, Service, Work};
 use guesthouse_control::{Answer, REQUEST_LIMIT, Request, read_line, write_line};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr::null_mut;
@@ -25,7 +27,11 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::{RevertToSelf, SECURITY_ATTRIBUTES, TOKEN_QUERY};
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
+    FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+    FlushFileBuffers, GetFinalPathNameByHandleW, PIPE_ACCESS_DUPLEX, READ_CONTROL, VOLUME_NAME_DOS,
+    WRITE_DAC,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
@@ -213,6 +219,130 @@ impl Connection for Pipe<'_> {
             )),
         }
     }
+
+    fn may_share(&mut self, path: &Path, read_only: bool) -> Result<Held, String> {
+        let opened = as_client(self.file, || open_shared_folder(path, read_only))?;
+        let folder = opened.map_err(|error| {
+            format!(
+                "You can't {} {} and change who may open it, so the service won't share it: {error}",
+                if read_only { "read" } else { "read and write" },
+                path.display()
+            )
+        })?;
+        the_folder_itself(&folder, path)?;
+        Ok(Box::new(folder))
+    }
+}
+
+/// Opens a folder to share, as whoever is asking. Changing who may open it is asked for too:
+/// sharing it lets the machine's own account in, and the service, as the system, does that only to a
+/// folder the user could do it to. It isn't opened for others to delete or rename, so while it's
+/// held, it stays where it is, and so does every folder it's in.
+fn open_shared_folder(path: &Path, read_only: bool) -> io::Result<File> {
+    let mut access = FILE_LIST_DIRECTORY | FILE_TRAVERSE | READ_CONTROL | WRITE_DAC;
+    if !read_only {
+        access |= FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
+    }
+    OpenOptions::new()
+        .access_mode(access)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        // A folder opens only with backup semantics. They let a holder of the backup privilege past
+        // the folder's rules, which an app's user doesn't have enabled, and the rules are what's
+        // being asked. A link is opened as itself, not followed, so it can be refused.
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+/// Whether `folder`, opened from `path`, is a folder by that very path: not a link of any kind,
+/// and not reached through one, as a junction anywhere along the path would hand the machine some
+/// other folder than the one the user was checked for.
+fn the_folder_itself(folder: &File, path: &Path) -> Result<(), String> {
+    let attributes =
+        folder.metadata().map_err(|error| format!("{}: {error}", path.display()))?.file_attributes();
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(format!(
+            "{} is a link to another folder, which isn't shared. Share the folder itself.",
+            path.display()
+        ));
+    }
+    if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(format!("{} isn't a folder.", path.display()));
+    }
+    let real = final_path(folder).map_err(|error| format!("{}: {error}", path.display()))?;
+    let asked = std::path::absolute(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let plain = |text: &str| text.trim_end_matches('\\').to_lowercase();
+    if plain(&real) != plain(&asked.to_string_lossy()) {
+        return Err(format!(
+            "{} leads to {real}, as a link on the way there does. Share the folder by its own path.",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The path Windows has for an open file, with every link resolved, as a drive letter's path.
+fn final_path(file: &File) -> io::Result<String> {
+    let mut buffer = vec![0u16; 1024];
+    loop {
+        // SAFETY: the handle is open, and the buffer is as many units long as said.
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        if length == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if length < buffer.len() {
+            let text = std::ffi::OsString::from_wide(&buffer[..length]).to_string_lossy().into_owned();
+            return Ok(text.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(text));
+        }
+        buffer.resize(length + 1, 0);
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    use std::process::Command;
+
+    fn junction(link: &Path, target: &Path) {
+        let made =
+            Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stdout));
+    }
+
+    fn check(path: &Path) -> Result<(), String> {
+        let folder = open_shared_folder(path, false).map_err(|error| error.to_string())?;
+        the_folder_itself(&folder, path)
+    }
+
+    #[test]
+    fn only_a_folder_by_its_own_path_is_shared() {
+        let root = std::env::temp_dir().join(format!("gh-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        std::fs::create_dir_all(real.join("inner")).unwrap();
+        junction(&root.join("link"), &real);
+
+        assert_eq!(check(&real), Ok(()));
+        assert_eq!(check(&real.join("inner").join("")), Ok(()), "a trailing backslash is the same folder");
+        let link = check(&root.join("link")).unwrap_err();
+        assert!(link.contains("is a link"), "{link}");
+        let through = check(&root.join("link").join("inner")).unwrap_err();
+        assert!(through.contains("leads to"), "{through}");
+
+        // Held, the folder can't be moved out of the way for a link to take its place.
+        let held = open_shared_folder(&real, false).unwrap();
+        assert!(std::fs::rename(&real, root.join("moved")).is_err());
+        drop(held);
+        // rmdir on a junction removes the link alone.
+        Command::new("cmd").arg("/c").arg("rmdir").arg(root.join("link")).status().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +371,15 @@ mod tests {
         fn end(&self, _: &str) {}
         fn console_access(&self) -> Vec<String> {
             Vec::new()
+        }
+        fn grow(&self, _: &Path, _: u64) -> Result<(), String> {
+            Err("not here".into())
+        }
+        fn disk_size_gb(&self, _: &Path) -> Option<u64> {
+            None
+        }
+        fn disks(&self) -> &dyn guesthouse_host_windows::snapshots::Disks {
+            &guesthouse_host_windows::windows::RealDisks
         }
     }
 

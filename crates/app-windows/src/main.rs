@@ -1,5 +1,6 @@
 //! Guesthouse's app on a Windows host, `guesthouse-app.exe`: a window that lists the machines and
-//! starts, stops, makes and deletes them, shows what each is doing, and says how to reach its guest.
+//! starts, stops, makes, changes and deletes them, shows what each is doing, and says how to reach
+//! its guest.
 //!
 //! The Guesthouse service does all of that, as the system, because HCS needs it. The app runs as its
 //! user and asks the service on its pipe, through `guesthouse-control`, and holds no rule of its own.

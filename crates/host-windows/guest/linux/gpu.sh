@@ -66,6 +66,50 @@ if ! modprobe dxgkrnl 2> /dev/null; then
     fi
 fi
 
+# The disk can be made larger while the machine is stopped, so the root partition, the last on it,
+# takes whatever room it has at every start. growpart says NOCHANGE and fails when there's none.
+root=$(findmnt -no SOURCE /)
+root_name=${root##*/}
+parent=$(lsblk -no PKNAME "$root" 2> /dev/null | head -n 1)
+number=$(cat "/sys/class/block/$root_name/partition" 2> /dev/null)
+if [ -n "$parent" ] && [ -n "$number" ] && command -v growpart > /dev/null; then
+    if grown=$(growpart "/dev/$parent" "$number" 2>&1); then
+        say "disk: $grown"
+        resize2fs "$root" 2>&1 | say_each disk
+    fi
+fi
+
+# The host's shared folder, when it gives one, by 9p over a Hyper-V socket to the host's port 564,
+# with the options hcsshim's Linux guests mount theirs with (internal/guest/storage/plan9). The host writes the file naming it at
+# each boot, and takes the file away when the machine has no share, and then it's unmounted.
+share=/mnt/shared
+if [ -f "$files/guesthouse/share" ]; then
+    read -r share_name share_mode < "$files/guesthouse/share"
+    mkdir -p "$share"
+    if ! mountpoint -q "$share"; then
+        modprobe hv_sock 2> /dev/null
+        # The socket's descriptor is handed to mount, which keeps the connection once it has it.
+        python3 - "$share_name" "$share_mode" "$share" << 'EOF' 2>&1 | say_each share
+import socket, subprocess, sys
+name, mode, target = sys.argv[1:4]
+packet = 65536
+connection = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, packet)
+connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, packet)
+connection.connect((socket.VMADDR_CID_HOST, 564))
+fd = connection.fileno()
+options = f"trans=fd,rfdno={fd},wfdno={fd},msize={packet}"
+if mode == "ro":
+    options += ",ro,noload"
+options += f",aname={name}"
+sys.exit(subprocess.run(["mount", "-t", "9p", "-o", options, target, target], pass_fds=[fd]).returncode)
+EOF
+    fi
+    if mountpoint -q "$share"; then say "share: at $share"; else say "share: not mounted"; fi
+elif mountpoint -q "$share"; then
+    umount "$share"
+fi
+
 if [ -e /dev/dxg ]; then say "dxg: present"; else say "dxg: missing"; fi
 for driver in /usr/lib/wsl/drivers/*; do
     [ -d "$driver" ] && say "host driver: ${driver##*/}"

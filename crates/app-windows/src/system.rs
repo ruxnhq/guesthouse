@@ -8,7 +8,9 @@ use std::process::Command;
 use std::thread::{self, JoinHandle};
 
 use windows_sys::Win32::Foundation::{GlobalFree, HWND};
-use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows_sys::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -16,6 +18,9 @@ use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+};
+use windows_sys::Win32::UI::Shell::{
+    BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, SHBrowseForFolderW, SHGetPathFromIDListW,
 };
 
 /// The clipboard's format for text in UTF-16.
@@ -144,6 +149,68 @@ pub fn open_link(link: &str) -> Result<(), String> {
         .spawn()
         .map(drop)
         .map_err(|error| format!("The browser didn't open: {error}. The page is {link}"))
+}
+
+/// Opens Windows' folder picker on a thread of its own, as it waits until the person chooses, and
+/// hands `chosen` the folder, or `None` if they cancelled. Returns whether the picker opened.
+pub fn pick_folder(owner: isize, chosen: impl FnOnce(Option<PathBuf>) + Send + 'static) -> bool {
+    thread::Builder::new().name("folder dialog".into()).spawn(move || chosen(folder_dialog(owner))).is_ok()
+}
+
+fn folder_dialog(owner: isize) -> Option<PathBuf> {
+    let title: Vec<u16> = "Choose the folder the machine shares with this PC\0".encode_utf16().collect();
+    let info = BROWSEINFOW {
+        hwndOwner: owner as HWND,
+        lpszTitle: title.as_ptr(),
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        ..Default::default()
+    };
+    let mut path = vec![0u16; LONGEST_PATH];
+    // SAFETY: COM is started on this thread for the picker, which needs it, and ended after it. The
+    // title ends in a null and outlives the call. The item list the picker returns is the caller's,
+    // freed here once its path is read into a buffer of MAX_PATH units at least, as the call wants.
+    let picked = unsafe {
+        let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let list = SHBrowseForFolderW(&info);
+        let picked = !list.is_null() && SHGetPathFromIDListW(list, path.as_mut_ptr()) != 0;
+        if !list.is_null() {
+            CoTaskMemFree(list.cast());
+        }
+        if com >= 0 {
+            CoUninitialize();
+        }
+        picked
+    };
+    if !picked {
+        return None;
+    }
+    let end = path.iter().position(|&unit| unit == 0).unwrap_or(path.len());
+    Some(PathBuf::from(String::from_utf16_lossy(&path[..end])))
+}
+
+/// A time in seconds since 1970 in UTC as this PC's own clock shows it, such as `2026-11-23 14:05`.
+pub fn local_time(seconds: u64) -> String {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+    /// FILETIME counts tenths of a microsecond from 1601.
+    const FROM_1601: u64 = 11_644_473_600;
+    const TICKS: u64 = 10_000_000;
+    let ticks = (seconds + FROM_1601) * TICKS;
+    let file = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
+    let (mut utc, mut local) = (SYSTEMTIME::default(), SYSTEMTIME::default());
+    // SAFETY: every pointer is to a value on the stack that outlives the call, and a null time zone
+    // is this PC's own.
+    let converted = unsafe {
+        FileTimeToSystemTime(&file, &mut utc) != 0
+            && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+    };
+    if !converted {
+        return format!("{seconds} s after 1970");
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute
+    )
 }
 
 /// Opens Remote Desktop on `address`. Returns words for the person when it couldn't.

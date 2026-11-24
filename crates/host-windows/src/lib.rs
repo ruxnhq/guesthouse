@@ -13,6 +13,7 @@ pub mod printable;
 pub mod record;
 pub mod screen;
 pub mod settings;
+pub mod snapshots;
 pub mod wim_info;
 #[cfg(windows)]
 pub mod windows;

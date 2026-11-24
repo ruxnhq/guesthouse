@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 const SETTINGS: &str = "machine.json";
 /// The copy of a Linux guest's installer, kept until it has installed.
 const INSTALLER: &str = "installer.iso";
+/// A machine's events, a line each, and the log before it when this one grew too long.
+pub const EVENTS: &str = "events.log";
+pub const EVENTS_BEFORE: &str = "events.1.log";
 
 /// What a machine was made with and is given at each boot, and what its guest last said.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +85,16 @@ impl Store {
 
     pub fn installer(&self, name: &str) -> PathBuf {
         self.folder(name).join(INSTALLER)
+    }
+
+    /// The file a machine's events are kept in, which is begun afresh when it grows long.
+    pub fn events(&self, name: &str) -> PathBuf {
+        self.folder(name).join(EVENTS)
+    }
+
+    /// The events before the current file's, which it is renamed to when it's full.
+    pub fn events_before(&self, name: &str) -> PathBuf {
+        self.folder(name).join(EVENTS_BEFORE)
     }
 
     /// Every machine with settings, by name. A folder that isn't a machine's, such as one left by

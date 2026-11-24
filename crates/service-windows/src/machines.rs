@@ -8,14 +8,20 @@ use crate::store::{Settings, Store};
 use guesthouse_control::{Event, State, address_in};
 use guesthouse_host_windows::events::Sink;
 use std::collections::{BTreeMap, VecDeque};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How many of a machine's events a window that starts watching is sent first.
 const HISTORY: usize = 500;
 /// How many events a window may be behind before it's let go.
 const QUEUE: usize = 2000;
+/// How long a machine's events file may grow before it's kept as the one before and begun afresh.
+const EVENTS_LIMIT: u64 = 1024 * 1024;
 
 /// One machine, as the service knows it now.
 #[derive(Debug)]
@@ -71,9 +77,10 @@ impl Machines {
     /// Takes one of a machine's events: what it says of the machine's state and address is kept,
     /// and it goes to every window watching.
     pub fn tell(&self, name: &str, event: Event) {
-        let saved = {
+        let (saved, kept) = {
             let mut entries = self.lock();
             let Some(entry) = entries.get_mut(name) else { return };
+            let kept = event.clone();
             let mut address_changed = false;
             match &event {
                 Event::State(state) => entry.state = *state,
@@ -96,8 +103,10 @@ impl Machines {
                 Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
             });
             // Only a machine that has been made has settings to save.
-            (address_changed && entry.state != State::Preparing).then(|| entry.settings.clone())
+            ((address_changed && entry.state != State::Preparing).then(|| entry.settings.clone()), kept)
         };
+        // The file is written with the machines free, as a slow disk must not hold up the others.
+        keep_event(&self.store.events(name), &self.store.events_before(name), now(), &kept);
         if let Some(settings) = saved
             && let Err(error) = self.store.save(name, &settings)
         {
@@ -118,6 +127,59 @@ impl Machines {
     pub fn sink(self: &Arc<Self>, name: &str) -> Arc<dyn Sink> {
         Arc::new(Told { machines: Arc::clone(self), name: name.to_owned() })
     }
+}
+
+/// Adds `event` to the machine's events file as a line, and begins the file afresh when it has
+/// grown past [`EVENTS_LIMIT`]. A report reads these, so a failure here is let go: the event has
+/// been told to the windows already, and the machine mustn't stop for a file.
+fn keep_event(path: &Path, before: &Path, seconds: u64, event: &Event) {
+    let Some(line) = event_line(seconds, event) else { return };
+    if fs::metadata(path).is_ok_and(|meta| meta.len() >= EVENTS_LIMIT) {
+        let _ = fs::rename(path, before);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// An event as one line of the events file: `2026-01-02 03:04:05 UTC note text`.
+fn event_line(seconds: u64, event: &Event) -> Option<String> {
+    let value = serde_json::to_value(event).ok()?;
+    let kind = value.get("kind")?.as_str()?;
+    let text = value.get("text")?.as_str()?;
+    let text = text.replace(['\r', '\n'], " ");
+    Some(format!("{} {kind} {text}\n", utc(seconds)))
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs())
+}
+
+/// Seconds since 1970 as `YYYY-MM-DD HH:MM:SS UTC`.
+fn utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// The year, month and day that is `days` after 1970-01-01, in the proleptic Gregorian calendar.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
+    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 } as u32;
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
 }
 
 struct Told {
@@ -180,6 +242,61 @@ mod tests {
         assert_eq!(machines.lock()["win"].settings.address.as_deref(), Some("172.29.1.2"));
         assert_eq!(machines.store.load()[0].1.address.as_deref(), Some("172.29.1.2"));
         let _ = std::fs::remove_dir_all(machines.store.root());
+    }
+
+    #[test]
+    fn a_time_is_written_in_utc() {
+        assert_eq!(utc(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(utc(951_782_400 + 86_399), "2000-02-29 23:59:59 UTC");
+        assert_eq!(utc(1_767_225_600), "2026-01-01 00:00:00 UTC");
+        assert_eq!(utc(1_709_251_199), "2024-02-29 23:59:59 UTC");
+    }
+
+    #[test]
+    fn an_event_is_one_line_with_its_kind() {
+        let line = event_line(0, &Event::Problem("two\nlines\r".into())).unwrap();
+        assert_eq!(line, "1970-01-01 00:00:00 UTC problem two lines \n");
+        let line = event_line(0, &Event::State(State::Running)).unwrap();
+        assert_eq!(line, "1970-01-01 00:00:00 UTC state running\n");
+    }
+
+    #[test]
+    fn each_event_is_kept_in_the_machines_folder() {
+        let machines = machines("kept");
+        machines.tell("win", Event::Note("making the disk".into()));
+        machines.tell("win", Event::State(State::Running));
+        let text = fs::read_to_string(machines.store.events("win")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with(" UTC note making the disk"), "{}", lines[0]);
+        assert!(lines[1].ends_with(" UTC state running"), "{}", lines[1]);
+        let _ = fs::remove_dir_all(machines.store.root());
+    }
+
+    #[test]
+    fn a_long_file_is_kept_as_the_one_before_and_begun_afresh() {
+        let machines = machines("rotate");
+        let path = machines.store.events("win");
+        fs::write(&path, vec![b'x'; EVENTS_LIMIT as usize]).unwrap();
+        fs::write(machines.store.events_before("win"), "older").unwrap();
+        machines.tell("win", Event::Note("fresh".into()));
+        let before = fs::read(machines.store.events_before("win")).unwrap();
+        assert_eq!(before.len(), EVENTS_LIMIT as usize, "the full one replaced the older");
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.ends_with(" UTC note fresh\n"));
+        let _ = fs::remove_dir_all(machines.store.root());
+    }
+
+    #[test]
+    fn a_file_that_cant_be_written_never_stops_the_event() {
+        let machines = machines("unwritable");
+        // A folder in the file's place can't be opened for writing.
+        fs::create_dir(machines.store.events("win")).unwrap();
+        let (_, events) = machines.watch("win").unwrap();
+        machines.tell("win", Event::Note("still told".into()));
+        assert_eq!(events.try_recv().unwrap(), Event::Note("still told".into()));
+        let _ = fs::remove_dir_all(machines.store.root());
     }
 
     #[test]

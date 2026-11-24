@@ -123,7 +123,7 @@ fn answer<W: Work>(service: &Arc<Service<W>>, pipe: File) {
         Ok(Some(request)) => match allowed(&pipe) {
             Ok(()) => service.answer(request, &mut connection),
             Err(reason) => {
-                log(&reason);
+                log(&format!("refused: {reason}"));
                 let _ = connection.send(&Answer::Refused { reason });
             }
         },

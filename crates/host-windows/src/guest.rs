@@ -10,6 +10,18 @@ pub const REPORT_FILE: &str = r"Guesthouse\report.txt";
 /// The report's last line, on either system's serial port.
 pub const REPORT_DONE: &str = "guesthouse: report done";
 
+/// The one line `Guesthouse\share.txt` holds when a Windows guest has a share: the share's name, the
+/// port of the host's Plan 9 server it reaches it on, and `rw` or `ro`, as `shared 50001 rw`.
+/// `report.ps1` reads it and starts `guesthouse-share.exe` with them.
+pub fn share_marker(read_only: bool) -> String {
+    format!(
+        "{} {} {}\r\n",
+        crate::settings::SHARE_NAME,
+        guesthouse_hcs::schema::PLAN9_WINDOWS_PORT,
+        if read_only { "ro" } else { "rw" }
+    )
+}
+
 /// What the host writes on a guest's serial port to ask it to shut down. HCS's own request needs
 /// Hyper-V's integration services in the guest, which a machine HCS makes doesn't have, so the guest
 /// listens for this and shuts itself down, as App Sandbox's guest agent does when asked.
@@ -108,6 +120,23 @@ mod tests {
         assert!(gpu.contains(&format!("say \"{done}\"")));
         assert!(report_done("guesthouse: report done"));
         assert!(!report_done("say \"guesthouse: report done\""));
+    }
+
+    #[test]
+    fn the_share_marker_is_one_line_the_report_reads_as_name_port_and_mode() {
+        assert_eq!(share_marker(false), "shared 50001 rw\r\n");
+        assert_eq!(share_marker(true), "shared 50001 ro\r\n");
+        // The report splits the first line on white space and takes those three, as the host wrote them.
+        assert!(REPORT.contains("-split '\\s+'"));
+        assert!(REPORT.contains(r"C:\Guesthouse\share.txt"));
+        assert!(REPORT.contains("-eq 'ro'"));
+        let marker = share_marker(true);
+        let fields: Vec<&str> = marker.split_whitespace().collect();
+        assert_eq!(fields, [crate::settings::SHARE_NAME, "50001", "ro"]);
+        // And what it runs and installs is where the host puts it.
+        assert!(REPORT.contains(r"$shareFolder = 'C:\Guesthouse\share'"));
+        assert!(REPORT.contains("'guesthouse-share.exe'"));
+        assert!(REPORT.contains("'winfsp.msi'"));
     }
 
     #[test]

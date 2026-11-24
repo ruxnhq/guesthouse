@@ -18,6 +18,11 @@
 #    remoteman only, so it needs -RemotemanFrom, and says so at the start and the end (with it,
 #    -RemotemanFrom's files may have another version in their names). With no network and nothing cached the build stops: it never
 #    builds without the screen unless -NoScreen asks;
+#    Also gets WinFsp, for a Windows guest's shared folder: the MSI windows\winfsp.json pins,
+#    downloaded from the pin's URL into target\winfsp-cache\VERSION\ (a cached file is used when its
+#    SHA-256 is the pin's; a file whose SHA-256 isn't is refused and deleted), and builds
+#    guesthouse-share.exe (cargo, release), the program the guest mounts the share with, when the
+#    workspace has the guesthouse-share package, and says so when it doesn't;
 # 4. gathers the files to install (the payload) in the out folder's payload\:
 #      guesthouse-service.exe, guesthouse-serial-relay.exe (it has to be beside the service),
 #      guesthouse-hcs-boot.exe, setup.ps1 (windows\installer), LICENSE, THIRD-PARTY.md (with the
@@ -25,7 +30,9 @@
 #      FFmpeg's LGPL 3 builds on), app\ (the app and the Windows App Runtime beside it),
 #      screen\remoteman-host-setup.exe (as it is: the service runs it in each Windows guest),
 #      viewer\ (the viewer's zip unpacked, remoteman.exe in it: the app starts that), and
-#      guest\nvapi64.dll (the NVAPI wrapper the service gives a guest on an NVIDIA card);
+#      guest\nvapi64.dll (the NVAPI wrapper the service gives a guest on an NVIDIA card),
+#      guest\guesthouse-share.exe and guest\winfsp.msi (as it is) with guest\WinFsp-License.txt
+#      (what the service gives a guest with a shared folder), and WinFsp's licence in THIRD-PARTY.md;
 # 5. builds the installer (crates\installer-windows) and packs the Windows App Runtime its pages
 #    need and the payload into it (guesthouse-setup --pack): the runtime is the same as the
 #    app's and is carried once. It's the out folder's guesthouse-setup-VERSION.exe (VERSION is
@@ -164,6 +171,70 @@ function Add-Remoteman($Pin, [string]$To) {
     Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
 }
 
+# windows\winfsp.json: the version of WinFsp this installer carries, and its installer's name, URL
+# and SHA-256.
+function Read-WinfspPin {
+    $file = Join-Path $root 'windows\winfsp.json'
+    $pin = Get-Content -Raw $file | ConvertFrom-Json
+    $entry = $pin.installer
+    if (-not $pin.version) { throw "$file has no version" }
+    if (-not $entry -or -not $entry.file -or -not $entry.url) { throw "$file has no installer.file and installer.url" }
+    if ($entry.sha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "$file pins no SHA-256 for $($entry.file) (it says '$($entry.sha256)')." }
+    $pin
+}
+
+# WinFsp's installer, checked against the pin: from the cache, or downloaded into it. A file that
+# isn't the pin's is never kept. Gives its path.
+function Get-WinfspInstaller($Pin) {
+    $entry = $Pin.installer
+    $want = $entry.sha256.ToLowerInvariant()
+    $cache = Join-Path $root "target\winfsp-cache\$($Pin.version)"
+    New-Item -ItemType Directory -Force $cache | Out-Null
+    $path = Join-Path $cache $entry.file
+    if (Test-Path -LiteralPath $path) {
+        if ((Get-Sha256 $path) -eq $want) {
+            Write-Information "WinFsp: $($entry.file) from the cache, $cache." -InformationAction Continue
+            return $path
+        }
+        Write-Warning "The cached $path isn't what windows\winfsp.json pins; deleting it and downloading it again."
+        Remove-Item -LiteralPath $path -Force
+    }
+    $part = "$path.part"
+    Write-Information "WinFsp: downloading $($entry.url)" -InformationAction Continue
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -UseBasicParsing -Uri $entry.url -OutFile $part
+    } catch {
+        Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        throw "WinFsp's $($entry.file) couldn't be downloaded from $($entry.url), and isn't in $cache ($($_.Exception.Message)). Connect to the network and run this again."
+    }
+    $got = Get-Sha256 $part
+    if ($got -ne $want) {
+        Remove-Item -LiteralPath $part -Force
+        throw "$($entry.url) has SHA-256 $got, and windows\winfsp.json pins $want. Refused: nothing of it is kept."
+    }
+    Move-Item -LiteralPath $part $path -Force
+    $path
+}
+
+# WinFsp's installer and licence into the payload's guest\ folder, which the service gives a guest
+# with a shared folder, and a line of THIRD-PARTY.md saying so.
+function Add-Winfsp($Pin, [string]$To) {
+    $msi = Get-WinfspInstaller $Pin
+    $guest = Join-Path $To 'guest'
+    New-Item -ItemType Directory -Force $guest | Out-Null
+    Copy-Item -LiteralPath $msi (Join-Path $guest 'winfsp.msi')
+    Copy-Item -LiteralPath (Join-Path $root 'windows\installer\WinFsp-License.txt') $guest
+    $lines = @(
+        '',
+        '## WinFsp in this installer',
+        '',
+        "This installer carries WinFsp $($Pin.version) ($(Split-Path -Leaf $msi)), WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos, https://github.com/winfsp/winfsp, as its project released it and unmodified, as ``guest\winfsp.msi``. It is under the GNU General Public License, version 3, with WinFsp's exception for free and open source software that permits distributing its installer unmodified; ``guest\WinFsp-License.txt`` is its licence. The service puts both in a Windows guest that has a shared folder, which installs WinFsp and mounts the folder as a drive."
+    )
+    Add-Content -Path (Join-Path $To 'THIRD-PARTY.md') -Value $lines -Encoding UTF8
+}
+
 Push-Location $root
 try {
     # The Windows App Runtime the pages (and the app) need: what windows-reactor-setup staged beside
@@ -186,10 +257,22 @@ try {
         # The pin is read first: a pin with no hashes stops the build before anything is built.
         $pin = $null
         if ($NoScreen) { Write-Output 'No screen: -NoScreen was given.' } else { $pin = Read-Pin }
+        $winfspPin = Read-WinfspPin
 
         Invoke-Native 'the build' {
             cargo build --release --locked -p guesthouse-service -p guesthouse-host-windows -p guesthouse-hcs-boot `
                 -p guesthouse-nvapi-shim
+        }
+        # The program a Windows guest mounts its shared folder with. Its package may not be in the
+        # workspace yet, and then the installer is built without it.
+        $shareExe = $null
+        if ($meta.packages | Where-Object { $_.name -eq 'guesthouse-share' }) {
+            Invoke-Native 'the share program build' { cargo build --release --locked -p guesthouse-share }
+            $shareExe = Join-Path $release 'guesthouse-share.exe'
+            if (-not (Test-Path -LiteralPath $shareExe)) { throw "$shareExe wasn't built" }
+        } else {
+            Write-Warning ('The workspace has no guesthouse-share package, so this installer has no program for a Windows guest ' +
+                'to mount a shared folder with: those guests will have no drive.')
         }
         $appFolder = ''
         if ($NoApp) {
@@ -225,6 +308,8 @@ try {
         Copy-Item (Join-Path $root 'windows\installer\setup.ps1'), (Join-Path $root 'LICENSE'), (Join-Path $root 'THIRD-PARTY.md') $Payload
         New-Item -ItemType Directory -Force (Join-Path $Payload 'guest') | Out-Null
         Copy-Item (Join-Path $release 'nvapi64.dll') (Join-Path $Payload 'guest')
+        if ($shareExe) { Copy-Item $shareExe (Join-Path $Payload 'guest') }
+        Add-Winfsp $winfspPin $Payload
         if ($appFolder) { Copy-Item -Recurse $appFolder (Join-Path $Payload 'app') }
         if ($pin) {
             Copy-Item (Join-Path $root 'windows\installer\GPL-3.0.txt') $Payload

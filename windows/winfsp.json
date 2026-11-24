@@ -1,0 +1,8 @@
+{
+  "version": "2.2",
+  "installer": {
+    "file": "winfsp-2.2.26323.msi",
+    "url": "https://github.com/winfsp/winfsp/releases/download/v2.2/winfsp-2.2.26323.msi",
+    "sha256": "36ce01f9eedbbe6842b7fb4bedc79d7d4f71983e8aceb6877b46a07b331c7e19"
+  }
+}

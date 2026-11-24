@@ -23,6 +23,9 @@ pub const GPU_RESOURCE_PATH: &str = "VirtualMachine/ComputeTopology/Gpu";
 /// The port a Linux guest reaches the host's Plan 9 shares on, over a Hyper-V socket, as Linux
 /// guests that HCS runs for containers do.
 pub const PLAN9_PORT: u32 = 564;
+/// The port a Windows guest reaches the host's Plan 9 shares on, as App Sandbox's Windows guests do
+/// when HCS boots them the same way. Guesthouse's own program in the guest connects to it.
+pub const PLAN9_WINDOWS_PORT: u32 = 50001;
 /// How a Windows guest names the host's virtual SMB shares: this, then the share's name. It's the
 /// one name the guest's virtual SMB redirector answers to.
 pub const VIRTUAL_SMB_ROOT: &str = r"\\?\VMSMB\VSMB-{dcc079ae-60ba-4d07-847c-3493609c0870}";

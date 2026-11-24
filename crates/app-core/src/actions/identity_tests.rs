@@ -200,3 +200,25 @@ fn a_build_without_the_script_keeps_microsofts_number_and_says_so() {
     assert_eq!(rig.asked().len(), 0);
     assert_eq!(rig.state().reason, no_script("NVIDIA"));
 }
+
+#[test]
+fn a_failed_gpu_start_gives_the_display_back_the_name_microsofts_number_needs() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &["named RDPUDD Chained DD from the next start\r\n"]);
+    scratch.write("program/guest/display-name.ps1", "name it");
+    let host = RecordingHost::default();
+    let task = Task::new(&rig.context, &host, "start", rig.machine.clone());
+    let state = IdentityState { shown: Shown::Maker, ..IdentityState::default() };
+    write_state(&rig.context, &rig.machine, &state).unwrap();
+    after_failed_gpu(&task, Failure::new("no GPU"));
+    assert_eq!(rig.machine.windows_maker(), Some(GpuMaker::Nvidia));
+    assert_eq!(rig.asked(), vec!["$name = 'RDPUDD Chained DD'\nname it".to_owned()]);
+
+    let scratch = Scratch::new();
+    let rig = Rig::on_amd(&scratch, &[]);
+    scratch.write("program/guest/display-name.ps1", "name it");
+    let task = Task::new(&rig.context, &host, "start", rig.machine.clone());
+    write_state(&rig.context, &rig.machine, &state).unwrap();
+    after_failed_gpu(&task, Failure::new("no GPU"));
+    assert!(rig.asked().is_empty(), "only NVIDIA's driver goes by the name");
+}

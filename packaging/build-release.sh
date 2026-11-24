@@ -534,10 +534,12 @@ glibc_needed() {
         sed 's/GLIBC_//; s/\.$//' | sort -Vu | tail -n 1
 }
 
-# The folder names are the app's, in paths.rs and linux/mod.rs.
+# The folder names are the app's, in paths.rs and linux/mod.rs. The recipes are the app's own, and
+# each is a file of text that a person can read before it is used.
 copy_guest_files() {
     [ ! -d "$REPO/guest" ] || cp -R "$REPO/guest" "$OUT/stage/"
     [ ! -d "$REPO/linux" ] || cp -R "$REPO/linux" "$OUT/stage/"
+    [ ! -d "$REPO/recipes" ] || cp -R "$REPO/recipes" "$OUT/stage/"
 }
 
 # The NVAPI wrapper a Windows guest gets in System32, so DLSS finds a paravirtualized card. It goes

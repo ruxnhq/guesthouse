@@ -3,9 +3,14 @@
 
 mod args;
 mod change;
+mod copies;
+mod idle;
 mod make;
 mod pick;
+mod recipes;
 mod setup;
+mod share;
+mod snapshots;
 mod standalone;
 mod steps;
 #[cfg(test)]
@@ -40,19 +45,46 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   off MACHINE                cut the power, as Force Off does
   log MACHINE                where the log is, and the end of it
   command MACHINE            what would start it beside your own QEMU or libvirt, printed
+  snapshots MACHINE          its snapshots, and which ones Guesthouse took by itself
+  take-snapshot MACHINE NAME keep its disk and firmware settings as they are now, by that name
+  go-back MACHINE [SNAPSHOT] [--yes]
+                             back to a snapshot, by its name or its tag, or with none after a
+                             start that failed, back to the one taken before it
+  delete-snapshot MACHINE SNAPSHOT [--yes]
+                             delete a snapshot, by its name or its tag
+  idle MACHINE [--minutes N] read how busy a running machine is, and say if it would count as
+                             idle. It changes nothing
+  share                      how each card with a running machine is shared, as the library
+                             page shows it. It changes nothing
 
   new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                              [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                              [--amd-driver PATH] [--intel-driver PATH]
                              [--remote-desktop on|off] [--ssh on|off]
+                             [--set-up-for RECIPE [--yes]] [--lean on|off]
+                             [--skip-scanning on|off]
   new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
   install MACHINE [--no-wait]
                              run the install of a Windows or Ubuntu machine
   remove MACHINE [--yes]     delete it, or forget it if its disk is elsewhere
+  recipes                    the recipes a machine can be set up for
+  recipe MACHINE [--no-wait] run a machine's recipe steps again, in the running guest
+  duplicate MACHINE [--name NAME] [--throwaway [--delete-when-stopped]] [--no-wait]
+                             a copy of a machine that is off, with its own disk.
+                             A throwaway starts clean each time, and one made with
+                             --delete-when-stopped is deleted once it has run and stopped
+  export MACHINE FILE [--no-wait]
+                             the machine in one file, for Guesthouse on another PC
+  import FILE [--name NAME]  a machine from such a file
+  lean MACHINE [--no-wait]   take out again what lean Windows takes out, in the running guest
+  scan-all MACHINE [--no-wait]
+                             have Defender scan the folders it was told to leave out again
 
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
-                             dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh
+                             dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh,
+                             auto-snapshot
+                             throwaway
                              only-through is an interface's name, such as wg0, or off. dns is an
                              IPv4 address, or auto
   forward MACHINE add|remove tcp|udp HOST GUEST
@@ -96,19 +128,46 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
     match parse(arguments)? {
         Command::Help => writeln!(out, "{USAGE}")?,
         Command::List => list(context, out)?,
+        Command::Share => share::run(context, out)?,
         Command::Status(name) => show_status(context, &find(context, name)?, out)?,
         Command::Show(name) => change::show(context, &find(context, name)?, out)?,
         Command::Start { name, wait } => start(context, &find(context, name)?, wait, out)?,
         Command::Install { name, wait } => make::install(context, &find(context, name)?, wait, out)?,
+        Command::Recipes => recipes::show_all(context, out)?,
+        Command::RunRecipe { name, wait } => recipes::run_again(context, &find(context, name)?, wait, out)?,
+        Command::Lean { name, wait } => recipes::lean_again(context, &find(context, name)?, wait, out)?,
+        Command::ScanAll { name, wait } => recipes::scan_all(context, &find(context, name)?, wait, out)?,
         Command::Stop(name) => stop(context, &find(context, name)?, "stop", out)?,
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
+        Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,
         Command::Standalone(name) => standalone::command(context, &find(context, name)?, out)?,
         Command::New { name, options } => make::new_machine(context, name, &options, out)?,
         Command::Set { name, key, value } => change::set(context, find(context, name)?, key, value, out)?,
         Command::Forward { name, change } => change::forward(context, find(context, name)?, &change, out)?,
         Command::Setup { driver, card } => setup::setup(context, driver, card, out)?,
         Command::Remove { name, yes } => make::remove(context, &find(context, name)?, yes, out)?,
+        Command::Snapshots(name) => snapshots::list(context, &find(context, name)?, out)?,
+        Command::GoBack { name, snapshot: None, yes } => {
+            snapshots::go_back(context, &find(context, name)?, yes, out)?
+        }
+        Command::GoBack { name, snapshot: Some(snapshot), yes } => {
+            snapshots::go_back_to(context, &find(context, name)?, snapshot, yes, out)?
+        }
+        Command::TakeSnapshot { name, snapshot } => {
+            snapshots::take(context, &find(context, name)?, snapshot, out)?
+        }
+        Command::DeleteSnapshot { name, snapshot, yes } => {
+            snapshots::delete(context, &find(context, name)?, snapshot, yes, out)?
+        }
+        Command::Duplicate { name, copy, throwaway, delete, wait } => {
+            let source = find(context, name)?;
+            copies::duplicate(context, &source, copies::Copy { name: copy, throwaway, delete }, wait, out)?
+        }
+        Command::Export { name, file, wait } => {
+            copies::export(context, &find(context, name)?, file, wait, out)?
+        }
+        Command::Import { file, name } => copies::import(context, file, name, out)?,
     }
     Ok(())
 }
@@ -131,6 +190,10 @@ fn state_text(found: &Status) -> String {
 }
 
 fn list(context: &Context, out: &mut dyn Write) -> Result<()> {
+    crate::duplicate::sweep_abandoned(context);
+    for id in crate::throwaway::delete_finished(context) {
+        writeln!(out, "{id} had run and stopped, and was deleted, as it was made to be.")?;
+    }
     let (machines, unreadable) = load_all(context);
     let rows: Vec<[String; 4]> = machines
         .iter()
@@ -173,6 +236,9 @@ fn show_status(context: &Context, machine: &Machine, out: &mut dyn Write) -> Res
     for note in notes.into_iter().filter(|note| !note.is_empty()) {
         writeln!(out, "{note}")?;
     }
+    if let Some(point) = &found.restore_point {
+        writeln!(out, "{}", snapshots::offer(&machine.id, point))?;
+    }
     // A machine held to one interface that has gone still runs, with no network.
     let in_use = found.slot.and_then(|_| network_in_use(context, machine));
     if in_use == Some(InUse::Cut) {
@@ -210,8 +276,20 @@ fn run_task(
     wait: bool,
     out: &mut dyn Write,
 ) -> Result<Option<Status>> {
+    run_task_with(context, machine, action, &[], wait, out)
+}
+
+/// The same, for an action that takes arguments.
+fn run_task_with(
+    context: &Context,
+    machine: &Machine,
+    action: &str,
+    arguments: &[String],
+    wait: bool,
+    out: &mut dyn Write,
+) -> Result<Option<Status>> {
     let mut steps = Steps::from_end(context, action);
-    let mut task = launch(context, action, machine, &[], None)?;
+    let mut task = launch(context, action, machine, arguments, None)?;
     if !wait {
         return Ok(None);
     }
@@ -248,7 +326,12 @@ fn start(context: &Context, machine: &Machine, wait: bool, out: &mut dyn Write) 
     };
     if found.state != State::Running {
         let log = context.paths.log_file();
-        return Err(follow_up(&found, format!("{name} did not start. The log has more: {}", log.display())));
+        let mut failure =
+            follow_up(&found, format!("{name} did not start. The log has more: {}", log.display()));
+        if let Some(point) = &found.restore_point {
+            failure.0 = format!("{} {}", failure.0, snapshots::offer(&machine.id, point));
+        }
+        return Err(failure);
     }
     if !found.error.is_empty() {
         writeln!(out, "Note: {}", found.error)?;

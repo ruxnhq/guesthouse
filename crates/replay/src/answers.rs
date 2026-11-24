@@ -277,7 +277,7 @@ impl Backend for RecordedAnswers {
         Some(Status(status))
     }
 
-    fn registry_value(&mut self, _name: &RegistryName) -> Option<RegistryValue> {
+    fn registry_value(&mut self, _name: &RegistryName, _asked_type: u32) -> Option<RegistryValue> {
         None
     }
 

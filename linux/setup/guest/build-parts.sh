@@ -73,5 +73,6 @@ cd "$work/nvfwd/tests"
 glslangValidator -V --vn shader_spv -o shader.h shader.comp
 gcc -O2 -o "$built/vkcompute" vkcompute.c -lvulkan
 gcc -std=gnu17 -O2 -o "$built/cudavec" cudavec.c -ldl
+gcc -std=gnu17 -O2 -o "$built/cudartcheck" cudartcheck.c -ldl
 
 rm -rf "$work"

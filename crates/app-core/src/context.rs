@@ -4,6 +4,7 @@ use crate::agent::{GuestAgent, TcpAgent};
 use crate::bridge::BridgeHost;
 use crate::clock::{Clock, RealClock};
 use crate::guest_memory::GuestMemory;
+use crate::guest_shell::{GuestShell, SshShell};
 use crate::jailing::Offer;
 use crate::monitor::{Monitor, QmpMonitor};
 use crate::paths::Paths;
@@ -92,6 +93,8 @@ pub struct Context {
     pub bridge: BridgeHost,
     pub monitor: Arc<dyn Monitor>,
     pub agent: Arc<dyn GuestAgent>,
+    /// A shell in an Ubuntu guest, over its forwarded SSH port.
+    pub shell: Arc<dyn GuestShell>,
     pub clock: Arc<dyn Clock>,
     /// Replaces the room an install needs, for a test on a small disk.
     pub install_room: Option<u64>,
@@ -134,6 +137,7 @@ impl Context {
             bridge: BridgeHost::default(),
             monitor: Arc::new(QmpMonitor),
             agent: Arc::new(TcpAgent),
+            shell: Arc::new(SshShell::default()),
             clock: Arc::new(RealClock::default()),
             install_room: None,
             recorded_intel_card: None,

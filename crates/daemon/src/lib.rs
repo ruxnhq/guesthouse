@@ -27,6 +27,7 @@ pub mod slot;
 pub mod startup;
 #[cfg(any(feature = "nvidia", feature = "amd", feature = "intel"))]
 mod store;
+pub mod use_note;
 #[cfg(any(feature = "amd", feature = "intel"))]
 pub mod vendor_setup;
 pub mod viewer;

@@ -4,6 +4,7 @@ use super::{Shared, is_off};
 use crate::common::in_background;
 use crate::rows::{boxed_rows, confirm, icon_button, on_yes, question, row_button};
 use adw::prelude::*;
+use guesthouse_app_core::auto_snapshot::{NOT_FOR_THROWAWAY, disk_can_hold};
 use guesthouse_app_core::machine::Kind;
 use guesthouse_app_core::snapshots::{Snapshot, list_snapshots};
 use guesthouse_app_core::tasks::Status;
@@ -14,6 +15,13 @@ use std::rc::Rc;
 
 const NOT_INSTALLED: &str = "Windows has not finished installing.";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
+const AUTO_TITLE: &str = "Snapshot Before Risky Changes";
+const AUTO_NOTE: &str = "Before a start that changes Windows in a way it might not come back from, Guesthouse \
+                         takes a snapshot of its own. It replaces the last one, and yours stay. If that start \
+                         fails, you can go back to it.";
+const AUTO_DISK: &str = "This disk can't hold snapshots, as only a qcow2 disk can.";
+const AUTO_BY: &str = "Taken by Guesthouse before a start";
+const AUTO_ICON: &str = "document-save-symbolic";
 
 fn taken_text(snapshot: &Snapshot) -> String {
     let time = Timestamp::from_second(snapshot.taken).ok();
@@ -25,10 +33,14 @@ fn taken_text(snapshot: &Snapshot) -> String {
 struct Parts {
     shared: Shared,
     group: adw::PreferencesGroup,
+    /// Windows machines only: the other kinds have no change for it to be before.
+    auto: Option<adw::SwitchRow>,
     take: gtk::Button,
     rows: RefCell<Vec<adw::ActionRow>>,
     can_change: Cell<bool>,
     busy: Cell<bool>,
+    /// Whether the disk can hold a snapshot, once it has been read.
+    disk_can_hold: Cell<bool>,
 }
 
 #[derive(Clone)]
@@ -46,18 +58,33 @@ impl Snapshots {
         let take = row_button("Take Snapshot");
         take.set_sensitive(false);
         group.set_header_suffix(Some(&take));
+        let auto = (shared.machine.borrow().kind == Kind::Windows).then(|| Self::auto_row(shared, &group));
         let this = Self(Rc::new(Parts {
             shared: shared.clone(),
             group,
+            auto,
             take,
             rows: RefCell::default(),
             can_change: Cell::new(false),
             busy: Cell::new(false),
+            disk_can_hold: Cell::new(true),
         }));
         let handle = this.clone();
         this.0.take.connect_clicked(move |_| handle.on_take());
         this.read();
         this
+    }
+
+    fn auto_row(shared: &Shared, group: &adw::PreferencesGroup) -> adw::SwitchRow {
+        let on = shared.machine.borrow().auto_snapshot_on();
+        let row = adw::SwitchRow::builder().title(AUTO_TITLE).subtitle(AUTO_NOTE).active(on).build();
+        let saving = shared.clone();
+        row.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().auto_snapshot = Some(row.is_active());
+            saving.save();
+        });
+        group.add(&row);
+        row
     }
 
     fn read(&self) {
@@ -67,20 +94,45 @@ impl Snapshots {
         let this = self.clone();
         in_background(
             &context,
-            move || Ok(list_snapshots(&reading, &machine)),
+            move || Ok((list_snapshots(&reading, &machine), disk_can_hold(&machine))),
             move |result| match result {
-                Ok(found) => this.show(&found),
+                Ok((found, can_hold)) => {
+                    this.show(&found);
+                    this.show_auto_disk(can_hold);
+                }
                 Err(text) => this.0.shared.window.problem(&text),
             },
         );
     }
 
+    fn show_auto_disk(&self, can_hold: bool) {
+        self.0.disk_can_hold.set(can_hold);
+        self.show_auto();
+    }
+
+    /// A disk that can't hold a snapshot, or a throwaway, gets none by itself, and the switch says why.
+    fn show_auto(&self) {
+        let Some(row) = &self.0.auto else { return };
+        let why = if self.0.shared.machine.borrow().throwaway {
+            Some(NOT_FOR_THROWAWAY)
+        } else {
+            (!self.0.disk_can_hold.get()).then_some(AUTO_DISK)
+        };
+        if row.is_sensitive() != why.is_none() || row.subtitle().as_deref() != Some(why.unwrap_or(AUTO_NOTE))
+        {
+            row.set_sensitive(why.is_none());
+            row.set_subtitle(why.unwrap_or(AUTO_NOTE));
+        }
+    }
+
     fn row_for(&self, snapshot: &Snapshot) -> adw::ActionRow {
-        let row = adw::ActionRow::builder()
-            .title(&snapshot.name)
-            .use_markup(false)
-            .subtitle(taken_text(snapshot))
-            .build();
+        let when = taken_text(snapshot);
+        let subtitle = if snapshot.automatic { format!("{AUTO_BY}, {when}") } else { when };
+        let row =
+            adw::ActionRow::builder().title(&snapshot.name).use_markup(false).subtitle(subtitle).build();
+        if snapshot.automatic {
+            row.add_prefix(&gtk::Image::from_icon_name(AUTO_ICON));
+        }
         let back = row_button("Go Back");
         let this = self.clone();
         let chosen = snapshot.clone();
@@ -170,6 +222,8 @@ impl Snapshots {
         for row in parts.rows.borrow().iter() {
             row.set_sensitive(can_change);
         }
+        // Throwaway is switched on the General page, and this follows it.
+        self.show_auto();
         if parts.busy.replace(status.busy) != status.busy {
             self.read();
         }

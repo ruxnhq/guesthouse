@@ -15,7 +15,7 @@ path = "src/main.rs"
 # Answers messages with no GPU behind them, to try the sockets by hand. Never for a real guest.
 stand-in = ["dep:guesthouse-backend-standin"]
 # The real backend, which opens the host's GPU.
-nvidia = ["dep:guesthouse-backend-nvidia", "dep:serde_json", "dep:guesthouse-sensors"]
+nvidia = ["dep:guesthouse-backend-nvidia", "dep:serde_json"]
 # The AMD backend. With nvidia on as well, each run opens the card the app named for its guest.
 amd = ["dep:guesthouse-backend-amd", "dep:serde_json"]
 # The Intel backend. It runs the guest's work on the card through xe where the card passes its own
@@ -38,8 +38,9 @@ guesthouse-frame-socket.workspace = true
 guesthouse-jail.workspace = true
 guesthouse-messages.workspace = true
 guesthouse-transport.workspace = true
-# The sensors' snapshot file, which the jail has to name.
-guesthouse-sensors = { workspace = true, optional = true }
+# The sensors' snapshot file, which the jail has to name, and the file the guest's video memory goes
+# in for the app.
+guesthouse-sensors.workspace = true
 # The facade, for the logger in logger.rs to serve.
 log = "0.4"
 # The app writes what setup found as JSON, and this reads it.
@@ -58,3 +59,7 @@ workspace = true
 [[test]]
 name = "jail"
 harness = false
+
+[[example]]
+name = "card_processes"
+required-features = ["nvidia"]

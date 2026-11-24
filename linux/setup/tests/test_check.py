@@ -41,8 +41,16 @@ class FakeGuest:
         self.file(f"opt/nv/driver/lib/libcuda.so.{V}", "")
         self.file("opt/nv/built/vkcompute", "#!/bin/sh\necho 'checked 16 values, 0 wrong'\n", True)
         self.file("opt/nv/built/cudavec", "#!/bin/sh\necho 'seed 1: checked 4 values, 0 wrong'\n", True)
+        self.file("opt/nv/built/cudartcheck", "#!/bin/sh\necho 'runtime 12040, seed 1: checked 8 values, 0 wrong'\n",
+                  True)
         self.state(f"gpu=on\nversion={V}\ntested=yes\n")
-        self.fake("dpkg-query", "echo 'install ok installed'")
+        # The packages of the install, our package at the host's version, and a `distro` file in the root
+        # for the distro's own NVIDIA packages.
+        self.fake("dpkg-query", f"""case "$*" in
+*libnvidia-compute*) [ ! -e "$NVFWD_ROOT/distro" ] || sed 's/^/ii |/' "$NVFWD_ROOT/distro" ;;
+*nvfwd-host-driver*) echo 'ii |{V}' ;;
+*) echo 'install ok installed' ;;
+esac""")
         self.fake("systemctl", '[ "$1" = get-default ] && echo graphical.target; exit 0')
         self.fake("id", '[ "$1" = -u ] && echo 1000; exit 0')
         self.fake("uname", "echo 7.0")
@@ -135,6 +143,54 @@ class Verdict(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL CUDA kernel", result.stdout)
 
+    def test_a_cuda_runtime_that_wont_start_fails(self):
+        # What every nvcc program did while the device refused what the runtime asks for at its start.
+        self.guest.file("opt/nv/built/cudartcheck",
+                        "#!/bin/sh\necho 'cudaGetDeviceCount(&count) = 3 (initialization error)'; exit 1\n", True)
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL CUDA runtime: cudaGetDeviceCount(&count) = 3 (initialization error)", result.stdout)
+
+    def test_no_cuda_runtime_is_said_and_not_a_failure(self):
+        self.guest.file("opt/nv/built/cudartcheck", "#!/bin/sh\necho 'no CUDA runtime here: install one'; exit 77\n",
+                        True)
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("SKIP CUDA runtime: no CUDA runtime here: install one", result.stdout)
+
+    def test_a_guest_built_before_the_runtime_check_is_not_failed(self):
+        os.remove(os.path.join(self.guest.root, "opt/nv/built/cudartcheck"))
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("SKIP CUDA runtime", result.stdout)
+
+    def test_what_the_device_turned_down_is_named(self):
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", "REFUSED ctrl 0x2080a084\nOVER limit 0x2b\n")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("turned down 2 kinds of call since the VM started: REFUSED ctrl 0x2080a084, OVER limit 0x2b",
+                      result.stdout)
+
+    def test_a_long_list_is_cut_to_the_first_few(self):
+        lines = "".join(f"REFUSED ctrl 0x{0x2080f000 + i:x}\n" for i in range(12))
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", lines)
+        out = self.guest.run().stdout
+        self.assertIn("turned down 12 kinds of call since the VM started: REFUSED ctrl 0x2080f000, "
+                      "REFUSED ctrl 0x2080f001, REFUSED ctrl 0x2080f002, REFUSED ctrl 0x2080f003, "
+                      "REFUSED ctrl 0x2080f004 and 7 more\n", out)
+        self.assertNotIn("0x2080f005", out)
+
+    def test_a_full_list_says_there_were_more(self):
+        lines = "".join(f"REFUSED ctrl 0x{0x2080f000 + i:x}\n" for i in range(63)) + "FULL more were turned down\n"
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", lines)
+        out = self.guest.run().stdout
+        self.assertIn("turned down more than 63 kinds of call", out)
+        self.assertIn("and 58 more, and more past what the device keeps (the host's calls.log has them)", out)
+
+    def test_nothing_turned_down_says_nothing(self):
+        self.guest.file("proc/driver/nvidia/nvfwd-refused", "")
+        self.assertNotIn("turned down", self.guest.run().stdout)
+
     def test_the_host_answering_another_version_fails(self):
         self.guest.script("driver-version.py", "#!/bin/sh\necho 620.10\n")
         self.assertIn("FAIL the host's driver says", self.guest.run().stdout)
@@ -171,6 +227,22 @@ class Verdict(unittest.TestCase):
     def test_sensors_that_read_say_nothing(self):
         self.guest.fake("nvidia-smi", """case "$*" in *temperature*) echo 42 ;; *) echo 'GPU 0: RTX' ;; esac""")
         self.assertNotIn("no sensor readings", self.guest.run().stdout)
+
+    def test_apt_knowing_the_hosts_driver_passes(self):
+        self.assertIn(f"PASS dpkg counts the host's driver {V} as installed", self.guest.run().stdout)
+
+    def test_apt_not_knowing_the_hosts_driver_fails(self):
+        self.guest.fake("dpkg-query", """case "$*" in *nvfwd-host-driver*|*libnvidia-compute*) ;; *) echo 'install ok installed' ;; esac""")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL dpkg counts the host's driver", result.stdout)
+
+    def test_the_distros_own_driver_is_named_in_a_warning(self):
+        self.guest.file("distro", "libnvidia-compute-595\nlibnvidia-compute-590\n")
+        result = self.guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("WARN the distro's own NVIDIA libraries are installed beside the host's "
+                      "(libnvidia-compute-595 libnvidia-compute-590)", result.stdout)
 
     def test_an_untested_driver_is_warned_about(self):
         self.guest.state(f"gpu=on\nversion={V}\ntested=no\n")

@@ -238,8 +238,16 @@ fn each_engine_notes_its_clock_at_both_ends_of_a_run() {
         for run in 0..RUNS {
             let ibs = [0, 1].map(|half| Ib { address: ib_va + ((run * 2 + half) * 32) as u64, bytes: 32 });
             let syncobj = Syncobj::create(&device).unwrap();
-            guesthouse_backend_amd::submit_all(&device, &context, ip_type, &ibs, &[ib, times], &syncobj)
-                .unwrap();
+            guesthouse_backend_amd::submit_all(
+                &device,
+                &context,
+                ip_type,
+                &ibs,
+                &[ib, times],
+                None,
+                &syncobj,
+            )
+            .unwrap();
             done.push(syncobj);
         }
         for syncobj in &done {

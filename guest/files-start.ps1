@@ -6,8 +6,6 @@ if (-not $user) { 'nobody is logged in'; return }
 if (-not (Get-NetFirewallRule -DisplayName 'gpupv-files' -ea 0)) {
     New-NetFirewallRule -DisplayName 'gpupv-files' -Direction Inbound -Protocol TCP -LocalPort 8767 -RemoteAddress 10.0.2.2 -Action Allow | Out-Null
 }
-# A helper from an earlier viewer may still be there, and Windows wouldn't start a second.
-Stop-ScheduledTask -TaskName gpupv-files -ea 0
 [IO.File]::WriteAllBytes('C:\gpupv\files.ps1', [Convert]::FromBase64String($helper))
 $action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File C:\gpupv\files.ps1'
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive

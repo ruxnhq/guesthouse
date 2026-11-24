@@ -153,12 +153,24 @@ impl VmPlan {
         if self.macos_boot().is_some() { MACOS_CARD } else { CARD }
     }
 
-    fn first_nic_model(&self) -> String {
-        let card = self.nic_card();
+    /// The machine's own address as the word for a card, or nothing for a machine that has none yet,
+    /// which keeps QEMU's default.
+    fn mac_word(&self) -> String {
         match self.network.mac.as_str() {
-            "" => format!("model={card}"),
-            mac => format!("model={card},mac={mac}"),
+            "" => String::new(),
+            mac => format!(",mac={mac}"),
         }
+    }
+
+    fn first_nic_model(&self) -> String {
+        format!("model={}{}", self.nic_card(), self.mac_word())
+    }
+
+    /// The only NIC of an Ubuntu guest, through QEMU's own NAT whatever the machine's network says,
+    /// with the machine's own address like any other machine's card. `settings` are the network's own.
+    pub(super) fn ubuntu_nic(&self, settings: &str) -> String {
+        let comma = if settings.is_empty() { "" } else { "," };
+        format!("{QEMU_NAT},model=virtio-net-pci{}{comma}{settings}", self.mac_word())
     }
 
     /// What the first NIC is connected to: QEMU's name for it, and its settings if it has any.

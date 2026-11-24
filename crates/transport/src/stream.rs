@@ -43,6 +43,11 @@ impl FrameStream {
         self.end += bytes.len();
     }
 
+    /// Whether part of a frame has arrived and the rest hasn't.
+    pub fn has_partial(&self) -> bool {
+        self.start < self.end
+    }
+
     /// The next whole frame, if one has arrived.
     pub fn next_frame(&mut self) -> Option<Frame<'_>> {
         let pending = &self.buffer[self.start..self.end];
@@ -77,6 +82,19 @@ mod tests {
             transaction,
         };
         [&header.encode()[..], payload].concat()
+    }
+
+    #[test]
+    fn part_of_a_frame_shows_until_the_rest_arrives() {
+        let bytes = frame(1, b"whole");
+        let mut stream = FrameStream::new();
+        assert!(!stream.has_partial());
+        stream.push(&bytes[..5]);
+        assert!(stream.next_frame().is_none());
+        assert!(stream.has_partial());
+        stream.push(&bytes[5..]);
+        assert!(stream.next_frame().is_some());
+        assert!(!stream.has_partial());
     }
 
     #[test]

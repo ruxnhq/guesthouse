@@ -23,6 +23,8 @@ const KIND_GDI: u32 = 4;
 
 /// The WDK's D3DDDIFMT_X8R8G8B8, the format of a staging surface.
 const FORMAT_X8R8G8B8: u32 = 22;
+/// The WDK's D3DDDIFMT_UNKNOWN. A GDI surface without a format is a heap of the guest's own memory.
+const FORMAT_NONE: u32 = 0;
 
 // Offsets in the record.
 const RECORD_WIDTH: usize = 8;
@@ -110,7 +112,14 @@ impl DescribeStandard {
             *field = u32_at(message, DESCRIPTION + index * 4)?;
         }
         let [width, height, ..] = fields;
-        let pitch = align_up(u64::from(width) * u64::from(BYTES_PER_PIXEL), PITCH_ALIGN) as u32;
+        // A program's own memory that the card is to reach, pinned memory in CUDA, comes as a GDI
+        // surface without a format, as wide as the memory is long and one row high. The guest locks
+        // as many bytes as the allocation says it has, so a row there is the width and no more.
+        let pitch = if kind == KIND_GDI && fields[2] == FORMAT_NONE {
+            width
+        } else {
+            align_up(u64::from(width) * u64::from(BYTES_PER_PIXEL), PITCH_ALIGN) as u32
+        };
         // Each kind of surface keeps its pitch in a different field of the description.
         match kind {
             KIND_SHADOW => fields[3] = pitch,
@@ -198,6 +207,14 @@ mod tests {
             describe(&request(kind, 32, [100, 50, 21, 0, 0, 0]), &mut out).unwrap();
             assert_eq!(u32_at(&out, 12 + field * 4), Ok(512), "kind {kind}");
         }
+    }
+
+    #[test]
+    fn a_heap_of_guest_memory_is_as_long_as_it_is_wide() {
+        let mut out = Vec::new();
+        describe(&request(KIND_GDI, 32, [0x1234, 1, FORMAT_NONE, 7, 0, 0]), &mut out).unwrap();
+        assert_eq!(u32_at(&out, 12 + 5 * 4), Ok(0x1234));
+        assert_eq!(StandardRecord::parse(&out[36..]).unwrap().exact_size(), 0x1234);
     }
 
     #[test]

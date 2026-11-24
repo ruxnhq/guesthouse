@@ -1,6 +1,7 @@
 //! Snapshots: the disk's own, with the firmware file and the TPM kept beside them.
 
 use crate::actions::Task;
+use crate::auto_snapshot;
 use crate::context::Context;
 use crate::disk_image::disk_info;
 use crate::failure::{Failure, Result};
@@ -8,6 +9,7 @@ use crate::machine::Machine;
 use crate::processes::running_vms;
 use crate::random::random_hex;
 use crate::settings::with_suffix;
+use crate::snapshot_state;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,8 @@ pub struct Snapshot {
     pub name: String,
     /// Seconds since 1970.
     pub taken: i64,
+    /// Guesthouse took it by itself before a start: see [`crate::auto_snapshot`].
+    pub automatic: bool,
 }
 
 pub fn snapshots_folder(context: &Context, machine: &Machine) -> PathBuf {
@@ -53,6 +57,7 @@ pub fn list_snapshots(context: &Context, machine: &Machine) -> Vec<Snapshot> {
                 tag: tag.to_owned(),
                 name: saved["name"].as_str().unwrap_or_default().to_owned(),
                 taken: entry["date-sec"].as_i64().unwrap_or(0),
+                automatic: saved["auto"].as_bool().unwrap_or(false),
             })
         })
         .collect();
@@ -106,14 +111,20 @@ pub fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The firmware file goes first: a snapshot only counts once the disk has it too.
 pub fn take_snapshot(task: &mut Task, name: &str) -> Result<()> {
+    make_snapshot(task, name, false).map(|_| ())
+}
+
+/// Takes a snapshot and says its tag. The firmware file goes first: a snapshot only counts once the
+/// disk has it too. One Guesthouse takes by itself may share a name with another, as the name is for
+/// reading and the tag is what tells them apart.
+pub(crate) fn make_snapshot(task: &mut Task, name: &str, automatic: bool) -> Result<String> {
     let (context, machine) = (task.context, task.machine.clone());
     let name = name.trim();
     if name.is_empty() || name.chars().count() > MAX_SNAPSHOT_NAME {
         return Err(Failure(format!("A snapshot needs a name of up to {MAX_SNAPSHOT_NAME} characters.")));
     }
-    if list_snapshots(context, &machine).iter().any(|snapshot| snapshot.name == name) {
+    if !automatic && list_snapshots(context, &machine).iter().any(|snapshot| snapshot.name == name) {
         return Err(Failure::new("There is already a snapshot with that name."));
     }
     if let Some(problem) = snapshot_problem(context, &machine) {
@@ -127,24 +138,33 @@ pub fn take_snapshot(task: &mut Task, name: &str) -> Result<()> {
     if tpm.is_dir() {
         copy_tree(&tpm, &snapshot_file(context, &machine, &tag, ".tpm"))?;
     }
-    fs::write(snapshot_file(context, &machine, &tag, ".json"), json!({"name": name}).to_string())?;
-    if let Err(failure) = change_snapshots(context, &machine, &["-c", &tag]) {
+    snapshot_state::keep(context, &machine, &snapshot_file(context, &machine, &tag, ".state"))?;
+    let saved = json!({"name": name, "auto": automatic, "nvme": machine.nvme});
+    fs::write(snapshot_file(context, &machine, &tag, ".json"), saved.to_string())?;
+    let made = auto_snapshot::record::keeping_back_to(context, &machine, || {
+        change_snapshots(context, &machine, &["-c", &tag])
+    });
+    if let Err(failure) = made {
         remove_snapshot_files(context, &machine, &tag)?;
         return Err(failure);
     }
-    Ok(())
+    Ok(tag)
 }
 
 fn remove_snapshot_files(context: &Context, machine: &Machine, tag: &str) -> Result<()> {
     for suffix in [".fd", ".json"] {
         fs::remove_file(snapshot_file(context, machine, tag, suffix))?;
     }
-    let _ = fs::remove_dir_all(snapshot_file(context, machine, tag, ".tpm"));
+    for suffix in [".tpm", ".state"] {
+        let _ = fs::remove_dir_all(snapshot_file(context, machine, tag, suffix));
+    }
+    auto_snapshot::record::forget_tag(context, machine, tag);
     Ok(())
 }
 
 /// Everything that can fail comes before the disk changes, and the firmware file then goes across in
-/// one step. The TPM goes with them: Windows may have sealed its disk's key in it.
+/// one step. The TPM goes with them: Windows may have sealed its disk's key in it. So do the notes
+/// the machine keeps about its guest, as they would otherwise say what the disk no longer holds.
 pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
     let (context, machine) = (task.context, task.machine.clone());
     let snapshot = find_snapshot(context, &machine, tag)?;
@@ -168,15 +188,32 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
         let _ = fs::remove_dir_all(&tpm);
         fs::rename(new_tpm, tpm)?;
     }
+    snapshot_state::restore(context, &task.machine, &snapshot_file(context, &machine, tag, ".state"))?;
+    let saved = snapshot_file(context, &machine, tag, ".json");
+    snapshot_state::restore_disk_place(context, &mut task.machine, saved)?;
+    auto_snapshot::record::went_back(context, &task.machine, tag, &snapshot.name);
+    crate::actions::copy_identity::went_back(context, &task.machine);
+    // A snapshot from before the app kept which folders Defender leaves out says nothing of them, so
+    // the next start asks the guest.
+    if machine.kind == crate::machine::Kind::Windows {
+        crate::scan_exclusions::mark_for_look(&machine.folder(context))?;
+    }
     Ok(())
 }
 
 pub fn delete_snapshot(task: &mut Task, tag: &str) -> Result<()> {
-    let (context, machine) = (task.context, task.machine.clone());
-    let snapshot = find_snapshot(context, &machine, tag)?;
+    let snapshot = find_snapshot(task.context, &task.machine, tag)?;
     task.step(&format!("Deleting the snapshot {}", snapshot.name));
-    change_snapshots(context, &machine, &["-d", tag])?;
-    remove_snapshot_files(context, &machine, tag)
+    delete_tag(task.context, &task.machine, tag)
+}
+
+/// Deletes the snapshot from the disk and what is kept beside it.
+pub(crate) fn delete_tag(context: &Context, machine: &Machine, tag: &str) -> Result<()> {
+    find_snapshot(context, machine, tag)?;
+    auto_snapshot::record::keeping_back_to(context, machine, || {
+        change_snapshots(context, machine, &["-d", tag])
+    })?;
+    remove_snapshot_files(context, machine, tag)
 }
 
 #[cfg(test)]
@@ -332,7 +369,8 @@ mod tests {
             "a refused go back changes nothing"
         );
         assert!(!with_suffix(Path::new(&machine.vars), ".new").exists());
-        assert_eq!(crate::machine::sorted_names(&snapshots_folder(&context, &machine)).len(), 2);
+        // The firmware file, the name and the notes about the guest.
+        assert_eq!(crate::machine::sorted_names(&snapshots_folder(&context, &machine)).len(), 3);
     }
 
     #[test]

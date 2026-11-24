@@ -45,6 +45,16 @@ class AllowList(unittest.TestCase):
                       ("ctrl", "0x20808163"), ("class", "0x2")):
             self.assertIn(entry, self.entries())
 
+    def test_the_cuda_runtime_has_what_it_needs(self):
+        # Without any one of these, every program built against the CUDA runtime stops at its first call with
+        # "initialization error", while the driver API still works.
+        for control in ("0x20802209", "0x20809001", "0x2080a026"):
+            self.assertIn(("ctrl", control), self.entries())
+
+    def test_what_the_cuda_runtime_can_do_without_stays_refused(self):
+        # It asks for this one too, and starts and runs without it.
+        self.assertFalse([entry for entry in self.entries() if entry[1] == "0x2080a084"])
+
     def test_its_two_neighbours_stay_refused(self):
         for control in ("0x20808164", "0x20808165"):
             self.assertFalse([entry for entry in self.entries() if entry[1] == control])

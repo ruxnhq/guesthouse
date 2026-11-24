@@ -2,7 +2,7 @@
 # It does nothing once that's so: Windows remembers the arrangement, for this set of monitors, in its own database.
 # Usage: take-over-display.ps1 WIDTH HEIGHT HZ LOG
 param([int]$Width = 1920, [int]$Height = 1080, [int]$Hz = 60, [string]$Log = "$env:ProgramData\Guesthouse\display.log")
-$ourName = 'RDPUDD Chained DD'
+$ourNames = 'RDPUDD Chained DD', 'Guesthouse Display'
 $tries = 30
 $pauseSeconds = 1
 $attachedToDesktop = 1
@@ -42,12 +42,12 @@ function All-Displays {
 
 $ours = $null
 for ($try = 0; $try -lt $tries -and -not $ours; $try++) {
-    $ours = All-Displays | Where-Object { $_.Str -eq $ourName } | Select-Object -First 1
+    $ours = All-Displays | Where-Object { $ourNames -contains $_.Str } | Select-Object -First 1
     if (-not $ours) { Start-Sleep $pauseSeconds }
 }
 if (-not $ours) { Say 'our display never came up, leaving things as they are'; return }
 
-$others = @(All-Displays | Where-Object { $_.Str -ne $ourName -and ($_.Flags -band $attachedToDesktop) })
+$others = @(All-Displays | Where-Object { $ourNames -notcontains $_.Str -and ($_.Flags -band $attachedToDesktop) })
 if (($ours.Flags -band $primaryDevice) -and $others.Count -eq 0) { Say "$($ours.Name) is already the only display"; return }
 
 $size = [Runtime.InteropServices.Marshal]::SizeOf([type][Screens+DM])

@@ -98,10 +98,14 @@ fn serve_jailed(folder: &Path, environment: &[(&str, &str)]) {
         std::thread::sleep(Duration::from_millis(50));
     }
     let connected = UnixStream::connect(&socket);
+    // The app's file for the guest's video memory is made after Landlock and mapped before the filter.
+    let use_file = guesthouse_sensors::guest_use::SharedGuestUse::open_to_read(&folder.join("run-2"));
+    let told = use_file.ok().and_then(|file| file.read_from(daemon.id()));
     let status = fs::read_to_string(format!("/proc/{}/status", daemon.id())).unwrap();
     let _ = daemon.kill();
     let _ = daemon.wait();
     assert!(connected.is_ok(), "QEMU's socket answers");
+    assert!(told.is_some(), "the guest's video memory is kept for the app: {}", log_of(folder));
     for wanted in [["NoNewPrivs:", "1"], ["Seccomp:", "2"]] {
         assert!(
             status.lines().any(|line| line.split_whitespace().eq(wanted)),

@@ -24,7 +24,7 @@ They're in `crates/`, listed here from the bottom up. Each depends only on crate
 |---|---|
 | `transport` | The byte stream from QEMU: frames, packet kinds, guest page ranges. |
 | `messages` | What the guest's messages look like, and how to write the answers. No state, no decisions. |
-| `sensors` | The host card's newest readings, in a small file any process of the user can read. |
+| `sensors` | The host card's newest readings, each process's part of an NVIDIA card, and each guest's video memory by its daemon's books, in small files any process of the user can read. |
 | `jail` | What a guest-facing process may still do once it's jailed: Landlock, seccomp, and no new privileges on Linux; an AppContainer, process mitigations and a job on Windows. |
 | `backend` | The `Backend` trait: what a GPU vendor must provide. Also the decision on whether to start. |
 | `backend-standin` | A pretend GPU, for tests only. |
@@ -202,7 +202,9 @@ NVIDIA limits how many encoding sessions a GeForce card runs at once, and this p
 
 ## Host sensors
 
-`backend-nvidia/src/sensors` reads the card through the vendor's management library, loaded at run time. One daemon per host does this, on its own thread, and writes a snapshot to a small shared file. The message path only reads that snapshot. With no library, or no fresh snapshot, the performance queries give their fixed answers.
+`backend-nvidia/src/sensors` reads the card through the vendor's management library, loaded at run time. One daemon per card does this, on its own thread, and writes a snapshot to a small shared file. The message path only reads that snapshot. With no library, or no fresh snapshot, the performance queries give their fixed answers.
+
+The same thread reads each process on the card once a second, for the app's share panel: the driver's newest one-second sample of each, of the shader cores, the encoder and the decoder, and the video memory the driver charges it with. It writes them to a table beside the snapshot, so one reading serves every guest on the card, and the other daemons never load the library. A sample is only believed if it ended in the last two seconds, as the library hands back old ones too, and a process the driver lists with none used nothing in that time. The table is one more owner-only file in shared memory in the daemon's jail. The daemon writing it serves a guest, so the app holds what it reads there to the table's room and every share to a whole.
 
 ## The app
 
@@ -219,6 +221,10 @@ Remote Desktop and SSH in a Windows guest are in `remote_access.rs`, with `actio
 Files dragged between this PC and a Windows guest go through a helper in the guest user's session, `guest/files.ps1`, as only a program there can start a drag in Windows or see one. `guest_files` in `app-core` is the host's end: one request a connection on a forwarded port, with the token first. The viewer's half is in `viewer/files/`. A drop is copied to the guest, the helper puts a window under the guest's pointer, and a press through the tablet starts a real drag there, which this PC's drag then moves. For a drag out, the helper is asked what the guest is dragging when the pointer leaves the picture with the button down, and a drag of this PC's takes its place while the files are fetched.
 
 Ubuntu guests take a route of their own, in `crates/app-core/src/linux/` and `actions/ubuntu.rs`, with what goes into a guest in `linux/` at the top of the repo. Ubuntu's installer runs with no hands from a seed disc, and the host's driver reaches the guest on a read-only image, made from the files of the driver that's loaded. An unknown driver branch turns the GPU off and the VM still boots, and another point release warns. That GPU is a preview so far, and the app says so.
+
+Recipes are in `recipe/` in `app-core`: a text file that says what a machine is for, with a few settings and the steps to run in the guest once the install has succeeded. `format` reads and checks one, `shelf` finds the app's own (`recipes/`) and the user's, and `record` keeps the copy a machine was made for and how its steps went, in two files beside `machine.json`. The steps are `actions/recipe`, a stage that comes after an install and fails alone, and a task of its own to run again. Windows takes them through the agent, which starts the steps in a task as the account and is read through a status file. Ubuntu takes them over SSH as root, in `guest_shell.rs`, with a fixed command and the data on stdin. [Recipes](docs/recipes.md) is the format.
+
+Lean Windows is `lean/` in `app-core`, a choice of its own that a recipe can turn on: `list` holds what it takes out and switches off, from which both the words the user reads and the data the guest gets are made. A lean machine's answer disc has `guest/lean.ps1` and one more command in the answer file's specialize pass, and `actions/lean` runs the script again through the agent near the end of the install, as a note and never a failure. Folders left out of Defender's scanning are `scan_exclusions.rs`, a choice only the user turns on for the folders a recipe names, put in place by `actions/scan_exclusions` with Defender's own setting.
 
 The guest's driver calls go through `nvfwd`, a device in the QEMU patch, to the host's driver, on the vCPU that made them. No daemon carries the calls on this route. The device works on a private copy of each call and holds it to an allow list and to limits per VM, and `linux/README.md` has the details. QEMU runs in the same jail as Windows' here, with the card's nodes added.
 

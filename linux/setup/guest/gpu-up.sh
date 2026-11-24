@@ -98,6 +98,9 @@ refresh_from_image() {
     esac
 }
 
+# Before anything that can stop this run: the network is the guest's way out, whatever the GPU does.
+"$here/netplan-by-name.sh" || true
+
 # Links from an earlier boot must not outlive it, whatever this boot decides.
 "$here/link-driver.sh" unlink
 udevadm settle --timeout=30
@@ -112,6 +115,9 @@ version=$(value_of "$driver/manifest" version)
 image_id=$(value_of "$driver/manifest" id)
 tested=$(value_of "$driver/manifest" tested)
 [ -n "$version" ] && [ -n "$image_id" ] || gpu_off "the driver image has no usable manifest"
+# Before anything here can turn the GPU off, and kept when it does: apt has to know the host's driver is
+# there whenever someone installs a package that needs it.
+"$here/driver-package.sh" "$version"
 
 built_for="$image_id $kernel"
 if [ "$(cat "$target/built-for" 2>/dev/null)" != "$built_for" ]; then

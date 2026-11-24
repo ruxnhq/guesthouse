@@ -8,16 +8,40 @@ PATCH = os.path.join(os.path.dirname(LINUX), "qemu", "qemu-gpupv.patch")
 
 
 def file_in_patch(name):
+    """The file as the whole series leaves it: the patch that adds it, then each later one that changes it."""
     with open(PATCH) as f:
         text = f.read()
-    start = text.index(f"+++ b/hw/misc/nvfwd/{name}\n")
+    marker = f"+++ b/hw/misc/nvfwd/{name}\n"
+    start = text.index(marker)
     body = text[text.index("@@", start):]
     lines = []
     for line in body.split("\n")[1:]:
         if not line.startswith("+"):
             break
         lines.append(line[1:])
+    at = text.find(marker, start + 1)
+    while at >= 0:
+        lines = apply_hunks(lines, text[at + len(marker):].split("\ndiff --git")[0].split("\n-- \n")[0])
+        at = text.find(marker, at + 1)
     return "\n".join(lines) + "\n"
+
+
+def apply_hunks(lines, diff):
+    """Applies one file's hunks, which have to match exactly where they say."""
+    out, used = [], 0
+    for hunk in re.finditer(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@.*\n((?:[ +-].*\n?)*)", diff, flags=re.M):
+        first = int(hunk.group(1)) - 1
+        out += lines[used:first]
+        used = first
+        for line in hunk.group(2).split("\n"):
+            if not line:
+                continue
+            if line[0] in " -":
+                assert lines[used] == line[1:], (lines[used], line)
+                used += 1
+            if line[0] in " +":
+                out.append(line[1:])
+    return out + lines[used:]
 
 
 class Copies(unittest.TestCase):

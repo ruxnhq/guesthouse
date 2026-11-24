@@ -2,10 +2,13 @@
 
 #include "ColourTransform.h"
 #include "CursorImage.h"
+#include "PassGeometry.h"
 
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -32,9 +35,16 @@ struct PassConstants
 
 	float sourceToWire[3][4];
 	float cursorToWire[3][4];
+
+	std::uint32_t unchanged;
+	// Set by Run, not by the caller.
+	std::uint32_t copyRows;
+	std::uint32_t originX;
+	std::uint32_t originY;
 };
 
 static_assert(sizeof(PassConstants) % 16 == 0, "D3D11 constant buffers come in 16-byte units");
+static_assert(offsetof(PassConstants, unchanged) == 144, "unchanged starts the cbuffer's tenth 16-byte register");
 
 // The GPU side of the exporter: the ring's buffers, and the compute pass that fills them. It runs on the swap chain's thread only.
 class FramePass
@@ -59,10 +69,14 @@ public:
 	// Writes one frame into a slot and flushes. The surface is free for Windows once this returns.
 	HRESULT Run(ID3D11Texture2D* surface, std::uint32_t slot, const PassConstants& constants);
 
+	// Rows per group for a frame that needs no colour work, from 1 to MostCopyRows. 0 runs such a frame in the normal layout.
+	void SetCopyRows(std::uint32_t rows) { m_CopyRows = (std::min)(rows, MostCopyRows); }
+
 private:
 	HRESULT CreateCursorTexture();
 	HRESULT CreateLutBuffer();
 	HRESULT ReadableView(ID3D11Texture2D* surface, Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& view);
+	HRESULT Dispatch(const PassConstants& constants, PassGroups groups);
 
 	Microsoft::WRL::ComPtr<ID3D11Device> m_Device;
 	Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_Context;
@@ -80,6 +94,7 @@ private:
 	std::vector<Microsoft::WRL::ComPtr<ID3D11Buffer>> m_Slots;
 	std::vector<Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView>> m_SlotViews;
 	std::uint64_t m_SlotSize = 0;
+	std::uint32_t m_CopyRows = DefaultCopyRows;
 };
 
 }

@@ -24,6 +24,7 @@ const TRANSLATED_PATH_ROOM: usize = 0x10;
 
 /// The value types the guest distinguishes.
 pub const TYPE_STRING: u32 = 1;
+pub const TYPE_BINARY: u32 = 3;
 pub const TYPE_NUMBER: u32 = 4;
 pub const TYPE_STRING_LIST: u32 = 7;
 

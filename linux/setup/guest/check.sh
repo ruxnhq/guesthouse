@@ -82,6 +82,18 @@ check_own_desktop() {
     if [ -n "$on_gpu" ]; then pass 'the compositor runs on the GPU'; else fail 'the compositor runs on the GPU'; fi
 }
 
+# apt has to know the host's driver is there, or a package that needs it brings the distro's own.
+check_driver_package() {
+    local others
+    command -v dpkg-query > /dev/null || return 0
+    others=$(distro_driver_packages)
+    if [ -n "$others" ]; then
+        warn "the distro's own NVIDIA libraries are installed beside the host's ($others): programs get the host's while the GPU is on, but OpenCL goes through their ICD, and it and the services they brought are of another version. sudo $installed/driver-package.sh --replace puts the host's in their place"
+    else
+        check "dpkg counts the host's driver $1 as installed" test "$(installed_version "$driver_package")" = "$1"
+    fi
+}
+
 check_version() {
     local version=$1 module answer
     for module in $modules; do
@@ -91,6 +103,7 @@ check_version() {
     answer=$("$here/driver-version.py" 2>&1)
     check "the host's driver says $version (it said: $answer)" test "$answer" = "$version"
     check "libcuda $version linked in" sh -c "ldconfig -p | grep -q libcuda.so.1 && test -e $driver/lib/libcuda.so.$version"
+    check_driver_package "$version"
     check 'driver libraries resolve' sh -c "! ldd $driver/lib/libGLX_nvidia.so.0 $driver/lib/libnvidia-egl-wayland.so.1 $driver/lib/libnvidia-egl-gbm.so.1 2>&1 | grep -qE 'not found|GLIBC'"
 }
 
@@ -103,6 +116,43 @@ check_compute() {
     if [ $? = 0 ] && echo "$output" | grep -q ' 0 wrong'; then pass "$text"; else fail "$text: $(echo "$output" | tail -n 1)"; fi
 }
 
+# What nvcc builds goes through the CUDA runtime, which asks the driver for more than cudavec does. The runtime
+# comes with a CUDA toolkit, not the driver, so a guest without one has nothing to check here.
+check_cuda_runtime() {
+    local output status
+    if [ ! -x "$built/cudartcheck" ]; then
+        echo "SKIP CUDA runtime: the check isn't built yet, it comes with the next driver image"
+        return 0
+    fi
+    output=$(timeout "$gpu_test_seconds" "$built/cudartcheck" 2>&1)
+    status=$?
+    if [ "$status" = 77 ]; then
+        echo "SKIP CUDA runtime: $(echo "$output" | tail -n 1)"
+    elif [ "$status" = 0 ] && echo "$output" | grep -q ' 0 wrong'; then
+        pass "CUDA runtime, every value checked"
+    else
+        fail "CUDA runtime: $(echo "$output" | tail -n 1)"
+    fi
+}
+
+# A refused control comes back as a status inside a call that worked, so a program only says its own error.
+# The device keeps one line for each kind of call it turned down, at most 64, the last saying when it is full.
+# This names the first few and counts the rest.
+say_refused() {
+    local list=$root/proc/driver/nvidia/nvfwd-refused lines count first more=''
+    [ -r "$list" ] || return 0
+    lines=$(grep -v '^FULL' "$list" | grep .)
+    [ -n "$lines" ] || return 0
+    count=$(echo "$lines" | wc -l)
+    first=$(echo "$lines" | head -n 5 | paste -sd, | sed 's/,/, /g')
+    [ "$count" -le 5 ] || more=" and $((count - 5)) more"
+    if grep -q '^FULL' "$list"; then
+        count="more than $count"
+        more="$more, and more past what the device keeps (the host's calls.log has them)"
+    fi
+    echo "---- the device turned down $count kinds of call since the VM started: $first$more"
+}
+
 check_gpu() {
     local listing vulkan
     listing=$(timeout "$gpu_test_seconds" nvidia-smi -L 2>&1)
@@ -113,6 +163,7 @@ check_gpu() {
     if echo "$vulkan" | grep -q 'driverName *= *NVIDIA'; then pass 'Vulkan sees the NVIDIA driver'; else fail 'Vulkan sees the NVIDIA driver'; fi
     check_compute 'Vulkan compute, every value checked' "$built/vkcompute"
     check_compute 'CUDA kernel, every value checked' "$built/cudavec"
+    check_cuda_runtime
     # Not a failure: the rest of the GPU doesn't need them.
     timeout "$gpu_test_seconds" nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader 2>&1 | grep -q '^[0-9]' ||
         warn "no sensor readings, so nvidia-smi shows N/A: the host's sensor daemon isn't running, or doesn't know this driver"
@@ -207,6 +258,7 @@ check_guest_files() {
 
 finish() {
     check_guest_files
+    [ "$gpu" != on ] || say_refused
     echo '----'
     if [ "$failed" != 0 ]; then
         echo "FAIL $failed parts do not work"

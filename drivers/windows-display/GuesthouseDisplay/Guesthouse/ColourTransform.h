@@ -39,4 +39,8 @@ struct GammaTransform
 // then CIEXYZ to the wire's primaries. With no transform that's a plain change of primaries.
 Rows ComposeToWire(Primaries source, WireFormat wire, const GammaTransform& transform);
 
+// Whether the transform gives an SDR pixel back as it came: no matrix or the identity, and no table or one that maps each value to
+// itself, close enough that no 8-bit value changes. Windows sends such a table with the desktop at its defaults.
+bool LeavesPixelsAlone(const GammaTransform& transform);
+
 }

@@ -8,6 +8,7 @@
 //! file: see [`crate::udmabuf`]. A buffer taken in is kept while any of its mappings in the space
 //! are, and let go after the last.
 
+use crate::buffer_list::BufferList;
 use crate::device::Device;
 use crate::fault::{self, Fault};
 use crate::fence_ib::{FenceIbs, Writer};
@@ -22,7 +23,7 @@ use crate::video_runs::{Retired, VideoRuns};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{OwnedFd, RawFd};
 use std::time::Instant;
 
 /// Which buffers a space has taken in, and its mappings of them. Kept apart from the files so the
@@ -163,8 +164,14 @@ pub struct SpaceVm {
     video_wake_failed: bool,
     /// How each engine family gives way to the card's other users, see [`crate::share`].
     shares: HashMap<u32, Share>,
+    /// Whether finished runs are kept for giving way, which only then judges them.
+    keeps_finished: bool,
+    /// Runs seen to retire since they were last asked for, with their times, while kept.
+    finished: Vec<Finished>,
     /// How fast the card's clock runs, to read the times runs note.
     clock_khz: u32,
+    /// The kernel's list of the buffers a run here may touch, made when they change.
+    lists: BufferList,
 }
 
 /// Where a run's fence is in guest memory, by guest physical address, and the value it ends with.
@@ -188,6 +195,13 @@ struct OnCard {
     fence: Option<GuestFence>,
 }
 
+/// A run of the space's that the card has been through: its engine family and when it ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Finished {
+    pub ip_type: u32,
+    pub times: RunTimes,
+}
+
 /// How a run on the card ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ran {
@@ -201,6 +215,17 @@ pub enum Ran {
     Faulted(Fault),
     /// Nothing was sent, as work here had already faulted in an earlier run. amdgpu keeps a space's
     /// last fault, so the fault is that earlier run's, not this one's.
+    Stopped(Fault),
+}
+
+/// How sending the daemon's own work that waits for other runs went.
+#[derive(Debug)]
+pub enum Sent {
+    /// It is on the card, and the kernel signals this when it retires.
+    OnCard(Syncobj),
+    /// amdgpu kept saying try again, so nothing was sent.
+    Refused,
+    /// Nothing was sent, as work here had already faulted.
     Stopped(Fault),
 }
 
@@ -236,7 +261,10 @@ impl SpaceVm {
             video_last_retired: None,
             video_wake_failed: false,
             shares: HashMap::new(),
+            keeps_finished: false,
+            finished: Vec::new(),
             clock_khz: device.info().counter_freq_khz,
+            lists: BufferList::default(),
         })
     }
 
@@ -264,6 +292,22 @@ impl SpaceVm {
     /// The fault that stopped this space, if its work has had one.
     pub fn faulted(&self) -> Option<Fault> {
         self.faults.found()
+    }
+
+    /// The buffers a submission may touch, made into a list once and named by its handle after that.
+    /// The guest doesn't say which it uses, so every buffer mapped here is in it.
+    fn buffer_list(&mut self, buffers: &[GemHandle]) -> io::Result<Option<u64>> {
+        Ok(self.lists.get(&self.file, buffers))
+    }
+
+    /// The buffers a submission here may name: every one mapped here, and this space's own for fence
+    /// writers and video commands once they are made. Every way of sending names this same set, so
+    /// they share one list and a guest that mixes them doesn't remake it at each switch.
+    fn named_buffers(&self) -> Vec<GemHandle> {
+        let mut buffers = self.books.handles();
+        buffers.extend(self.fence_ibs.as_ref().map(FenceIbs::handle));
+        buffers.extend(self.video_ib.as_ref().map(VideoIb::handle));
+        buffers
     }
 
     /// Runs command buffers already mapped here on the engine family `ip_type`, in order, and waits
@@ -334,15 +378,15 @@ impl SpaceVm {
                 fault.address, fault.status
             )));
         }
-        let Some(own) = self.video_ib.as_ref().map(VideoIb::handle) else {
+        if self.video_ib.is_none() {
             return Err(io::Error::other("no buffer for video commands was made here"));
-        };
+        }
         let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
-        let mut buffers = self.books.handles();
-        buffers.push(own);
+        let buffers = self.named_buffers();
+        let list = self.buffer_list(&buffers)?;
         let submitted = self.contexts.submit(&self.file, HW_IP_VCN_ENC, Some(queue), |context| {
-            submit::submit_all(&self.file, context, HW_IP_VCN_ENC, runs, &buffers, &retired).map(|_| ())
+            submit::submit_all(&self.file, context, HW_IP_VCN_ENC, runs, &buffers, list, &retired).map(|_| ())
         });
         match submitted {
             Ok(()) => {
@@ -404,6 +448,75 @@ impl SpaceVm {
         }
     }
 
+    /// Sync files of the guest's runs on the card that write `fence`, if one of them takes it to
+    /// `value` or past it. Work that waits for all of them comes after the fence reaches the value.
+    /// `None` if no run sent here does, as when the run is still to be sent.
+    pub fn sync_files_reaching(&self, fence: u64, value: u64) -> io::Result<Option<Vec<OwnedFd>>> {
+        let writes = |run: &&OnCard| run.fence.is_some_and(|written| written.address == fence);
+        let reaches = |run: &OnCard| run.fence.is_some_and(|written| written.value >= value);
+        if !self.on_card.iter().filter(writes).any(reaches) {
+            return Ok(None);
+        }
+        let files = self.on_card.iter().filter(writes).map(|run| run.retired.export_sync_file(&self.file));
+        files.collect::<io::Result<Vec<_>>>().map(Some)
+    }
+
+    /// Sends the daemon's own command buffers, already mapped here, to run once every sync file in
+    /// `after` has signalled, and doesn't wait for them. Hand what it gives to [`Self::end_own`].
+    pub fn send_after(&mut self, ip_type: u32, ibs: &[Ib], after: &[OwnedFd]) -> io::Result<Sent> {
+        only_copies_for_the_video_ring(ip_type, ibs)?;
+        if let Some(fault) = self.faults.look(&self.file) {
+            return Ok(Sent::Stopped(fault));
+        }
+        let mut waits = Vec::with_capacity(after.len());
+        for sync_file in after {
+            match Syncobj::from_sync_file(&self.file, sync_file) {
+                Ok(wait) => waits.push(wait),
+                Err(error) => {
+                    waits.iter().for_each(|wait| wait.destroy(&self.file));
+                    return Err(step("taking in a run to wait for", error));
+                }
+            }
+        }
+        let sent = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error));
+        let submitted = sent.and_then(|signal| {
+            // As in `submit_and_wait`: any buffer mapped here may be used.
+            let buffers = self.books.handles();
+            let submitted = self.contexts.submit(&self.file, ip_type, None, |context| {
+                submit::submit_after(&self.file, context, ip_type, ibs, &buffers, None, &waits, &signal)
+                    .map(|_| ())
+            });
+            match submitted {
+                Ok(()) => Ok(Sent::OnCard(signal)),
+                Err(error) => {
+                    signal.destroy(&self.file);
+                    match error.kind() {
+                        io::ErrorKind::WouldBlock => Ok(Sent::Refused),
+                        _ => Err(step("submitting", error)),
+                    }
+                }
+            }
+        });
+        // The kernel holds the fences a submission waits for, so the objects can go now.
+        waits.iter().for_each(|wait| wait.destroy(&self.file));
+        submitted
+    }
+
+    /// An eventfd that becomes readable once `signal`, from [`Self::send_after`], is signalled.
+    pub fn arm(&self, signal: &Syncobj) -> io::Result<OwnedFd> {
+        signal.arm_eventfd(&self.file).map_err(|error| step("arming the eventfd", error))
+    }
+
+    /// How the daemon's own run from [`Self::send_after`] ended, once it retired or was given up on.
+    pub fn end_own(&mut self, signal: Syncobj, retired: bool) -> Ran {
+        signal.destroy(&self.file);
+        match (retired, self.faults.look(&self.file)) {
+            (false, _) => Ran::Hung,
+            (true, Some(fault)) => Ran::Faulted(fault),
+            (true, None) => Ran::Retired,
+        }
+    }
+
     fn submit_and_wait(
         &mut self,
         ip_type: u32,
@@ -412,10 +525,12 @@ impl SpaceVm {
         patience: Patience,
     ) -> io::Result<Ran> {
         let signal = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
-        // The guest doesn't say which buffers the work uses, so it may use any mapped here.
-        let buffers = self.books.handles();
+        // The guest doesn't say which buffers the work uses, so it may use any mapped here, named by
+        // a list the kernel keeps rather than by every handle each time.
+        let buffers = self.named_buffers();
+        let list = self.buffer_list(&buffers)?;
         let submitted = self.contexts.submit(&self.file, ip_type, queue, |context| {
-            submit::submit_all(&self.file, context, ip_type, ibs, &buffers, &signal).map(|_| ())
+            submit::submit_all(&self.file, context, ip_type, ibs, &buffers, list, &signal).map(|_| ())
         });
         let ran = match submitted {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(Ran::Refused),
@@ -468,9 +583,9 @@ impl SpaceVm {
     /// and doesn't wait for them. The last is the fence writer in `slot`, which writes `fence`.
     pub fn send(&mut self, ip_type: u32, ibs: &[Ib], slot: usize, fence: GuestFence) -> io::Result<()> {
         only_copies_for_the_video_ring(ip_type, ibs)?;
-        let Some(fence_ibs) = &self.fence_ibs else {
+        if self.fence_ibs.is_none() {
             return Err(io::Error::other("no fence writers were made here"));
-        };
+        }
         // As in `run`: nothing more is sent to a space whose work has faulted.
         if let Some(fault) = self.faults.look(&self.file) {
             return Err(io::Error::other(format!(
@@ -480,12 +595,13 @@ impl SpaceVm {
             )));
         }
         let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
-        // The guest doesn't say which buffers the work uses, so it may use any mapped here.
-        let mut buffers = self.books.handles();
-        buffers.push(fence_ibs.handle());
+        // The guest doesn't say which buffers the work uses, so it may use any mapped here, and the
+        // fence writers, which are this file's own.
+        let buffers = self.named_buffers();
         let stamped = with_clock_notes(ibs, slot);
+        let list = self.buffer_list(&buffers)?;
         let submitted = self.contexts.submit(&self.file, ip_type, Some(fence.queue), |context| {
-            submit::submit_all(&self.file, context, ip_type, &stamped, &buffers, &retired).map(|_| ())
+            submit::submit_all(&self.file, context, ip_type, &stamped, &buffers, list, &retired).map(|_| ())
         });
         match submitted {
             Ok(_) => {
@@ -498,6 +614,37 @@ impl SpaceVm {
                 Err(error)
             }
         }
+    }
+
+    /// Has the space keep its finished runs for [`Self::take_finished`], to give way.
+    pub fn keep_finished(&mut self) {
+        self.keeps_finished = true;
+    }
+
+    /// The runs seen to retire since this was last asked, looking at them all, with their times.
+    pub fn take_finished(&mut self) -> Vec<Finished> {
+        self.take_back_slots(true);
+        std::mem::take(&mut self.finished)
+    }
+
+    /// When the runs still on the card that the card has been through ended, by engine family: the
+    /// card notes a run's end before the kernel retires it.
+    pub fn ends_on_card(&self) -> Vec<(u32, u64)> {
+        let Some(fence_ibs) = &self.fence_ibs else { return Vec::new() };
+        self.on_card
+            .iter()
+            .filter(|run| run.sent.is_some())
+            .filter_map(|run| {
+                let (started, ended) = fence_ibs.times(run.slot);
+                (started != 0 && ended >= started).then(|| (run.ip_type, ticks_to_ns(ended, self.clock_khz)))
+            })
+            .collect()
+    }
+
+    /// Judges a finished run for giving way, with when the guest's own work last ended before it
+    /// started: see [`Share::retired`].
+    pub fn judge(&mut self, finished: Finished, own_end: u64) {
+        self.shares.entry(finished.ip_type).or_default().retired(finished.times, own_end);
     }
 
     /// Whether a run may go to the engine family `ip_type` now, or should wait while the space gives
@@ -539,10 +686,10 @@ impl SpaceVm {
             if run.retired.signalled(&self.file).unwrap_or(true) {
                 run.retired.destroy(&self.file);
                 let (started, ended) = fence_ibs.times(run.slot);
-                if let Some(sent) = run.sent {
+                if let Some(sent) = run.sent.filter(|_| self.keeps_finished) {
                     let ticks = |ticks| ticks_to_ns(ticks, self.clock_khz);
                     let times = RunTimes { sent, started: ticks(started), ended: ticks(ended) };
-                    self.shares.entry(run.ip_type).or_default().retired(times);
+                    self.finished.push(Finished { ip_type: run.ip_type, times });
                 }
                 fence_ibs.give_back(run.slot);
                 self.retired.extend(run.fence);
@@ -589,6 +736,7 @@ impl SpaceVm {
             return Err(error);
         }
         self.books.add(buffer, handle, address, offset, length);
+        self.lists.mark_stale();
         Ok(())
     }
 
@@ -597,8 +745,12 @@ impl SpaceVm {
         let Some(unmapping) = self.books.remove(address) else {
             return Ok(());
         };
+        self.lists.mark_stale();
         let result = memory::unmap(&self.file, unmapping.handle, unmapping.address, unmapping.length);
         if unmapping.last_use {
+            // The cached list holds a reference on this buffer, so closing the handle alone would
+            // keep its memory until the next submission remakes the list.
+            self.lists.close(&self.file, unmapping.handle);
             memory::close(&self.file, unmapping.handle);
         }
         result
@@ -674,6 +826,12 @@ mod tests {
 
     /// A space with no card behind its file: every call to the kernel on it fails, so a test sees
     /// what is refused before the kernel is asked.
+    #[test]
+    fn a_fence_no_run_here_writes_has_nothing_to_wait_on() {
+        let space = space_without_a_card();
+        assert!(space.sync_files_reaching(0x1000, 1).unwrap().is_none());
+    }
+
     fn space_without_a_card() -> SpaceVm {
         SpaceVm {
             file: File::open("/dev/null").unwrap(),
@@ -689,7 +847,10 @@ mod tests {
             video_last_retired: None,
             video_wake_failed: false,
             shares: HashMap::new(),
+            keeps_finished: false,
+            finished: Vec::new(),
             clock_khz: 100_000,
+            lists: BufferList::default(),
         }
     }
 

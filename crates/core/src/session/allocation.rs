@@ -102,7 +102,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     }
 
     /// The system memory allocations hold that the card had no room for.
-    fn spilled_in_use(&self) -> u64 {
+    pub(super) fn spilled_in_use(&self) -> u64 {
         let spilled =
             self.allocations.values().filter(|allocation| holds_memory(allocation) && allocation.spilled);
         spilled.map(|allocation| allocation.size).fold(0, u64::saturating_add)

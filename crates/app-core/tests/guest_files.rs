@@ -8,6 +8,9 @@ use std::path::PathBuf;
 const SENT_TO_THE_GUEST: [&str; 35] = [
     "SetupComplete.cmd",
     "agent.ps1",
+    "app-windows-start.ps1",
+    "app-windows.cs",
+    "app-windows.ps1",
     "api-check.ps1",
     "autounattend.xml",
     "check.ps1",
@@ -38,9 +41,6 @@ const SENT_TO_THE_GUEST: [&str; 35] = [
     "window-size-start.ps1",
     "window-size.ps1",
     "window-speed.ps1",
-    "windows-ask.ps1",
-    "windows-start.ps1",
-    "windows.ps1",
 ];
 
 fn guest_file(name: &str) -> PathBuf {
@@ -107,6 +107,23 @@ fn the_files_helper_only_answers_the_host() {
     assert!(helper.contains("words[0] != token) return;"));
 }
 
+/// The helper for app windows listens on the guest's network too, so the firewall rule and the helper
+/// keep it to the host's end of QEMU's private link, and only a caller that sends the token gets in.
+/// The one other caller it lets through is a program on the guest itself, which still needs the token.
+#[test]
+fn the_app_windows_helper_only_answers_the_host() {
+    let start = fs::read_to_string(guest_file("app-windows-start.ps1")).unwrap();
+    let rules: Vec<&str> = start.lines().filter(|line| line.contains("New-NetFirewallRule")).collect();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert!(rules[0].contains("-LocalPort 8769 -RemoteAddress 10.0.2.2"), "{}", rules[0]);
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
+    assert!(helper.contains("if (!IPAddress.IsLoopback(from) && from.ToString() != HostAddress) return;"));
+    assert!(helper.contains("if (first == null || first != token) return;"));
+    let runner = fs::read_to_string(guest_file("app-windows.ps1")).unwrap();
+    assert!(runner.contains("Get-Content C:\\gpupv\\token.txt"));
+}
+
 /// A helper's task runs conhost, and stopping the task leaves the PowerShell under it holding the
 /// helper's port. The next helper then can't listen, and a loop that went on would keep a core busy.
 #[test]
@@ -114,12 +131,15 @@ fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
     let stop = fs::read_to_string(guest_file("helper-stop.ps1")).unwrap();
     assert!(stop.contains("Stop-ScheduledTask -TaskName \"gpupv-$helperName\""), "{stop}");
     assert!(stop.contains("C:\\gpupv\\$helperName.ps1") && stop.contains("Stop-Process"), "{stop}");
-    for helper in ["clipboard.ps1", "window-size.ps1", "windows.ps1"] {
+    for helper in ["clipboard.ps1", "window-size.ps1"] {
         let text = fs::read_to_string(guest_file(helper)).unwrap();
         assert!(text.contains("try { $listener.Start() } catch { exit 1 }"), "{helper}");
         assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
     }
-    for name in ["clipboard", "files", "window-size", "windows"] {
+    let windows = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(windows.contains("try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }"));
+    assert!(windows.contains("try { client = listener.AcceptTcpClient(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); return; }"));
+    for name in ["clipboard", "files", "window-size", "app-windows"] {
         let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();
         assert!(start.contains(&format!("-File C:\\gpupv\\{name}.ps1")), "the stop finds it by this: {name}");
     }

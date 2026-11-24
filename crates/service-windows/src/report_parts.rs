@@ -3,6 +3,41 @@
 //! lines about other users' refused requests out of the service's log. It is plain text in and
 //! out, so it is tested anywhere; running the programs is `windows::collect`'s.
 
+use std::fs;
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::path::Path;
+
+/// The end of the file at `path`: all of it if it's at most `most_bytes` long, and otherwise its last
+/// part, from the start of a line, after a line that says how much is left out. A file that is
+/// missing, or isn't a plain file of its own (a link is never followed), is an error with the reason
+/// in words.
+pub fn tail_file(path: &Path, most_bytes: u64) -> Result<String, String> {
+    let meta = fs::symlink_metadata(path).map_err(|error| reason(path, &error))?;
+    if !meta.is_file() {
+        return Err(format!("{} isn't a plain file, so it's left.", path.display()));
+    }
+    let mut file = fs::File::open(path).map_err(|error| reason(path, &error))?;
+    let cut = meta.len().saturating_sub(most_bytes);
+    file.seek(SeekFrom::Start(cut)).map_err(|error| reason(path, &error))?;
+    let mut bytes = Vec::new();
+    file.take(most_bytes).read_to_end(&mut bytes).map_err(|error| reason(path, &error))?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if cut == 0 {
+        return Ok(text);
+    }
+    // The cut is mostly inside a line, so the kept part starts at the next one.
+    let start = text.find('\n').map_or(0, |at| at + 1);
+    Ok(format!("[{} bytes left out at the start]\n{}", cut + start as u64, &text[start..]))
+}
+
+fn reason(path: &Path, error: &std::io::Error) -> String {
+    if error.kind() == ErrorKind::NotFound {
+        format!("{} isn't there.", path.display())
+    } else {
+        format!("{} couldn't be read: {error}", path.display())
+    }
+}
+
 /// Whether a line starts an event in `wevtutil`'s text output: `Event[` and a number, then `]:`.
 fn starts_event(line: &str) -> bool {
     let Some(rest) = line.trim_start().strip_prefix("Event[") else {
@@ -152,6 +187,41 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion
         let got = registry_values(REG, &["Nope", "EditionID"]);
         assert_eq!(got, vec![("EditionID".to_string(), "Professional".to_string())]);
         assert!(registry_values("", &["UBR"]).is_empty());
+    }
+
+    fn folder(test: &str) -> std::path::PathBuf {
+        let folder = std::env::temp_dir().join(format!("gh-tail-{test}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_file_that_fits_is_read_whole() {
+        let folder = folder("whole");
+        fs::write(folder.join("a.log"), "one\ntwo\n").unwrap();
+        assert_eq!(tail_file(&folder.join("a.log"), 100).unwrap(), "one\ntwo\n");
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_long_file_is_cut_to_its_end_from_a_line_start() {
+        let folder = folder("long");
+        fs::write(folder.join("a.log"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+        // 13 bytes start inside "charlie", so the kept part starts at "delta".
+        let text = tail_file(&folder.join("a.log"), 13).unwrap();
+        assert_eq!(text, "[20 bytes left out at the start]\ndelta\n");
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_missing_file_and_a_folder_are_errors_with_reasons() {
+        let folder = folder("missing");
+        let said = tail_file(&folder.join("none.log"), 10).unwrap_err();
+        assert!(said.ends_with("none.log isn't there."), "{said}");
+        let said = tail_file(&folder, 10).unwrap_err();
+        assert!(said.contains("isn't a plain file"), "{said}");
+        let _ = fs::remove_dir_all(folder);
     }
 
     #[test]

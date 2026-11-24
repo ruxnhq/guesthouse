@@ -74,6 +74,15 @@ impl Work for Pretend {
     fn disks(&self) -> &dyn Disks {
         &FileDisks
     }
+
+    fn report_parts(&self) -> Vec<(String, Result<String, String>)> {
+        let log = "started\nrefused: pid 4 asked for a thing\nstopped\n";
+        vec![
+            ("service.log".to_owned(), Ok(crate::report_parts::without_refusals(log))),
+            ("windows.txt".to_owned(), Ok("ProductName: Windows 11 Pro\n".to_owned())),
+            ("crashes.txt".to_owned(), Err("wevtutil isn't here.".to_owned())),
+        ]
+    }
 }
 
 /// Disks as small files that name their parent, which is enough for the service's part. The disk
@@ -774,4 +783,135 @@ fn a_busy_machine_says_so_and_does_nothing_else_meanwhile() {
             other => panic!("{other:?}"),
         }
     }
+}
+
+/// A report's answers: each file with its text, each file that was missing and why, and every answer.
+type Report = (Vec<(String, String)>, Vec<(String, String)>, Vec<Answer>);
+
+fn report(setup: &Setup, machine: Option<&str>) -> Report {
+    let answers = ask(&setup.service, Request::ReportFiles { machine: machine.map(str::to_owned) });
+    let mut parts = guesthouse_control::report::Parts::default();
+    for answer in &answers {
+        match answer {
+            Answer::ReportPart { name, text } => parts.piece(name, text),
+            Answer::ReportMissing { name, reason } => parts.miss(name, reason),
+            _ => {}
+        }
+    }
+    (parts.files, parts.missing, answers)
+}
+
+fn made_machine(setup: &Setup, name: &str) -> PathBuf {
+    ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
+    setup.service.machines().store.folder(name)
+}
+
+#[test]
+fn a_report_without_a_machine_is_the_hosts_files_then_the_machines_then_done() {
+    let setup = setup("report-host", Pretend::default());
+    made_machine(&setup, "win");
+    let (files, missing, answers) = report(&setup, None);
+    let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["service.log", "windows.txt", "machines.txt"], "the work's parts, then the machines'");
+    assert_eq!(missing, [("crashes.txt".to_owned(), "wevtutil isn't here.".to_owned())]);
+    assert_eq!(files[0].1, "started\nstopped\n", "the lines about refused requests are left out");
+    assert_eq!(files[2].1, "win: windows, stopped, not set up\n");
+    assert_eq!(answers.last(), Some(&Answer::Done { reason: None }));
+    assert!(answers.iter().all(|answer| !matches!(answer, Answer::Refused { .. })));
+}
+
+#[test]
+fn a_report_for_a_machine_adds_only_its_allowed_files() {
+    let setup = setup("report-machine", Pretend::default());
+    let folder = made_machine(&setup, "win");
+    fs::write(folder.join("win.account.txt"), "user: guesthouse\npassword: hunter2\n").unwrap();
+    fs::write(folder.join("win.screen"), "PRIVATE KEY").unwrap();
+    fs::write(folder.join("installer.iso"), "iso").unwrap();
+    fs::write(folder.join("events.log"), "2026-01-01 00:00:00 UTC note one\n").unwrap();
+    fs::create_dir(folder.join("snapshots")).unwrap();
+    fs::write(folder.join("snapshots").join("index.json"), "{}").unwrap();
+    fs::write(folder.join("snapshots").join("1.vhdx"), "disk").unwrap();
+    let (files, missing, _) = report(&setup, Some("WIN"));
+    let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["service.log", "windows.txt", "machines.txt", "machine.json", "snapshots/index.json", "events.log"]
+    );
+    assert!(files.iter().any(|(name, text)| name == "events.log" && text.contains("UTC note one")));
+    let missing: Vec<&str> = missing.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(missing, ["crashes.txt", "win.guesthouse.json", "events.1.log"], "each is optional");
+    let everything = format!("{files:?}");
+    for secret in ["hunter2", "PRIVATE KEY", "account", "screen", "installer", "1.vhdx"] {
+        assert!(!everything.contains(secret), "{secret} was handed over");
+    }
+}
+
+#[test]
+fn a_machines_record_and_older_events_come_when_they_are_there() {
+    let iso = std::env::temp_dir().join(format!("gh-requests-report-iso-{}.iso", std::process::id()));
+    fs::write(&iso, b"ubuntu").unwrap();
+    let work = Pretend { linux_installer: Some(iso.clone()), ..Pretend::default() };
+    let setup = setup("report-record", work);
+    let folder = made_machine(&setup, "ubuntu");
+    fs::write(folder.join("events.1.log"), "older\n").unwrap();
+    let (files, missing, _) = report(&setup, Some("ubuntu"));
+    assert!(files.iter().any(|(name, text)| name == "ubuntu.guesthouse.json" && text.contains("linux")));
+    assert!(files.iter().any(|(name, text)| name == "events.1.log" && text == "older\n"));
+    assert!(missing.iter().all(|(name, _)| name != "events.1.log"));
+    let _ = fs::remove_file(&iso);
+}
+
+#[test]
+fn a_large_file_comes_in_pieces_a_line_can_hold_and_only_its_end() {
+    let setup = setup("report-large", Pretend::default());
+    let folder = made_machine(&setup, "win");
+    let line = "2026-01-01 00:00:00 UTC note something happened to the machine\n";
+    let big = line.repeat(60_000);
+    assert!(big.len() > 3 * 1024 * 1024);
+    fs::write(folder.join("events.log"), &big).unwrap();
+    let (files, _, answers) = report(&setup, Some("win"));
+    let pieces = answers
+        .iter()
+        .filter(|answer| matches!(answer, Answer::ReportPart { name, .. } if name == "events.log"))
+        .count();
+    assert!(pieces > 60, "{pieces} pieces");
+    for answer in &answers {
+        let mut buffer = Vec::new();
+        guesthouse_control::write_line(&mut buffer, answer).unwrap();
+        assert!(buffer.len() <= 64 * 1024, "a line of {} bytes", buffer.len());
+    }
+    let (_, text) = files.iter().find(|(name, _)| name == "events.log").unwrap();
+    assert!(text.starts_with('[') && text.contains("bytes left out at the start]\n2026-01-01"));
+    assert!(text.ends_with(line));
+    assert!(text.len() <= 2 * 1024 * 1024 + 64);
+}
+
+#[test]
+fn a_machine_that_isnt_there_is_refused_before_anything_is_sent() {
+    let setup = setup("report-none", Pretend::default());
+    let answers = ask(&setup.service, Request::ReportFiles { machine: Some("nope".into()) });
+    assert_eq!(answers, [Answer::Refused { reason: "There is no machine called nope.".into() }]);
+}
+
+#[test]
+fn a_report_stops_when_the_window_has_gone() {
+    let setup = setup("report-gone", Pretend::default());
+    let (answers, received) = channel();
+    drop(received);
+    let mut window = Window { answers, readable: true, gone: true };
+    setup.service.answer(Request::ReportFiles { machine: None }, &mut window);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_that_is_a_link_is_not_followed() {
+    let setup = setup("report-link", Pretend::default());
+    let folder = made_machine(&setup, "win");
+    let secret = setup.root.join("secret.txt");
+    fs::write(&secret, "outside").unwrap();
+    let _ = fs::remove_file(folder.join("events.log"));
+    std::os::unix::fs::symlink(&secret, folder.join("events.log")).unwrap();
+    let (files, missing, _) = report(&setup, Some("win"));
+    assert!(!format!("{files:?}").contains("outside"));
+    assert!(missing.iter().any(|(name, reason)| name == "events.log" && reason.contains("plain file")));
 }

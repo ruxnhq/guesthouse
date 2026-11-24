@@ -66,6 +66,11 @@ pub enum Request {
     Watch { name: String },
     /// Changes what a machine that isn't running is given at each boot.
     Change { name: String, settings: MachineSettings },
+    /// The files a bug report is made from that only the service can read: its own log, facts about
+    /// this PC and, for `machine` if one is named, that machine's record and events. Each comes as
+    /// `ReportPart` lines, or `ReportMissing` if it couldn't be read, then `Done`. The service only
+    /// hands them over. The app scrubs, packs and sends them.
+    ReportFiles { machine: Option<String> },
 }
 
 /// What a machine is given at each boot, which can be changed while it's off.
@@ -179,6 +184,17 @@ pub enum Answer {
     Account {
         user: String,
         password: String,
+    },
+    /// One piece of a report file's text, in a line of at most [`report::PIECE_BYTES`]. Pieces with
+    /// the same name are the file's text, to be joined in the order they came.
+    ReportPart {
+        name: String,
+        text: String,
+    },
+    /// A report file that couldn't be handed over, and why, in words for the person.
+    ReportMissing {
+        name: String,
+        reason: String,
     },
     /// Where a guest's screen is and what the viewer proves itself and expects with, for
     /// [`screen::connect_command`]. The certificate and key are hex.
@@ -394,6 +410,44 @@ mod tests {
             "memory_mb": 8192, "processors": 4, "card": null, "address": null});
         let machine: Machine = serde_json::from_value(older).unwrap();
         assert_eq!((machine.chosen_card, machine.nvapi_wrapper), (Card::Default, true));
+    }
+
+    #[test]
+    fn a_request_for_a_reports_files_names_a_machine_or_none() {
+        let named = Request::ReportFiles { machine: Some("win".into()) };
+        assert_eq!(serde_json::to_value(&named).unwrap(), json!({"ask": "report_files", "machine": "win"}));
+        let none: Request = serde_json::from_value(json!({"ask": "report_files", "machine": null})).unwrap();
+        assert_eq!(none, Request::ReportFiles { machine: None });
+    }
+
+    #[test]
+    fn a_reports_files_come_as_parts_and_what_is_missing() {
+        let part = Answer::ReportPart { name: "service.log".into(), text: "one\n".into() };
+        assert_eq!(
+            serde_json::to_value(&part).unwrap(),
+            json!({"answer": "report_part", "name": "service.log", "text": "one\n"})
+        );
+        let missing = Answer::ReportMissing { name: "events.log".into(), reason: "there is none".into() };
+        assert_eq!(
+            serde_json::to_value(&missing).unwrap(),
+            json!({"answer": "report_missing", "name": "events.log", "reason": "there is none"})
+        );
+        let back: Answer = serde_json::from_value(serde_json::to_value(&part).unwrap()).unwrap();
+        assert_eq!(back, part);
+    }
+
+    #[test]
+    fn a_piece_of_the_worst_text_still_fits_a_line_the_app_reads() {
+        for text in ["\u{1}".repeat(40_000), "\n".repeat(40_000), "\"".repeat(40_000), "画".repeat(40_000)] {
+            for piece in report::pieces(&text) {
+                let mut buffer = Vec::new();
+                let answer = Answer::ReportPart { name: "a-long-file-name.txt".into(), text: piece.into() };
+                write_line(&mut buffer, &answer).unwrap();
+                assert!(buffer.len() < REQUEST_LIMIT, "{} bytes", buffer.len());
+                let mut reader = io::BufReader::new(&buffer[..]);
+                assert_eq!(read_line::<Answer>(&mut reader).unwrap(), Some(answer));
+            }
+        }
     }
 
     #[test]

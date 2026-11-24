@@ -4,7 +4,9 @@
 //! and the pipe are behind [`Work`] and [`Connection`], so all of it is tested without either.
 
 use crate::machines::{Entry, Machines};
+use crate::report_parts::tail_file;
 use crate::store::{Settings, Store, usable_name};
+use guesthouse_control::report::pieces;
 use guesthouse_control::{
     Answer, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NewMachine, Request, Share,
     SnapshotInfo, State, System, valid_edition, valid_user,
@@ -16,7 +18,7 @@ use guesthouse_host_windows::settings::{self as host_settings, BootSettings, Gpu
 use guesthouse_host_windows::snapshots::{self, Disks};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
@@ -28,6 +30,8 @@ const MEMORY_MB: (u64, u64) = (2048, 256 * 1024);
 const SIZE_GB: (u64, u64) = (32, 4096);
 /// How often a window that's watching is checked for having gone, while nothing happens.
 const CHECK: Duration = Duration::from_secs(1);
+/// How much of each of a machine's own files a report takes: its end, as the newest is what matters.
+const REPORT_TAIL: u64 = 2 * 1024 * 1024;
 /// How long the list of cards is kept before it's read again, as the app asks for it every moment.
 const CARDS_KEPT: Duration = Duration::from_secs(30);
 
@@ -48,6 +52,9 @@ pub trait Work: Send + Sync + 'static {
     fn disk_size_gb(&self, disk: &Path) -> Option<u64>;
     /// Snapshots' disks.
     fn disks(&self) -> &dyn Disks;
+    /// The host's files for a bug report, each by name with its text or why it couldn't be read: the
+    /// service's own log, the installer's, and facts about this PC.
+    fn report_parts(&self) -> Vec<(String, Result<String, String>)>;
 }
 
 /// The app window a request came from.
@@ -133,6 +140,7 @@ impl<W: Work> Service<W> {
             Request::DeleteSnapshot { name, id } => self.delete_snapshot(&name, id),
             Request::Account { name } => self.account(&name),
             Request::Watch { name } => return self.watch(&name, connection),
+            Request::ReportFiles { machine } => return self.report_files(machine, connection),
         };
         let _ = connection.send(&answer);
     }
@@ -762,6 +770,55 @@ impl<W: Work> Service<W> {
         }
     }
 
+    /// Hands over the files a bug report needs from this PC: what the work reads, a list of the
+    /// machines, and if one is named, a few of its own files. Nothing secret goes: see
+    /// [`report_machine_files`].
+    fn report_files(&self, machine: Option<String>, connection: &mut dyn Connection) {
+        let named = match machine.as_deref() {
+            Some(asked) => match self.machines.find(asked) {
+                Some(name) => Some(name),
+                None => {
+                    let _ = connection.send(&no_machine(asked));
+                    return;
+                }
+            },
+            None => None,
+        };
+        let mut files = self.work.report_parts();
+        files.push(("machines.txt".to_owned(), Ok(self.machines_text())));
+        if let Some(name) = &named {
+            for (shown, path) in report_machine_files(&self.machines.store, name) {
+                files.push((shown, tail_file(&path, REPORT_TAIL)));
+            }
+        }
+        for (name, text) in files {
+            let sent = match text {
+                Ok(text) => send_text(connection, &name, &text),
+                Err(reason) => connection.send(&Answer::ReportMissing { name, reason }),
+            };
+            if sent.is_err() {
+                return;
+            }
+        }
+        let _ = connection.send(&Answer::Done { reason: None });
+    }
+
+    /// Each machine on a line: its name, system, state, and whether its first boot has set it up.
+    fn machines_text(&self) -> String {
+        let Answer::Status { machines, .. } = self.status() else { return String::new() };
+        machines
+            .iter()
+            .map(|machine| {
+                let system = match machine.system {
+                    System::Windows => "windows",
+                    System::Linux => "linux",
+                };
+                let set_up = if machine.set_up { "set up" } else { "not set up" };
+                format!("{}: {system}, {}, {set_up}\n", machine.name, words(machine.state))
+            })
+            .collect()
+    }
+
     fn watch(&self, asked: &str, connection: &mut dyn Connection) {
         let Some((history, events)) = self.machines.find(asked).and_then(|name| self.machines.watch(&name))
         else {
@@ -787,6 +844,22 @@ impl<W: Work> Service<W> {
             }
         }
     }
+}
+
+/// A report's files for a machine are these and nothing else: its folder also holds the guest's
+/// account and password, the viewer's private key, and its disks. Each is optional. A file is
+/// named in the report as it's shown here.
+fn report_machine_files(store: &Store, name: &str) -> Vec<(String, PathBuf)> {
+    let folder = store.folder(name);
+    let record = Record::path(&store.disk(name));
+    let record_name = record.file_name().map(|file| file.to_string_lossy().into_owned()).unwrap_or_default();
+    vec![
+        ("machine.json".to_owned(), folder.join("machine.json")),
+        (record_name, record),
+        ("snapshots/index.json".to_owned(), folder.join("snapshots").join("index.json")),
+        ("events.log".to_owned(), store.events(name)),
+        ("events.1.log".to_owned(), store.events_before(name)),
+    ]
 }
 
 fn gpu_choice(card: &Card) -> GpuChoice {
@@ -831,6 +904,16 @@ fn busy_words(entry: &Entry) -> String {
         Some(doing) => doing.to_lowercase(),
         None => words(entry.state).to_owned(),
     }
+}
+
+/// A file's text as `ReportPart` lines. An empty file is one empty part, so it's still there.
+fn send_text(connection: &mut dyn Connection, name: &str, text: &str) -> io::Result<()> {
+    let found = pieces(text);
+    let found = if found.is_empty() { vec![""] } else { found };
+    for piece in found {
+        connection.send(&Answer::ReportPart { name: name.to_owned(), text: piece.to_owned() })?;
+    }
+    Ok(())
 }
 
 fn no_machine(name: &str) -> Answer {

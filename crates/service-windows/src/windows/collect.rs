@@ -2,9 +2,6 @@
 //! the state of the services the guests need, the Hyper-V events about Guesthouse's machines, and
 //! its crashes. Each is a [`Part`], gathered on its own, so one that fails is only missing.
 
-// Nothing asks for these yet; the requests that hand them to the app are wired separately.
-#![allow(dead_code)]
-
 use crate::report_parts::{keep_events, registry_values};
 use std::io::Read;
 use std::os::windows::process::CommandExt;

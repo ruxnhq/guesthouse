@@ -8,6 +8,7 @@ mod pipe;
 mod scm;
 mod security;
 
+use crate::report_parts::{tail_file, without_refusals};
 use crate::requests::{Service, Work};
 use crate::store::Store;
 use guesthouse_control::{CardInfo, PIPE};
@@ -24,6 +25,9 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How much of the service's log and the installer's a report takes: their ends.
+const LOG_TAIL: u64 = 512 * 1024;
 
 /// How long running guests have to shut down when the service stops, before they're stopped.
 const GRACE: Duration = Duration::from_secs(60);
@@ -82,6 +86,24 @@ impl Work for HostWork {
 
     fn disks(&self) -> &dyn guesthouse_host_windows::snapshots::Disks {
         &host_work::RealDisks
+    }
+
+    fn report_parts(&self) -> Vec<(String, Result<String, String>)> {
+        let mut parts = Vec::new();
+        let service_log = LOG
+            .get()
+            .ok_or_else(|| "The service keeps no log.".to_owned())
+            .and_then(|path| tail_file(path, LOG_TAIL).map(|text| without_refusals(&text)));
+        parts.push(("service.log".to_owned(), service_log));
+        let setup_log = std::env::current_exe()
+            .map_err(|error| format!("The install folder isn't known: {error}"))
+            .and_then(|exe| {
+                let folder = exe.parent().ok_or_else(|| "The install folder isn't known.".to_owned())?;
+                tail_file(&folder.join("setup.log"), LOG_TAIL)
+            });
+        parts.push(("setup.log".to_owned(), setup_log));
+        parts.extend(collect::host_parts().into_iter().map(|part| (part.name, part.text)));
+        parts
     }
 
     fn end(&self, id: &str) {

@@ -381,6 +381,9 @@ mod tests {
         fn disks(&self) -> &dyn guesthouse_host_windows::snapshots::Disks {
             &guesthouse_host_windows::windows::RealDisks
         }
+        fn report_parts(&self) -> Vec<(String, Result<String, String>)> {
+            Vec::new()
+        }
     }
 
     /// The pipe as the service makes it, under a name of the test's own, asked as the app asks, by

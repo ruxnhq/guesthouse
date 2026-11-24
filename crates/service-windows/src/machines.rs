@@ -160,12 +160,7 @@ fn utc(seconds: u64) -> String {
     let days = (seconds / 86_400) as i64;
     let rest = seconds % 86_400;
     let (year, month, day) = civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        rest / 3600,
-        rest % 3600 / 60,
-        rest % 60
-    )
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC", rest / 3600, rest % 3600 / 60, rest % 60)
 }
 
 /// The year, month and day that is `days` after 1970-01-01, in the proleptic Gregorian calendar.

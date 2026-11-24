@@ -23,6 +23,8 @@ guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--
                        [--remote-desktop on|off] [--ssh on|off]
                        [--set-up-for RECIPE [--yes]] [--lean on|off]
                        [--skip-scanning on|off]
+guesthouse-vm new NAME --kind macos [--disk GIB] [--cores N] [--ram GIB]
+guesthouse-vm new NAME --kind android [--iso IMAGE] [--play on|off] [--disk GIB] [--cores N] [--ram GIB]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
 guesthouse-vm recipes
@@ -74,6 +76,8 @@ The reading sends `guest/idle.ps1` through the agent. The only thing it does in 
 ## Making a machine
 
 The disc decides what the machine is, as it does in the app's New Machine dialog: a disc with Windows 11 Pro or Windows 11 IoT Enterprise LTSC is a Windows machine with GPU-PV, an Ubuntu server disc is Ubuntu, and anything else is a plain VM that you install by hand. `new` says which it found. `--kind` is there to say what you expect, and it refuses if the disc is something else here. A disc that would be Windows or Ubuntu on a PC with the GPU part is a plain VM on a PC without it, and `new` says so.
+
+An Android machine, a [preview](android.md), needs no disc. Without `--iso` it downloads Guesthouse's Android image, or uses the one downloaded before. `--iso` takes an image you built yourself, and `--play on` gives it Play services through microG.
 
 What you don't give, you get as the dialog would start you: the sizes for that kind, with RAM as high as this PC allows, and for Windows the NVIDIA card setup chose, or another card by its address with `--amd-card`: another NVIDIA card, or an AMD or Intel card. For an AMD card, `--amd-driver` takes AMD's installer and unpacks the card's driver from it, as the dialog does when it asks for the installer, and `--intel-driver` does the same with Intel's for an Intel card. `--amd-driver` takes the place of an AMD driver that was unpacked before, and every AMD machine on this PC uses the one that's there. Whatever else would stop the machine, like its sizes or too little room for the install, is said before either installer is read, so a `new` that's refused leaves the driver as it was. The dialog's refusals come out as they are, in plain words, and nothing is made.
 

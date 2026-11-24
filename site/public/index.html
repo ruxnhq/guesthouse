@@ -261,6 +261,16 @@
           <p>NVIDIA's Linux driver in the guest, its calls forwarded to the host's: CUDA, Vulkan, NVENC and NVDEC at about host speed. On AMD, Mesa on the real card.</p>
         </article>
         <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>
+          <h3>Android guests <small>Preview</small></h3>
+          <p>Android 17 on Linux hosts, on the real card: OpenGL ES and Vulkan, on NVIDIA, AMD and Intel. Play services through microG if you want them, and apps built only for ARM phones run. <a href="https://github.com/ruxnhq/guesthouse/blob/main/docs/android.md">More</a></p>
+        </article>
+        <article class="card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4.5" width="16" height="11" rx="1.5"/><path d="M2 19.5h20"/></svg>
+          <h3>macOS guests <small>Preview</small></h3>
+          <p>macOS Tahoe on Linux hosts, drawn with Metal on your card through reims-vgpu, on NVIDIA and AMD. Apple's installer comes from Apple. <a href="https://github.com/ruxnhq/guesthouse/blob/main/docs/macos.md">More</a></p>
+        </article>
+        <article class="card">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 17v4M9 10.5l2 2 4-4"/></svg>
           <h3>Windows hosts too <small>Preview</small></h3>
           <p>On Windows 11, Home or Pro, through Virtual Machine Platform. No Hyper-V needed. Windows and Ubuntu guests share your card the same way, on NVIDIA and AMD, and on Intel Arc as an experiment.</p>

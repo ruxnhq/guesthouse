@@ -38,7 +38,7 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 | **Windows hosts** · Windows 11 Home or Pro, no Hyper-V needed | **The app** · give it an ISO, and it installs the guest with its GPU |
 
 > [!NOTE]
-> **Early days.** Linux 0.9.0 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS guests are a [preview](docs/macos.md). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
+> **Early days.** Linux 0.9.0 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS and Android guests are previews ([macOS](docs/macos.md), [Android](docs/android.md)). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
 
 ## Install
 
@@ -63,6 +63,7 @@ On Linux hosts, from 0.8.0.
 - **Lean Windows.** Install Windows without the apps most people never open in a VM. Off unless you choose it. [What it takes out](docs/recipes.md#lean-windows).
 - **Snapshots before a risky start.** A machine can save a snapshot by itself before a change that may leave Windows unable to come up, such as a new display driver. Off by default.
 - **See how the card is shared.** The library shows each running machine's part of the card.
+- **Android, a preview.** From 0.9.0, an Android machine runs on the host's card, with Play services through microG if you want them and apps built only for ARM phones. [Android](docs/android.md).
 - **No window needed.** Everything above is in `guesthouse-vm` too. [The commands](docs/headless.md).
 
 ## Is it safe?

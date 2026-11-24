@@ -220,10 +220,14 @@ const TURING_NODES: EngineNodes = EngineNodes {
 };
 const NO_VIDEO_FLAGS: VideoRecordFlags = VideoRecordFlags { caps: [0; 4], decoder: 0, encoder: 0 };
 
-// Ampere's words have the bit of each class the guest's video runtimes use, from the table the
-// fourth word's bits are in (record::builder). Blackwell's words on an Ampere card name Blackwell's
-// compute class: NVENC on a Direct3D 11 device then sends a compute program for Blackwell's shaders,
-// which the card refuses, and the picture is black.
+// The first three words have a bit for each class as well, and Ampere's have the bits of the classes
+// the guest's video runtimes use: its copy, decoder, compute and encoder classes. They aren't from
+// the table in record::builder, which has the fourth word's bits only, for graphics, channel and
+// copy classes. They are what NVIDIA's driver gives a card that lists these classes, in the words
+// and rows that table leaves out, so they are constants here, and each was taken out in turn on a
+// GA102 to see what it stops. Blackwell's words on an Ampere card name Blackwell's compute class:
+// NVENC on a Direct3D 11 device then sends a compute program for Blackwell's shaders, which the card
+// refuses, and the picture is black.
 
 /// The copy class, in the first word. With this bit clear, NVENC opens on a Direct3D 11 device but
 /// can't set up an encoder.

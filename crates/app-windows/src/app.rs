@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use guesthouse_control::client::Unreached;
+use guesthouse_control::updates::Latest;
 use guesthouse_control::{
     Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, State, System, valid_name,
 };
@@ -296,6 +297,8 @@ pub struct Main {
     pub news: Option<News>,
     /// The machine whose Delete is being asked about.
     pub deleting: Option<String>,
+    /// A newer Windows host, once the file drop says there is one, until it's put aside.
+    pub update: Option<Latest>,
     pub form: Form,
     /// The selected machine's settings, as the person is changing them.
     pub draft: Option<Draft>,
@@ -369,6 +372,12 @@ pub enum Message {
     SaveSettings,
     UndoSettings,
     NewsClosed,
+    /// A newer Windows host is out.
+    Update(Latest),
+    /// Open the newer one's installer in the browser.
+    GetUpdate,
+    /// Put the update aside until the app next starts.
+    LaterUpdate,
 }
 
 impl Main {
@@ -696,6 +705,7 @@ impl Component for Main {
             account: None,
             news: None,
             deleting: None,
+            update: None,
             form: Form::default(),
             draft: None,
             making: None,
@@ -714,6 +724,11 @@ impl Component for Main {
             return main;
         }
         main.take_status(start.first.clone());
+        // Only an installed app asks, and anyone can turn it off.
+        let asked_not_to = std::env::var("GUESTHOUSE_UPDATE_CHECK").is_ok_and(|value| value == "0");
+        if crate::system::installed() && !asked_not_to {
+            bridge::check_for_update(main.window.clone());
+        }
         main
     }
 
@@ -819,6 +834,15 @@ impl Component for Main {
                 self.follow_draft();
             }
             Message::NewsClosed => self.news = None,
+            Message::Update(latest) => self.update = Some(latest),
+            Message::GetUpdate => {
+                if let Some(latest) = &self.update
+                    && let Err(words) = crate::system::open_link(&latest.installer)
+                {
+                    self.tell(words, true);
+                }
+            }
+            Message::LaterUpdate => self.update = None,
         }
     }
 

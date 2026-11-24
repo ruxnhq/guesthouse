@@ -69,6 +69,7 @@ mod glyph {
     pub const SAVE: &str = "\u{E74E}";
     pub const UNDO: &str = "\u{E7A7}";
     pub const GAME: &str = "\u{E7FC}";
+    pub const DOWNLOAD: &str = "\u{E896}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -255,8 +256,32 @@ fn empty(context: &ViewContext<Main>) -> View {
 
 // ---- A machine's page ----
 
+/// A newer Windows host, at the top of a page, until it's put aside.
+fn update_card(main: &Main, context: &ViewContext<Main>) -> Option<View> {
+    let latest = main.update.as_ref()?;
+    let words = format!(
+        "You have {}. Download the installer and run it: it keeps your machines, and asks each running one to shut down first.",
+        guesthouse_control::WINDOWS_VERSION
+    );
+    let download = button("Download", glyph::DOWNLOAD, context.message(Message::GetUpdate), true)
+        .automation_name(format!("Download Guesthouse {}", latest.version));
+    let later = Button::new().content("Not now").on_click(context.message(Message::LaterUpdate));
+    let buttons =
+        StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((download, later));
+    Some(
+        card(row(
+            glyph::DOWNLOAD,
+            &format!("Guesthouse {} is out", latest.version),
+            &[&words],
+            Some(buttons.into()),
+        ))
+        .into(),
+    )
+}
+
 fn machine_page(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> View {
-    let mut sections = vec![header(machine, context)];
+    let mut sections: Vec<View> = update_card(main, context).into_iter().collect();
+    sections.push(header(machine, context));
     sections.push(group("Status", status_rows(machine)));
     sections.push(group("Connect", connect_rows(main, machine, context)));
     if let Some(draft) = main.draft.as_ref().filter(|draft| draft.machine == machine.name) {
@@ -731,6 +756,9 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
         parts.push(log(&making.lines, "Waiting for the service."));
         // Under the title, where it's seen at once, rather than under the form that started it.
         sections.insert(1, StackPanel::new().spacing(HEADING_GAP).children(parts).into());
+    }
+    if let Some(update) = update_card(main, context) {
+        sections.insert(0, update);
     }
     page(sections)
 }

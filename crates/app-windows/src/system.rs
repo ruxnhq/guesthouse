@@ -109,6 +109,43 @@ fn open_dialog(owner: isize) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16_lossy(&file[..end])))
 }
 
+/// Starts a program with no console window of its own, as the app has none to share.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Whether this is an installed app, beside the installer's uninstaller. Only an installed app is
+/// offered updates: a build of the repo is whatever it was built from.
+pub fn installed() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("uninstall.exe").is_file()))
+        .unwrap_or(false)
+}
+
+/// The newest Windows host's file, fetched with the curl Windows has, which needs no library of
+/// ours for HTTPS. Only HTTPS, with a time limit, and no more than the file can be.
+pub fn fetch_latest() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let curl = PathBuf::from(root).join(r"System32\curl.exe");
+    let limit = guesthouse_control::updates::LONGEST.to_string();
+    let output = Command::new(curl)
+        .args(["--fail", "--silent", "--location", "--proto", "=https", "--max-time", "20"])
+        .args(["--max-filesize", &limit, guesthouse_control::updates::LATEST_URL])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Opens a web page in the person's browser. Returns words for the person when it couldn't.
+pub fn open_link(link: &str) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(link)
+        .spawn()
+        .map(drop)
+        .map_err(|error| format!("The browser didn't open: {error}. The page is {link}"))
+}
+
 /// Opens Remote Desktop on `address`. Returns words for the person when it couldn't.
 pub fn remote_desktop(address: &str) -> Result<(), String> {
     Command::new("mstsc")

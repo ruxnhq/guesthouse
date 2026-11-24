@@ -92,6 +92,15 @@ pub fn stage(main: &mut Main) {
                 }
             }
         }
+        "update" => {
+            show(main, "win11", State::Stopped);
+            main.update = Some(guesthouse_control::updates::Latest {
+                version: "0.10.0".to_owned(),
+                installer: "https://files.ruxn.com/p/guesthouse/guesthouse-setup-0.10.0.exe".to_owned(),
+                sha256: "0".repeat(64),
+                notes: String::new(),
+            });
+        }
         "delete" => {
             show(main, "ubuntu", State::Stopped);
             main.deleting = Some("ubuntu".to_owned());

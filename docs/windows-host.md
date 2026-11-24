@@ -151,6 +151,8 @@ $env:GUESTHOUSE_APP_PREVIEW = "running"; $env:GUESTHOUSE_APP_THEME = "light"
 .\target\debug\guesthouse-app.exe
 ```
 
+An installed app, one beside the installer's `uninstall.exe`, asks the file drop for `guesthouse-windows-latest.json` when it starts, the file a Windows release publishes last (`crates/control/src/updates.rs`). When that names a newer version than the app's, a card at the top of each page says so, with Download, which opens the installer in the browser, and Not now, which puts it aside until the app next starts. It's fetched with the `curl.exe` Windows has, over HTTPS only, in 20 seconds at most, and no larger than 4 KB, and nothing is said when it can't be had. Only a link to an installer on the file drop is ever offered, whatever the file says. A build of the repo never asks, and `GUESTHOUSE_UPDATE_CHECK=0` turns it off. The preview's `update` state shows the card.
+
 Closing the window ends the app, and the machines go on as they were. A panic leaves its words in `guesthouse-app\panic.txt` in your temporary folder, as the app has no console.
 
 ## Installing

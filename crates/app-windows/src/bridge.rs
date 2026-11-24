@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use guesthouse_control::client::{self, Unreached};
+use guesthouse_control::updates;
 use guesthouse_control::{Answer, CardInfo, Machine, MachineSettings, NewMachine, Request};
 use windows_reactor::ComponentCompletion;
 
@@ -109,6 +110,20 @@ pub fn start(window: Window) -> Sender<Job> {
             failed.tell(Message::Status(Err(format!("The app couldn't start asking the service: {error}"))));
     }
     jobs
+}
+
+/// Asks the file drop for the newest Windows host, once, on a thread of its own, and tells the window
+/// if it's newer than this one. Nothing is said when it isn't, or when the file can't be had: an
+/// update is offered, never needed.
+pub fn check_for_update(window: Window) {
+    let _ = thread::Builder::new().name("update".into()).spawn(move || {
+        let Some(latest) = crate::system::fetch_latest().and_then(|text| updates::parse(&text)) else {
+            return;
+        };
+        if updates::newer(&latest.version, guesthouse_control::WINDOWS_VERSION) {
+            let _ = window.tell(Message::Update(latest));
+        }
+    });
 }
 
 /// Makes a new machine, sending the window each of its events and then how it ended.

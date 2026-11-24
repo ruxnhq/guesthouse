@@ -12,6 +12,7 @@
 pub mod client;
 pub mod events;
 pub mod screen;
+pub mod updates;
 
 pub use events::{Event, State};
 

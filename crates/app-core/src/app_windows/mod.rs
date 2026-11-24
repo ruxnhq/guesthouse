@@ -4,6 +4,7 @@
 mod client;
 #[cfg(test)]
 mod client_tests;
+mod forward;
 mod geometry;
 #[cfg(test)]
 mod geometry_tests;
@@ -15,9 +16,14 @@ mod model;
 #[cfg(test)]
 mod model_tests;
 pub mod stand_in;
+mod switch;
+#[cfg(test)]
+mod switch_tests;
 
 pub use client::*;
+pub use forward::*;
 pub use geometry::*;
-pub use link::{HelperStarter, LinkConfig, RequestFailure, Status, Timing};
+pub use link::{HelperStarter, LinkConfig, LinkSettings, RequestFailure, Status, Timing};
 pub use message::*;
 pub use model::*;
+pub use switch::*;

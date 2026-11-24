@@ -13,6 +13,8 @@ pub const MOST_PORT: u32 = 65535;
 pub const GUEST_AGENT_PORT: u16 = 8765;
 /// A Windows guest's helper for dropped and dragged files listens here, while a viewer is open.
 pub const GUEST_FILES_PORT: u16 = 8767;
+/// A Windows guest's app windows helper listens here, when the machine has app windows switched on.
+pub const GUEST_APP_WINDOWS_PORT: u16 = 8769;
 /// QEMU's own range, which is locally administered.
 const MAC_PREFIX: &str = "52:54:00";
 /// What QEMU gives a NIC when it is told nothing.

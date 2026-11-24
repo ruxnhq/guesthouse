@@ -101,6 +101,8 @@ pub struct Context {
     /// A recording of an Intel card that stands in for one, for a lab run on a PC without it. Only
     /// a process started with the variable that names it has one: see [`Context::from_process`].
     pub recorded_intel_card: Option<PathBuf>,
+    /// How this process reaches app windows helpers, which a test points at a pretend one.
+    pub app_windows: crate::app_windows::LinkSettings,
 }
 
 impl Context {
@@ -141,6 +143,7 @@ impl Context {
             clock: Arc::new(RealClock::default()),
             install_room: None,
             recorded_intel_card: None,
+            app_windows: crate::app_windows::LinkSettings::default(),
         }
     }
 

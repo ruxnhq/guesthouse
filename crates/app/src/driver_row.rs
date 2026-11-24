@@ -3,7 +3,7 @@
 //! installer covers the card.
 
 use crate::common::{choose_file, in_background};
-use crate::rows::row_button;
+use crate::rows::{info_button, row_button};
 use crate::window::Window;
 use adw::prelude::*;
 use gtk::glib;
@@ -18,16 +18,28 @@ use std::sync::Arc;
 
 /// What the row says for each maker whose driver is taken from an installer.
 fn title(maker: GpuMaker) -> String {
-    format!("{}'s driver", maker.name())
+    format!("{}'s Driver", maker.name())
 }
 
+/// The row's own line: which installer.
 fn ask(maker: GpuMaker) -> String {
     match maker {
+        GpuMaker::Amd => format!("The installer for Adrenalin {AMD_RELEASE}"),
+        GpuMaker::Intel => "The installer gfx_win_101.9175.exe".to_owned(),
+        GpuMaker::Nvidia => String::new(),
+    }
+}
+
+/// What the info button says about it.
+fn more(maker: GpuMaker) -> String {
+    match maker {
         GpuMaker::Amd => format!(
-            "Choose AMD's installer for Adrenalin {AMD_RELEASE}. The display driver is taken out of it."
+            "Choose AMD's installer for Adrenalin {AMD_RELEASE}. It doesn't run here: the display driver is \
+             taken out of it, and the row goes once it's done."
         ),
         GpuMaker::Intel => format!(
-            "Choose Intel's installer for graphics driver {INTEL_WINDOWS_DRIVER}, gfx_win_101.9175.exe. The drivers for the card are taken out of it."
+            "Choose Intel's installer for graphics driver {INTEL_WINDOWS_DRIVER}, gfx_win_101.9175.exe. It \
+             doesn't run here: the drivers for the card are taken out of it, and the row goes once it's done."
         ),
         GpuMaker::Nvidia => String::new(),
     }
@@ -36,6 +48,8 @@ fn ask(maker: GpuMaker) -> String {
 struct Parts {
     window: Window,
     row: adw::ActionRow,
+    /// The words behind the row's info button, which change with the maker.
+    more: Option<gtk::Label>,
     choose: gtk::Button,
     bar: gtk::ProgressBar,
     /// The maker whose installer is asked for, and the card it must cover.
@@ -52,6 +66,9 @@ pub struct DriverRow(Rc<Parts>);
 impl DriverRow {
     pub fn new(window: &Window, group: &adw::PreferencesGroup) -> Self {
         let row = adw::ActionRow::builder().title(title(GpuMaker::Amd)).visible(false).build();
+        let info = info_button(&more(GpuMaker::Amd));
+        let more = info.popover().and_then(|popover| popover.child()).and_downcast::<gtk::Label>();
+        row.add_suffix(&info);
         let choose = row_button("Choose");
         row.add_suffix(&choose);
         let bar = gtk::ProgressBar::builder().visible(false).valign(gtk::Align::Center).build();
@@ -60,6 +77,7 @@ impl DriverRow {
         let this = Self(Rc::new(Parts {
             window: window.clone(),
             row,
+            more,
             choose: choose.clone(),
             bar,
             maker: Cell::new(GpuMaker::Amd),
@@ -87,6 +105,9 @@ impl DriverRow {
             parts.device.set(device);
             parts.row.set_title(&title(maker));
             parts.row.set_subtitle(&ask(maker));
+            if let Some(label) = &parts.more {
+                label.set_label(&more(maker));
+            }
         }
     }
 

@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-const TITLE: &str = "Disk location";
+const TITLE: &str = "Disk Location";
 const WITH_THE_MACHINE: &str = "With the machine";
 
 struct Parts {

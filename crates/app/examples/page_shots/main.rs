@@ -566,10 +566,17 @@ async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     glib::timeout_future(SETTLE).await;
     shot_after_paint(&window, &folder, "19-log").await;
     close_dialogs(&window).await;
-    for (action, name) in [("preferences", "19b-preferences"), ("about", "19c-about")] {
+    let sheets = [
+        ("preferences", "19b-preferences", "Colour Scheme"),
+        ("about", "19c-about", "Free software"),
+        ("report", "19d-report", "What Went Wrong"),
+        ("shortcuts", "19e-shortcuts", "Guest Screen"),
+    ];
+    for (action, name, says) in sheets {
         gtk::prelude::ActionGroupExt::activate_action(window.widget(), action, None);
         glib::timeout_future(SETTLE).await;
         check(&failures, window.widget().visible_dialog().is_some(), &format!("{action} opens a sheet"));
+        check(&failures, shows(&window, says).await, &format!("{action} says {says:?}"));
         shot_after_paint(&window, &folder, name).await;
         close_dialogs(&window).await;
     }

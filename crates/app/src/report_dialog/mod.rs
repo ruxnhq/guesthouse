@@ -4,7 +4,7 @@
 mod after;
 
 use crate::common::in_background;
-use crate::rows::choice_row;
+use crate::rows::{choice_row, explain, info_button};
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::machine::{Machine, load_all};
@@ -25,6 +25,8 @@ const NO_MACHINE: &str = "None, it's about the app";
 const GUEST_LOGS_NOTE: &str = "From a running Windows guest: Guesthouse's own guest logs, display events, the \
                               adapter and its driver, Windows' build, and whether a crash dump was written, by \
                               name, time and size. Never the dump itself, memory or your files.";
+const SERIAL_NOTE: &str = "What Windows or Linux wrote to its serial port. Turned off, the app's log can still \
+                           hold a few of the guest's answers to the app's own scripts.";
 const GATHERING: &str = "Gathering what goes in…";
 
 fn what_is_sent() -> String {
@@ -78,18 +80,20 @@ impl ReportDialog {
         let chosen = machines.iter().position(|machine| Some(&machine.id) == latest.as_ref());
         machine.set_selected(chosen.unwrap_or(machines.len()) as u32);
         let kinds: Vec<&str> = ProblemKind::ALL.iter().map(|kind| kind.label()).collect();
-        let kind = choice_row("Kind of problem", &kinds);
+        let kind = choice_row("Kind of Problem", &kinds);
         kind.set_selected(ProblemKind::ALL.len() as u32 - 1);
         let guest_serial = adw::SwitchRow::builder()
-            .title("The guest's serial log")
-            .subtitle("What Windows or Linux wrote to its serial port. The app's log can still hold a few of the guest's answers to its own scripts.")
+            .title("Guest's Serial Log")
+            .subtitle("What the guest wrote to its serial port")
             .active(true)
             .build();
+        explain(&guest_serial, SERIAL_NOTE);
         let guest_logs = adw::SwitchRow::builder()
-            .title("Include logs from inside the guest")
-            .subtitle(GUEST_LOGS_NOTE)
+            .title("Logs From Inside the Guest")
+            .subtitle("From a running Windows guest")
             .active(true)
             .build();
+        explain(&guest_logs, GUEST_LOGS_NOTE);
         let choices = adw::PreferencesGroup::new();
         choices.add(&machine);
         choices.add(&kind);
@@ -110,23 +114,28 @@ impl ReportDialog {
         description.update_property(&[gtk::accessible::Property::Label("What went wrong")]);
         let frame = gtk::Frame::builder().child(&description).build();
         let words = adw::PreferencesGroup::builder()
-            .title("What went wrong")
-            .description("What you did, what you expected, and what happened instead.")
+            .title("What Went Wrong")
+            .description("What you did, what you expected, and what happened instead")
             .build();
         words.add(&frame);
-        let contact = adw::EntryRow::builder().title("How to reach you, if you'd like (optional)").build();
+        let contact = adw::EntryRow::builder().title("How to Reach You (Optional)").build();
         let contact_group = adw::PreferencesGroup::new();
         contact_group.add(&contact);
 
         let contents = gtk::Label::builder().label(GATHERING).wrap(true).xalign(0.0).selectable(true).build();
         contents.add_css_class("monospace");
-        let held =
-            adw::PreferencesGroup::builder().title("What it holds").description(what_is_sent()).build();
+        let held = adw::PreferencesGroup::builder()
+            .title("What It Holds")
+            .description("Nothing is sent until you press Send")
+            .build();
+        held.set_header_suffix(Some(&info_button(&what_is_sent())));
         held.add(&contents);
 
         let page = adw::PreferencesPage::new();
         let warning = adw::PreferencesGroup::new();
         warning.add(&thin);
+        // An empty group would still leave its gap over the rows.
+        thin.bind_property("visible", &warning, "visible").sync_create().build();
         page.add(&warning);
         for group in [&choices, &words, &contact_group, &held] {
             page.add(group);

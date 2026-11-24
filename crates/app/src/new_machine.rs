@@ -4,6 +4,7 @@
 use crate::common::{choose_file, in_background};
 use crate::disk_place_row::DiskPlaceRow;
 use crate::driver_row::DriverRow;
+use crate::recipe_dialog;
 use crate::rows::{bottom_bar, choice_row, number_row, page_heading, row_button};
 use crate::window::Window;
 use adw::prelude::*;
@@ -15,14 +16,20 @@ use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use guesthouse_app_core::host::{RamField, physical_cores};
 use guesthouse_app_core::iso::Iso;
+use guesthouse_app_core::lean::what_it_does;
 use guesthouse_app_core::library::{
-    MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create,
+    Extras, MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create_with,
 };
 use guesthouse_app_core::machine::{Kind, MIN_CORES, MIN_RAM_GIB, Machine};
 use guesthouse_app_core::macos_setup::{
     MACOS_SIZES, MACOS_TITLE, MIN_MACOS_DISK_GIB, NewMac, create_macos, how_it_installs,
 };
+use guesthouse_app_core::recipe::{
+    Chosen, Entry, SettingsAsked, Source, Usual, fit, list_for, origin_text, what_it_will_run,
+};
 use guesthouse_app_core::remote_access::{Access, Service, ssh_problem};
+use guesthouse_app_core::scan_exclusions::{self, WHAT_IT_MEANS};
+use guesthouse_app_core::settings::max_vram_gib_for;
 use guesthouse_app_core::setup::amd::NO_AMD_SETUP;
 use guesthouse_app_core::setup::checks::machine_gpu_warning;
 use guesthouse_app_core::setup::guest_driver::guest_driver;
@@ -44,6 +51,13 @@ const ACCESS_NOTE: &str = "Only a port forward from this PC reaches them, whatev
 const REMOTE_DESKTOP_NOTE: &str = "Windows' own, on guest port 3389. Sign in with the account above.";
 const SSH_NOTE: &str = "OpenSSH Server on guest port 22, for the account above. Your public keys from ~/.ssh go \
                         in too.";
+const NO_RECIPE: &str = "Nothing extra";
+const LEAN_TITLE: &str = "Lean Windows";
+const SKIP_SCANNING_TITLE: &str = "Leave Folders Out of Virus Scanning";
+const LEAN_NOTE: &str = "Leaves out apps Windows adds for every account, and keeps some programs from running in \
+                         the background. Show lists all of it, and what it leaves alone.";
+const RECIPE_NOTE: &str = "A recipe sets a few of the machine's settings and gives it software once it is installed. \
+                           Nothing runs in the machine until it is.";
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
@@ -78,6 +92,15 @@ struct Parts {
     access: adw::PreferencesGroup,
     remote_desktop: adw::SwitchRow,
     ssh: adw::SwitchRow,
+    /// Lean Windows, for a Windows machine. Off unless the user or the chosen recipe turns it on.
+    lean_group: adw::PreferencesGroup,
+    lean: adw::SwitchRow,
+    /// The switch is on because the recipe turned it on, and goes off with the recipe.
+    lean_from_recipe: Cell<bool>,
+    /// Folders the chosen recipe names for Defender to leave out. There only when it names some, and
+    /// off whatever the recipe says, as only the user turns it on.
+    skip_scanning_group: adw::PreferencesGroup,
+    skip_scanning: adw::SwitchRow,
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     disk: adw::SpinRow,
@@ -86,6 +109,14 @@ struct Parts {
     card: adw::ComboRow,
     cards: Vec<CardChoice>,
     driver_row: DriverRow,
+    /// What the machine is for, there only when a recipe exists for the disc's kind.
+    recipes_group: adw::PreferencesGroup,
+    recipe_row: adw::ComboRow,
+    recipe_show: gtk::Button,
+    /// The recipes behind the row's choices after "Nothing extra", for the disc's kind.
+    recipes: RefCell<Vec<Entry>>,
+    /// The sizes are a recipe's, and go back to the disc's own when it is taken off.
+    recipe_sized: Cell<bool>,
     note: gtk::Label,
     iso_path: RefCell<Option<String>>,
     iso: RefCell<Option<Iso>>,
@@ -185,6 +216,22 @@ impl NewMachineDialog {
             .sensitive(no_openssh.is_none())
             .build();
         access.add(&ssh);
+        let lean_group = adw::PreferencesGroup::builder().visible(false).build();
+        page.add(&lean_group);
+        let lean = adw::SwitchRow::builder().title(LEAN_TITLE).subtitle(LEAN_NOTE).build();
+        let lean_show = row_button("Show");
+        lean.add_suffix(&lean_show);
+        lean_group.add(&lean);
+        let skip_scanning_group = adw::PreferencesGroup::builder().visible(false).build();
+        page.add(&skip_scanning_group);
+        let skip_scanning = adw::SwitchRow::builder()
+            .title(SKIP_SCANNING_TITLE)
+            .subtitle(WHAT_IT_MEANS)
+            .subtitle_lines(0)
+            .build();
+        let skip_scanning_show = row_button("Show");
+        skip_scanning.add_suffix(&skip_scanning_show);
+        skip_scanning_group.add(&skip_scanning);
         let cards = windows_card_choices(&context);
         let labels: Vec<&str> = cards.iter().map(|choice| choice.label.as_str()).collect();
         let card = choice_row(CARD_TITLE, &labels);
@@ -193,6 +240,13 @@ impl NewMachineDialog {
         card.set_visible(false);
         hardware.add(&card);
         let driver_row = DriverRow::new(window, &hardware);
+        let recipes_group = adw::PreferencesGroup::builder().description(RECIPE_NOTE).visible(false).build();
+        page.add(&recipes_group);
+        let recipe_row = choice_row("Set up for", &[NO_RECIPE]);
+        let recipe_show = row_button("Show");
+        recipe_show.set_sensitive(false);
+        recipe_row.add_suffix(&recipe_show);
+        recipes_group.add(&recipe_row);
         let note = gtk::Label::builder()
             .wrap(true)
             .xalign(0.0)
@@ -231,6 +285,11 @@ impl NewMachineDialog {
             access,
             remote_desktop,
             ssh,
+            lean_group,
+            lean,
+            lean_from_recipe: Cell::new(false),
+            skip_scanning_group,
+            skip_scanning,
             cores,
             ram,
             disk,
@@ -238,6 +297,11 @@ impl NewMachineDialog {
             card,
             cards,
             driver_row,
+            recipes_group,
+            recipe_row,
+            recipe_show,
+            recipes: RefCell::default(),
+            recipe_sized: Cell::new(false),
             note,
             iso_path: RefCell::default(),
             iso: RefCell::default(),
@@ -248,6 +312,15 @@ impl NewMachineDialog {
         }));
         this.set_vm_running(window.vm_running());
         this.connect(&cancel, &choose);
+        let dialog = this.0.dialog.clone();
+        lean_show.connect_clicked(move |_| recipe_dialog::show(&dialog, LEAN_TITLE, &what_it_does()));
+        let handle = this.clone();
+        skip_scanning_show.connect_clicked(move |_| {
+            if let Some(entry) = handle.chosen_recipe() {
+                let text = scan_exclusions::what_it_does(&entry.recipe.scan_exclusions);
+                recipe_dialog::show(&handle.0.dialog, SKIP_SCANNING_TITLE, &text);
+            }
+        });
         let handle = this.clone();
         use_macos.connect_clicked(move |_| handle.choose_macos());
         this
@@ -270,6 +343,10 @@ impl NewMachineDialog {
         self.0.create_button.connect_clicked(move |_| this.on_create());
         let this = self.clone();
         self.0.card.connect_selected_notify(move |_| this.card_changed());
+        let this = self.clone();
+        self.0.recipe_row.connect_selected_notify(move |_| this.recipe_changed());
+        let this = self.clone();
+        self.0.recipe_show.connect_clicked(move |_| this.show_recipe());
         let this = self.clone();
         self.0.driver_row.connect_ready(move || this.card_changed());
         let window = self.0.window.clone();
@@ -332,6 +409,8 @@ impl NewMachineDialog {
         parts.disk.set_value(MACOS_SIZES.disk.into());
         parts.card.set_visible(false);
         parts.account.set_visible(false);
+        parts.lean_group.set_visible(false);
+        self.fill_recipes(Kind::Plain);
         parts.no_driver.set(false);
         if keeps_following_the_disc(&parts.name.text(), &parts.suggested.borrow()) {
             parts.name.set_text(MACOS_NAME);
@@ -487,7 +566,9 @@ impl NewMachineDialog {
         }
         *self.0.suggested.borrow_mut() = suggestion;
         self.show_account(iso.kind);
+        self.fill_recipes(iso.kind);
         self.0.access.set_visible(iso.kind == Kind::Windows);
+        self.0.lean_group.set_visible(iso.kind == Kind::Windows);
         *self.0.iso.borrow_mut() = Some(iso);
         self.0.hardware.set_sensitive(true);
         self.update();
@@ -558,6 +639,89 @@ impl NewMachineDialog {
         self.update();
     }
 
+    /// The recipes for a disc of this kind. With none, there is no row, and the dialog is as it was.
+    fn fill_recipes(&self, kind: Kind) {
+        let parts = &self.0;
+        let listing = list_for(&parts.window.context(), kind);
+        let mut names = vec![NO_RECIPE.to_owned()];
+        names.extend(listing.entries.iter().map(|entry| entry.recipe.name.clone()));
+        let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+        parts.recipe_row.set_model(Some(&gtk::StringList::new(&labels)));
+        parts.recipes_group.set_visible(!listing.entries.is_empty());
+        parts.recipe_sized.set(false);
+        *parts.recipes.borrow_mut() = listing.entries;
+        parts.recipe_row.set_selected(0);
+        let unread = listing.problems.len();
+        let subtitle = match unread {
+            0 => String::new(),
+            1 => "One file in your recipes folder could not be read.".to_owned(),
+            more => format!("{more} files in your recipes folder could not be read."),
+        };
+        parts.recipe_row.set_subtitle(&subtitle);
+    }
+
+    /// The recipe chosen, if one is.
+    fn chosen_recipe(&self) -> Option<Entry> {
+        let index = self.0.recipe_row.selected() as usize;
+        self.0.recipes.borrow().get(index.checked_sub(1)?).cloned()
+    }
+
+    /// The recipe's own sizes go in the rows, as far as this PC allows, and the rows are the user's to
+    /// change after. Taking it off puts the disc's own sizes back.
+    fn recipe_changed(&self) {
+        let parts = &self.0;
+        let Some(iso) = parts.iso.borrow().clone() else { return };
+        if parts.lean_from_recipe.replace(false) {
+            parts.lean.set_active(false);
+        }
+        // Never carried from one recipe to the next: each time, the user turns it on for these folders.
+        parts.skip_scanning.set_active(false);
+        let named = self.chosen_recipe().is_some_and(|entry| !entry.recipe.scan_exclusions.is_empty());
+        parts.skip_scanning_group.set_visible(named);
+        let Some(entry) = self.chosen_recipe() else {
+            parts.recipe_show.set_sensitive(false);
+            parts.recipe_row.set_subtitle("");
+            if parts.recipe_sized.replace(false) {
+                self.set_sizes(&iso);
+            }
+            return;
+        };
+        let context = parts.window.context();
+        let recipe = &entry.recipe;
+        parts.recipe_show.set_sensitive(true);
+        // As with the sizes, the recipe's choice goes in the row, and the row is the user's after.
+        if recipe.lean && !parts.lean.is_active() {
+            parts.lean.set_active(true);
+            parts.lean_from_recipe.set(true);
+        }
+        let usual = Usual {
+            cores: parts.cores.value() as u32,
+            ram_gib: parts.ram.value() as u32,
+            disk_gib: parts.disk.value() as u32,
+        };
+        let fitted = fit(&context, iso.kind, &recipe.settings, usual, self.recipe_vram_limit());
+        parts.recipe_sized.set(true);
+        parts.cores.set_value(fitted.cores.into());
+        parts.ram.set_value(fitted.ram_gib.into());
+        parts.disk.set_value(fitted.disk_gib.into());
+        let origin = origin_text(entry.source, &entry.file.display().to_string());
+        parts
+            .recipe_row
+            .set_subtitle([recipe.description.as_str(), &origin, &fitted.notes.join(" ")].join(" ").trim());
+    }
+
+    /// The most video memory the machine's card allows, for a recipe that caps it.
+    fn recipe_vram_limit(&self) -> u32 {
+        max_vram_gib_for(&self.0.window.context(), &self.chosen_card())
+    }
+
+    fn show_recipe(&self) {
+        if let Some(entry) = self.chosen_recipe() {
+            let text = what_it_will_run(&entry.recipe, entry.source, &entry.file.display().to_string());
+            recipe_dialog::show(&self.0.dialog, &entry.recipe.name, &text);
+        }
+    }
+
     fn update(&self) {
         let parts = &self.0;
         let ready = parts.iso.borrow().is_some()
@@ -574,6 +738,23 @@ impl NewMachineDialog {
         if parts.macos.get() {
             return self.create_macos();
         }
+        let Some(entry) = self.chosen_recipe() else { return self.create(None) };
+        // A recipe of the user's own was read by nobody but them, so what it runs is shown first. The
+        // app's own are shown by the row's button.
+        if entry.source == Source::Yours && !entry.recipe.steps.is_empty() {
+            let text = what_it_will_run(&entry.recipe, entry.source, &entry.file.display().to_string());
+            let heading = entry.recipe.name.clone();
+            let this = self.clone();
+            return recipe_dialog::ask(&parts.dialog, &heading, &text, "Create", move || {
+                this.create(Some(entry.clone()));
+            });
+        }
+        self.create(Some(entry));
+    }
+
+    /// Makes the machine, with the recipe if one was chosen.
+    fn create(&self, entry: Option<Entry>) {
+        let parts = &self.0;
         let (Some(iso), Some(path)) = (parts.iso.borrow().clone(), parts.iso_path.borrow().clone()) else {
             return;
         };
@@ -598,11 +779,33 @@ impl NewMachineDialog {
             },
         };
         let context = parts.window.context();
+        // The video memory cap is the one setting here that has no row, so it comes from the recipe,
+        // held to what the card allows.
+        let lean = iso.kind == Kind::Windows && parts.lean.is_active();
+        let skipped = match &entry {
+            Some(entry) if iso.kind == Kind::Windows && parts.skip_scanning.is_active() => {
+                entry.recipe.scan_exclusions.clone()
+            }
+            _ => Vec::new(),
+        };
+        let extras = entry.map_or_else(Extras::default, |entry| {
+            let asked =
+                SettingsAsked { vram_gib: entry.recipe.settings.vram_gib, ..SettingsAsked::default() };
+            let usual = Usual { cores: new.cores, ram_gib: new.ram_gib, disk_gib: new.disk_gib };
+            let vram = fit(&context, iso.kind, &asked, usual, self.recipe_vram_limit()).vram_gib;
+            let file = entry.file.display().to_string();
+            Extras {
+                vram_gib: vram,
+                recipe: Some(Chosen { source: entry.source, file, recipe: entry.recipe }),
+                ..Extras::default()
+            }
+        });
+        let extras = Extras { lean, scan_exclusions: skipped, ..extras };
         let working = context.clone();
         let this = self.clone();
         in_background(
             &context,
-            move || create(&working, &new),
+            move || create_with(&working, &new, &extras),
             move |result| match result {
                 Ok(machine) => {
                     let window = &this.0.window;

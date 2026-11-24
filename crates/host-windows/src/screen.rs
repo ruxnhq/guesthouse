@@ -41,7 +41,7 @@ pub fn viewer_identity(state: &Path) -> Result<String, String> {
     fs::create_dir_all(&client).map_err(|error| format!("{}: {error}", client.display()))?;
     let made = rcgen::generate_simple_self_signed(vec!["remoteman".to_owned()])
         .map_err(|error| format!("Making the viewer's identity: {error}"))?;
-    fs::write(&key_path, made.key_pair.serialize_der())
+    fs::write(&key_path, made.signing_key.serialize_der())
         .map_err(|error| format!("{}: {error}", key_path.display()))?;
     let certificate = made.cert.der().to_vec();
     fs::write(&cert_path, &certificate).map_err(|error| format!("{}: {error}", cert_path.display()))?;

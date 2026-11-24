@@ -122,13 +122,18 @@ pub fn allocation_size(layout: &AllocationLayout, data: &[u8]) -> u64 {
 
 /// The size of an allocation in the guest's own memory, with no rounding. The guest locks this
 /// much and the GPU reaches only this much, so it has to cover all the request asks for, the same
-/// as in video memory.
+/// as in video memory, and can't be more than the memory the program has there.
 pub fn exact_size(layout: &AllocationLayout, data: &[u8]) -> u64 {
-    if is_ours(layout, data) && data.len() >= layout.size + 4 {
-        requested_size(layout, data).0
-    } else {
-        DEFAULT_SIZE
+    if !is_ours(layout, data) || data.len() < layout.size + 4 {
+        return DEFAULT_SIZE;
     }
+    // Memory a program registers with the driver has its length in both block fields. The size
+    // field is never less than 2 MiB there, and the program's memory ends at its length.
+    let (size, whole) = (word(data, layout.size), word(data, layout.whole_size));
+    if whole != 0 && whole < size && whole == word(data, layout.asked_size) {
+        return u64::from(whole);
+    }
+    requested_size(layout, data).0
 }
 
 /// A surface's shape, if the data describes one.
@@ -352,6 +357,18 @@ mod tests {
         set_word(&mut bytes, LAYOUT.fallback_size, 0x2_0000);
         assert_eq!(exact_size(LAYOUT, &bytes), 0x4000);
         assert_eq!(allocation_size(LAYOUT, &bytes), 0x4000);
+    }
+
+    /// Four KiB a program registers, as CUDA's cuMemHostRegister sends it.
+    #[test]
+    fn registered_memory_is_as_long_as_the_program_says() {
+        let mut bytes = data(0x20_0000);
+        set_word(&mut bytes, LAYOUT.whole_size, 0x1000);
+        set_word(&mut bytes, LAYOUT.asked_size, 0x1000);
+        assert_eq!(exact_size(LAYOUT, &bytes), 0x1000);
+        assert_eq!(allocation_size(LAYOUT, &bytes), 0x20_0000);
+        set_word(&mut bytes, LAYOUT.asked_size, 0x800);
+        assert_eq!(exact_size(LAYOUT, &bytes), 0x20_0000);
     }
 
     #[test]

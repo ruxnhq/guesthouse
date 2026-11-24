@@ -7,7 +7,6 @@ if (-not $user) { 'nobody is logged in'; return }
 $action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\gpupv\window-size.ps1'
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
-Stop-ScheduledTask -TaskName gpupv-window-size -ea 0
 Register-ScheduledTask -TaskName gpupv-window-size -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName gpupv-window-size
 # It compiles its calls to Windows before it listens, which took a second or two in a guest.

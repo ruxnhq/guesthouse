@@ -1,0 +1,8 @@
+name = "Clean box"
+description = "A small Windows to try something out in. Nothing is added to it."
+guest = "windows"
+
+[settings]
+cores = 4
+ram_gib = 8
+disk_gib = 80

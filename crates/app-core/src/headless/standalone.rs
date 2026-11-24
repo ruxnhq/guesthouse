@@ -22,6 +22,12 @@ const SOCKET_WAIT: &str = "0.2";
 /// The plan for a machine as it would run beside the user's own tools, or why it can't.
 fn plan(context: &Context, machine: &Machine) -> Result<VmPlan> {
     let name = &machine.name;
+    if machine.throwaway {
+        return Err(Failure(format!(
+            "{name} is a throwaway, and a QEMU the app doesn't start would keep what it writes to the disk. \
+             Turn Throwaway off to run it this way."
+        )));
+    }
     let boot = match machine.kind {
         Kind::Windows if machine.installing => {
             return Err(Failure(format!(

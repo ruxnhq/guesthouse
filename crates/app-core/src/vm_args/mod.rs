@@ -13,6 +13,7 @@ mod own_linux;
 mod passt_age;
 mod qemu_jail;
 mod standalone;
+mod throwaway;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
@@ -21,6 +22,7 @@ pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;
+pub use throwaway::{THROWAWAY_FDS, THROWAWAY_MARK, throwaway_disk};
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
 
 use crate::context::Context;
@@ -28,7 +30,7 @@ use crate::firmware::Firmware;
 use crate::gpu_identity::{PciIdentity, shown_identity};
 use crate::jailing::LAUNCHER;
 use crate::linux::card::ForwardedCard;
-use crate::machine::{Drive, Machine};
+use crate::machine::{Drive, Kind, Machine};
 use crate::network::{Forward, Mode};
 use crate::only_through::{OnlyThrough, dns_now};
 use guesthouse_daemon::memory_files::MemoryFiles;
@@ -90,6 +92,17 @@ pub enum UbuntuBoot {
         reason_file: PathBuf,
     },
     Amd(AmdBoot),
+}
+
+/// The address the machine's first card is given: the machine's own, which an empty one leaves as QEMU's
+/// default. An Ubuntu guest installed before its netplan found the card by name has that netplan pinned
+/// to the default address, so it only gets the machine's own where its scripts will put that right: in a
+/// boot with the driver image, which brings them. Otherwise it keeps the default, and its network.
+fn card_address(context: &Context, machine: &Machine, boot: &Boot) -> String {
+    let safe = machine.kind != Kind::Linux
+        || matches!(boot, Boot::UbuntuInstall(_) | Boot::Ubuntu(UbuntuBoot::WithGpu { .. }))
+        || machine.network_by_name_marker(context).is_file();
+    if safe { machine.mac.clone() } else { String::new() }
 }
 
 /// What the first NIC is, and what the private link carries.
@@ -169,6 +182,9 @@ pub struct VmPlan {
     /// The folder of the drives' names, when QEMU opens each by its path and not from a descriptor
     /// the app opened: see [`standalone`].
     pub drives_by_path: Option<PathBuf>,
+    /// For a throwaway machine's run, its own disk, which is only read. `disk` is then the overlay
+    /// the app handed QEMU open: see [`crate::throwaway`].
+    pub throwaway: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,6 +229,7 @@ impl VmPlan {
             None if passt => host_resolver(),
             None => None,
         };
+        let mac = card_address(context, machine, &boot);
         Self {
             boot,
             slot,
@@ -242,7 +259,7 @@ impl VmPlan {
                 mode: machine.network_mode,
                 passt,
                 bridge: machine.bridge.clone(),
-                mac: machine.mac.clone(),
+                mac,
                 forwards: machine.forwards.clone(),
                 resolver,
                 only_through,
@@ -254,6 +271,7 @@ impl VmPlan {
             jail_note: String::new(),
             memory_by_path: None,
             drives_by_path: None,
+            throwaway: None,
             run_folder,
         }
     }

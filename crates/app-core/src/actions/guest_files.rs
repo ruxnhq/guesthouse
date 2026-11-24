@@ -9,7 +9,7 @@ use super::driver_store::HOST_DRIVER_STORE;
 use super::guest_upload::{put_big_file, quoted};
 use crate::agent::guest_script;
 use crate::failure::Result;
-use crate::gpu_identity::INTEL_RENDER;
+use crate::gpu_identity::{INTEL_RENDER, Shown, read_state};
 use crate::log::write_log;
 use crate::setup::amd_system_files::runtime_file_list;
 use crate::setup::cards::nvidia_card_at;
@@ -31,6 +31,17 @@ const TRANSFORMS_SECONDS: u64 = 30;
 /// How the transforms script's answer starts when it wrote nothing: the registry had it all, or the
 /// driver's INF asks for none for this card.
 const TRANSFORMS_UNCHANGED: [&str; 2] = ["kept", "nothing to register"];
+const DISPLAY_NAME_SCRIPT: &str = "display-name.ps1";
+const DISPLAY_NAME_SECONDS: u64 = 20;
+const SETMODE_SCRIPT: &str = "setmode.ps1";
+const SCRIPT_PLACED: &str = "script placed";
+const TAKE_OVER_SCRIPT: &str = "take-over-display.ps1";
+/// Where the display driver's install leaves its take-over script.
+const TAKE_OVER_IN_GUEST: &str = "C:\\gpupv\\idd\\take-over-display.ps1";
+/// The name the display driver's INF gives the device.
+const INF_DISPLAY_NAME: &str = "RDPUDD Chained DD";
+/// The name the guest's scripts also know it by, see display-name.ps1.
+const OWN_DISPLAY_NAME: &str = "Guesthouse Display";
 const LIST_NAME: &str = "nv-files.txt";
 const LOG_NAME: &str = "nv-files.log";
 const CHECK_SECONDS: u64 = 20;
@@ -94,7 +105,9 @@ fn run_placing_script(task: &Task, store: Option<&str>) -> String {
 }
 
 /// The folder NVIDIA's settings store lives in, with the driver's own profile database in it. A guest
-/// that has it keeps it, as the files change once a program has used them.
+/// that has it keeps it, as the files change once a program has used them. The same script sets the
+/// driver's Vulkan and OpenGL present method by the machine's "Faster programs in a window", as that
+/// is the store it writes.
 pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
     let script = match guest_script(task.context, PROFILES_SCRIPT) {
         Ok(script) => script,
@@ -103,11 +116,12 @@ pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
             return Ok(());
         }
     };
+    let script = format!("$on = ${}\n{script}", task.machine.window_speed());
     let said = task.ask_guest(&script, PROFILES_SECONDS);
     if said.contains(FAILED_MARK) {
         task.error = "NVIDIA's settings store did not reach Windows. The log says why.".to_owned();
     }
-    if !said.trim().starts_with("kept") {
+    if !all_kept(&said) {
         write_log(task.context, &format!("profile store: {}", said.trim()))?;
     }
     Ok(())
@@ -145,6 +159,79 @@ pub(super) fn register_media_transforms(task: &mut Task) -> Result<()> {
         write_log(task.context, &format!("media transforms: {}", said.trim()))?;
     }
     Ok(())
+}
+
+/// The name our display gets on an NVIDIA machine, by the vendor number Windows sees on the render
+/// device: on Microsoft's, NVIDIA's OpenGL and Vulkan driver finds its GPU only through a display
+/// named like a remote session's, which the INF names it; on NVIDIA's, that name folds the GPU into
+/// the display's adapter, and the other one lets the driver keep them apart.
+fn display_name(shown: Shown) -> &'static str {
+    match shown {
+        Shown::Microsoft => INF_DISPLAY_NAME,
+        Shown::Maker => OWN_DISPLAY_NAME,
+    }
+}
+
+/// Windows reads the name at boot, so what this writes counts from the next start. The start that
+/// moves a machine to NVIDIA's number restarts Windows anyway, so that boot has it already.
+pub(super) fn name_display(task: &mut Task) -> Result<()> {
+    if give_display_its_name(task)? {
+        task.error =
+            "Windows could not be given the display's name for NVIDIA's driver. The log says why.".to_owned();
+    }
+    Ok(())
+}
+
+/// Names the display for the vendor number the machine's next start shows, and says whether that
+/// failed. Also for a start whose GPU failed, which moves the machine back to Microsoft's number:
+/// with NVIDIA's name left on it, OpenGL and Vulkan would find no GPU on the start after.
+pub(super) fn give_display_its_name(task: &Task) -> Result<bool> {
+    let script = match guest_script(task.context, DISPLAY_NAME_SCRIPT) {
+        Ok(script) => script,
+        Err(failure) => {
+            write_log(task.context, &format!("display name: {}", failure.0))?;
+            return Ok(false);
+        }
+    };
+    let name = display_name(read_state(task.context, &task.machine).shown);
+    // The logon task's script and the display driver's take-over script find our display by its
+    // name too, and a guest keeps the copies it was installed with, which know only the INF's.
+    if name != INF_DISPLAY_NAME {
+        let setmode = task.context.paths.guest_files().join(SETMODE_SCRIPT);
+        refresh_guest_script(task, &setmode, &guest_path(SETMODE_SCRIPT))?;
+        let take_over = task.context.paths.display_driver().join(TAKE_OVER_SCRIPT);
+        if take_over.is_file() {
+            refresh_guest_script(task, &take_over, TAKE_OVER_IN_GUEST)?;
+        }
+    }
+    let said = task.ask_guest(&format!("$name = '{name}'\n{script}"), DISPLAY_NAME_SECONDS);
+    if !all_kept(&said) {
+        write_log(task.context, &format!("display name: {}", said.trim()))?;
+    }
+    Ok(said.contains(FAILED_MARK))
+}
+
+/// Writes a guest's copy of one of our scripts again, where the guest has one. The install copied
+/// some from read-only media, and those kept the read-only mark.
+fn refresh_guest_script(task: &Task, local: &std::path::Path, path: &str) -> Result<()> {
+    let data = base64_encode(&fs::read(local)?);
+    let said = task.ask_guest(
+        &format!(
+            "$file = '{path}'; if (Test-Path -LiteralPath $file) {{ (Get-Item -LiteralPath $file).IsReadOnly = $false; \
+             [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String('{data}')) }}; '{SCRIPT_PLACED}'"
+        ),
+        DISPLAY_NAME_SECONDS,
+    );
+    if !said.contains(SCRIPT_PLACED) {
+        write_log(task.context, &format!("display name: {path} stayed as it was: {}", said.trim()))?;
+    }
+    Ok(())
+}
+
+/// Whether the script said something, and every line of it is about something left as it was.
+fn all_kept(said: &str) -> bool {
+    let mut lines = said.lines().map(str::trim).filter(|line| !line.is_empty()).peekable();
+    lines.peek().is_some() && lines.all(|line| line.starts_with("kept"))
 }
 
 /// Windows is up by now, so anything that goes wrong here is said and doesn't stop the machine.
@@ -370,6 +457,15 @@ fn place_listed_files(task: &mut Task, list: &str, store: Option<&str>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_script_that_changed_nothing_is_left_out_of_the_log() {
+        assert!(all_kept("kept C:\\ProgramData\\NVIDIA Corporation\\Drs\r\nkept the present method\r\n"));
+        assert!(!all_kept("kept C:\\ProgramData\\NVIDIA Corporation\\Drs\r\npresent method set to DXGI\r\n"));
+        assert!(!all_kept("made C:\\ProgramData\\NVIDIA Corporation\\Drs\r\nkept the present method\r\n"));
+        assert!(!all_kept("FAILED present method: NVAPI has no function\r\n"));
+        assert!(!all_kept(""), "no answer is not an answer");
+    }
 
     #[test]
     fn nvidias_system32_nvapi_is_left_out_and_the_32_bit_one_stays() {

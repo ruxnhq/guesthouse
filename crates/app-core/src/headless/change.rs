@@ -4,8 +4,9 @@
 use super::args::Forwarding;
 use super::run_task;
 use crate::context::Context;
-use crate::display::{forget_note, read_state};
+use crate::display::{Driver, DriverPackage, forget_note, read_state};
 use crate::failure::{Failure, Result};
+use crate::gpu_identity::{Shown, maker_name, read_state as read_identity};
 use crate::gpu_maker::GpuMaker;
 use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
@@ -22,7 +23,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 17] = [
+const SETTINGS: [&str; 19] = [
     "cores",
     "ram",
     "vram",
@@ -40,6 +41,8 @@ const SETTINGS: [&str; 17] = [
     "start-unjailed",
     "remote-desktop",
     "ssh",
+    "auto-snapshot",
+    "throwaway",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -162,6 +165,10 @@ pub(super) fn set(
             only_for_nvidia(&machine, key)?;
             machine.nvapi_wrapper_off = !on_or_off(key, value)?;
         }
+        "auto-snapshot" => {
+            only_for_windows(&machine, key)?;
+            machine.auto_snapshot = Some(on_or_off(key, value)?);
+        }
         "start-unjailed" => {
             must_be_off(context, &machine)?;
             machine.start_without_jail = on_or_off(key, value)?;
@@ -227,6 +234,10 @@ pub(super) fn set(
             set_dns(context, &mut machine, address)?;
             return said(out, key, value);
         }
+        "throwaway" => {
+            crate::throwaway::set_throwaway(context, &mut machine, on_or_off(key, value)?)?;
+            return said(out, key, value);
+        }
         "share" => {
             not_for_ubuntu(&machine)?;
             must_be_off(context, &machine)?;
@@ -245,7 +256,11 @@ pub(super) fn set(
     if matches!(key, "screen" | "refresh") {
         apply_display(context, &machine, out)?;
     }
-    said(out, key, value)
+    said(out, key, value)?;
+    if key == "auto-snapshot" && machine.throwaway {
+        writeln!(out, "It has no effect while Throwaway is on, as a throwaway starts clean each time.")?;
+    }
+    Ok(())
 }
 
 fn protocol_of(word: &str) -> Result<Protocol> {
@@ -289,6 +304,32 @@ fn switch(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// The display driver as the settings page says it, in a few words. Going back to a snapshot puts
+/// back what its disk had, so this is how to check one from a terminal.
+fn driver_text(context: &Context, machine: &Machine) -> String {
+    let state = read_state(context, machine);
+    match state.driver {
+        Driver::Installed if state.restart_owed => "in Windows, from its next restart".to_owned(),
+        Driver::Installed => "in Windows".to_owned(),
+        Driver::Failed if state.reason.is_empty() => "taken out, as it failed".to_owned(),
+        Driver::Failed => format!("taken out, as it failed: {}", state.reason),
+        Driver::Absent if DriverPackage::find(context).is_some() => "goes in at the next start".to_owned(),
+        Driver::Absent => "none in this build".to_owned(),
+    }
+}
+
+/// The vendor and device number the next start shows Windows, and whose they are.
+fn vendor_text(context: &Context, machine: &Machine) -> String {
+    let identity = read_identity(context, machine);
+    let shown = identity.shown.identity(machine);
+    let whose = match identity.shown {
+        Shown::Microsoft => "Microsoft's".to_owned(),
+        Shown::Maker => format!("{}'s", maker_name(machine)),
+    };
+    let restart = if identity.restarts_windows() { ", and Windows restarts once on it" } else { "" };
+    format!("{:04x}:{:04x}, {whose}{restart}", shown.vendor, shown.device)
+}
+
 pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
     line(out, "name", &machine.name)?;
     line(out, "id", &machine.id)?;
@@ -303,15 +344,29 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "refresh", &format!("{} Hz", machine.refresh_hz))?;
         line(out, "sound", &switch(machine.sound))?;
         line(out, "window-speed", &switch(machine.window_speed()))?;
+        let auto =
+            if machine.throwaway { "none, as it's a throwaway" } else { switch(machine.auto_snapshot_on()) };
+        line(out, "auto-snapshot", &auto)?;
         if machine.windows_maker() == Some(GpuMaker::Nvidia) {
             line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
+        }
+        if machine.has_gpu() {
+            line(out, "display-driver", &driver_text(context, machine))?;
+            line(out, "vendor-id", &vendor_text(context, machine))?;
         }
         let access = read_access(context, machine);
         for service in Service::ALL {
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;
         }
+        let lean = switch(crate::lean::is_lean(context, machine));
+        match crate::lean::state_text(context, machine) {
+            Some(done) if lean == "on" => line(out, "lean", &format!("on. {done}"))?,
+            _ => line(out, "lean", &lean)?,
+        }
+        line(out, "defender", &crate::scan_exclusions::show_text(context, machine))?;
     }
     line(out, "start-unjailed", &switch(machine.start_without_jail))?;
+    line(out, "throwaway", &switch(machine.throwaway))?;
     if machine.kind != Kind::Linux {
         line(out, "network", &machine.network_mode.name())?;
         if machine.network_mode == Mode::Nat {
@@ -332,8 +387,14 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
     if !machine.iso.is_empty() {
         line(out, "iso", &machine.iso)?;
     }
+    if let Some(recipe) = crate::recipe::summary(context, machine) {
+        line(out, "recipe", &recipe)?;
+    }
     if machine.installing {
         writeln!(out, "Its install has not finished.")?;
+    }
+    if let Some(note) = crate::token_change::refused_note(context, machine) {
+        writeln!(out, "{note}")?;
     }
     Ok(())
 }

@@ -5,8 +5,11 @@ use std::fmt;
 
 const NO_WAIT: &str = "--no-wait";
 const YES: &str = "--yes";
+const NAME: &str = "--name";
+const THROWAWAY: &str = "--throwaway";
+const DELETE_WHEN_STOPPED: &str = "--delete-when-stopped";
 /// The options of `new` that take a value.
-const NEW_OPTIONS: [&str; 12] = [
+const NEW_OPTIONS: [&str; 15] = [
     "--iso",
     "--kind",
     "--disk",
@@ -19,8 +22,12 @@ const NEW_OPTIONS: [&str; 12] = [
     "--intel-driver",
     "--remote-desktop",
     "--ssh",
+    "--set-up-for",
+    "--lean",
+    "--skip-scanning",
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
+const MINUTES: &str = "--minutes";
 
 /// What `new` was told. Whatever it wasn't told, the New Machine dialog's choice stands.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -40,6 +47,14 @@ pub(super) struct NewOptions<'a> {
     /// On or off, for a Windows machine.
     pub remote_desktop: Option<&'a str>,
     pub ssh: Option<&'a str>,
+    /// A recipe, by its key, its file's name or its name.
+    pub set_up_for: Option<&'a str>,
+    /// On or off, for a Windows machine. Off unless the recipe turns it on.
+    pub lean: Option<&'a str>,
+    /// On or off: whether Defender leaves out the folders the recipe names. Always off unless said.
+    pub skip_scanning: Option<&'a str>,
+    /// Goes ahead with a recipe of the user's own, whose steps `new` shows first.
+    pub yes: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,19 +67,91 @@ pub(super) enum Forwarding<'a> {
 pub(super) enum Command<'a> {
     Help,
     List,
+    Share,
     Status(&'a str),
     Show(&'a str),
-    Start { name: &'a str, wait: bool },
-    Install { name: &'a str, wait: bool },
+    Start {
+        name: &'a str,
+        wait: bool,
+    },
+    Install {
+        name: &'a str,
+        wait: bool,
+    },
+    Recipes,
+    RunRecipe {
+        name: &'a str,
+        wait: bool,
+    },
+    Lean {
+        name: &'a str,
+        wait: bool,
+    },
+    ScanAll {
+        name: &'a str,
+        wait: bool,
+    },
     Stop(&'a str),
     Off(&'a str),
     Log(&'a str),
     Standalone(&'a str),
-    New { name: &'a str, options: NewOptions<'a> },
-    Set { name: &'a str, key: &'a str, value: &'a str },
-    Forward { name: &'a str, change: Forwarding<'a> },
-    Setup { driver: Option<&'a str>, card: Option<&'a str> },
-    Remove { name: &'a str, yes: bool },
+    Idle {
+        name: &'a str,
+        minutes: Option<&'a str>,
+    },
+    New {
+        name: &'a str,
+        options: NewOptions<'a>,
+    },
+    Set {
+        name: &'a str,
+        key: &'a str,
+        value: &'a str,
+    },
+    Forward {
+        name: &'a str,
+        change: Forwarding<'a>,
+    },
+    Setup {
+        driver: Option<&'a str>,
+        card: Option<&'a str>,
+    },
+    Remove {
+        name: &'a str,
+        yes: bool,
+    },
+    Snapshots(&'a str),
+    /// Back to the named snapshot, or with none to the one taken before a start that failed.
+    GoBack {
+        name: &'a str,
+        snapshot: Option<&'a str>,
+        yes: bool,
+    },
+    TakeSnapshot {
+        name: &'a str,
+        snapshot: &'a str,
+    },
+    DeleteSnapshot {
+        name: &'a str,
+        snapshot: &'a str,
+        yes: bool,
+    },
+    Duplicate {
+        name: &'a str,
+        copy: Option<&'a str>,
+        throwaway: bool,
+        delete: bool,
+        wait: bool,
+    },
+    Export {
+        name: &'a str,
+        file: &'a str,
+        wait: bool,
+    },
+    Import {
+        file: &'a str,
+        name: Option<&'a str>,
+    },
 }
 
 pub(super) fn mistake(why: impl fmt::Display) -> Problem {
@@ -127,9 +214,9 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
     let machine = "a machine";
     match command {
         "help" | "-h" | "--help" => Ok(Command::Help),
-        "list" => {
+        "list" | "share" => {
             Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
-            Ok(Command::List)
+            Ok(if command == "list" { Command::List } else { Command::Share })
         }
         "status" | "show" | "stop" | "off" | "log" | "command" => {
             let split = Split::new(command, rest, &[], &[])?;
@@ -143,6 +230,23 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 _ => Command::Log(name),
             })
         }
+        "recipes" => {
+            Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
+            Ok(Command::Recipes)
+        }
+        "recipe" | "lean" | "scan-all" => {
+            let split = Split::new(command, rest, &[], &[NO_WAIT])?;
+            let (name, wait) = (split.exactly(command, machine, 1)?[0], !split.has(NO_WAIT));
+            Ok(match command {
+                "recipe" => Command::RunRecipe { name, wait },
+                "lean" => Command::Lean { name, wait },
+                _ => Command::ScanAll { name, wait },
+            })
+        }
+        "idle" => {
+            let split = Split::new(command, rest, &[MINUTES], &[])?;
+            Ok(Command::Idle { name: split.exactly(command, machine, 1)?[0], minutes: split.value(MINUTES) })
+        }
         "start" | "install" => {
             let split = Split::new(command, rest, &[], &[NO_WAIT])?;
             let (name, wait) = (split.exactly(command, machine, 1)?[0], !split.has(NO_WAIT));
@@ -152,12 +256,59 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 Command::Install { name, wait }
             })
         }
+        "snapshots" => {
+            let split = Split::new(command, rest, &[], &[])?;
+            Ok(Command::Snapshots(split.exactly(command, machine, 1)?[0]))
+        }
+        "go-back" => {
+            let split = Split::new(command, rest, &[], &[YES])?;
+            let words = match split.words.len() {
+                2 => &split.words[..],
+                _ => split.exactly(command, machine, 1)?,
+            };
+            Ok(Command::GoBack { name: words[0], snapshot: words.get(1).copied(), yes: split.has(YES) })
+        }
+        "take-snapshot" => {
+            let split = Split::new(command, rest, &[], &[])?;
+            let [name, snapshot] = split.exactly(command, "a machine and a name", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::TakeSnapshot { name, snapshot })
+        }
+        "delete-snapshot" => {
+            let split = Split::new(command, rest, &[], &[YES])?;
+            let [name, snapshot] = split.exactly(command, "a machine and a snapshot", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::DeleteSnapshot { name, snapshot, yes: split.has(YES) })
+        }
         "remove" => {
             let split = Split::new(command, rest, &[], &[YES])?;
             Ok(Command::Remove { name: split.exactly(command, machine, 1)?[0], yes: split.has(YES) })
         }
+        "export" => {
+            let split = Split::new(command, rest, &[], &[NO_WAIT])?;
+            let [name, file] = split.exactly(command, "a machine and a file", 2)? else {
+                unreachable!("exactly two words")
+            };
+            Ok(Command::Export { name, file, wait: !split.has(NO_WAIT) })
+        }
+        "import" => {
+            let split = Split::new(command, rest, &[NAME], &[])?;
+            Ok(Command::Import { file: split.exactly(command, "a file", 1)?[0], name: split.value(NAME) })
+        }
+        "duplicate" => {
+            let split = Split::new(command, rest, &[NAME], &[NO_WAIT, THROWAWAY, DELETE_WHEN_STOPPED])?;
+            let name = split.exactly(command, machine, 1)?[0];
+            let (copy, throwaway, wait) = (split.value(NAME), split.has(THROWAWAY), !split.has(NO_WAIT));
+            let delete = split.has(DELETE_WHEN_STOPPED);
+            if delete && !throwaway {
+                return Err(mistake("--delete-when-stopped is for a --throwaway copy."));
+            }
+            Ok(Command::Duplicate { name, copy, throwaway, delete, wait })
+        }
         "new" => {
-            let split = Split::new(command, rest, &NEW_OPTIONS, &[])?;
+            let split = Split::new(command, rest, &NEW_OPTIONS, &[YES])?;
             let name = split.exactly(command, "a name for the machine", 1)?[0];
             let options = NewOptions {
                 iso: split.value("--iso"),
@@ -172,6 +323,10 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 intel_driver: split.value("--intel-driver"),
                 remote_desktop: split.value("--remote-desktop"),
                 ssh: split.value("--ssh"),
+                set_up_for: split.value("--set-up-for"),
+                lean: split.value("--lean"),
+                skip_scanning: split.value("--skip-scanning"),
+                yes: split.has(YES),
             };
             Ok(Command::New { name, options })
         }

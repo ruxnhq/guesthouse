@@ -70,6 +70,10 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure(problem));
     }
     task.step("Preparing the install");
+    super::recipe::reset(task);
+    // A new install is a new guest, with host keys of its own.
+    task.machine.forget_guest_host_key(context);
+    super::copy_identity::forget(context, &task.machine);
     let iso = task.machine.iso.clone();
     let listing = isoinfo_files(&iso)?;
     let package = listing.lines().find_map(kernel_package).map(str::to_owned);
@@ -98,10 +102,15 @@ pub fn install(task: &mut Task) -> Result<()> {
         )));
     }
     let _ = fs::remove_dir_all(boot);
+    fs::write(task.machine.network_by_name_marker(context), "")?;
     task.machine.installing = false;
     task.machine.iso.clear();
     task.machine.save(context)?;
-    start_if_there_is_room(task, "Ubuntu")
+    crate::throwaway::installed(task.context, &task.machine)?;
+    start_if_there_is_room(task, "Ubuntu")?;
+    // Last, and after all of it has succeeded: what a recipe's steps do can't undo the install.
+    super::recipe::after_install(task);
+    Ok(())
 }
 
 fn wait_for_poweroff(task: &Task) -> Result<()> {
@@ -229,6 +238,8 @@ pub fn start(task: &mut Task) -> Result<()> {
         let plan = start_vm(task)?;
         wait_for_guest(task, &plan);
     }
+    // Last, once the start has the guest going: a copy's guest restarts after it.
+    super::copy_identity::renew_if_owed(task);
     Ok(())
 }
 

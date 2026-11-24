@@ -10,13 +10,28 @@ guesthouse-vm stop NAME
 guesthouse-vm off NAME
 guesthouse-vm log NAME
 guesthouse-vm command NAME
+guesthouse-vm snapshots NAME
+guesthouse-vm take-snapshot NAME SNAPSHOT
+guesthouse-vm go-back NAME [SNAPSHOT] [--yes]
+guesthouse-vm delete-snapshot NAME SNAPSHOT [--yes]
+guesthouse-vm idle NAME [--minutes N]
+guesthouse-vm share
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
                        [--cores N] [--ram GIB] [--user NAME] [--amd-card PCI]
                        [--amd-driver PATH] [--intel-driver PATH]
                        [--remote-desktop on|off] [--ssh on|off]
+                       [--set-up-for RECIPE [--yes]] [--lean on|off]
+                       [--skip-scanning on|off]
 guesthouse-vm install NAME [--no-wait]
 guesthouse-vm remove NAME [--yes]
+guesthouse-vm recipes
+guesthouse-vm recipe NAME [--no-wait]
+guesthouse-vm duplicate NAME [--name NAME] [--throwaway [--delete-when-stopped]] [--no-wait]
+guesthouse-vm export NAME FILE [--no-wait]
+guesthouse-vm import FILE [--name NAME]
+guesthouse-vm lean NAME [--no-wait]
+guesthouse-vm scan-all NAME [--no-wait]
 
 guesthouse-vm show NAME
 guesthouse-vm set NAME SETTING VALUE
@@ -32,7 +47,29 @@ NAME is a machine's id, or its name in any case. If a name fits two machines, it
 - `list` has a line for each machine: its name, id, kind and what it's doing.
 - `start` does what Start does in the app, and prints each step as the task writes it to the log. It ends when the machine is ready, with exit code 0, or prints what went wrong and exits with 1. `--no-wait` returns as soon as the start is under way, and `status` says how far it is.
 - `stop` asks the guest to shut down and waits. If the guest doesn't shut down in time, the VM is turned off and it says so. `off` is Force Off: the power is cut and the guest gets no chance to save anything.
+- A Windows machine with `auto-snapshot` on takes a snapshot first at a start when a change that can leave Windows unable to come up is due, as the app's Start does. See [A snapshot before a risky start](#a-snapshot-before-a-risky-start).
 - `log` says where the log is and shows the end of it. The log is one file for every machine, so the lines aren't sorted by machine.
+
+## Reading how busy a machine is
+
+`idle` reads a running machine and says in plain words whether it would count as idle. It acts on nothing: no machine is paused or stopped, and no setting changes. It is the measuring half of stopping or parking a machine nobody uses, which does not exist yet. A reading takes a few seconds.
+
+For a Windows machine it reads four things:
+
+- the last keyboard or mouse input in the user's session, or that nobody is logged in
+- the Remote Desktop sessions that are connected (one that was left disconnected doesn't count)
+- what programs have asked Windows to stay awake, from `powercfg /requests`, for the display, the system, away mode and execution
+- the guest's CPU time on this PC, as a share of one core over the few seconds the reading takes, which the host reads from QEMU's own process and needs nothing from the guest
+
+Windows words its own output in the PC's language, so none of it is read by a word. The guest says its sessions by Windows' numbers and station names, and `powercfg`'s text is read by its layout. If that layout isn't what was expected, the reading says it could not be read.
+
+A machine counts as idle only when every one of those was read and every one was quiet. Any one that says busy makes it busy, whatever else could not be read. A reading that could not be taken, such as an agent that did not answer, is never idle: it says it cannot tell. `--minutes N` is how old the last input must be to count as quiet, and is 30 by default. The CPU limit is a few percent of one core. Both are first guesses that no idle Windows has been measured against.
+
+For an Ubuntu machine, a plain VM or a macOS machine, only the CPU time can be read, as nothing in them answers Guesthouse. That is not enough to call one idle, so it says it cannot tell, and says busy if the CPU time is.
+
+The reading sends `guest/idle.ps1` through the agent. The only thing it does in Windows is to start a task in the user's session for a moment, as only a program there can see that session's input. The task, its helper script in `C:\gpupv` and its answer file in the public documents folder are removed when it is done, or at the next reading if one was cut short.
+
+`share` prints how each card with a running machine is shared, in the words of the library page's Sharing the Card panel: the whole card, then each machine's GPU time and video memory. It looks twice, a second apart, as AMD's and Intel's engine times need two looks. On NVIDIA each machine's time is the driver's last one-second sample of its processes, and its video memory is shown twice: what the guest allocated against its cap, and what the driver charges its processes with, which is more, as it includes the daemon's own work. It only reads.
 
 ## Making a machine
 
@@ -46,20 +83,31 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 
 `new` makes the disk and its settings and stops there. A Windows or Ubuntu machine is then installed with `install`, which follows the install step by step like `start`. The guest account's password is made at the install and kept in the machine's folder. There's no way to choose it here.
 
+`--set-up-for` makes a Windows or Ubuntu machine for a [recipe](recipes.md): it prints the whole recipe first, takes the recipe's sizes unless you typed your own, and runs the recipe's steps once the install has finished and the machine is up. `recipes` lists them, and `recipe NAME` runs a machine's steps again. A recipe of your own that has steps goes ahead only with `--yes` after you've read it.
+
+`--lean on` makes a Windows machine as [lean Windows](recipes.md#lean-windows), without the apps Windows adds for every account, and prints all it takes out and switches off first. It's off unless you say so or the recipe turns it on, and `--lean off` turns a recipe's off. `show` says `lean on` for a machine made with it, and which apps it took out, and `lean NAME` does it again in the running guest.
+
+`--skip-scanning on` has Defender leave out of its real-time scanning the folders the recipe names, and prints what that means first. It's off unless you say it, a recipe can't turn it on, and it needs a recipe that names folders. [Recipes](recipes.md#leaving-folders-out-of-virus-scanning) says what it means and doesn't. `show` says on its `defender` line which folders Defender leaves out, for as long as it does, and `scan-all NAME` has Defender scan them again.
+
 `remove` says what it would delete, and does it when you add `--yes`. A machine whose disk is outside its folder only loses its entry, and the disk stays.
+
+`duplicate` copies a machine that is off. It says what the copy costs, then follows the copy like `start`, and the copy is called NAME Copy unless `--name` says otherwise. `--throwaway` makes the copy a throwaway, which starts clean every time, and `--delete-when-stopped` has it deleted once it has run and stopped, as `set NAME throwaway on` does for any installed machine. [Copies](copies.md) says what a copy keeps and what's new, and how a throwaway works.
+
+`export` writes a machine that is off to one file, for Guesthouse on another PC, and follows the task like `start`. `import` makes a machine of such a file, called what it was called there unless `--name` says otherwise, and says what it changed on the way. [Copies](copies.md) says what goes in the file and how an import checks it.
 
 ## Settings
 
-`show` lists a machine's settings, with the port forwards. `set` changes one:
+`show` lists a machine's settings, with the port forwards. For a Windows machine it also says how its display driver stands and which vendor ID its next start shows Windows, as the settings page does. Going back to a snapshot puts both back as that disk had them, so `show` is how to check one. `set` changes one:
 
 | Setting | Value | Machines |
 |---|---|---|
 | `cores`, `ram` | a whole number, within what this PC allows | all |
 | `vram` | the video memory cap in GiB, 0 for none | Windows |
 | `sound` | on or off | Windows |
-| `window-speed` | on or off: whether programs in a window are shown without a copy of every frame | Windows |
+| `window-speed` | on or off: whether programs in a window are shown without a copy of every frame, and on NVIDIA whether Vulkan and OpenGL present through DXGI | Windows |
 | `dlss` | on or off: whether Guesthouse's NVAPI wrapper, which DLSS needs, is in System32 in place of NVIDIA's. Off for a game whose anti-cheat refuses the unsigned wrapper | Windows on an NVIDIA card |
 | `start-unjailed` | on or off: on lets a machine with a GPU start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
+| `throwaway` | on or off: on makes the machine start clean every time, from its disk as it is now, as Throwaway does in the app. [Copies](copies.md) says what goes and what stays. Only while it's off and installed | all |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |
 | `network` | nat, none or bridged | not Ubuntu |
@@ -68,12 +116,32 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `only-through` | an interface's name such as wg0, or off, with NAT | not Ubuntu |
 | `dns` | an IPv4 address, or auto | not Ubuntu |
 | `share` | a folder, or `none` | not Ubuntu |
+| `auto-snapshot` | on or off: whether a start takes a snapshot first when it has a risky change to make | Windows |
 | `remote-desktop` | on or off | Windows |
 | `ssh` | on or off | Windows |
 
 These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop` and `ssh`. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
+`auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which. A throwaway takes none, whatever it says, and `show` says so.
+
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
+
+## A snapshot before a risky start
+
+This is off until you turn it on for a machine, with `set NAME auto-snapshot on` or the switch in its Snapshots settings. A snapshot needs the machine off, so a Windows machine with it on takes it as `start` begins, before QEMU runs. It does so only if a change is due that can leave Windows unable to come up, and no successful start has met that change yet:
+
+- Windows is to write the driver package for its card maker's vendor ID, or this is the first start that shows that ID.
+- The disk is due to move to NVMe, or is on NVMe and has not started there yet.
+- A new build, or a new host driver, has files to put in the guest.
+- A new build of the display driver is to go into Windows.
+
+A start with none of these due takes none, and costs a few small reads. The snapshot is the machine's own, named for what it is before and when, such as `Automatic: before the vendor ID, 23 Nov, 14:05`, and it replaces the one before it. Snapshots you took in the app are never touched. A snapshot that can't be taken, as something else has the disk open or there is no room, is said as a note and the start goes on. A disk that isn't a qcow2 file can't hold one, so it gets none, and the app's settings say so. It also holds the machine's notes about its guest (which vendor ID it shows, and where its disk is), so going back puts them back with the disk.
+
+If that start then fails, `start` says so and tells you the snapshot, and `go-back NAME` goes back to it. It shows what is lost and does it with `--yes`. The machine must be off. A later start that works clears the offer, and so does going back. A start right after going back to a snapshot takes no automatic one, as the snapshot you went back to already is that disk: if the start fails, that snapshot is the one offered, and the automatic snapshot there was stays. `snapshots NAME` lists them all, with the automatic one marked.
+
+`snapshots NAME` gives each snapshot's tag in brackets. `take-snapshot NAME SNAPSHOT` takes one by that name, as Take Snapshot does in the app. `go-back NAME SNAPSHOT` goes back to the snapshot of that name, or of that tag when two share a name, and `delete-snapshot NAME SNAPSHOT` deletes it. Both say what is lost and do it only with `--yes`. All three refuse where the app's Snapshots page does: while the machine is running, a throwaway's run included, or busy with a task, and before its install has finished. On a throwaway, which is off, they change its clean state, as [Copies](copies.md) says. Linux machines (Ubuntu) and plain machines take none: an Ubuntu machine has no firmware file for a snapshot to keep, and a plain machine has no change that the app makes to its guest.
+
+A change made to a running Windows with no start after it, such as installing the display driver from the settings, takes no snapshot, as there is no moment to take one. Starting a machine with your own QEMU command from `command` takes none either.
 
 ## Setup
 

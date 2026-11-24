@@ -9250,3 +9250,506 @@ index a92c67a..bfb7bc6 100644
 -- 
 2.47.3
 
+From e3fc6d30693b673ca2c40e9982f49c795a9a67b2 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 11:45:55 -0800
+Subject: [PATCH 33/33] hw/misc/nvfwd: let the CUDA runtime ask what it needs
+ to start
+
+The CUDA runtime stops with "initialization error" unless three controls
+succeed. RC_GET_WATCHDOG_INFO is public, one NvU32 the driver writes, and
+goes at its 4 bytes only. The other two have no public layout, so the host
+never reads the guest's bytes for them: the guest has to ask the one
+question NVIDIA's own library was seen to ask, and the device sends its
+own copy of that question, with every other byte zero.
+---
+ hw/misc/nvfwd/forward.c |  7 +++++++
+ hw/misc/nvfwd/nvfwd.h   |  2 +-
+ hw/misc/nvfwd/rmargs.c  | 44 +++++++++++++++++++++++++++++++++++++++++
+ hw/misc/nvfwd/rmargs.h  |  7 +++++++
+ 4 files changed, 59 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 17ae253..af201b6 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -425,6 +425,13 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+         memcpy(&params, arg + RM_CONTROL_PARAMS, 8);
+         memcpy(&params_size, arg + RM_CONTROL_PARAMS_SIZE, 4);
+         /* By now this pointer is ours or null, and fits the size it claims. */
++        if (rmargs_own_request(cmd, (uint8_t *)(uintptr_t)params, params_size) < 0) {
++            uint32_t st = STATUS_NOT_SUPPORTED;
++            note_once(s, "REFUSED", "question in ctrl", KEY(K_QUESTION, cmd), cmd);
++            memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++            r->ret = 0;
++            return;
++        }
+         if (cmd == 0x906f0101 && params && params_size >= sizeof(hobj)) { /* which engine owns this object? */
+             memcpy(&hobj, (const void *)params, sizeof(hobj));
+             if (objects_is_local(s->objects, hclient, hobj)) {
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index 8812830..e230825 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -94,7 +94,7 @@ struct NvfwdState {
+ };
+ 
+ enum { K_IOCTL = 1, K_CTRL = 2, K_CLASS = 3, K_UVM = 4, K_MEMCLASS = 5, K_EMUCTRL = 6, K_LIMIT = 7, K_CLIENT = 8,
+-       K_CARD = 9 };
++       K_CARD = 9, K_QUESTION = 10 };
+ 
+ #define KEY(kind, value) (((uint64_t)(kind) << 32) | (uint32_t)(value))
+ 
+diff --git a/hw/misc/nvfwd/rmargs.c b/hw/misc/nvfwd/rmargs.c
+index f4b7979..1ccfbaa 100644
+--- a/hw/misc/nvfwd/rmargs.c
++++ b/hw/misc/nvfwd/rmargs.c
+@@ -42,6 +42,25 @@ struct control_size {
+ };
+ static const struct control_size pinned_controls[] = {
+     { 0x20808163, 4 },
++    { 0x20802209, 4 },   /* NV2080_CTRL_CMD_RC_GET_WATCHDOG_INFO, which is public: one NvU32 out */
++    { 0x20809001, 8 },   /* the CUDA runtime's, see owned_requests */
++    { 0x2080a026, 532 }, /* likewise */
++};
++
++/*
++ * Controls with no public layout that the CUDA runtime won't start without. The host never reads the
++ * guest's bytes for them: the guest has to ask the one question NVIDIA's own library was seen to ask,
++ * and the device sends that question, written by the device, in its place. Bytes not named here are
++ * zero on the way to the host. Seen from libcuda 620.73.04 on an RTX 5090.
++ */
++#define OWNED_FIELDS_MAX 4
++struct owned_request {
++    uint32_t cmd, size, nfields;
++    struct { uint32_t at, value; } field[OWNED_FIELDS_MAX];
++};
++static const struct owned_request owned_requests[] = {
++    { 0x20809001, 8, 0, { { 0, 0 } } },
++    { 0x2080a026, 532, 4, { { 0, 0x400 }, { 16, 2 }, { 20, 1 }, { 36, 0x10 } } },
+ };
+ 
+ struct class_size {
+@@ -175,6 +194,31 @@ static bool size_allowed(uint32_t cmd, uint32_t size)
+     return true;
+ }
+ 
++int rmargs_own_request(uint32_t cmd, uint8_t *params, uint32_t size)
++{
++    for (size_t i = 0; i < ARRAY_LENGTH(owned_requests); i++) {
++        const struct owned_request *o = &owned_requests[i];
++
++        if (o->cmd != cmd) {
++            continue;
++        }
++        if (!params || size != o->size) {
++            return -1;
++        }
++        for (uint32_t f = 0; f < o->nfields; f++) {
++            if (read32(params + o->field[f].at) != o->field[f].value) {
++                return -1;
++            }
++        }
++        memset(params, 0, size);
++        for (uint32_t f = 0; f < o->nfields; f++) {
++            memcpy(params + o->field[f].at, &o->field[f].value, sizeof(uint32_t));
++        }
++        return 1;
++    }
++    return 0;
++}
++
+ static void walk_control(Walk *w)
+ {
+     const RmCall *c = w->call;
+diff --git a/hw/misc/nvfwd/rmargs.h b/hw/misc/nvfwd/rmargs.h
+index 68d413a..cc41fe4 100644
+--- a/hw/misc/nvfwd/rmargs.h
++++ b/hw/misc/nvfwd/rmargs.h
+@@ -50,6 +50,13 @@ int rmargs_fields(const RmCall *call, RmField *fields, int *matched);
+ int rmargs_uvm_fields(uint32_t cmd, uint32_t len, const struct nvfwd_fix *fix, uint32_t nfix,
+                       RmField *fields, int *matched);
+ 
++/*
++ * For a control whose parameters no public source describes, puts the device's own copy of the one
++ * question it may ask in place of the guest's. 0: not such a control. 1: `params` now holds only the
++ * device's bytes. -1: the guest asked something else, or at another size, so the call goes no further.
++ */
++int rmargs_own_request(uint32_t cmd, uint8_t *params, uint32_t size);
++
+ /*
+  * Reads calls as the host's driver at `version` will, which is "615.78.08" or the like. False for
+  * a branch this device has no tables for, whose calls it can't read safely.
+-- 
+2.56.1
+
+From 41e21268184a5030c8110f38887809508d4c65ce Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 11:45:55 -0800
+Subject: [PATCH 34/34] hw/misc/nvfwd: let the guest read what the device
+ turned down
+
+A refused control comes back as a status inside a call that worked, so a
+program in the guest only says its own error, and calls.log is on the
+host. The device keeps the REFUSED and OVER lines it writes there, each
+kind once and at most 64 of them, and answers a new request, REFUSED,
+with them. It only ever writes that answer, so a guest can't make it grow
+or make the host log more.
+---
+ hw/misc/nvfwd/allow.c       | 14 ++++++++++++++
+ hw/misc/nvfwd/meson.build   |  1 +
+ hw/misc/nvfwd/nvfwd.c       |  3 +++
+ hw/misc/nvfwd/nvfwd.h       |  4 ++++
+ hw/misc/nvfwd/nvfwd_proto.h |  6 +++++-
+ hw/misc/nvfwd/refused.c     | 28 ++++++++++++++++++++++++++++
+ hw/misc/nvfwd/refused.h     | 23 +++++++++++++++++++++++
+ 7 files changed, 78 insertions(+), 1 deletion(-)
+ create mode 100644 hw/misc/nvfwd/refused.c
+ create mode 100644 hw/misc/nvfwd/refused.h
+
+diff --git a/hw/misc/nvfwd/allow.c b/hw/misc/nvfwd/allow.c
+index fe5ec5c..636c76f 100644
+--- a/hw/misc/nvfwd/allow.c
++++ b/hw/misc/nvfwd/allow.c
+@@ -84,6 +84,10 @@ void note_once(NvfwdState *s, const char *outcome, const char *what, uint64_t ke
+         s->seen_count++;
+         fprintf(s->log, "%s %s 0x%llx\n", outcome, what, (unsigned long long)value);
+         fflush(s->log);
++        /* Each kind once, as above, and a fixed number of them: a guest can't make this grow. */
++        if (!strcmp(outcome, "REFUSED") || !strcmp(outcome, "OVER")) {
++            refused_add(&s->refused, outcome, what, value);
++        }
+     }
+     qemu_mutex_unlock(&s->lock);
+ }
+@@ -105,3 +109,13 @@ bool allowed(NvfwdState *s, const char *what, int kind, uint64_t value)
+     note(s, what, kind, value, ok);
+     return ok;
+ }
++
++int refused_list(NvfwdState *s, char *to, uint32_t room)
++{
++    uint32_t used;
++
++    qemu_mutex_lock(&s->lock);
++    used = refused_text(&s->refused, to, room);
++    qemu_mutex_unlock(&s->lock);
++    return used;
++}
+diff --git a/hw/misc/nvfwd/meson.build b/hw/misc/nvfwd/meson.build
+index ce35da7..860ad36 100644
+--- a/hw/misc/nvfwd/meson.build
++++ b/hw/misc/nvfwd/meson.build
+@@ -11,6 +11,7 @@ nvfwd_ss = files(
+   'card.c',
+   'host_card.c',
+   'sensors.c',
++  'refused.c',
+   'allow.c',
+   'fds.c',
+   'forward.c',
+diff --git a/hw/misc/nvfwd/nvfwd.c b/hw/misc/nvfwd/nvfwd.c
+index 256d79f..1ac083b 100644
+--- a/hw/misc/nvfwd/nvfwd.c
++++ b/hw/misc/nvfwd/nvfwd.c
+@@ -84,6 +84,9 @@ static void handle(NvfwdState *s, uint32_t slot)
+     case NVFWD_OP_SHOW_FRAME:
+         do_show_frame(s, r);
+         break;
++    case NVFWD_OP_REFUSED: /* only written here, never read back, so the guest's copy is no matter */
++        r->ret = refused_list(s, (char *)base + NVFWD_HDR_SIZE, NVFWD_REFUSED_MAX * NVFWD_REFUSED_LINE);
++        break;
+     case NVFWD_OP_POLL: {
+         struct pollfd p = { .fd = host_fd(s, r->fdid), .events = r->a0 };
+         int rc = poll(&p, 1, 0);
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index e230825..302f4b1 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -19,6 +19,7 @@
+ #include "card.h"
+ #include "maps.h"
+ #include "nvfwd_proto.h"
++#include "refused.h"
+ #include "objects.h"
+ #include "sensors.h"
+ 
+@@ -83,6 +84,7 @@ struct NvfwdState {
+     uint64_t surf_modifier[NVFWD_SHOW_MAX_SURFACES];
+     AllowSet *seen; /* first-seen keys, for the list of forwarded calls */
+     uint32_t seen_count;
++    RefusedList refused; /* the REFUSED and OVER lines, for the guest to read */
+     Sensors *sensors;
+     Objects *objects;
+     Maps *maps;
+@@ -105,6 +107,8 @@ void allow_reload(NvfwdState *s);
+ void note_once(NvfwdState *s, const char *outcome, const char *what, uint64_t key, uint64_t value);
+ void note_local(NvfwdState *s, const char *what, int kind, uint64_t value);
+ bool allowed(NvfwdState *s, const char *what, int kind, uint64_t value);
++/* Writes the refused lines into `to`, which holds `room` bytes, and returns how many bytes that took. */
++int refused_list(NvfwdState *s, char *to, uint32_t room);
+ 
+ /* fds.c */
+ void throttle(NvfwdState *s);
+diff --git a/hw/misc/nvfwd/nvfwd_proto.h b/hw/misc/nvfwd/nvfwd_proto.h
+index 969db62..4b17f2c 100644
+--- a/hw/misc/nvfwd/nvfwd_proto.h
++++ b/hw/misc/nvfwd/nvfwd_proto.h
+@@ -15,7 +15,11 @@
+ #define NVFWD_MAGIC      0x6e766664u
+ 
+ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_OP_MUNMAP, NVFWD_OP_POLL,
+-       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE };
++       NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE,
++       NVFWD_OP_REFUSED };
++/* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
++#define NVFWD_REFUSED_MAX 64u
++#define NVFWD_REFUSED_LINE 48u
+ /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
+ #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
+     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)
+diff --git a/hw/misc/nvfwd/refused.c b/hw/misc/nvfwd/refused.c
+new file mode 100644
+index 0000000..66dd600
+--- /dev/null
++++ b/hw/misc/nvfwd/refused.c
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* See refused.h. */
++#include "refused.h"
++
++#include <stdio.h>
++
++void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value)
++{
++    if (list->count < NVFWD_REFUSED_MAX) {
++        snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s %s 0x%llx", outcome, what,
++                 (unsigned long long)value);
++    }
++}
++
++uint32_t refused_text(const RefusedList *list, char *to, uint32_t room)
++{
++    uint32_t used = 0;
++
++    for (uint32_t i = 0; i < list->count && i < NVFWD_REFUSED_MAX; i++) {
++        int n = snprintf(to + used, room - used, "%s\n", list->line[i]);
++
++        if (n < 0 || (uint32_t)n >= room - used) {
++            break;
++        }
++        used += n;
++    }
++    return used;
++}
+diff --git a/hw/misc/nvfwd/refused.h b/hw/misc/nvfwd/refused.h
+new file mode 100644
+index 0000000..ad4fa66
+--- /dev/null
++++ b/hw/misc/nvfwd/refused.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * The kinds of call the device turned down, for the guest to read. Each kind comes here once, as
++ * calls.log has it, and the list stops at a fixed size, so a guest can't make it grow.
++ */
++#ifndef NVFWD_REFUSED_H
++#define NVFWD_REFUSED_H
++
++#include <stdint.h>
++#include "nvfwd_proto.h"
++
++typedef struct RefusedList {
++    char line[NVFWD_REFUSED_MAX][NVFWD_REFUSED_LINE];
++    uint32_t count;
++} RefusedList;
++
++/* Keeps "outcome what 0xvalue", cut to a line's size, while there's room. */
++void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value);
++
++/* Writes whole lines, each ending in a newline, into `room` bytes at most, and returns the bytes written. */
++uint32_t refused_text(const RefusedList *list, char *to, uint32_t room);
++
++#endif
+-- 
+2.56.1
+
+From 2595c1df5627bc909f5c8239dde0777f8586416b Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 12:08:29 -0800
+Subject: [PATCH 35/35] hw/misc/nvfwd: answer a pinned control at another size
+ as the driver does
+
+A control the device takes at one size only failed the whole ioctl with
+EINVAL at any other size, and nothing said so. The filter now answers it
+with NV_ERR_INVALID_PARAM_STRUCT, which is what the driver says to a
+control at the wrong size, and notes "REFUSED size of ctrl" once. Calls
+at the right size are as before, and the parser keeps its own check.
+---
+ hw/misc/nvfwd/forward.c   | 11 ++++++++++-
+ hw/misc/nvfwd/nvfwd.h     |  2 +-
+ hw/misc/nvfwd/rm_layout.h |  1 +
+ hw/misc/nvfwd/rmargs.c    |  9 ++++++---
+ hw/misc/nvfwd/rmargs.h    |  3 +++
+ 5 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index af201b6..0c42a2b 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -105,7 +105,16 @@ static int filter_rm(NvfwdState *s, uint32_t nr, uint8_t *arg, uint32_t size)
+             return 0;
+         }
+         if (allowed(s, "ctrl", K_CTRL, cmd)) {
+-            return 0;
++            uint32_t params_size, st = STATUS_INVALID_PARAM_STRUCT;
++
++            memcpy(&params_size, arg + RM_CONTROL_PARAMS_SIZE, 4);
++            if (rmargs_control_size_ok(cmd, params_size)) {
++                return 0;
++            }
++            /* As the host's driver answers a control at the wrong size, and said once, as a refusal is. */
++            note_once(s, "REFUSED", "size of ctrl", KEY(K_SIZE, cmd), cmd);
++            memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++            return 1;
+         }
+         status_at = 28;
+         break;
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index 302f4b1..c73977d 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -96,7 +96,7 @@ struct NvfwdState {
+ };
+ 
+ enum { K_IOCTL = 1, K_CTRL = 2, K_CLASS = 3, K_UVM = 4, K_MEMCLASS = 5, K_EMUCTRL = 6, K_LIMIT = 7, K_CLIENT = 8,
+-       K_CARD = 9, K_QUESTION = 10 };
++       K_CARD = 9, K_QUESTION = 10, K_SIZE = 11 };
+ 
+ #define KEY(kind, value) (((uint64_t)(kind) << 32) | (uint32_t)(value))
+ 
+diff --git a/hw/misc/nvfwd/rm_layout.h b/hw/misc/nvfwd/rm_layout.h
+index 4c00adf..c6ef907 100644
+--- a/hw/misc/nvfwd/rm_layout.h
++++ b/hw/misc/nvfwd/rm_layout.h
+@@ -105,6 +105,7 @@
+ #define STATUS_OK 0
+ #define STATUS_INSUFFICIENT_RESOURCES 0x1a
+ #define STATUS_INVALID_ARGUMENT 0x1f
++#define STATUS_INVALID_PARAM_STRUCT 0x3a /* what the RM says to a control at the wrong size */
+ #define STATUS_INVALID_CLASS 0x22 /* what the RM says to a device instance it doesn't have */
+ #define STATUS_NO_MEMORY 0x51
+ #define STATUS_NOT_SUPPORTED 0x56
+diff --git a/hw/misc/nvfwd/rmargs.c b/hw/misc/nvfwd/rmargs.c
+index 1ccfbaa..60e261d 100644
+--- a/hw/misc/nvfwd/rmargs.c
++++ b/hw/misc/nvfwd/rmargs.c
+@@ -51,7 +51,10 @@ static const struct control_size pinned_controls[] = {
+  * Controls with no public layout that the CUDA runtime won't start without. The host never reads the
+  * guest's bytes for them: the guest has to ask the one question NVIDIA's own library was seen to ask,
+  * and the device sends that question, written by the device, in its place. Bytes not named here are
+- * zero on the way to the host. Seen from libcuda 620.73.04 on an RTX 5090.
++ * zero on the way to the host, whatever the guest put there: a call that differs only outside the named
++ * fields is answered, as the host is asked the same thing either way. That is by design, not a hole: no
++ * byte of the guest's parameters ever reaches the host's driver for these. Seen from libcuda 620.73.04
++ * on an RTX 5090.
+  */
+ #define OWNED_FIELDS_MAX 4
+ struct owned_request {
+@@ -184,7 +187,7 @@ static bool inside(Walk *w, uint64_t start, uint64_t bytes, uint32_t size)
+     return true;
+ }
+ 
+-static bool size_allowed(uint32_t cmd, uint32_t size)
++bool rmargs_control_size_ok(uint32_t cmd, uint32_t size)
+ {
+     for (size_t i = 0; i < ARRAY_LENGTH(pinned_controls); i++) {
+         if (pinned_controls[i].cmd == cmd) {
+@@ -231,7 +234,7 @@ static void walk_control(Walk *w)
+     }
+     cmd = read32(arg + RM_CONTROL_CMD);
+     size = read32(arg + RM_CONTROL_PARAMS_SIZE);
+-    if (!size_allowed(cmd, size)) {
++    if (!rmargs_control_size_ok(cmd, size)) { /* the filter has refused these already: a second guard */
+         w->error = -EINVAL;
+         return;
+     }
+diff --git a/hw/misc/nvfwd/rmargs.h b/hw/misc/nvfwd/rmargs.h
+index cc41fe4..ab1a507 100644
+--- a/hw/misc/nvfwd/rmargs.h
++++ b/hw/misc/nvfwd/rmargs.h
+@@ -50,6 +50,9 @@ int rmargs_fields(const RmCall *call, RmField *fields, int *matched);
+ int rmargs_uvm_fields(uint32_t cmd, uint32_t len, const struct nvfwd_fix *fix, uint32_t nfix,
+                       RmField *fields, int *matched);
+ 
++/* False for a control the device takes at one size only, asked at another. */
++bool rmargs_control_size_ok(uint32_t cmd, uint32_t size);
++
+ /*
+  * For a control whose parameters no public source describes, puts the device's own copy of the one
+  * question it may ask in place of the guest's. 0: not such a control. 1: `params` now holds only the
+-- 
+2.56.1
+
+From 5c80f6ad22e7edc6a08e695f053b6d173aeb365d Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Mon, 23 Nov 2026 12:08:29 -0800
+Subject: [PATCH 36/36] hw/misc/nvfwd: a full refused list says it is full
+
+The list a guest reads stopped at 64 lines with no sign that more were
+turned down. Its last line is now kept for a fixed one that says so.
+---
+ hw/misc/nvfwd/nvfwd_proto.h | 2 ++
+ hw/misc/nvfwd/refused.c     | 4 +++-
+ hw/misc/nvfwd/refused.h     | 5 ++++-
+ 3 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/nvfwd/nvfwd_proto.h b/hw/misc/nvfwd/nvfwd_proto.h
+index 4b17f2c..8f06fe0 100644
+--- a/hw/misc/nvfwd/nvfwd_proto.h
++++ b/hw/misc/nvfwd/nvfwd_proto.h
+@@ -20,6 +20,8 @@ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_O
+ /* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
+ #define NVFWD_REFUSED_MAX 64u
+ #define NVFWD_REFUSED_LINE 48u
++/* The list's last line once it is full. calls.log on the host has the rest. */
++#define NVFWD_REFUSED_FULL "FULL more were turned down"
+ /* First argument of SHOW_SURFACE: which surface, and how its memory is laid out, as NVKMS describes it. */
+ #define NVFWD_SURFACE_ID(id, layout, generic, gobs_y, pitch_blocks) \
+     ((id) | (uint64_t)(layout) << 8 | (uint64_t)!!(generic) << 9 | (uint64_t)(gobs_y) << 12 | (uint64_t)(pitch_blocks) << 32)
+diff --git a/hw/misc/nvfwd/refused.c b/hw/misc/nvfwd/refused.c
+index 66dd600..5be09a1 100644
+--- a/hw/misc/nvfwd/refused.c
++++ b/hw/misc/nvfwd/refused.c
+@@ -6,9 +6,11 @@
+ 
+ void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value)
+ {
+-    if (list->count < NVFWD_REFUSED_MAX) {
++    if (list->count < NVFWD_REFUSED_MAX - 1) {
+         snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s %s 0x%llx", outcome, what,
+                  (unsigned long long)value);
++    } else if (list->count == NVFWD_REFUSED_MAX - 1) {
++        snprintf(list->line[list->count++], NVFWD_REFUSED_LINE, "%s", NVFWD_REFUSED_FULL);
+     }
+ }
+ 
+diff --git a/hw/misc/nvfwd/refused.h b/hw/misc/nvfwd/refused.h
+index ad4fa66..2589009 100644
+--- a/hw/misc/nvfwd/refused.h
++++ b/hw/misc/nvfwd/refused.h
+@@ -14,7 +14,10 @@ typedef struct RefusedList {
+     uint32_t count;
+ } RefusedList;
+ 
+-/* Keeps "outcome what 0xvalue", cut to a line's size, while there's room. */
++/*
++ * Keeps "outcome what 0xvalue", cut to a line's size, while there's room. The last line is kept for
++ * NVFWD_REFUSED_FULL, so a full list says it is full.
++ */
+ void refused_add(RefusedList *list, const char *outcome, const char *what, uint64_t value);
+ 
+ /* Writes whole lines, each ending in a newline, into `room` bytes at most, and returns the bytes written. */
+-- 
+2.56.1
+

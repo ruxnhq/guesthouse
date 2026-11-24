@@ -73,6 +73,8 @@ private:
 
 	std::shared_ptr<const GammaTransform> m_Transform;
 	std::uint64_t m_TransformVersion = 0;
+	// The transform gives each pixel back unchanged, so an SDR frame needs no colour work.
+	bool m_TransformChangesNothing = false;
 	std::uint32_t m_CursorShapeId = 0;
 
 	// What Announce owes the daemon for the frame Process handled.

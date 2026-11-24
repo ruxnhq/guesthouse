@@ -933,7 +933,7 @@ impl Backend for IntelBackend {
         }
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
+    fn registry_value(&mut self, name: &RegistryName, _asked_type: u32) -> Option<RegistryValue> {
         let value = guest_driver::registry(name, &self.generation.drivers);
         self.traffic.registry(name, value.is_some());
         value

@@ -168,18 +168,40 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         targets: &[Target],
         deadline: Instant,
     ) -> Status {
-        while !self.targets_reached(targets) && Instant::now() < deadline {
-            thread::sleep(FRAME_WAIT_STEP);
-        }
-        let status = match self.backend.start_staging_copy(&mut services!(self), copy) {
-            StagingStart::Finished(status) => status,
-            StagingStart::Running => self.wait_for_copy(),
+        let status = match self.copy_after_work(copy, targets, deadline) {
+            Some(status) => status,
+            None => {
+                while !self.targets_reached(targets) && Instant::now() < deadline {
+                    thread::sleep(FRAME_WAIT_STEP);
+                }
+                match self.backend.start_staging_copy(&mut services!(self), copy) {
+                    StagingStart::Finished(status) => status,
+                    StagingStart::Running => self.wait_for_copy(),
+                }
+            }
         };
         if let Some(slot) = self.after_staging(copy, handles, status) {
             let slot_status = self.wait_for_copy();
             self.ring_copy_ended(slot, slot_status);
         }
         status
+    }
+
+    /// Has the card hold the copy until the frame is done, if the backend can, so the message thread
+    /// doesn't wait for the frame in sleeps first. `None` if it can't, or the frame is done already.
+    fn copy_after_work(
+        &mut self,
+        copy: &StagingCopy,
+        targets: &[Target],
+        deadline: Instant,
+    ) -> Option<Status> {
+        let after: Vec<Target> =
+            targets.iter().copied().filter(|&(fence, value)| self.fence_value(fence) < value).collect();
+        if after.is_empty() {
+            return None;
+        }
+        let wait = deadline.checked_duration_since(Instant::now())?;
+        self.backend.copy_staging_after(&mut services!(self), copy, &after, wait)
     }
 
     /// Waits until the copy under way ends, as the backend waits. The backend gives up on a dead

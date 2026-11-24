@@ -128,6 +128,7 @@ void HostExporter::ReadColourState()
 	{
 		m_Transform = std::move(transform);
 		m_TransformVersion = version;
+		m_TransformChangesNothing = LeavesPixelsAlone(*m_Transform);
 		m_Pass.SetLut(*m_Transform);
 	}
 
@@ -153,6 +154,9 @@ PassConstants HostExporter::Constants(std::uint32_t width, std::uint32_t height,
 	constants.sdrWhite = static_cast<float>(whiteNits) / ScrgbNits;
 	CopyRows(constants.sourceToWire, ComposeToWire(PrimariesOf(source), m_RingFormat, *m_Transform));
 	CopyRows(constants.cursorToWire, ComposeToWire(Primaries::Bt709, m_RingFormat, *m_Transform));
+	// Decoding an sRGB pixel to light and encoding it back gives the same pixel, unless Windows asked for a transform. That
+	// round trip is most of the pass's work, so it's skipped when it would change nothing.
+	constants.unchanged = source == SourceSrgb && constants.wire == 0 && m_TransformChangesNothing ? 1 : 0;
 
 	const CursorImage::Snapshot cursor = m_Cursor->Read(m_CursorShapeId);
 	if (!cursor.pixels.empty() && SUCCEEDED(m_Pass.SetCursorShape(cursor)))

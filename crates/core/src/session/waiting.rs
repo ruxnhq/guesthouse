@@ -392,6 +392,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// Lets work run, or leaves it behind the queue's gate if there is one. A doorbell the backend
     /// refuses for now starts a gate, so it is rung again before anything after it on the queue.
     pub(crate) fn ring_or_hold(&mut self, queue: u32, doorbell: u64, fence: u64, value: u64) {
+        if self.reply_first {
+            self.rings_after_reply.push((queue, doorbell, fence, value));
+            return;
+        }
         let step = GateStep::Ring { doorbell, fence, value };
         if let Some(gate) = self.gates.get_mut(&queue) {
             gate.push_back(step);

@@ -22,8 +22,9 @@ const BASIC_NOTE: &str =
 const HDR_NOTE: &str = "Windows goes to HDR when the machine starts, or at once if it's running.";
 const WINDOW_SPEED_NOTE: &str = "Windows copies every frame of a program that draws in a window, unless it counts \
                                  the program as a game. On, no program outside the Windows folder is held back \
-                                 that way, which can double its frame rate. Turn it off if a program's window \
-                                 flickers or stays blank. Takes effect when the machine starts.";
+                                 that way, which can double its frame rate. On NVIDIA it also has Vulkan and \
+                                 OpenGL present through DXGI, without their copy of every frame. Turn it off if a \
+                                 program's window flickers or stays blank. Takes effect when the machine starts.";
 const DRIVER_ROW: &str = "Display driver";
 const DRIVER_IN: &str = "In Windows. It was signed on this machine with a certificate made for it, which Windows \
                          trusts as a root. Its private key was deleted before the install.";

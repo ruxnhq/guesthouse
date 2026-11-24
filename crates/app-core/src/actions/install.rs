@@ -3,6 +3,7 @@
 use super::complete_host_driver;
 use super::desktop::{BOOT_LINE, SERIAL_FILE, count, wait_for_desktop};
 use super::identity::set_up_identity;
+use super::recipe;
 use super::{KEY_POLL, Task, plan_for, start_if_there_is_room};
 use crate::account::xml_text;
 use crate::agent::{QUICK_SECONDS, guest_script, make_password, make_token};
@@ -11,6 +12,7 @@ use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
 use crate::gpu_maker::GpuMaker;
 use crate::iso::{self, iso_maker};
+use crate::lean;
 use crate::library::make_disk;
 use crate::machine::{Kind, Machine};
 use crate::monitor::Command as Qmp;
@@ -141,8 +143,14 @@ fn fill_answer_disc(context: &Context, machine: &Machine, files: &Path) -> Resul
     }
     let password = make_password(context, machine)?;
     let zone = zones::host_zone(zones::HOST_ZONE_LINK);
-    let answers =
+    let mut answers =
         answer_file(context, &zone, machine.account(), &password, disc_edition(machine).as_deref())?;
+    // Only a lean machine's disc has these, and only its answer file the line that runs them.
+    if lean::is_lean(context, machine) {
+        copy_writable(context.paths.guest_files().join(lean::SCRIPT), files.join(lean::SCRIPT))?;
+        fs::write(files.join(lean::DATA_ON_DISC), lean::guest_data())?;
+        answers = lean::with_specialize_step(&answers)?;
+    }
     fs::write(files.join("autounattend.xml"), password_is_filled(answers)?)?;
     fs::write(files.join(TOKEN_ON_DISC), make_token(context, machine)? + "\n")?;
     let driver = guest_driver(context, machine).map_err(Failure::new)?;
@@ -272,6 +280,7 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure(problem));
     }
     task.step("Preparing the install disc");
+    recipe::reset(task);
     // The answer file counts on it, and all that was here goes anyway.
     task.machine.tpm = true;
     task.machine.save(context)?;
@@ -284,6 +293,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     // which then gets no package for its vendor number and no display driver.
     crate::gpu_identity::forget_state(context, &task.machine);
     crate::display::forget_state(context, &task.machine);
+    crate::auto_snapshot::record::forget(context, &task.machine);
     task.step("Starting the installer");
     let answer = answer_disc_path(context, &task.machine);
     let boot = Boot::Install { iso: task.machine.iso.clone(), answer: answer.clone() };
@@ -296,6 +306,10 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure::new("Windows installed, but its desktop never came up."));
     }
     check_guest(task)?;
+    // While the install's own session is up, as SYSTEM, and before its shutdown makes the next start
+    // the first that counts. It only ever adds a note.
+    super::lean::after_install(task);
+    super::scan_exclusions::after_install(task);
     // Here, so the first start is already on the card maker's vendor number and needs no second VM.
     set_up_identity(task);
     task.step("Shutting down Windows");
@@ -311,7 +325,13 @@ pub fn install(task: &mut Task) -> Result<()> {
     task.machine.installing = false;
     task.machine.iso.clear();
     task.machine.save(context)?;
-    if context.second_instance() { Ok(()) } else { start_if_there_is_room(task, "Windows") }
+    crate::throwaway::installed(task.context, &task.machine)?;
+    if !context.second_instance() {
+        start_if_there_is_room(task, "Windows")?;
+    }
+    // Last, and after all of it has succeeded: what a recipe's steps do can't undo the install.
+    recipe::after_install(task);
+    Ok(())
 }
 
 #[cfg(test)]

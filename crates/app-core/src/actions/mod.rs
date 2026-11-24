@@ -5,6 +5,7 @@ mod amd_files;
 mod amd_package;
 mod amd_start;
 mod api_stage;
+pub(crate) mod copy_identity;
 mod desktop;
 mod diagnose;
 mod display;
@@ -20,11 +21,14 @@ mod install;
 mod intel_device;
 mod intel_files;
 mod late_watch;
+mod lean;
 mod macos;
 mod macos_install;
 mod nvme_move;
 mod own_linux;
+mod recipe;
 mod remote_access;
+mod scan_exclusions;
 mod ubuntu;
 mod window_speed;
 
@@ -35,19 +39,22 @@ use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
 use guest_files::{
-    place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store, place_system_files,
-    register_media_transforms, write_device_key,
+    name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
+    place_system_files, register_media_transforms, write_device_key,
 };
 use identity::set_up_identity;
+pub(crate) use identity::will_stage;
 use identity_restart::restart_after_switch;
 use identity_switch::{new_vm_needed, stop_for_new_identity};
 pub use install::{
     INSTALL_STEPS, answer_disc_path, answer_file, install, install_step, make_answer_disc, wait_for_setup,
 };
 use intel_files::complete_intel_driver;
+pub(crate) use nvme_move::{pending as nvme_pending, state_files as nvme_state_files};
 use remote_access::apply_remote_access;
 use window_speed::apply_window_speed;
 
+use crate::auto_snapshot::{self, AutoStart};
 use crate::context::Context;
 use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
@@ -87,6 +94,12 @@ const SIGTERM_WAIT_SECONDS: u64 = 20;
 const SIGKILL_WAIT_SECONDS: u64 = 10;
 const FORCE_POLL: Duration = Duration::from_millis(200);
 pub(crate) const KEY_POLL: Duration = Duration::from_millis(500);
+/// Runs a machine's recipe again, as its settings ask.
+pub const RECIPE_TASK: &str = "recipe";
+/// Makes a lean machine lean again, as its settings ask.
+pub const LEAN_TASK: &str = "lean";
+/// Has Defender scan the folders a machine left out, as its settings ask.
+pub const SCAN_ALL_TASK: &str = "scan_all";
 
 /// The running side of a task: reports steps, and holds what the actions need.
 pub struct Task<'a> {
@@ -100,6 +113,11 @@ pub struct Task<'a> {
     pub ram_this_run: Option<u32>,
     /// The desktop on the card is still to be watched once the start is reported done.
     watch_after_start: bool,
+    /// What a start's snapshot before it has to finish, and tell.
+    pub(crate) auto: AutoStart,
+    /// Every step said, in order, as the log has them.
+    #[cfg(test)]
+    pub(crate) said: std::sync::Mutex<Vec<String>>,
 }
 
 impl<'a> Task<'a> {
@@ -112,6 +130,9 @@ impl<'a> Task<'a> {
             error: String::new(),
             ram_this_run: None,
             watch_after_start: false,
+            auto: AutoStart::default(),
+            #[cfg(test)]
+            said: std::sync::Mutex::default(),
         }
     }
 
@@ -134,6 +155,8 @@ impl<'a> Task<'a> {
 
     pub fn step(&self, text: &str) {
         println!("{} {} {text}", clock_text(), self.action);
+        #[cfg(test)]
+        self.said.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(text.to_owned());
         // A step that can't be written costs the user a line of progress, and the task goes on.
         let _ = write_task(self.context, None, &self.record(std::process::id(), text));
     }
@@ -214,7 +237,12 @@ pub fn start(task: &mut Task) -> Result<()> {
         let plan = plan_for(task.context, &machine, Boot::Plain { iso: machine.iso.clone() });
         return task.host.start(&plan, &machine);
     }
+    auto_snapshot::before_start(task);
     boot(task)?;
+    auto_snapshot::start_succeeded(task);
+    if !task.auto.note.is_empty() {
+        task.error = [task.auto.note.as_str(), &task.error].join(" ").trim().to_owned();
+    }
     if let Some(gib) = task.ram_this_run {
         let note = smaller_start_note(gib, machine.ram_gib);
         task.error = [note.as_str(), &task.error].join(" ").trim().to_owned();
@@ -234,6 +262,7 @@ pub fn smaller_start_note(gib: u32, own: u32) -> String {
 fn boot(task: &mut Task) -> Result<()> {
     task.step("Starting the VM");
     let shown = start_gpu_vm(task)?;
+    crate::token_change::finish_token_change(task.context, &task.machine, task.context.agent_port(None));
     let ready = get_ready(task, shown);
     if ready.is_err() {
         turn_off_after_failed_start(task);
@@ -321,7 +350,8 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
             place_driver_files(task)?;
             place_nvapi_wrapper(task)?;
             place_profile_store(task)?;
-            register_media_transforms(task)
+            register_media_transforms(task)?;
+            name_display(task)
         }
         Some(GpuMaker::Amd) => {
             bring_amd_driver_up_to_date(task)?;
@@ -519,7 +549,11 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
     let first = arguments.first().map(String::as_str);
     let text = first.unwrap_or_default();
     match task.action.as_str() {
-        "start" => start(task),
+        "start" => {
+            // Each start is a look at the library, as the app's is.
+            crate::throwaway::delete_finished(task.context);
+            start(task).map(|()| recipe::after_start(task))
+        }
         "stop" => stop(task),
         "force" => force(task, first),
         "grow" => grow(task, text.parse().map_err(|_| Failure::new("That is not a size."))?),
@@ -536,12 +570,21 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
             Ok(())
         }
         crate::remote_access::APPLY_TASK => remote_access::apply_change(task),
+        RECIPE_TASK => recipe::run_again(task),
+        LEAN_TASK => lean::run_again(task),
+        SCAN_ALL_TASK => scan_exclusions::scan_all(task),
         "install" if task.machine.macos() => macos_install::install(task),
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),
         "take_snapshot" => take_snapshot(task, text),
         "go_back" => go_back(task, text),
         "delete_snapshot" => delete_snapshot(task, text),
+        crate::export::EXPORT_TASK => crate::export::export(task, text),
+        crate::duplicate::DUPLICATE_TASK => {
+            let said = |word: &str| arguments.iter().skip(1).any(|given| given == word);
+            let throwaway = said(crate::duplicate::THROWAWAY_WORD);
+            crate::duplicate::duplicate(task, text, throwaway, said(crate::duplicate::DELETE_WORD))
+        }
         other => Err(Failure(format!("There is no action called {}.", shell_quote(other)))),
     }
 }
@@ -590,6 +633,11 @@ pub fn run_task(
     let _ = writeln!(std::io::stdout(), "{} {action} finished", clock_text());
     if result.is_ok() && task.watch_after_start {
         late_watch::watch_after_start(&mut task);
+    }
+    // Also once the start is reported done, and never part of it.
+    if result.is_ok() && action == "start" {
+        scan_exclusions::after_start(&mut task);
+        lean::after_start(&mut task);
     }
     result
 }

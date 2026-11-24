@@ -9,7 +9,7 @@ use super::arguments::{MONITOR_SOCKETS, words};
 use super::forwarding_jail::DEVICES as CARD_NODES;
 use super::ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_SOCKET};
 use super::{Boot, QemuJail, VmPlan};
-use crate::disk_image::backing::backing_files;
+use crate::disk_image::backing::backing_files as backing_files_of;
 use crate::failure::{Failure, Result};
 use crate::network::{Mode, Protocol, bridge_helper};
 use guesthouse_jail::launch::{self, Launch, Passt, Tap, UnixSocket};
@@ -172,7 +172,10 @@ impl VmPlan {
         for device in DEVICES {
             plan.grant(Grant::Device, device);
         }
-        plan.grant(Grant::Write, &self.disk);
+        // A throwaway run's disk is the overlay QEMU is handed open, and its own disk is a backing file.
+        if self.throwaway.is_none() {
+            plan.grant(Grant::Write, &self.disk);
+        }
         if self.is_gpu()
             && let Some(disc) = &self.tools_disc
         {
@@ -198,7 +201,11 @@ impl VmPlan {
     /// The jail with the files the disk is built on. Refuses a chain QEMU couldn't open, and a
     /// backing file in the shared folder, where QEMU may write anything.
     pub fn with_backing_files(&self, jail: QemuJail) -> Result<QemuJail> {
-        let backing_files = backing_files(Path::new(&self.disk))?;
+        let mut backing_files = Vec::new();
+        if let Some(disk) = &self.throwaway {
+            backing_files.push(PathBuf::from(disk));
+        }
+        backing_files.extend(backing_files_of(Path::new(self.throwaway.as_ref().unwrap_or(&self.disk)))?);
         let shared = |file: &&PathBuf| self.shared_folder().is_some_and(|folder| file.starts_with(folder));
         if let Some(file) = backing_files.iter().find(shared) {
             return Err(Failure(format!(

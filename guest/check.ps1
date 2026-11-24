@@ -8,7 +8,7 @@ if ($count -ne $expected) { $missing += "driver files: $count of $expected" }
 if (-not (bcdedit /enum '{current}' | Select-String 'highestmode\s+Yes')) { $missing += 'highestmode' }
 $names = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Video' -ea 0 |
     ForEach-Object { (Get-ItemProperty (Join-Path $_.PSPath '0000') -ea 0).DriverDesc }
-if (-not ($names -match 'RDPUDD Chained DD')) { $missing += 'the display name Vulkan needs' }
+if (-not ($names -match 'RDPUDD Chained DD|Guesthouse Display')) { $missing += 'the display name Vulkan needs' }
 foreach ($task in 'gpupv-agent', 'gpupv-setmode') {
     if (-not (Get-ScheduledTask $task -ea 0)) { $missing += "the task $task" }
 }

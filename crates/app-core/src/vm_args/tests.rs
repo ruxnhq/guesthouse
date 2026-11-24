@@ -497,3 +497,28 @@ fn a_program_for_a_cleared_environment_is_given_by_where_path_finds_it() {
     assert!(shell.starts_with('/') && shell.ends_with("/sh"), "{shell}");
     assert_eq!(program_word("no-such-program-here"), "no-such-program-here");
 }
+
+#[test]
+fn the_first_card_has_the_machines_own_address_in_every_network_mode() {
+    let mac = "52:54:00:a2:1c:6d";
+    for machine in [windows(), plain_machine()] {
+        for (mode, passt, bridge) in [
+            (Mode::Nat, false, ""),
+            (Mode::Nat, true, ""),
+            (Mode::None, false, ""),
+            (Mode::Bridged, false, "br0"),
+        ] {
+            let machine = Machine {
+                network_mode: mode,
+                passt,
+                bridge: bridge.into(),
+                mac: mac.into(),
+                ..machine.clone()
+            };
+            let boot = if machine.kind == Kind::Plain { plain_boot() } else { Boot::Gpu };
+            let (_scratch, plan) = plan(&machine, boot);
+            let card = value_after(&plan.qemu_arguments(), "-nic");
+            assert!(card.contains(&format!(",mac={mac},")), "{mode:?} passt {passt}: {card}");
+        }
+    }
+}

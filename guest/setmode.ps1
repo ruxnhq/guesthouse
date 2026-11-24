@@ -21,11 +21,11 @@ public class Mode {
 }
 '@
 Add-Type $src
-$ourName = 'RDPUDD Chained DD'
+$ourNames = 'RDPUDD Chained DD', 'Guesthouse Display'
 for ($i = 0; $i -lt 16; $i++) {
   $d = New-Object Mode+DD; $d.cb = [Runtime.InteropServices.Marshal]::SizeOf($d)
   if (-not [Mode]::EnumDisplayDevices([NullString]::Value, $i, [ref]$d, 0)) { break }
-  if ($d.Str -eq $ourName) { "left alone: $($d.Name) is the display driver's" | Out-File C:\gpupv\cap\setmode.txt -Encoding ascii; return }
+  if ($ourNames -contains $d.Str) { "left alone: $($d.Name) is the display driver's" | Out-File C:\gpupv\cap\setmode.txt -Encoding ascii; return }
 }
 $modes = @()
 for ($i = 0; ; $i++) {

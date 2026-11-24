@@ -111,6 +111,17 @@ pub struct TableSizes {
     pub deferred: usize,
 }
 
+/// See [`Session::video_use`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoUse {
+    /// The video memory the guest's allocations hold.
+    pub on_card: u64,
+    /// The system memory allocations hold that the card had no room for.
+    pub spilled: u64,
+    /// The cap they are held to, if any.
+    pub cap: Option<u64>,
+}
+
 /// Everything the host knows about one guest. See the crate documentation.
 pub struct Session<B, M> {
     pub(crate) backend: B,
@@ -225,6 +236,11 @@ pub struct Session<B, M> {
     pub(crate) pending: Vec<Pending>,
     pub(crate) pending_spare: Vec<Pending>,
     pub(crate) notices: Vec<Notice>,
+    /// While a message is handled for [`Session::handle_message_reply_first`]: doorbells wait in
+    /// `rings_after_reply` until the reply has gone.
+    pub(crate) reply_first: bool,
+    /// Doorbells to ring once the reply is out, as (queue, doorbell, fence, value), in order.
+    pub(crate) rings_after_reply: Vec<(u32, u64, u64, u64)>,
 }
 
 impl<B: Backend, M: GuestMemory> Session<B, M> {
@@ -303,6 +319,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             pending: Vec::new(),
             pending_spare: Vec::new(),
             notices: Vec::new(),
+            reply_first: false,
+            rings_after_reply: Vec::new(),
         }
     }
 
@@ -343,12 +361,53 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
     }
 
+    /// What the guest's allocations hold, by the same count the cap is checked against. It goes
+    /// through every allocation, so it's for now and then, not for each message.
+    pub fn video_use(&self) -> VideoUse {
+        VideoUse {
+            on_card: self.video_in_use(),
+            spilled: self.spilled_in_use(),
+            cap: self.config.limits.video_cap,
+        }
+    }
+
     pub fn timings(&self) -> &Timings {
         &self.timings
     }
 
     pub fn timings_mut(&mut self) -> &mut Timings {
         &mut self.timings
+    }
+
+    /// Answers one message as [`Session::handle_message`] does, but leaves the doorbells it would ring
+    /// for [`Session::ring_after_reply`], which the caller calls once the reply has been written.
+    ///
+    /// A submission's reply says only whether its work was taken, which is known before the
+    /// doorbell. Ringing is the CS call on AMD, tens of microseconds, and the guest's thread waits
+    /// for the reply, so it goes first. The daemon reads nothing more before the doorbells are rung,
+    /// so the order of everything the guest sends is kept.
+    pub fn handle_message_reply_first(
+        &mut self,
+        message: &[u8],
+        ticket: Option<ReplyTicket>,
+        out: &mut Vec<u8>,
+    ) -> Answer {
+        self.reply_first = true;
+        let answer = self.handle_message(message, ticket, out);
+        self.reply_first = false;
+        answer
+    }
+
+    /// Rings what [`Session::handle_message_reply_first`] left, in order.
+    pub fn ring_after_reply(&mut self) {
+        let mut rings = std::mem::take(&mut self.rings_after_reply);
+        for (queue, doorbell, fence, value) in rings.drain(..) {
+            self.ring_or_hold(queue, doorbell, fence, value);
+        }
+        // Kept, so ringing does not allocate.
+        if self.rings_after_reply.is_empty() {
+            self.rings_after_reply = rings;
+        }
     }
 
     /// Answers one message. `ticket` is `None` if the guest wants no reply.

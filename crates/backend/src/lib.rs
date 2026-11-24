@@ -238,8 +238,9 @@ pub trait Backend: Sized {
     /// a query it leaves to the core.
     fn adapter_answer(&mut self, query: &VendorQuery<'_>, out: &mut Vec<u8>) -> Option<Status>;
 
-    /// A value from the adapter's registry key, or one of the driver paths.
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue>;
+    /// A value from the adapter's registry key, or one of the driver paths. `asked_type` is the
+    /// type the guest asks for, for a value a backend gives in whichever type it is asked in.
+    fn registry_value(&mut self, name: &RegistryName, asked_type: u32) -> Option<RegistryValue>;
 
     /// The GPU's clock, in nanoseconds.
     fn gpu_clock(&mut self) -> Result<u64, BackendError>;
@@ -329,6 +330,23 @@ pub trait Backend: Sized {
     /// Starts copying a finished frame into a staging surface. This must not wait for the copy,
     /// as the message thread serves every other guest thread meanwhile.
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart;
+
+    /// Copies a frame into a staging surface before the work that draws it has finished, when the
+    /// card itself can hold the copy until that work is done. `after` are the fences, with the
+    /// values they must reach, that the core would otherwise wait for on the message thread. The
+    /// copy is waited for at most `wait`; one still on the card then lands late.
+    ///
+    /// `None` means this backend can't, or the card hasn't been sent all of that work yet, and
+    /// nothing was done: the core waits for the fences and calls [`Backend::start_staging_copy`].
+    fn copy_staging_after(
+        &mut self,
+        _host: &mut dyn HostServices,
+        _copy: &StagingCopy,
+        _after: &[(u64, u64)],
+        _wait: Duration,
+    ) -> Option<Status> {
+        None
+    }
 
     /// Looks at a copy that [`StagingStart::Running`] said was under way. `None` means not yet.
     fn poll_staging_copy(&mut self, host: &mut dyn HostServices, now: Instant) -> Option<Status>;

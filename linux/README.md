@@ -31,11 +31,27 @@ You need an NVIDIA card with the open kernel modules loaded, and the driver vers
 
 The install needs no hands, and the first boot builds everything. If anything about the driver is in doubt the GPU stays off and the VM still boots. The guest gets one plain sentence and the app has the details, as those can hold your paths. As root in the guest, `nvfwd-check` says which parts work.
 
+An Ubuntu guest's network is QEMU's own NAT, and its card has the machine's own address. The install writes a netplan that finds the card by its name (`en*`) with DHCP for IPv4 and IPv6, so the address can change, as a copy's does. Guests installed before that had a netplan pinned to QEMU's default address, `52:54:00:12:34:56`. On a start with the driver image, `netplan-by-name.sh` rewrites the installer's file, and only a file exactly as the installer left it, so a netplan you wrote stays. A guest started without a GPU has no image, so it keeps the default address until it has had one start with the GPU, as the initrd's catch-all is all it would have otherwise.
+
 After the app updates, the guest takes the new scripts and settings by itself. Each driver image carries them, and when a boot finds an image whose scripts differ from the guest's, it installs them the way a fresh setup would and carries on with the new ones. If that fails, the guest keeps what it had and boots as before, and `nvfwd-check` says why. A guest made before 0.2.3 doesn't know to do this yet, so run this once in it, as root, and reboot:
 
     sudo bash /opt/nv/driver/setup/refresh.sh
 
 That's where the image is mounted on a boot with the GPU. On one without, mount it there first with `sudo mount -o ro LABEL=NVFWD_DRIVER /opt/nv/driver`.
+
+### The CUDA toolkit and other packages that need the driver
+
+The guest's NVIDIA libraries are the host's, from the image, and Ubuntu doesn't know they're there. So `apt install nvidia-cuda-toolkit` used to bring Ubuntu's own driver libraries with it, `libnvidia-compute-595` on 26.04, of another version than the host's: a second libcuda and NVML in `/usr/lib/x86_64-linux-gnu`, an OpenCL ICD, and from `nvidia-kernel-common` udev rules that load NVIDIA's modules, `nvidia-powerd` and sleep hooks. On an RTX 5090 with the host on 620.73.04, the GPU kept working with them: `nvidia-smi`, `nvfwd-check` and CUDA programs ran, and loaded the host's libcuda, NVML and PTX compiler, as the image's folder comes first. What they added was clutter of another version: OpenCL went to Ubuntu's 595 library through its ICD and found no platform, and `nvidia-powerd` started at each boot and stopped with `Allocate Root client failed 0x26`.
+
+A program built with that toolkit's runtime (`cudart` 12.4), which is what plain `nvcc` makes, runs in the guest. As it starts, the runtime asks the driver three things the driver API never does, and until the device let them through every such program stopped at its first CUDA call with `initialization error`. Two of the three have no public layout, so the device sends the host its own copy of the one question NVIDIA's library asks, never the guest's bytes. On the RTX 5090 with the host on 620.73.04, runtime programs, managed memory and two programs at once all ran with every value right. `nvfwd-check` runs a runtime check when a toolkit is there.
+
+OpenCL isn't in the driver image: the guest has no NVIDIA OpenCL library and no ICD for it, so OpenCL finds no platform.
+
+Now each boot with an image tells dpkg the host's driver is installed: `driver-package.sh` installs `nvfwd-host-driver`, a package with no files at the host's version, which provides `libcuda.so.1` and `libnvidia-ml.so.1` at that version, and `nvidia-opencl-icd`. That is what Ubuntu's CUDA packages ask for, so apt installs the toolkit and nothing of the driver. It's made again when the host's driver changes, and kept on a boot without the GPU. It only provides names: installing Ubuntu's driver on purpose still works, and apt takes `nvfwd-host-driver` away to do it. A guest that already has Ubuntu's libraries keeps them, and `nvfwd-check` names them with a warning. On a boot with the GPU, this puts the host's in their place in one go, and the toolkit and whatever else needed them stay:
+
+    sudo /usr/lib/nvfwd/driver-package.sh --replace
+
+apt says what it will remove, Ubuntu's libraries and the kernel-common and firmware packages that came with them, and asks first. A guest that has never booted with an image has no `nvfwd-host-driver` yet, and apt there still brings Ubuntu's driver. Tried on that RTX 5090: a fresh guest and an updated one got the package at boot through the image, the toolkit came with no driver package, the PTX kernel ran on the card and a restart was clean, and `--replace` cleared Ubuntu's driver from a guest that had it.
 
 ## A Linux you installed yourself
 
@@ -96,7 +112,7 @@ Another point release of the same branch gets a warning and a try. In order, you
 1. The app wants NVIDIA's source at your exact version, and says how to get it.
 2. The tables made from that source have to match the ones in the device. If a driver moved a field the device checks, the GPU stays off, as QEMU would need a new build. They're the same at 615.71.09, 615.71.10 and 615.78.08. Branch 620 has tables of its own, made from 620.70.06, and the device picks by the loaded driver's version.
 3. The guest builds its modules against your driver. A change there fails the build, which turns the GPU off and names the log.
-4. The guest runs CUDA and Vulkan before it calls the GPU on. A call the allow list doesn't have shows up here: the GPU goes off, the plain desktop comes up, and the VM's `calls.log` has a `REFUSED` line for it.
+4. The guest runs CUDA and Vulkan before it calls the GPU on. A call the allow list doesn't have shows up here: the GPU goes off, the plain desktop comes up, and the VM's `calls.log` has a `REFUSED` line for it. A call refused later, from a program the boot doesn't run, reaches that program as an error inside a call that worked, so it only says its own error. `nvfwd-check` names every kind of call the device has turned down since the VM started, which the guest can read in `/proc/driver/nvidia/nvfwd-refused`.
 5. The sensor daemon only knows one exact version, so on any other `nvidia-smi` shows N/A. Everything else works.
 
 ## How far to trust a guest
@@ -133,4 +149,4 @@ QEMU still opens `/dev/nvidia*` itself, and its filter doesn't look at ioctl num
 
 `make -C linux/tests/device QEMU=/path/to/patched/qemu BUILD=/somewhere` runs the device's checks with no GPU and no VM, under ASan and UBSan. It needs `libasan`, `libubsan` and glib's headers.
 
-`tests/` has small programs for CUDA, Vulkan and OpenGL, and `sensorrate`, which shows that sensor calls wait for the call rate. The CUDA and Vulkan ones count wrong values, and `glbench` writes an image to compare with a run on the host.
+`tests/` has small programs for CUDA, Vulkan and OpenGL, and `sensorrate`, which shows that sensor calls wait for the call rate. The CUDA and Vulkan ones count wrong values, and `glbench` writes an image to compare with a run on the host. `cudavec` goes through CUDA's driver API and `cudartcheck` through the CUDA runtime, which is what a program built with `nvcc` uses and which asks the driver for more as it starts. The runtime comes with a CUDA toolkit, not the driver, so on a guest without one `nvfwd-check` skips it and says so.

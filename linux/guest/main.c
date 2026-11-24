@@ -28,6 +28,29 @@ static int proc_params(struct seq_file *m, void *v)
 	return 0;
 }
 
+/*
+ * The kinds of call the device has turned down since the VM started, one line each, as the host's calls.log
+ * has them. A refused control comes back as a status inside a call that succeeded, so nothing else in the
+ * guest shows it. nvfwd-check reads this.
+ */
+static int proc_refused(struct seq_file *m, void *v)
+{
+	int slot = slot_get();
+	struct nvfwd_req *r = slot_req(slot);
+	long rc;
+
+	r->op = NVFWD_OP_REFUSED;
+	r->fdid = 0;
+	kick(slot);
+	rc = r->ret;
+	if (rc > 0)
+		seq_write(m, (u8 *)r + NVFWD_HDR_SIZE, min_t(long, rc, NVFWD_REFUSED_MAX * NVFWD_REFUSED_LINE));
+	else if (rc == -ENOSYS)
+		seq_puts(m, "unknown: this QEMU can't say\n");
+	slot_put(slot);
+	return 0;
+}
+
 static struct proc_dir_entry *proc_root;
 
 static void proc_setup(void)
@@ -37,6 +60,7 @@ static void proc_setup(void)
 		return;
 	proc_create_single("version", 0444, proc_root, proc_version);
 	proc_create_single("params", 0444, proc_root, proc_params);
+	proc_create_single("nvfwd-refused", 0444, proc_root, proc_refused);
 }
 
 /* ---- probe ---- */

@@ -278,7 +278,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         };
         // Windows fails the lookup of a value that isn't there. A success with the buffer as it came
         // reads as a value found, which is how Direct3D 9 took it.
-        let Some(value) = self.backend.registry_value(&lookup) else {
+        let Some(value) = self.backend.registry_value(&lookup, query.value_type) else {
             log::debug!("no registry value for {:?}", query.name);
             query.unchanged(out);
             return Ok(Status::NOT_FOUND);

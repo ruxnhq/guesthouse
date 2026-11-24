@@ -1,6 +1,7 @@
 //! The keyboard and mouse, from the screen to the guest.
 
 use super::screen::Screen;
+use super::title_drag::TitleRelease;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use guesthouse_app_core::input::TABLET_RANGE;
@@ -81,7 +82,7 @@ impl Screen {
     }
 
     pub(super) fn on_motion(&self, x: f64, y: f64) {
-        if self.captured() || !self.in_view(x, y) {
+        if self.captured() || !self.in_view(x, y) || self.title_press_moved(x, y) {
             return;
         }
         if self.0.pointer_held.get() {
@@ -141,6 +142,23 @@ impl Screen {
             return;
         }
         let button = gesture.current_button();
+        if down && self.hold_title_press(gesture, button, x, y) {
+            return;
+        }
+        if !down {
+            match self.title_press_released() {
+                TitleRelease::Click((x, y)) => {
+                    self.on_motion(x, y);
+                    if let Some(name) = button_name(button) {
+                        self.press(name, true);
+                        self.press(name, false);
+                    }
+                    return;
+                }
+                TitleRelease::Swallowed => return,
+                TitleRelease::Not => {}
+            }
+        }
         if let Some(name) = button_name(button) {
             // Left unclaimed, back would also take the window back to the list of machines.
             if matches!(button, BUTTON_BACK | BUTTON_FORWARD) {
@@ -252,6 +270,7 @@ impl Screen {
 
     /// Lifts what is held down, because the guest won't see those keys come up otherwise.
     pub(super) fn let_go(&self) {
+        self.forget_title_press();
         let mut held = self.0.keys_down.borrow_mut();
         if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
             for code in held.iter() {

@@ -41,8 +41,8 @@ impl Crop {
 }
 
 /// Where the rectangle goes in `room`, in the room's logical pixels: as large as fits at its own shape,
-/// centred. The room is normally the rectangle's own size. It is wider when the title bar can't be as
-/// narrow as a small program's window, and the rest is a black bar on each side.
+/// centred. The room is normally the rectangle's own size. Where the compositor holds a window to a
+/// size of its own, such as a smallest width, the rest is a black bar on each side.
 pub fn rectangle_place(crop: Crop, (room_width, room_height): (i32, i32)) -> Placement {
     let scale =
         (f64::from(room_width) / f64::from(crop.width)).min(f64::from(room_height) / f64::from(crop.height));
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn a_room_wider_than_the_rectangle_keeps_it_at_its_size_in_the_middle() {
-        // A title bar that can't be narrower than 252 over a program 200 wide.
+        // A window held to 252 wide over a program 200 wide.
         let crop = Crop { x: 700, y: 300, width: 200, height: 120 };
         assert_eq!(rectangle_place(crop, (252, 120)), Placement { x: 26.0, y: 0.0, width: 200, height: 120 });
         let placed = picture_place(crop, FRAME, (252, 120));

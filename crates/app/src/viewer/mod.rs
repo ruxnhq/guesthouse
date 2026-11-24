@@ -32,6 +32,7 @@ mod screen_frame;
 mod slot_hold;
 mod socket_frames;
 mod stall;
+mod title_drag;
 mod window_size;
 
 use crate::common::in_background;

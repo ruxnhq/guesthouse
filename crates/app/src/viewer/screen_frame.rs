@@ -323,6 +323,15 @@ impl ScreenFrame {
         graphene::Rect::new(at.x, at.y, at.width as f32, at.height as f32)
     }
 
+    /// A point on this widget as a point of the rectangle, in the guest's pixels from its corner.
+    pub fn in_rectangle(&self, point: &graphene::Point) -> Option<(f64, f64)> {
+        let crop = self.shown_crop()?;
+        let view = self.in_view();
+        let across = f64::from(crop.width) / f64::from(view.width()).max(1.0);
+        let down = f64::from(crop.height) / f64::from(view.height()).max(1.0);
+        Some((f64::from(point.x() - view.x()) * across, f64::from(point.y() - view.y()) * down))
+    }
+
     /// The rectangle in view, as it is on the frame now shown.
     pub fn shown_crop(&self) -> Option<Crop> {
         self.imp().shown_crop()

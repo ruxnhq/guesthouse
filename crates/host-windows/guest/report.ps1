@@ -198,7 +198,9 @@ function Get-ShareArguments($Share) {
 }
 
 # Puts the folder's task right whenever it isn't what's wanted, as the report's own task is, which
-# stops a copy running as it was. Only then, unless -NoStart, starts it if it isn't running.
+# stops a copy running as it was. Only then, unless -NoStart, starts it if it isn't running. Before
+# a copy is started, a line in its log says so, so a "mounted at" an earlier copy wrote this boot,
+# with a drive another folder may have now, isn't taken for this one's.
 function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
     $task = Get-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue
     $wrong = -not $task -or
@@ -208,7 +210,10 @@ function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
         $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries -or
         $task.Settings.ExecutionTimeLimit -ne 'PT0S' -or $task.Settings.RestartCount -ne 999
     if ($wrong) {
-        if ($task) { Stop-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue }
+        if ($task) {
+            Stop-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue
+            Add-ShareLogLine $Slot 'stopped by the report to set its task right'
+        }
         $action = New-ScheduledTaskAction -Execute $shareProgram -Argument $Arguments
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
@@ -217,8 +222,16 @@ function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
         Register-ScheduledTask -TaskName $Slot.Task -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
     }
     if (-not $NoStart -and (Get-ScheduledTask -TaskName $Slot.Task).State -ne 'Running') {
+        Add-ShareLogLine $Slot 'started by the report'
         Start-ScheduledTask -TaskName $Slot.Task
     }
+}
+
+function Add-ShareLogLine($Slot, [string]$Text) {
+    try {
+        New-Item -ItemType Directory -Force -Path $shareFolder | Out-Null
+        Add-Content -LiteralPath $Slot.Log -Value "report: $Text" -Encoding ascii
+    } catch {}
 }
 
 # The folders the host gives, each with its number. A line that isn't one is said and passed over.

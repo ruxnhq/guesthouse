@@ -129,7 +129,7 @@ try {
 }
 
 # The host's shared folder, when it gives one, is a drive of its own. The host serves it over Plan 9
-# on a Hyper-V socket, and Guesthouse's own program (guesthouse-share.exe, which the host puts in
+# on a Hyper-V socket, and Guesthouse's own program (guesthouse-guest-share.exe, which the host puts in
 # C:\Guesthouse\share with WinFsp's installer) mounts it with WinFsp: it runs from a task of its own,
 # as SYSTEM from the start, and is started again if it ends. The host writes C:\Guesthouse\share.txt
 # at each boot when the machine has a share, one line, "NAME PORT rw" or "NAME PORT ro" (shared 50001
@@ -137,7 +137,7 @@ try {
 # link on everyone's desktop. Only the link is ever deleted, never what it points to.
 $shareFile = 'C:\Guesthouse\share.txt'
 $shareFolder = 'C:\Guesthouse\share'
-$shareProgram = Join-Path $shareFolder 'guesthouse-share.exe'
+$shareProgram = Join-Path $shareFolder 'guesthouse-guest-share.exe'
 $shareInstaller = Join-Path $shareFolder 'winfsp.msi'
 $shareLog = Join-Path $shareFolder 'share.log'
 $shareTaskName = 'Guesthouse shared folder'

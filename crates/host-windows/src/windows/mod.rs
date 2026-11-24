@@ -49,12 +49,12 @@ pub fn machine(
 
 /// The program a Windows guest mounts the host's share with, and WinFsp's installer, which it needs:
 /// both in the program's guest folder, as the NVAPI wrapper is.
-const SHARE_PROGRAM: &str = r"guest\guesthouse-share.exe";
+const SHARE_PROGRAM: &str = r"guest\guesthouse-guest-share.exe";
 const WINFSP_INSTALLER: &str = r"guest\winfsp.msi";
 /// Where the guest has them, from the root of its Windows volume: `report.ps1` installs WinFsp from
 /// the one and runs the other, as `C:\Guesthouse\share\...`.
 const SHARE_FOLDER: &str = r"Guesthouse\share";
-const SHARE_PROGRAM_NAME: &str = "guesthouse-share.exe";
+const SHARE_PROGRAM_NAME: &str = "guesthouse-guest-share.exe";
 const WINFSP_INSTALLER_NAME: &str = "winfsp.msi";
 
 /// Where a Windows guest finds what the host shares: `report.ps1` reads this file, from the root of

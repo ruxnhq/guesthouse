@@ -12,7 +12,7 @@ pub const REPORT_DONE: &str = "guesthouse: report done";
 
 /// The one line `Guesthouse\share.txt` holds when a Windows guest has a share: the share's name, the
 /// port of the host's Plan 9 server it reaches it on, and `rw` or `ro`, as `shared 50001 rw`.
-/// `report.ps1` reads it and starts `guesthouse-share.exe` with them.
+/// `report.ps1` reads it and starts `guesthouse-guest-share.exe` with them.
 pub fn share_marker(read_only: bool) -> String {
     format!(
         "{} {} {}\r\n",
@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(fields, [crate::settings::SHARE_NAME, "50001", "ro"]);
         // And what it runs and installs is where the host puts it.
         assert!(REPORT.contains(r"$shareFolder = 'C:\Guesthouse\share'"));
-        assert!(REPORT.contains("'guesthouse-share.exe'"));
+        assert!(REPORT.contains("'guesthouse-guest-share.exe'"));
         assert!(REPORT.contains("'winfsp.msi'"));
     }
 

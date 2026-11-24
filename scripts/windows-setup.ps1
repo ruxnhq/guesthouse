@@ -21,8 +21,8 @@
 #    Also gets WinFsp, for a Windows guest's shared folder: the MSI windows\winfsp.json pins,
 #    downloaded from the pin's URL into target\winfsp-cache\VERSION\ (a cached file is used when its
 #    SHA-256 is the pin's; a file whose SHA-256 isn't is refused and deleted), and builds
-#    guesthouse-share.exe (cargo, release), the program the guest mounts the share with, when the
-#    workspace has the guesthouse-share package, and says so when it doesn't;
+#    guesthouse-guest-share.exe (cargo, release), the program the guest mounts the share with, when the
+#    workspace has the guesthouse-guest-share package, and says so when it doesn't;
 # 4. gathers the files to install (the payload) in the out folder's payload\:
 #      guesthouse-service.exe, guesthouse-serial-relay.exe (it has to be beside the service),
 #      guesthouse-hcs-boot.exe, setup.ps1 (windows\installer), LICENSE, THIRD-PARTY.md (with the
@@ -31,7 +31,7 @@
 #      screen\remoteman-host-setup.exe (as it is: the service runs it in each Windows guest),
 #      viewer\ (the viewer's zip unpacked, remoteman.exe in it: the app starts that), and
 #      guest\nvapi64.dll (the NVAPI wrapper the service gives a guest on an NVIDIA card),
-#      guest\guesthouse-share.exe and guest\winfsp.msi (as it is) with guest\WinFsp-License.txt
+#      guest\guesthouse-guest-share.exe and guest\winfsp.msi (as it is) with guest\WinFsp-License.txt
 #      (what the service gives a guest with a shared folder), and WinFsp's licence in THIRD-PARTY.md;
 # 5. builds the installer (crates\installer-windows) and packs the Windows App Runtime its pages
 #    need and the payload into it (guesthouse-setup --pack): the runtime is the same as the
@@ -266,12 +266,12 @@ try {
         # The program a Windows guest mounts its shared folder with. Its package may not be in the
         # workspace yet, and then the installer is built without it.
         $shareExe = $null
-        if ($meta.packages | Where-Object { $_.name -eq 'guesthouse-share' }) {
-            Invoke-Native 'the share program build' { cargo build --release --locked -p guesthouse-share }
-            $shareExe = Join-Path $release 'guesthouse-share.exe'
+        if ($meta.packages | Where-Object { $_.name -eq 'guesthouse-guest-share' }) {
+            Invoke-Native 'the share program build' { cargo build --release --locked -p guesthouse-guest-share }
+            $shareExe = Join-Path $release 'guesthouse-guest-share.exe'
             if (-not (Test-Path -LiteralPath $shareExe)) { throw "$shareExe wasn't built" }
         } else {
-            Write-Warning ('The workspace has no guesthouse-share package, so this installer has no program for a Windows guest ' +
+            Write-Warning ('The workspace has no guesthouse-guest-share package, so this installer has no program for a Windows guest ' +
                 'to mount a shared folder with: those guests will have no drive.')
         }
         $appFolder = ''

@@ -15,6 +15,7 @@ mod standalone;
 mod steps;
 #[cfg(test)]
 mod tests;
+mod windows;
 
 use crate::context::Context;
 use crate::failure::{Failure, Result};
@@ -54,6 +55,8 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              delete a snapshot, by its name or its tag
   idle MACHINE [--minutes N] read how busy a running machine is, and say if it would count as
                              idle. It changes nothing
+  windows MACHINE [--json]   the windows a running Windows guest has open, a line each, or with
+                             --json the guest's own list. It changes nothing
   share                      how each card with a running machine is shared, as the library
                              page shows it. It changes nothing
 
@@ -142,6 +145,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
         Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,
+        Command::Windows { name, json } => windows::run(context, &find(context, name)?, json, out)?,
         Command::Standalone(name) => standalone::command(context, &find(context, name)?, out)?,
         Command::New { name, options } => make::new_machine(context, name, &options, out)?,
         Command::Set { name, key, value } => change::set(context, find(context, name)?, key, value, out)?,

@@ -29,6 +29,7 @@ const NEW_OPTIONS: [&str; 16] = [
 ];
 const SETUP_OPTIONS: [&str; 2] = ["--driver", "--card"];
 const MINUTES: &str = "--minutes";
+const JSON: &str = "--json";
 
 /// What `new` was told. Whatever it wasn't told, the New Machine dialog's choice stands.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -101,6 +102,11 @@ pub(super) enum Command<'a> {
     Idle {
         name: &'a str,
         minutes: Option<&'a str>,
+    },
+    /// The windows a running Windows guest has open. `json` is the helper's own answer, not lines.
+    Windows {
+        name: &'a str,
+        json: bool,
     },
     New {
         name: &'a str,
@@ -249,6 +255,10 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
         "idle" => {
             let split = Split::new(command, rest, &[MINUTES], &[])?;
             Ok(Command::Idle { name: split.exactly(command, machine, 1)?[0], minutes: split.value(MINUTES) })
+        }
+        "windows" => {
+            let split = Split::new(command, rest, &[], &[JSON])?;
+            Ok(Command::Windows { name: split.exactly(command, machine, 1)?[0], json: split.has(JSON) })
         }
         "start" | "install" => {
             let split = Split::new(command, rest, &[], &[NO_WAIT])?;

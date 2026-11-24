@@ -328,3 +328,4 @@ mod settings_tests;
 mod share_tests;
 mod snapshots_tests;
 mod standalone_tests;
+mod windows_tests;

@@ -15,6 +15,7 @@ guesthouse-vm take-snapshot NAME SNAPSHOT
 guesthouse-vm go-back NAME [SNAPSHOT] [--yes]
 guesthouse-vm delete-snapshot NAME SNAPSHOT [--yes]
 guesthouse-vm idle NAME [--minutes N]
+guesthouse-vm windows NAME [--json]
 guesthouse-vm share
 
 guesthouse-vm new NAME --iso PATH [--kind windows|ubuntu|plain] [--disk GIB] [--disk-folder PATH]
@@ -70,6 +71,12 @@ A machine counts as idle only when every one of those was read and every one was
 For an Ubuntu machine, a plain VM or a macOS machine, only the CPU time can be read, as nothing in them answers Guesthouse. That is not enough to call one idle, so it says it cannot tell, and says busy if the CPU time is.
 
 The reading sends `guest/idle.ps1` through the agent. The only thing it does in Windows is to start a task in the user's session for a moment, as only a program there can see that session's input. The task, its helper script in `C:\gpupv` and its answer file in the public documents folder are removed when it is done, or at the next reading if one was cut short.
+
+`windows` lists the windows a running Windows machine has open, one line each, topmost first: its z-order place, handle, program, title, size and position, and in brackets whether it is the foreground window, minimized, a tool window, a popup, and which window owns it. `--json` prints the guest's own answer as it came, which also has each window's process id, class, and both rectangles (the one the user sees, from DWM's extended frame bounds, and the one Windows gives the window with its invisible border). It only reads, and it is the first step towards showing one program of a guest as a window of its own.
+
+A helper in the user's session, `guest/windows.ps1`, answers. If it isn't running, the command starts it through the agent for the question and ends it after, so it takes a few seconds more then. With nobody logged in to the guest there is no session for the helper, and the command says so. The helper listens on loopback in the guest only, on port 8769, so nothing is forwarded.
+
+It leaves out what no user would call an app window: windows that aren't visible or that DWM cloaks (a hidden helper window, a UWP app's window on another virtual desktop or one Windows keeps suspended), windows with no area, the console's hidden PseudoConsoleWindow, and the desktop and taskbars. Menus, tooltips and drop-downs are windows of their own, and are listed as popups with their owner.
 
 `share` prints how each card with a running machine is shared, in the words of the library page's Sharing the Card panel: the whole card, then each machine's GPU time and video memory. It looks twice, a second apart, as AMD's and Intel's engine times need two looks. On NVIDIA each machine's time is the driver's last one-second sample of its processes, and its video memory is shown twice: what the guest allocated against its cap, and what the driver charges its processes with, which is more, as it includes the daemon's own work. It only reads.
 

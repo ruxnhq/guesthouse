@@ -104,7 +104,7 @@ pub(super) enum Command<'a> {
     },
     New {
         name: &'a str,
-        options: NewOptions<'a>,
+        options: Box<NewOptions<'a>>,
     },
     Set {
         name: &'a str,
@@ -332,7 +332,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 play: split.value("--play"),
                 yes: split.has(YES),
             };
-            Ok(Command::New { name, options })
+            Ok(Command::New { name, options: Box::new(options) })
         }
         "set" => {
             let split = Split::new(command, rest, &[], &[])?;

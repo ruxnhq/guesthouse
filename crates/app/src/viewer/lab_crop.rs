@@ -234,7 +234,7 @@ pub fn open_window(
         .build();
     let shown = Rc::new(Cell::new(Shown::Up));
     let host_file = request.follow.as_deref().map(host_file);
-    follow_window_state(&screen, &window, shown.clone(), host_file);
+    follow_window_state(&screen, &window, shown.clone(), host_file, context.clone());
     end_on_signals(&window, shown.clone());
     window.present();
     // The own surface waits for the page it's on to settle. This window has no page to slide in.
@@ -270,12 +270,16 @@ fn follow_window_state(
     window: &gtk::ApplicationWindow,
     shown: Rc<Cell<Shown>>,
     host_file: Option<PathBuf>,
+    context: Arc<Context>,
 ) {
     let looked = screen.clone();
     let seen = shown.clone();
     let told = host_file.clone();
     let follow = move |window: &gtk::ApplicationWindow| {
         let active = window.is_active();
+        // Each change in the log, as what KWin does around a minimize is only seen on a desktop.
+        let state = format!("active {active}, out of sight {}, {:?}", window.is_suspended(), seen.get());
+        let _ = write_log(&context, &format!("lab crop window: {state}"));
         if !active || window.is_suspended() {
             looked.let_go();
         }

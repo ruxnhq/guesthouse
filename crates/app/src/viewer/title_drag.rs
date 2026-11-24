@@ -42,6 +42,7 @@ struct HeldPress {
     at: (f64, f64),
     device: gdk::Device,
     time: u32,
+    gesture: gtk::GestureClick,
 }
 
 #[derive(Default)]
@@ -85,7 +86,7 @@ impl Screen {
         }
         let Some(event) = gesture.current_event() else { return false };
         let Some(device) = event.device() else { return false };
-        drag.held = Some(HeldPress { at: (x, y), device, time: event.time() });
+        drag.held = Some(HeldPress { at: (x, y), device, time: event.time(), gesture: gesture.clone() });
         true
     }
 
@@ -112,6 +113,10 @@ impl Screen {
                 held.time,
             );
         }
+        // The compositor has the button from here on, and the release never reaches GTK. The click
+        // gesture would wait for it, and take no press again: on KWin every click after a move was
+        // lost.
+        held.gesture.reset();
         true
     }
 

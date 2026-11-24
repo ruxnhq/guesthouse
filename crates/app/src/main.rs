@@ -1,5 +1,6 @@
 //! `guesthouse`: the desktop app.
 
+use guesthouse_app::viewer::lab_crop;
 use guesthouse_app::{gpu_reset, installer};
 use std::env;
 use std::path::PathBuf;
@@ -35,6 +36,16 @@ fn main() -> gtk::glib::ExitCode {
         // SAFETY: nothing else is running yet. Taken out so that nothing the installer starts gets it.
         unsafe { env::remove_var(installer::VARIABLE) };
         return installer::run(&payload);
+    }
+    // Lab only: one rectangle of a running machine's screen in a window of its own.
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    match lab_crop::request(&arguments) {
+        Some(Ok(request)) => return lab_crop::run(request),
+        Some(Err(text)) => {
+            eprintln!("{text}");
+            return gtk::glib::ExitCode::FAILURE;
+        }
+        None => {}
     }
     let restart = env::var(gpu_reset::VARIABLE).ok().and_then(|note| gpu_reset::Restart::from_value(&note));
     // SAFETY: nothing else is running yet. Taken out so that nothing the app starts gets it.

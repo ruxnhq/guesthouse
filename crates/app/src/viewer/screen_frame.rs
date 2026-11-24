@@ -6,6 +6,7 @@
 //! on multiples of q logical pixels: 2 at 1.5, 4 at 1.25, 20 at 1.45. So the picture's size and place
 //! go in steps of q, and at a scale like 1.45 a thin black border is the price.
 
+use super::crop::{Crop, picture_place, rectangle_place};
 use gtk::glib;
 use gtk::graphene;
 use gtk::gsk;
@@ -129,8 +130,26 @@ mod imp {
         pub laid_out_at: Cell<(f64, (f64, f64))>,
         /// The window's clock, and the check on it while the frame is realized.
         pub watching: RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>,
-        /// Where the picture was put, for the bars beside it.
+        /// Where the picture is in view, for the bars beside it. Without a rectangle, that's where it
+        /// was put.
         pub picture_at: Cell<Placement>,
+        /// The picture reaches past where it's in view, which is all that is drawn of it.
+        pub clipped: Cell<bool>,
+        /// The guest's frame's size, once one has come.
+        pub frame: Cell<Option<(i32, i32)>>,
+        /// Lab only: the rectangle of the frame that is all there is to see.
+        pub crop: Cell<Option<Crop>>,
+    }
+
+    impl ScreenFrame {
+        /// The rectangle as it is on the frame shown now. Until a frame comes it's as it was asked for.
+        pub fn shown_crop(&self) -> Option<Crop> {
+            let crop = self.crop.get()?;
+            match self.frame.get() {
+                Some(frame) => crop.within(frame),
+                None => Some(crop),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -150,6 +169,11 @@ mod imp {
 
     impl WidgetImpl for ScreenFrame {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            // A rectangle is shown at its own size, and the window is made to fit it.
+            if let Some(crop) = self.shown_crop() {
+                let side = if orientation == gtk::Orientation::Horizontal { crop.width } else { crop.height };
+                return (side, side, -1, -1);
+            }
             // It shrinks to anything, as the picture inside it can.
             match self.child.upgrade() {
                 Some(child) => {
@@ -165,10 +189,20 @@ mod imp {
             let widget = self.obj();
             let (scale, origin) = surface_place(widget.upcast_ref());
             self.laid_out_at.set((scale, origin));
-            let placed = place(width, height, self.ratio.get(), scale, origin);
+            let cropped = self.shown_crop().zip(self.frame.get());
+            let (placed, in_view) = match cropped {
+                Some((crop, frame)) => {
+                    (picture_place(crop, frame, (width, height)), rectangle_place(crop, (width, height)))
+                }
+                None => {
+                    let placed = place(width, height, self.ratio.get(), scale, origin);
+                    (placed, placed)
+                }
+            };
             let transform = gsk::Transform::new().translate(&graphene::Point::new(placed.x, placed.y));
             child.allocate(placed.width, placed.height, -1, Some(transform));
-            self.picture_at.set(placed);
+            self.picture_at.set(in_view);
+            self.clipped.set(cropped.is_some());
         }
 
         /// The bars beside a picture of another shape are black, and only the bars: the picture's
@@ -196,7 +230,12 @@ mod imp {
                     snapshot.append_color(&black, &graphene::Rect::new(x, y, w, h));
                 }
             }
-            if let Some(child) = self.child.upgrade() {
+            let Some(child) = self.child.upgrade() else { return };
+            if self.clipped.get() {
+                snapshot.push_clip(&graphene::Rect::new(left, top, right - left, bottom - top));
+                widget.snapshot_child(&child, snapshot);
+                snapshot.pop();
+            } else {
                 widget.snapshot_child(&child, snapshot);
             }
         }
@@ -247,10 +286,55 @@ impl ScreenFrame {
         frame
     }
 
-    pub fn set_ratio(&self, ratio: f64) {
-        if (self.imp().ratio.replace(ratio) - ratio).abs() > f64::EPSILON {
+    /// The size of the guest's frame now shown.
+    pub fn set_frame(&self, width: i32, height: i32) {
+        let imp = self.imp();
+        let size = (width, height);
+        if imp.frame.replace(Some(size)) == Some(size) {
+            return;
+        }
+        imp.ratio.set(f64::from(width) / f64::from(height.max(1)));
+        // A rectangle partly off a frame of the new size takes another size in the window.
+        if imp.crop.get().is_some() {
+            self.queue_resize();
+        } else {
             self.queue_allocate();
         }
+    }
+
+    /// Lab only: shows just this rectangle of the guest's frame, or the whole frame again with `None`.
+    /// What lies outside it is clipped away, drawing and the pointer both.
+    pub fn set_crop(&self, crop: Option<Crop>) {
+        if self.imp().crop.replace(crop) != crop {
+            self.set_overflow(if crop.is_some() { gtk::Overflow::Hidden } else { gtk::Overflow::Visible });
+            self.queue_resize();
+        }
+    }
+
+    /// The rectangle as it was asked for.
+    pub fn crop(&self) -> Option<Crop> {
+        self.imp().crop.get()
+    }
+
+    /// Where the picture is in view, in this widget's logical pixels. With a rectangle that is
+    /// narrower than the room, the picture reaches on under the bars beside it.
+    pub fn in_view(&self) -> graphene::Rect {
+        let at = self.imp().picture_at.get();
+        graphene::Rect::new(at.x, at.y, at.width as f32, at.height as f32)
+    }
+
+    /// A point on this widget as a point of the rectangle, in the guest's pixels from its corner.
+    pub fn in_rectangle(&self, point: &graphene::Point) -> Option<(f64, f64)> {
+        let crop = self.shown_crop()?;
+        let view = self.in_view();
+        let across = f64::from(crop.width) / f64::from(view.width()).max(1.0);
+        let down = f64::from(crop.height) / f64::from(view.height()).max(1.0);
+        Some((f64::from(point.x() - view.x()) * across, f64::from(point.y() - view.y()) * down))
+    }
+
+    /// The rectangle in view, as it is on the frame now shown.
+    pub fn shown_crop(&self) -> Option<Crop> {
+        self.imp().shown_crop()
     }
 }
 

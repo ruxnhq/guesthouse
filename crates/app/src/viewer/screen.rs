@@ -14,6 +14,7 @@ use super::pointer_lock::{PointerLock, pointer_lock};
 use super::screen_frame::ScreenFrame;
 use super::slot_hold::HeldFrame;
 use super::socket_frames::SocketFrames;
+use super::title_drag::TitleDrag;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use guesthouse_app_core::forwarded_input::ForwardedInput;
@@ -114,6 +115,8 @@ pub(super) struct Inner {
     /// The frame GTK is showing because the own surface couldn't take it yet, to hand over once it can.
     pub(super) handover: RefCell<Option<HeldFrame>>,
     pub(super) followed_at: Cell<Instant>,
+    /// Lab only: a press on the guest program's title bar that may move the window.
+    pub(super) title_drag: RefCell<TitleDrag>,
 }
 
 #[derive(Clone)]
@@ -212,6 +215,7 @@ impl Screen {
             handover: RefCell::default(),
             on_own_surface: RefCell::default(),
             followed_at: Cell::new(Instant::now()),
+            title_drag: RefCell::default(),
         }));
         this.add_input();
         this.connect_life();
@@ -452,7 +456,7 @@ impl Screen {
 
     fn show(&self, texture: gdk::Texture) {
         self.0.picture.set_paintable(Some(&texture));
-        self.0.aspect.set_ratio(f64::from(texture.width()) / f64::from(texture.height()));
+        self.0.aspect.set_frame(texture.width(), texture.height());
         self.0.spinner.set_visible(false);
         // One that takes the place of a frame still waiting to be drawn isn't one more on screen.
         if !self.0.waiting.replace(true) {

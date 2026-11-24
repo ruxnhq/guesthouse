@@ -1,6 +1,7 @@
 //! The keyboard and mouse, from the screen to the guest.
 
 use super::screen::Screen;
+use super::title_drag::TitleRelease;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use guesthouse_app_core::input::TABLET_RANGE;
@@ -11,6 +12,12 @@ const X11_KEY_OFFSET: u32 = 8;
 /// GDK's numbers for the two thumb buttons, back and forward.
 const BUTTON_BACK: u32 = 8;
 const BUTTON_FORWARD: u32 = 9;
+
+/// A place along the picture, `size` long, as the tablet's value for it. The tablet spans the guest's
+/// whole screen, as the picture does.
+pub(super) fn tablet_axis(value: f64, size: i32) -> i64 {
+    (value * TABLET_RANGE as f64 / f64::from(size.max(1))) as i64
+}
 
 /// QEMU's name for a button, by GDK's number for it.
 pub(super) fn button_name(number: u32) -> Option<&'static str> {
@@ -75,7 +82,7 @@ impl Screen {
     }
 
     pub(super) fn on_motion(&self, x: f64, y: f64) {
-        if self.captured() {
+        if self.captured() || !self.in_view(x, y) || self.title_press_moved(x, y) {
             return;
         }
         if self.0.pointer_held.get() {
@@ -87,14 +94,26 @@ impl Screen {
             return;
         }
         let picture = &self.0.picture;
-        let scaled = |value: f64, size: i32| (value * TABLET_RANGE as f64 / f64::from(size.max(1))) as i64;
-        let position = (scaled(x, picture.width()), scaled(y, picture.height()));
+        let position = (tablet_axis(x, picture.width()), tablet_axis(y, picture.height()));
         // GTK repeats the last position every time it redraws.
         if self.0.pointer.get() != Some(position)
             && let Some(guest) = self.0.guest.borrow_mut().as_mut()
         {
             self.0.pointer.set(Some(position));
             guest.move_to(position.0, position.1);
+        }
+    }
+
+    /// Whether a point on the picture is in view. Only a rectangle of the frame leaves some of it out,
+    /// under the black bars beside it.
+    fn in_view(&self, x: f64, y: f64) -> bool {
+        if self.0.aspect.shown_crop().is_none() {
+            return true;
+        }
+        let point = gtk::graphene::Point::new(x as f32, y as f32);
+        match self.0.picture.compute_point(&self.0.aspect, &point) {
+            Some(point) => self.0.aspect.in_view().contains_point(&point),
+            None => true,
         }
     }
 
@@ -117,7 +136,29 @@ impl Screen {
         if down {
             self.0.picture.grab_focus();
         }
+        // A press beside a rectangle would land on whatever the guest has outside it. Letting go
+        // still goes, so nothing stays held.
+        if down && !self.in_view(x, y) {
+            return;
+        }
         let button = gesture.current_button();
+        if down && self.hold_title_press(gesture, button, x, y) {
+            return;
+        }
+        if !down {
+            match self.title_press_released() {
+                TitleRelease::Click((x, y)) => {
+                    self.on_motion(x, y);
+                    if let Some(name) = button_name(button) {
+                        self.press(name, true);
+                        self.press(name, false);
+                    }
+                    return;
+                }
+                TitleRelease::Swallowed => return,
+                TitleRelease::Not => {}
+            }
+        }
         if let Some(name) = button_name(button) {
             // Left unclaimed, back would also take the window back to the list of machines.
             if matches!(button, BUTTON_BACK | BUTTON_FORWARD) {
@@ -229,6 +270,7 @@ impl Screen {
 
     /// Lifts what is held down, because the guest won't see those keys come up otherwise.
     pub(super) fn let_go(&self) {
+        self.forget_title_press();
         let mut held = self.0.keys_down.borrow_mut();
         if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
             for code in held.iter() {

@@ -9,6 +9,7 @@
 //! Like the pointer lock, this lives on GTK's own connection with a queue of its own. GTK goes on
 //! reading the socket for everyone, and `catch_up` takes in what landed on this queue.
 
+use super::crop::Crop;
 use super::dmabuf_feedback::{self, Reading};
 use super::frames::SlotFrame;
 pub use super::stall::Stall;
@@ -68,6 +69,8 @@ const COLOUR_VERSION: u32 = 1;
 pub(super) const PQ_TRANSFER: u8 = 16;
 const BT2020_PRIMARIES: u8 = 9;
 const SINGLE_PLANE: u32 = 0;
+/// What `wp_viewport.set_source` takes to show the whole buffer again.
+const WHOLE_BUFFER: f64 = -1.0;
 /// PQ's own reference white, for a guest that hasn't said where its SDR white is.
 const PQ_REFERENCE_NITS: u32 = 203;
 /// The darkest a PQ signal goes, in the protocol's units of 0.0001 cd/m². Its peak is fixed at
@@ -459,6 +462,12 @@ pub struct OwnSurface {
     place: Option<(i32, i32, i32, i32)>,
     /// Whether the frames sent reach the screen.
     stall: StallWatch,
+    /// Lab only: the rectangle of each frame to show, as it was asked for.
+    crop: Option<Crop>,
+    /// The viewport's source now: the rectangle as it fits the buffer, or `None` for all of it.
+    source: Option<Crop>,
+    /// The size of the buffer on the surface, while there is one.
+    attached: Option<(i32, i32)>,
 }
 
 impl OwnSurface {
@@ -532,6 +541,9 @@ impl OwnSurface {
             last_reference: None,
             place: None,
             stall: StallWatch::default(),
+            crop: None,
+            source: None,
+            attached: None,
         })
     }
 
@@ -579,6 +591,35 @@ impl OwnSurface {
         // was. GTK sets and commits its own state in one go, so nothing of its is half done here.
         self.parent.commit();
         let _ = self.queue.flush();
+        true
+    }
+
+    /// Lab only: shows just this rectangle of each frame, or all of it with `None`. A frame already up
+    /// is cut to it at once, as a still guest may send no other for a long time.
+    pub fn set_crop(&mut self, crop: Option<Crop>) {
+        self.crop = crop;
+        if let Some(size) = self.attached
+            && self.cut_to(size)
+        {
+            self.surface.commit();
+            let _ = self.queue.flush();
+        }
+    }
+
+    /// Sets the viewport's source for a buffer of this size, and says if it changed. It has to lie
+    /// inside the buffer, or the compositor ends the connection, and that is GTK's as well.
+    fn cut_to(&mut self, (width, height): (i32, i32)) -> bool {
+        let source = self.crop.and_then(|crop| crop.within((width, height)));
+        if source == self.source {
+            return false;
+        }
+        match source {
+            Some(Crop { x, y, width, height }) => {
+                self.viewport.set_source(f64::from(x), f64::from(y), f64::from(width), f64::from(height))
+            }
+            None => self.viewport.set_source(WHOLE_BUFFER, WHOLE_BUFFER, WHOLE_BUFFER, WHOLE_BUFFER),
+        }
+        self.source = source;
         true
     }
 
@@ -684,7 +725,11 @@ impl OwnSurface {
             }
             self.showing = wanted;
         }
+        let size = (descriptor.width as i32, descriptor.height as i32);
         self.surface.attach(Some(buffer), 0, 0);
+        self.attached = Some(size);
+        // In the same commit as the buffer, as a rectangle that fits it may not fit the last one.
+        self.cut_to(size);
         self.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
         if let Some(presentation) = &self.presentation {
             presentation.feedback(&self.surface, &handle, ());
@@ -751,6 +796,7 @@ impl OwnSurface {
     /// Takes the picture off, and gives back every slot. The surface stays for the next frame.
     pub fn hide(&mut self) {
         self.surface.attach(None, 0, 0);
+        self.attached = None;
         self.surface.commit();
         let _ = self.queue.flush();
         self.stall.nothing_awaited();

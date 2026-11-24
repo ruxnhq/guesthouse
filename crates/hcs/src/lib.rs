@@ -3,10 +3,13 @@
 //! are never needed.
 //!
 //! `schema` is the machine document and the other documents HCS and its network take, as types, and
-//! it builds on every system so its tests run anywhere. The rest is Windows only:
+//! it builds on every system so its tests run anywhere, as does the rule for which adapters are
+//! physical in `adapters`. The rest is Windows only:
 //!
 //! - `system`: computecore.dll, which creates, starts, changes and stops a machine.
 //! - `network`: computenetwork.dll, the network a machine's card is plugged into.
+//! - `adapters`: the host's network adapters, and which of them a machine can be bridged onto.
+//! - `services`: whether a Windows service is installed and running.
 //! - `disk`: virtdisk.dll, which makes, attaches and detaches a VHDX or an ISO, and the volumes on them.
 //! - `gpu`: the host's cards that can be shared with a guest, and their drivers' folders.
 //! - `drivers`: the copy of a card's driver a guest needs, put on its disk while the machine is off.
@@ -15,6 +18,7 @@
 //! The JSON shapes, the order a machine gets its GPU in, and where a guest looks for its host's
 //! driver were first worked out in App Sandbox, as `THIRD-PARTY.md` says.
 
+pub mod adapters;
 pub mod schema;
 
 #[cfg(windows)]
@@ -33,6 +37,8 @@ pub mod host;
 pub mod network;
 #[cfg(windows)]
 pub mod serial;
+#[cfg(windows)]
+pub mod services;
 #[cfg(windows)]
 pub mod system;
 #[cfg(windows)]

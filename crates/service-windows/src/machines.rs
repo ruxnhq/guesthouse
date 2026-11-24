@@ -32,13 +32,24 @@ pub struct Entry {
     pub stop: Option<Arc<AtomicBool>>,
     /// What's being done to the stopped machine, such as taking a snapshot, if anything.
     pub busy: Option<String>,
+    /// The address the guest has reported since this run began, which its forwards lead to. The
+    /// settings keep the last run's, which may not be this run's.
+    pub run_address: Option<String>,
     history: VecDeque<Event>,
     watchers: Vec<SyncSender<Event>>,
 }
 
 impl Entry {
     pub fn new(settings: Settings, state: State) -> Self {
-        Entry { settings, state, stop: None, busy: None, history: VecDeque::new(), watchers: Vec::new() }
+        Entry {
+            settings,
+            state,
+            stop: None,
+            busy: None,
+            run_address: None,
+            history: VecDeque::new(),
+            watchers: Vec::new(),
+        }
     }
 
     /// Whether nothing is being done with the machine, so it may be started or deleted.
@@ -85,11 +96,12 @@ impl Machines {
             match &event {
                 Event::State(state) => entry.state = *state,
                 Event::Guest(line) | Event::Report(line) => {
-                    if let Some(address) = address_in(line)
-                        && entry.settings.address.as_deref() != Some(address.as_str())
-                    {
-                        entry.settings.address = Some(address);
-                        address_changed = true;
+                    if let Some(address) = address_in(line) {
+                        if entry.settings.address.as_deref() != Some(address.as_str()) {
+                            entry.settings.address = Some(address.clone());
+                            address_changed = true;
+                        }
+                        entry.run_address = Some(address);
                     }
                 }
                 Event::Note(_) | Event::Problem(_) => {}
@@ -210,6 +222,11 @@ mod tests {
         machines.tell("win", Event::Report("address: 172.29.1.2".into()));
         assert_eq!(machines.lock()["win"].settings.address.as_deref(), Some("172.29.1.2"));
         assert_eq!(machines.store.load()[0].1.address.as_deref(), Some("172.29.1.2"));
+        assert_eq!(machines.lock()["win"].run_address.as_deref(), Some("172.29.1.2"));
+        // The same address again, as a guest reports each run, is still this run's.
+        machines.lock().get_mut("win").unwrap().run_address = None;
+        machines.tell("win", Event::Guest("guesthouse: address: 172.29.1.2".into()));
+        assert_eq!(machines.lock()["win"].run_address.as_deref(), Some("172.29.1.2"));
         let _ = std::fs::remove_dir_all(machines.store.root());
     }
 

@@ -358,6 +358,39 @@ mod tests {
 
     struct Nothing;
 
+    /// A network with nothing in it, as this test must change nothing of the real one's.
+    struct NoNetwork;
+
+    impl guesthouse_host_windows::network::Network for NoNetwork {
+        fn proxies(&self) -> Result<Vec<guesthouse_host_windows::network::Proxy>, String> {
+            Ok(Vec::new())
+        }
+        fn add_proxy(&self, _: u16, _: std::net::Ipv4Addr, _: u16) -> Result<(), String> {
+            Err("not here".into())
+        }
+        fn delete_proxy(&self, _: u16) -> Result<(), String> {
+            Err("not here".into())
+        }
+        fn rules(&self) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+        fn add_rule(&self, _: &str, _: u16) -> Result<(), String> {
+            Err("not here".into())
+        }
+        fn delete_rule(&self, _: &str) -> Result<(), String> {
+            Err("not here".into())
+        }
+        fn port_free(&self, _: u16) -> bool {
+            false
+        }
+        fn ip_helper_running(&self) -> bool {
+            false
+        }
+        fn bridging(&self) -> guesthouse_control::Bridging {
+            guesthouse_control::Bridging::default()
+        }
+    }
+
     impl Work for Nothing {
         fn prepare(&self, _: &PrepareSettings, _: &dyn Sink) -> Result<(), String> {
             Err("not here".into())
@@ -383,6 +416,9 @@ mod tests {
         }
         fn report_parts(&self) -> Vec<(String, Result<String, String>)> {
             Vec::new()
+        }
+        fn network(&self) -> &dyn guesthouse_host_windows::network::Network {
+            &NoNetwork
         }
     }
 

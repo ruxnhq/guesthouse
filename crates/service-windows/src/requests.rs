@@ -8,11 +8,12 @@ use crate::report_parts::tail_file;
 use crate::store::{Settings, Store, usable_name};
 use guesthouse_control::report::pieces;
 use guesthouse_control::{
-    Answer, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NewMachine, Request, Share,
-    SnapshotInfo, State, System, valid_edition, valid_user,
+    Answer, Bridging, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NetworkMode, NewMachine,
+    Request, Share, SnapshotInfo, State, System, forwards_refusal, valid_edition, valid_user,
 };
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::machine::Guest;
+use guesthouse_host_windows::network::Network;
 use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::settings::{self as host_settings, BootSettings, GpuChoice, PrepareSettings};
 use guesthouse_host_windows::snapshots::{self, Disks};
@@ -34,6 +35,10 @@ const CHECK: Duration = Duration::from_secs(1);
 const REPORT_TAIL: u64 = 2 * 1024 * 1024;
 /// How long the list of cards is kept before it's read again, as the app asks for it every moment.
 const CARDS_KEPT: Duration = Duration::from_secs(30);
+/// How long what bridging offers is kept, for the same reason: the adapters are read from Windows.
+const BRIDGING_KEPT: Duration = Duration::from_secs(30);
+/// How long a machine that's been ended has to take its port forwards away, as the service stops.
+const UNMAKE_WAIT: Duration = Duration::from_secs(15);
 
 /// The work done to machines, which only Windows can do.
 pub trait Work: Send + Sync + 'static {
@@ -55,6 +60,9 @@ pub trait Work: Send + Sync + 'static {
     /// The host's files for a bug report, each by name with its text or why it couldn't be read: the
     /// service's own log, the installer's, and facts about this PC.
     fn report_parts(&self) -> Vec<(String, Result<String, String>)>;
+
+    /// The host's side of machines' networks: port forwards, and bridging.
+    fn network(&self) -> &dyn Network;
 }
 
 /// The app window a request came from.
@@ -86,6 +94,9 @@ pub struct Service<W: Work> {
     /// The machine being made, as two machines made at once fight over drive letters and diskpart.
     making: Mutex<Option<String>>,
     cards: Mutex<Option<(Instant, Vec<CardInfo>)>>,
+    bridging: Mutex<Option<(Instant, Bridging)>>,
+    /// Port forwards are made and taken away one machine at a time, as `netsh` is.
+    forwarding: Mutex<()>,
 }
 
 impl<W: Work> Service<W> {
@@ -110,12 +121,17 @@ impl<W: Work> Service<W> {
                 let _ = machines.store.save(&name, &entry.settings);
             }
         }
-        Arc::new(Service {
+        let service = Arc::new(Service {
             machines,
             work: Arc::new(work),
             making: Mutex::new(None),
             cards: Mutex::new(None),
-        })
+            bridging: Mutex::new(None),
+            forwarding: Mutex::new(()),
+        });
+        // Port forwards a stopped service left behind are no use to anyone, and hold their ports.
+        service.clear_leftover_forwards();
+        service
     }
 
     pub fn machines(&self) -> &Arc<Machines> {
@@ -164,8 +180,13 @@ impl<W: Work> Service<W> {
             .filter(|(_, entry)| entry.stop.is_some())
             .map(|(name, _)| name.clone())
             .collect();
-        for name in left {
-            self.work.end(&vm_id(&name));
+        for name in &left {
+            self.work.end(&vm_id(name));
+        }
+        // An ended machine's boot ends, and its forwards are taken away, on their own threads.
+        let until = Instant::now() + UNMAKE_WAIT;
+        while Instant::now() < until && self.machines.lock().values().any(|entry| entry.stop.is_some()) {
+            thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -181,8 +202,22 @@ impl<W: Work> Service<W> {
         }
     }
 
+    /// Whether a machine can be bridged onto this PC's network, and onto which adapters.
+    fn bridging(&self) -> Bridging {
+        let mut kept = self.bridging.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &*kept {
+            Some((when, bridging)) if when.elapsed() < BRIDGING_KEPT => bridging.clone(),
+            _ => {
+                let bridging = self.work.network().bridging();
+                *kept = Some((Instant::now(), bridging.clone()));
+                bridging
+            }
+        }
+    }
+
     fn status(&self) -> Answer {
         let cards = self.cards();
+        let bridging = self.bridging();
         let default_card = cards.iter().find(|card| card.default).map(|card| card.name.clone());
         let machines = self
             .machines
@@ -210,6 +245,8 @@ impl<W: Work> Service<W> {
                     tpm: entry.settings.tpm,
                     network: entry.settings.network,
                     share: entry.settings.share.clone(),
+                    network_mode: entry.settings.network_mode.clone(),
+                    forwards: entry.settings.forwards.clone(),
                     size_gb: entry.settings.size_gb,
                     snapshots: snapshots::list(&self.machines.store.disk(name))
                         .unwrap_or_default()
@@ -226,7 +263,7 @@ impl<W: Work> Service<W> {
                 }
             })
             .collect();
-        Answer::Status { version: guesthouse_control::WINDOWS_VERSION.into(), machines, cards }
+        Answer::Status { version: guesthouse_control::WINDOWS_VERSION.into(), machines, cards, bridging }
     }
 
     /// Why a machine can't be given `memory_mb` and `processors`, if it can't.
@@ -313,6 +350,8 @@ impl<W: Work> Service<W> {
             tpm: machine.tpm,
             network: machine.network,
             share: machine.share.clone(),
+            network_mode: NetworkMode::Shared,
+            forwards: Vec::new(),
             size_gb: Some(machine.size_gb),
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Preparing));
@@ -392,6 +431,8 @@ impl<W: Work> Service<W> {
             }
             entry.stop = Some(Arc::clone(&stop));
             entry.state = State::Starting;
+            // What the guest said last run isn't where its forwards lead until it says it again.
+            entry.run_address = None;
         }
         let store = &self.machines.store;
         let disk = store.disk(&name);
@@ -420,14 +461,36 @@ impl<W: Work> Service<W> {
             tpm: entry_settings.tpm,
             network: entry_settings.network,
             share,
+            bridge: match &entry_settings.network_mode {
+                NetworkMode::Shared => None,
+                NetworkMode::Bridged { adapter } => Some(adapter.clone()),
+            },
             ..BootSettings::new(&vm_id(&name), disk)
         };
+        if settings.bridge.is_some() && !entry_settings.forwards.is_empty() {
+            self.machines.tell(
+                &name,
+                Event::Note(
+                    "Its port forwards aren't made while it's bridged: it has an address of its own on the network, \
+                     and its ports are reached there."
+                        .into(),
+                ),
+            );
+        }
         let service = Arc::clone(self);
         thread::spawn(move || {
             let sink = service.machines.sink(&name);
+            // The forwards are kept while the machine runs and taken away before it counts as stopped.
+            let over = Arc::new(AtomicBool::new(false));
+            let forwarder = {
+                let (service, name, over) = (Arc::clone(&service), name.clone(), Arc::clone(&over));
+                thread::spawn(move || service.keep_forwards(&name, &over))
+            };
             if let Err(error) = service.work.boot(&settings, Arc::clone(&sink), stop) {
                 sink.problem(error);
             }
+            over.store(true, Ordering::SeqCst);
+            let _ = forwarder.join();
             drop(held);
             let mut entries = service.machines.lock();
             if let Some(entry) = entries.get_mut(&name) {
@@ -517,10 +580,33 @@ impl<W: Work> Service<W> {
         if let Some(reason) = Self::size_refusal(wanted.memory_mb, wanted.processors) {
             return Answer::Refused { reason };
         }
-        let (before, shared_before) = {
+        if let Some(reason) = forwards_refusal(&wanted.forwards) {
+            return Answer::Refused { reason };
+        }
+        let (before, shared_before, mode_before) = {
             let entries = self.machines.lock();
-            (entries[&name].settings.card.clone(), entries[&name].settings.share.clone())
+            let settings = &entries[&name].settings;
+            (settings.card.clone(), settings.share.clone(), settings.network_mode.clone())
         };
+        // A mode is checked only when it changes, as a card is: an adapter that's gone since needn't
+        // stop a change of memory.
+        if wanted.network_mode != mode_before
+            && let NetworkMode::Bridged { adapter } = &wanted.network_mode
+        {
+            let bridging = self.bridging();
+            if !bridging.available {
+                return Answer::Refused {
+                    reason: bridging.reason.unwrap_or_else(|| "This PC can't bridge a machine.".into()),
+                };
+            }
+            if !bridging.adapters.iter().any(|known| known.name == *adapter) {
+                return Answer::Refused {
+                    reason: format!(
+                        "This PC has no Ethernet or Wi-Fi adapter called {adapter} that's up to bridge onto."
+                    ),
+                };
+            }
+        }
         // A share is checked again only when it changes: the user who shared it may not be the
         // one asking now, and needn't be for its memory to change.
         if wanted.share != shared_before
@@ -549,6 +635,19 @@ impl<W: Work> Service<W> {
         }
         let saved = {
             let mut entries = self.machines.lock();
+            // This PC's ports are the machines' together: one is one machine's forward only.
+            for (other, entry) in entries.iter().filter(|(other, _)| **other != name) {
+                if let Some(taken) = wanted.forwards.iter().find(|forward| {
+                    entry.settings.forwards.iter().any(|kept| kept.host_port == forward.host_port)
+                }) {
+                    return Answer::Refused {
+                        reason: format!(
+                            "This PC's port {} is forwarded to {other} already.",
+                            taken.host_port
+                        ),
+                    };
+                }
+            }
             let entry = entries.get_mut(&name).expect("found just now");
             if !entry.idle() {
                 return Answer::Refused {
@@ -563,8 +662,14 @@ impl<W: Work> Service<W> {
                 tpm: wanted.tpm,
                 network: wanted.network,
                 share: wanted.share,
-                // With no network, the guest's last address leads nowhere.
-                address: entry.settings.address.clone().filter(|_| wanted.network),
+                // With no network, or on another one, the guest's last address leads nowhere.
+                address: entry
+                    .settings
+                    .address
+                    .clone()
+                    .filter(|_| wanted.network && wanted.network_mode == mode_before),
+                network_mode: wanted.network_mode,
+                forwards: wanted.forwards,
                 ..entry.settings.clone()
             };
             if changed == entry.settings {
@@ -595,6 +700,16 @@ impl<W: Work> Service<W> {
         }
         if !saved.network {
             words.push_str(", no network");
+        } else if let NetworkMode::Bridged { adapter } = &saved.network_mode {
+            words.push_str(&format!(", a place on this PC's network through {adapter}"));
+        }
+        if !saved.forwards.is_empty() {
+            let ports: Vec<String> = saved
+                .forwards
+                .iter()
+                .map(|forward| format!("{} to {}", forward.host_port, forward.guest_port))
+                .collect();
+            words.push_str(&format!(", ports forwarded ({})", ports.join(", ")));
         }
         match &saved.share {
             Some(share) => {
@@ -962,6 +1077,8 @@ fn drop_installer(store: &Store, name: &str, disk: &Path) {
         let _ = record.save(disk);
     }
 }
+
+mod forwards;
 
 #[cfg(test)]
 mod tests;

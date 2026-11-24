@@ -16,8 +16,8 @@ use guesthouse_control::client::Unreached;
 use guesthouse_control::report::{ProblemKind, issue_link};
 use guesthouse_control::updates::Latest;
 use guesthouse_control::{
-    Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, Share, State, System, valid_name,
-    valid_user,
+    Answer, Bridging, Card, CardInfo, Event, Forward, Machine, MachineSettings, NetworkMode, NewMachine,
+    Share, State, System, forwards_refusal, valid_name, valid_user,
 };
 use windows_reactor::*;
 
@@ -305,6 +305,8 @@ pub fn settings_of(machine: &Machine) -> MachineSettings {
         tpm: machine.tpm,
         network: machine.network,
         share: machine.share.clone(),
+        network_mode: machine.network_mode.clone(),
+        forwards: machine.forwards.clone(),
     }
 }
 
@@ -323,6 +325,10 @@ pub struct Draft {
     /// The folder to share, as typed or picked. Empty shares none.
     pub share_folder: String,
     pub share_read_only: bool,
+    /// Whether the card is on the shared network or bridged onto an adapter of this PC's.
+    pub network_mode: NetworkMode,
+    /// The port forwards, a row each, as the person is editing them.
+    pub forwards: Vec<ForwardRow>,
     /// The size the disk is to grow to, which is asked for on its own, with Grow, as it can't be
     /// undone.
     pub size_gb: Option<f64>,
@@ -330,6 +336,31 @@ pub struct Draft {
     pub saving: bool,
     /// Why the service said no, until they're changed again.
     pub refused: Option<String>,
+}
+
+/// A port forward as its two boxes hold it: either may be empty while it's being typed.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ForwardRow {
+    pub host: Option<f64>,
+    pub guest: Option<f64>,
+}
+
+impl ForwardRow {
+    /// A new row, with neither port given yet.
+    const NEW: ForwardRow = ForwardRow { host: None, guest: None };
+
+    fn of(forward: &Forward) -> ForwardRow {
+        ForwardRow { host: Some(f64::from(forward.host_port)), guest: Some(f64::from(forward.guest_port)) }
+    }
+
+    /// The forward the boxes say, once each holds a port.
+    fn forward(&self) -> Option<Forward> {
+        let port = |value: Option<f64>| {
+            let value = whole(value)?;
+            u16::try_from(value).ok().filter(|port| *port != 0)
+        };
+        Some(Forward { host_port: port(self.host)?, guest_port: port(self.guest)? })
+    }
 }
 
 impl Draft {
@@ -348,6 +379,8 @@ impl Draft {
                 .map(|share| share.folder.display().to_string())
                 .unwrap_or_default(),
             share_read_only: machine.share.as_ref().is_some_and(|share| share.read_only),
+            network_mode: machine.network_mode.clone(),
+            forwards: machine.forwards.iter().map(ForwardRow::of).collect(),
             size_gb: machine.size_gb.map(|gb| gb as f64),
             saving: false,
             refused: None,
@@ -365,7 +398,19 @@ impl Draft {
             tpm: self.tpm,
             network: self.network,
             share: share_of(&self.share_folder, self.share_read_only),
+            network_mode: self.network_mode.clone(),
+            forwards: self.forwards.iter().map(ForwardRow::forward).collect::<Option<Vec<_>>>()?,
         })
+    }
+
+    /// Why the forwards can't be saved as they are, if they can't, in the service's own words. A
+    /// row with a port missing isn't one yet, and is said apart.
+    pub fn forwards_problem(&self) -> Option<String> {
+        let forwards: Vec<Forward> = self.forwards.iter().filter_map(ForwardRow::forward).collect();
+        if forwards.len() < self.forwards.len() {
+            return Some("Give each forward both ports, 1 to 65535.".to_owned());
+        }
+        forwards_refusal(&forwards)
     }
 
     /// Whether the person has changed something from what `machine`'s settings say.
@@ -454,6 +499,9 @@ pub struct Main {
     pub report: ReportPage,
     /// The selected machine's settings, as the person is changing them.
     pub draft: Option<Draft>,
+    /// Whether the person is being asked to confirm bridging the selected machine, which can drop
+    /// this PC's own network for a few seconds.
+    pub bridge_ask: bool,
     pub making: Option<Making>,
     /// The console's window, while one is open. There's one at a time.
     pub console: Option<OpenConsole>,
@@ -557,7 +605,15 @@ pub enum Message {
     SetCard(Option<usize>),
     SetDlss(bool),
     SaveSettings,
+    /// The answer to the question about bridging.
+    BridgeAnswered(ContentDialogResult),
     UndoSettings,
+    /// A network was chosen for the machine, by its place in `Main::network_choices`.
+    SetNetworkMode(Option<usize>),
+    AddForward,
+    RemoveForward(usize),
+    SetForwardHost(usize, Option<f64>),
+    SetForwardGuest(usize, Option<f64>),
     SetTpm(bool),
     SetNetwork(bool),
     SetShareFolder(String),
@@ -626,6 +682,30 @@ impl Main {
         choices
     }
 
+    /// What the service says of bridging a machine onto this PC's network.
+    pub fn bridging(&self) -> Option<&Bridging> {
+        self.status().map(|status| &status.bridging)
+    }
+
+    /// The networks a machine's settings offer, in the list's order: the shared one, then each
+    /// adapter if bridging is there. The one the draft has is kept in the list even if it has gone
+    /// from this PC, so the list can still say what the machine has.
+    pub fn network_choices(&self) -> Vec<NetworkMode> {
+        let adapters =
+            self.bridging().filter(|bridging| bridging.available).map(|bridging| &bridging.adapters);
+        let named = adapters
+            .into_iter()
+            .flatten()
+            .map(|adapter| NetworkMode::Bridged { adapter: adapter.name.clone() });
+        let mut choices: Vec<NetworkMode> = std::iter::once(NetworkMode::Shared).chain(named).collect();
+        if let Some(draft) = &self.draft
+            && !choices.contains(&draft.network_mode)
+        {
+            choices.push(draft.network_mode.clone());
+        }
+        choices
+    }
+
     /// Starts the selected machine's draft afresh from what the service says, unless the person
     /// has changed something while it's stopped.
     fn follow_draft(&mut self) {
@@ -661,6 +741,22 @@ impl Main {
         if machine.state != State::Stopped {
             return;
         }
+        let Some(draft) = self.draft.as_ref().filter(|draft| !draft.saving) else { return };
+        if draft.settings().is_none() || draft.forwards_problem().is_some() {
+            return;
+        }
+        // Binding the bridge's switch to the adapter can drop this PC's own network for a few
+        // seconds, so a machine's first bridging onto an adapter is asked about before it's kept.
+        if matches!(draft.network_mode, NetworkMode::Bridged { .. })
+            && draft.network_mode != machine.network_mode
+        {
+            self.bridge_ask = true;
+            return;
+        }
+        self.keep_settings();
+    }
+
+    fn keep_settings(&mut self) {
         let Some(draft) = self.draft.as_mut().filter(|draft| !draft.saving) else { return };
         let Some(settings) = draft.settings() else { return };
         if !self.live {
@@ -676,6 +772,8 @@ impl Main {
                 machine.tpm = settings.tpm;
                 machine.network = settings.network;
                 machine.share = settings.share;
+                machine.network_mode = settings.network_mode;
+                machine.forwards = settings.forwards;
             }
             self.follow_draft();
             return;
@@ -1072,6 +1170,7 @@ impl Component for Main {
             account: None,
             news: None,
             deleting: None,
+            bridge_ask: false,
             update: None,
             snapshot_ask: None,
             snapshot_label: String::new(),
@@ -1272,7 +1371,39 @@ impl Component for Main {
             Message::SetCard(None) => {}
             Message::SetDlss(on) => self.edit(|draft| draft.nvapi_wrapper = on),
             Message::SaveSettings => self.save_settings(),
+            Message::BridgeAnswered(result) => {
+                if std::mem::take(&mut self.bridge_ask) && result == ContentDialogResult::Primary {
+                    self.keep_settings();
+                }
+            }
+            Message::SetNetworkMode(Some(index)) => {
+                if let Some(mode) = self.network_choices().get(index).cloned() {
+                    self.edit(|draft| draft.network_mode = mode);
+                }
+            }
+            Message::SetNetworkMode(None) => {}
+            Message::AddForward => self.edit(|draft| {
+                if draft.forwards.len() < guesthouse_control::MOST_FORWARDS {
+                    draft.forwards.push(ForwardRow::NEW);
+                }
+            }),
+            Message::RemoveForward(index) => self.edit(|draft| {
+                if index < draft.forwards.len() {
+                    draft.forwards.remove(index);
+                }
+            }),
+            Message::SetForwardHost(index, value) => self.edit(|draft| {
+                if let Some(row) = draft.forwards.get_mut(index) {
+                    row.host = value;
+                }
+            }),
+            Message::SetForwardGuest(index, value) => self.edit(|draft| {
+                if let Some(row) = draft.forwards.get_mut(index) {
+                    row.guest = value;
+                }
+            }),
             Message::UndoSettings => {
+                self.bridge_ask = false;
                 self.draft = None;
                 self.follow_draft();
             }
@@ -1353,6 +1484,8 @@ mod tests {
             tpm: true,
             network: true,
             share: None,
+            network_mode: NetworkMode::Shared,
+            forwards: Vec::new(),
             size_gb: Some(128),
             snapshots: Vec::new(),
             working: None,
@@ -1384,6 +1517,42 @@ mod tests {
         assert!(draft.changed(&machine));
         draft.processors = Some(0.0);
         assert_eq!(draft.settings(), None);
+    }
+
+    #[test]
+    fn forwards_are_edited_as_rows_and_asked_for_once_each_holds_two_ports() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        draft.forwards.push(ForwardRow::NEW);
+        assert!(draft.changed(&machine));
+        assert_eq!(draft.settings(), None, "a row with no ports isn't a forward yet");
+        assert!(draft.forwards_problem().unwrap().contains("both ports"));
+        draft.forwards[0].host = Some(8080.0);
+        draft.forwards[0].guest = Some(80.0);
+        assert_eq!(draft.forwards_problem(), None);
+        assert_eq!(draft.settings().unwrap().forwards, [Forward { host_port: 8080, guest_port: 80 }]);
+        // A port that isn't one is a row that isn't finished.
+        draft.forwards[0].guest = Some(70000.0);
+        assert_eq!(draft.settings(), None);
+        draft.forwards[0].guest = Some(80.0);
+        draft.forwards.push(ForwardRow { host: Some(8080.0), guest: Some(81.0) });
+        assert!(draft.forwards_problem().unwrap().contains("twice"));
+        draft.forwards.pop();
+        // Back to what the machine has, it's unchanged again.
+        draft.forwards.clear();
+        assert!(!draft.changed(&machine));
+    }
+
+    #[test]
+    fn a_machine_bridged_is_a_change_from_shared_and_asks_for_the_adapter_by_name() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        draft.network_mode = NetworkMode::Bridged { adapter: "Ethernet".to_owned() };
+        assert!(draft.changed(&machine));
+        assert_eq!(
+            draft.settings().unwrap().network_mode,
+            NetworkMode::Bridged { adapter: "Ethernet".to_owned() }
+        );
     }
 
     #[test]

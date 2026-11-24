@@ -70,6 +70,10 @@ pub struct BootSettings {
     /// A folder of the host's the guest sees, if any.
     #[serde(default)]
     pub share: Option<Share>,
+    /// The physical adapter the machine is bridged onto, by name, when it joins the host's own
+    /// network and doesn't take Guesthouse's shared one.
+    #[serde(default)]
+    pub bridge: Option<String>,
 }
 
 fn on() -> bool {
@@ -105,6 +109,7 @@ impl BootSettings {
             console_access: Vec::new(),
             nvapi_wrapper: true,
             share: None,
+            bridge: None,
         }
     }
 }

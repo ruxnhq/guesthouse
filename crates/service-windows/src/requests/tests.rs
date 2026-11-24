@@ -11,6 +11,9 @@ struct Pretend {
     booted: Mutex<Vec<BootSettings>>,
     prepared: Mutex<Vec<PrepareSettings>>,
     grown: Mutex<Vec<u64>>,
+    net: FakeNet,
+    /// A guest that says nothing of its address.
+    silent: AtomicBool,
 }
 
 impl Work for Pretend {
@@ -39,7 +42,9 @@ impl Work for Pretend {
     ) -> Result<(), String> {
         self.booted.lock().unwrap().push(settings.clone());
         sink.state(State::Running);
-        sink.event(Event::Guest("guesthouse: address: 172.29.1.2".into()));
+        if !self.silent.load(Ordering::SeqCst) {
+            sink.event(Event::Guest("guesthouse: address: 172.29.1.2".into()));
+        }
         while !stop.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(5));
         }
@@ -82,6 +87,10 @@ impl Work for Pretend {
             ("windows.txt".to_owned(), Ok("ProductName: Windows 11 Pro\n".to_owned())),
             ("crashes.txt".to_owned(), Err("wevtutil isn't here.".to_owned())),
         ]
+    }
+
+    fn network(&self) -> &dyn Network {
+        &self.net
     }
 }
 
@@ -376,6 +385,8 @@ fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
         tpm: true,
         network: true,
         share: None,
+        network_mode: NetworkMode::Shared,
+        forwards: Vec::new(),
     };
     assert_eq!(change(service, wanted.clone()), [Answer::Ok]);
     let machine = &status(service)[0];
@@ -404,6 +415,8 @@ fn hardware(memory_mb: u64, card: Card) -> MachineSettings {
         tpm: true,
         network: true,
         share: None,
+        network_mode: NetworkMode::Shared,
+        forwards: Vec::new(),
     }
 }
 
@@ -915,3 +928,6 @@ fn a_file_that_is_a_link_is_not_followed() {
     assert!(!format!("{files:?}").contains("outside"));
     assert!(missing.iter().any(|(name, reason)| name == "events.log" && reason.contains("plain file")));
 }
+
+mod network;
+use network::FakeNet;

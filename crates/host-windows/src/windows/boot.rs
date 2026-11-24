@@ -15,6 +15,7 @@ use crate::record::{Record, files_disk};
 use crate::settings::BootSettings;
 use guesthouse_hcs::host;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
+use guesthouse_hcs::schema::network::{Network, bridged_network_id, bridged_network_name};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
 use guesthouse_hcs::serial::SerialPort;
 use guesthouse_hcs::system::{self, ComputeSystem};
@@ -109,7 +110,11 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
         }
     }
     let mac = record.mac.clone().expect("the record has a MAC by now");
-    let (_endpoint, adapter) = if settings.network { plug_in(&mac, sink.as_ref())? } else { (None, None) };
+    let (_endpoint, adapter) = if settings.network {
+        plug_in(&mac, settings.bridge.as_deref(), sink.as_ref())?
+    } else {
+        (None, None)
+    };
     let mut machine = machine(settings, disk, &record, adapter);
     machine.share = share;
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
@@ -218,19 +223,53 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     waited
 }
 
-/// An endpoint on Guesthouse's network, deleted when dropped, and the card with this MAC that plugs
-/// into it.
-fn plug_in(mac: &str, sink: &dyn Sink) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
+/// An endpoint on Guesthouse's network, or on the network bridged onto the adapter `bridge` names,
+/// deleted when dropped, and the card with this MAC that plugs into it.
+fn plug_in(
+    mac: &str,
+    bridge: Option<&str>,
+    sink: &dyn Sink,
+) -> Result<(Option<Endpoint>, Option<NetworkAdapter>), String> {
     let _ = network::delete_network(&OLD_NETWORK_ID);
-    network::ensure_ics_network(&NETWORK_ID, NETWORK_NAME).map_err(|error| error.to_string())?;
+    let network_id = match bridge {
+        None => {
+            network::ensure_ics_network(&NETWORK_ID, NETWORK_NAME).map_err(|error| error.to_string())?;
+            NETWORK_ID
+        }
+        Some(adapter) => bridged_network(adapter, sink)?,
+    };
     let id = host::new_guid().map_err(|error| error.to_string())?;
-    let endpoint = Endpoint::create(&NETWORK_ID, id, mac).map_err(|error| error.to_string())?;
+    let endpoint = Endpoint::create(&network_id, id, mac).map_err(|error| error.to_string())?;
     match endpoint.properties() {
         Ok(properties) => sink.note(format!("The network gave its card: {properties}")),
         Err(error) => sink.problem(error.to_string()),
     }
     let adapter = NetworkAdapter { endpoint_id: endpoint.id_string(), mac_address: mac.to_owned() };
     Ok((Some(endpoint), Some(adapter)))
+}
+
+/// The network bridged onto the physical adapter `adapter`, made if HCN doesn't have it: one per
+/// adapter, which HCN keeps until the host restarts. A boot that can't have it fails, as a machine
+/// meant for the host's network that's put on another one is worse than one that doesn't start.
+fn bridged_network(adapter: &str, sink: &dyn Sink) -> Result<GUID, String> {
+    let id = GUID::from_u128(bridged_network_id(adapter));
+    let wanted = Network::transparent(&bridged_network_name(adapter), adapter);
+    sink.note(format!("Bridging the machine onto {adapter}, so it takes an address from the router."));
+    match network::ensure_network(&id, &wanted) {
+        Ok(true) => sink.note(format!(
+            "Made the network {}. Windows binds its switch to {adapter}, which can drop this PC's own \
+             connection for a few seconds.",
+            wanted.name
+        )),
+        Ok(false) => {}
+        Err(error) => {
+            return Err(format!(
+                "{error}. Bridging onto {adapter} needs Hyper-V's switch, and Wi-Fi adapters often can't be \
+                 bridged. Give the machine the shared network, or another adapter, in its settings."
+            ));
+        }
+    }
+    Ok(id)
 }
 
 /// The serial port, while the guest has it open.

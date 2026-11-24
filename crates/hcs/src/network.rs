@@ -18,6 +18,12 @@ pub use windows_sys::core::GUID;
 /// Makes the ICS network `id` unless HCN has it already. HCN keeps a network after its maker exits,
 /// until the host restarts, so one network serves every run.
 pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
+    ensure_network(id, &Network::ics(name)).map(|_| ())
+}
+
+/// Makes the network `wanted` as `id` unless HCN has it already, and says whether it made it.
+pub fn ensure_network(id: &GUID, wanted: &Network) -> Result<bool> {
+    let name = &wanted.name;
     let mut network = null_mut();
     let mut record: PWSTR = null_mut();
     // SAFETY: `id` is a GUID that outlives the call, and the other two are places for HCN's answers.
@@ -26,10 +32,10 @@ pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
     drop(unsafe { take_co_task(record) });
     if opened >= 0 {
         close_network(network);
-        return Ok(());
+        return Ok(false);
     }
 
-    let settings = wide(serde_json::to_string(&Network::ics(name)).expect("a network always serialises"));
+    let settings = wide(serde_json::to_string(wanted).expect("a network always serialises"));
     let mut record: PWSTR = null_mut();
     // SAFETY: as above, and the settings end in a zero and outlive the call.
     let created = unsafe { HcnCreateNetwork(id, settings.as_ptr(), &mut network, &mut record) };
@@ -39,7 +45,7 @@ pub fn ensure_ics_network(id: &GUID, name: &str) -> Result<()> {
         return Err(Error::new(format!("Making the network {name}"), created, record));
     }
     close_network(network);
-    Ok(())
+    Ok(true)
 }
 
 /// Deletes the network `id` if HCN has it and nothing is plugged into it.

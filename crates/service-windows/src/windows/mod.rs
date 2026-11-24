@@ -17,6 +17,7 @@ use guesthouse_hcs::host;
 use guesthouse_hcs::system::ComputeSystem;
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::settings::{BootSettings, PrepareSettings};
+use guesthouse_host_windows::windows::network as host_network;
 use guesthouse_host_windows::windows::{self as host_work, boot, prepare};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -33,7 +34,10 @@ const LOG_TAIL: u64 = 512 * 1024;
 const GRACE: Duration = Duration::from_secs(60);
 
 /// The work itself, as `guesthouse-hcs-boot` does it.
-pub struct HostWork;
+#[derive(Default)]
+pub struct HostWork {
+    network: host_network::RealNetwork,
+}
 
 impl Work for HostWork {
     fn prepare(&self, settings: &PrepareSettings, sink: &dyn Sink) -> Result<(), String> {
@@ -104,6 +108,10 @@ impl Work for HostWork {
         parts.push(("setup.log".to_owned(), setup_log));
         parts.extend(collect::host_parts().into_iter().map(|part| (part.name, part.text)));
         parts
+    }
+
+    fn network(&self) -> &dyn guesthouse_host_windows::network::Network {
+        &self.network
     }
 
     fn end(&self, id: &str) {
@@ -218,7 +226,7 @@ pub(crate) fn start(asked: Option<PathBuf>) -> Result<Arc<Service<HostWork>>, St
     folder::secure(&root, own_parent)?;
     let _ = LOG.set(log_path(&root, own_parent));
     log(&format!("The service starts, version {}.", guesthouse_control::WINDOWS_VERSION));
-    let service = Service::new(Store::new(root), HostWork);
+    let service = Service::new(Store::new(root), HostWork::default());
     pipe::listen(PIPE, Arc::clone(&service))?;
     Ok(service)
 }

@@ -2,6 +2,7 @@
 
 pub mod boot;
 pub mod linux;
+pub mod network;
 pub mod prepare;
 
 use crate::events::{Event, Sink};

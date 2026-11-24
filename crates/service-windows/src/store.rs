@@ -2,7 +2,7 @@
 //! only the system and administrators may open. A machine's folder holds its disks, the record and
 //! the account `prepare` leaves beside them, and its settings, which say what it was made with.
 
-use guesthouse_control::{Card, Share, valid_name};
+use guesthouse_control::{Card, Forward, NetworkMode, Share, valid_name};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +34,12 @@ pub struct Settings {
     pub network: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<Share>,
+    /// Which network its card is plugged into. A machine from before bridging has the shared one.
+    #[serde(default, skip_serializing_if = "is_shared")]
+    pub network_mode: NetworkMode,
+    /// The ports of this PC passed on to the guest's while it runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forwards: Vec<Forward>,
     /// The largest its disk may grow to. A machine from before this has it read from its disk when
     /// the service starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +48,10 @@ pub struct Settings {
 
 fn on() -> bool {
     true
+}
+
+fn is_shared(mode: &NetworkMode) -> bool {
+    *mode == NetworkMode::Shared
 }
 
 impl Settings {
@@ -56,6 +66,8 @@ impl Settings {
             tpm: true,
             network: true,
             share: None,
+            network_mode: NetworkMode::Shared,
+            forwards: Vec::new(),
             size_gb: None,
         }
     }
@@ -185,6 +197,22 @@ mod tests {
             serde_json::from_str(r#"{"memory_mb": 8192, "processors": 4, "card": {"card": "default"}}"#)
                 .unwrap();
         assert_eq!(old, settings());
+    }
+
+    #[test]
+    fn a_machines_network_and_forwards_are_kept_and_a_machine_without_them_has_none() {
+        let store = store("network");
+        store.make("ubuntu").unwrap();
+        let saved = Settings {
+            network_mode: NetworkMode::Bridged { adapter: "Ethernet".into() },
+            forwards: vec![Forward { host_port: 8080, guest_port: 80 }],
+            ..settings()
+        };
+        store.save("ubuntu", &saved).unwrap();
+        assert_eq!(store.load(), [("ubuntu".to_owned(), saved)]);
+        let plain = serde_json::to_string(&settings()).unwrap();
+        assert!(!plain.contains("network_mode") && !plain.contains("forwards"), "{plain}");
+        let _ = fs::remove_dir_all(store.root());
     }
 
     #[test]

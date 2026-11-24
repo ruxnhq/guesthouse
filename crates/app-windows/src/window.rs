@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use guesthouse_control::client::Unreached;
 use guesthouse_control::report::{KEPT_DAYS, ProblemKind, stage::size_words};
-use guesthouse_control::{Card, CardInfo, Machine, State, System};
+use guesthouse_control::{Card, CardInfo, Machine, NetworkMode, State, System};
 use windows_reactor::*;
 
 use crate::app::{
@@ -140,6 +140,7 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
     match (&main.deleting, &main.snapshot_ask) {
         (Some(name), _) => content.content_dialog(delete_dialog(name, context)),
         (None, Some(ask)) => content.content_dialog(snapshot_dialog(ask, context)),
+        (None, None) if main.bridge_ask => content.content_dialog(bridge_dialog(main, context)),
         (None, None) => content.into(),
     }
 }
@@ -629,6 +630,8 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
         &["Through Windows' own network for its machines. Without it the guest has no address to reach it on."],
         Some(toggle("Network", draft.network, open, context.callback(Message::SetNetwork))),
     ));
+    rows.push(network_row(main, draft, open && draft.network, context));
+    rows.push(forwards_row(draft, open && draft.network, context));
     rows.push(row_under(
         glyph::SHARE,
         "Shared folder",
@@ -658,17 +661,19 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
 
     let changed = draft.changed(machine);
     let save = button("Save", glyph::SAVE, context.message(Message::SaveSettings), true)
-        .is_enabled(open && changed && draft.settings().is_some());
+        .is_enabled(open && changed && draft.settings().is_some() && draft.forwards_problem().is_none());
     let undo = button("Undo", glyph::UNDO, context.message(Message::UndoSettings), false)
         .is_enabled(open && (changed || draft.refused.is_some()));
     let mut foot: Vec<View> = vec![save.into(), undo.into()];
+    let problem = draft.forwards_problem();
     let (words, bad) = match (&draft.refused, stopped) {
         (Some(reason), _) => (Some(reason.as_str()), true),
         (None, false) => (Some("Its settings change while it's off. Stop it first."), false),
         (None, true) if draft.saving => (Some("Saving."), false),
         (None, true) if changed && draft.settings().is_none() => {
-            (Some("Give it memory and processors first."), false)
+            (Some("Give it memory and processors, and both ports of each forward, first."), false)
         }
+        (None, true) if changed && problem.is_some() => (problem.as_deref(), true),
         (None, true) if changed => (Some("They take effect when it next starts."), false),
         (None, true) => (None, false),
     };
@@ -678,6 +683,140 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
     }
     let foot = StackPanel::new().orientation(Orientation::Horizontal).spacing(12.0).children(foot);
     StackPanel::new().spacing(HEADING_GAP).children((group("Settings", rows), foot)).into()
+}
+
+/// Which network the machine's card is on, with the adapters it could be bridged onto.
+fn network_row(main: &Main, draft: &Draft, enabled: bool, context: &ViewContext<Main>) -> View {
+    let choices = main.network_choices();
+    let names: Vec<String> = choices.iter().map(|mode| network_words(mode, main)).collect();
+    let list = ComboBox::new()
+        .items_source(names)
+        .selected_index(choices.iter().position(|mode| *mode == draft.network_mode))
+        .is_enabled(enabled)
+        .width(360.0)
+        .automation_name("Connects through")
+        .on_selection_changed(context.callback(Message::SetNetworkMode));
+    let mut lines = vec![SHARED_NOTE.to_owned(), BRIDGED_NOTE.to_owned()];
+    match main.bridging() {
+        Some(bridging) if !bridging.available => {
+            lines.push(
+                bridging.reason.clone().unwrap_or_else(|| "This PC can't bridge a machine.".to_owned()),
+            );
+        }
+        Some(bridging) if bridging.adapters.is_empty() => {
+            lines.push(
+                "No Ethernet or Wi-Fi adapter of this PC's is up, so there is nothing to bridge onto."
+                    .to_owned(),
+            );
+        }
+        _ => {}
+    }
+    if let NetworkMode::Bridged { adapter } = &draft.network_mode {
+        let wifi = main.bridging().is_some_and(|bridging| {
+            bridging.adapters.iter().any(|known| known.name == *adapter && known.wifi)
+        });
+        if wifi {
+            lines.push(
+                "This is a Wi-Fi adapter. Many Wi-Fi adapters, and routers, refuse a second address on one \
+                 connection, so the machine may not start, or get no address. Ethernet always can."
+                    .to_owned(),
+            );
+        }
+    }
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    row(glyph::NETWORK, "Connects through", &lines, Some(list.into()))
+}
+
+/// The shared network, which every edition has.
+const SHARED_NOTE: &str = "Shared: Windows' own network for its machines. The guest has a private address that only \
+                           this PC reaches; forward ports below to reach it from other devices.";
+
+/// Bridging, which needs Hyper-V and says what it does to this PC.
+const BRIDGED_NOTE: &str = "Bridged: the guest joins this PC's network, with an address of its own from the router, \
+                            so other devices reach it directly. It needs Windows' Hyper-V feature. The first time, \
+                            this PC's own network can drop for a few seconds.";
+
+/// A network, as the list says it.
+fn network_words(mode: &NetworkMode, main: &Main) -> String {
+    match mode {
+        NetworkMode::Shared => "Shared, with a private address".to_owned(),
+        NetworkMode::Bridged { adapter } => {
+            let known = main
+                .bridging()
+                .and_then(|bridging| bridging.adapters.iter().find(|known| known.name == *adapter));
+            match known {
+                Some(known) if known.wifi => {
+                    format!("Bridged onto {adapter} (Wi-Fi: often can't), {}", known.description)
+                }
+                Some(known) => format!("Bridged onto {adapter}, {}", known.description),
+                None => format!("Bridged onto {adapter} (not available now)"),
+            }
+        }
+    }
+}
+
+/// The port forwards: a row of two ports each, and one to add.
+fn forwards_row(draft: &Draft, enabled: bool, context: &ViewContext<Main>) -> View {
+    let bridged = matches!(draft.network_mode, NetworkMode::Bridged { .. });
+    let mut rows: Vec<View> = Vec::new();
+    for (place, forward) in draft.forwards.iter().enumerate() {
+        let host = port_box(
+            "This PC's port",
+            forward.host,
+            enabled,
+            context.callback(move |value| Message::SetForwardHost(place, value)),
+        );
+        let guest = port_box(
+            "Guest's port",
+            forward.guest,
+            enabled,
+            context.callback(move |value| Message::SetForwardGuest(place, value)),
+        );
+        let remove = square(glyph::CLOSE, "Remove the forward")
+            .is_enabled(enabled)
+            .on_click(context.message(Message::RemoveForward(place)));
+        let line = StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((
+            TextBlock::new().text("This PC's port").vertical_alignment(VerticalAlignment::Center),
+            host,
+            TextBlock::new().text("to the guest's").vertical_alignment(VerticalAlignment::Center),
+            guest,
+            remove,
+        ));
+        rows.push(line.into());
+    }
+    let add = button("Add a forward", glyph::ADD, context.message(Message::AddForward), false)
+        .is_enabled(enabled && draft.forwards.len() < guesthouse_control::MOST_FORWARDS);
+    rows.push(add.into());
+    if let Some(problem) = draft.forwards_problem().filter(|_| !draft.forwards.is_empty()) {
+        rows.push(caption(&problem).foreground(ThemeBrush::SystemCritical).into());
+    }
+    row_under(
+        glyph::SHARE,
+        "Port forwards",
+        if bridged { BRIDGED_FORWARDS_NOTE } else { FORWARDS_NOTE },
+        StackPanel::new().spacing(8.0).children(rows).into(),
+    )
+}
+
+/// What a forward does, which needs the shared network and a running machine.
+const FORWARDS_NOTE: &str = "While the machine runs, a TCP port of this PC's leads to a port of the guest's, so other \
+                             devices on this network reach it at this PC's address. It also opens that port in \
+                             Windows Firewall, to this network only, and closes both when the machine stops. Needs \
+                             Windows' IP Helper service. At most 16.";
+
+const BRIDGED_FORWARDS_NOTE: &str = "Not made while it's bridged: the guest has an address of its own on the network, \
+                                     and its ports are reached there.";
+
+/// A box for a port.
+fn port_box(name: &str, value: Option<f64>, enabled: bool, changed: Callback<Option<f64>>) -> NumberBox {
+    NumberBox::new()
+        .value(value)
+        .minimum(1.0)
+        .maximum(65535.0)
+        .is_enabled(enabled)
+        .width(130.0)
+        .automation_name(name)
+        .on_value_changed(changed)
 }
 
 /// What a card is to the guest, under the card's list.
@@ -1080,6 +1219,32 @@ fn snapshot_dialog(ask: &app::SnapshotAsk, context: &ViewContext<Main>) -> Conte
         .default_button(ContentDialogButton::Close)
         .is_open(true)
         .on_closed(context.callback(Message::SnapshotAnswered))
+}
+
+/// Asks before a machine is first bridged, as Windows can drop this PC's own network for a few
+/// seconds while it binds its virtual switch to the adapter.
+fn bridge_dialog(main: &Main, context: &ViewContext<Main>) -> ContentDialog {
+    let adapter = match main.draft.as_ref().map(|draft| &draft.network_mode) {
+        Some(NetworkMode::Bridged { adapter }) => adapter.as_str(),
+        _ => "the adapter",
+    };
+    ContentDialog::new()
+        .title(format!("Bridge the machine onto {adapter}?"))
+        .content(
+            TextBlock::new()
+                .text(format!(
+                    "The first time a machine starts bridged, Windows binds a virtual switch to {adapter}. This \
+                     PC's own network, and anything running on it, can drop for a few seconds. Many Wi-Fi \
+                     adapters can't be bridged at all. Save it only when nothing on this PC needs the network \
+                     for the next minute."
+                ))
+                .text_wrapping(TextWrapping::Wrap),
+        )
+        .primary_button_text("Save")
+        .close_button_text("Cancel")
+        .default_button(ContentDialogButton::Close)
+        .is_open(true)
+        .on_closed(context.callback(Message::BridgeAnswered))
 }
 
 fn delete_dialog(name: &str, context: &ViewContext<Main>) -> ContentDialog {

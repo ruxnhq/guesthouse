@@ -141,8 +141,9 @@ impl Options {
             // port and the report.
             console_access: Vec::new(),
             nvapi_wrapper: self.nvapi_wrapper,
-            // Sharing a folder is the app's, through the service.
+            // Sharing a folder, and bridging, are the app's, through the service.
             share: None,
+            bridge: None,
         }
     }
 }

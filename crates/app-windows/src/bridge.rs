@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use guesthouse_control::client::{self, Unreached};
 use guesthouse_control::updates;
-use guesthouse_control::{Answer, CardInfo, Machine, MachineSettings, NewMachine, Request};
+use guesthouse_control::{Answer, Bridging, CardInfo, Machine, MachineSettings, NewMachine, Request};
 use windows_reactor::ComponentCompletion;
 
 use crate::app::Message;
@@ -29,6 +29,7 @@ pub struct Status {
     pub version: String,
     pub machines: Vec<Machine>,
     pub cards: Vec<CardInfo>,
+    pub bridging: Bridging,
 }
 
 /// How things stand, or the words for why that isn't known.
@@ -85,7 +86,9 @@ impl Window {
 /// Asks how things stand.
 pub fn status() -> Seen {
     match client::ask(&Request::Status) {
-        Ok(Answer::Status { version, machines, cards }) => Ok(Status { version, machines, cards }),
+        Ok(Answer::Status { version, machines, cards, bridging }) => {
+            Ok(Status { version, machines, cards, bridging })
+        }
         Ok(Answer::Refused { reason }) => Err(reason),
         Ok(_) => Err(Unreached::Garbled.words().to_owned()),
         Err(unreached) => Err(unreached.words().to_owned()),

@@ -9,6 +9,7 @@
 pub mod events;
 pub mod guest;
 pub mod machine;
+pub mod network;
 pub mod printable;
 pub mod record;
 pub mod screen;

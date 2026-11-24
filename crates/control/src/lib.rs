@@ -89,6 +89,13 @@ pub struct MachineSettings {
     pub network: bool,
     #[serde(default)]
     pub share: Option<Share>,
+    /// Which network the machine's card is plugged into. An app from before bridging sends none,
+    /// which reads as the shared one.
+    #[serde(default)]
+    pub network_mode: NetworkMode,
+    /// The ports of this PC that lead to the machine's. An older app sends none.
+    #[serde(default)]
+    pub forwards: Vec<Forward>,
 }
 
 /// What a new machine is made from and given.
@@ -116,6 +123,71 @@ pub struct NewMachine {
     pub network: bool,
     #[serde(default)]
     pub share: Option<Share>,
+}
+
+/// How a machine's network card reaches the network.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum NetworkMode {
+    /// Windows' own shared network for its machines: the guest has a private address that only this
+    /// PC reaches, and its connection goes through this PC's. Works on every edition.
+    #[default]
+    Shared,
+    /// The guest joins this PC's network by one of its physical adapters, with an address of its
+    /// own from the router. Needs Hyper-V's switch, as `Bridging` says.
+    Bridged { adapter: String },
+}
+
+/// One port of this PC (TCP) that is passed on to a port of the guest's, while the machine runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Forward {
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
+/// The most forwards a machine has.
+pub const MOST_FORWARDS: usize = 16;
+
+/// Why `forwards` can't be one machine's, if they can't: ports 1 to 65535, at most `MOST_FORWARDS`,
+/// and no port of this PC twice. That no other machine or program has a port is the service's to
+/// say.
+pub fn forwards_refusal(forwards: &[Forward]) -> Option<String> {
+    if forwards.len() > MOST_FORWARDS {
+        return Some(format!("A machine has {MOST_FORWARDS} port forwards at most."));
+    }
+    for (place, forward) in forwards.iter().enumerate() {
+        if forward.host_port == 0 || forward.guest_port == 0 {
+            return Some("A port is 1 to 65535.".into());
+        }
+        if forwards[..place].iter().any(|before| before.host_port == forward.host_port) {
+            return Some(format!("This PC's port {} is forwarded twice.", forward.host_port));
+        }
+    }
+    None
+}
+
+/// What the service says of bridging a machine onto this PC's network.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Bridging {
+    /// Whether Hyper-V's virtual switch is there to make the bridge with.
+    pub available: bool,
+    /// When it isn't, why, in words for the person.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The physical adapters that are up, Ethernet and Wi-Fi.
+    #[serde(default)]
+    pub adapters: Vec<AdapterInfo>,
+}
+
+/// A physical network adapter of this PC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdapterInfo {
+    /// Its name in Windows' network settings, which a machine's `Bridged` names it by.
+    pub name: String,
+    /// What it is, as its driver says.
+    pub description: String,
+    /// Whether it's a Wi-Fi adapter, which often can't be bridged.
+    pub wifi: bool,
 }
 
 /// The guest's administrator when none is named.
@@ -166,6 +238,9 @@ pub enum Answer {
         version: String,
         machines: Vec<Machine>,
         cards: Vec<CardInfo>,
+        /// A service from before bridging doesn't say, which reads as not available.
+        #[serde(default)]
+        bridging: Bridging,
     },
     /// Done as asked.
     Ok,
@@ -232,6 +307,10 @@ pub struct Machine {
     pub network: bool,
     #[serde(default)]
     pub share: Option<Share>,
+    #[serde(default)]
+    pub network_mode: NetworkMode,
+    #[serde(default)]
+    pub forwards: Vec<Forward>,
     /// The largest its disk may grow to, if the service knows.
     #[serde(default)]
     pub size_gb: Option<u64>,
@@ -368,6 +447,8 @@ mod tests {
             tpm: true,
             network: true,
             share: None,
+            network_mode: NetworkMode::Shared,
+            forwards: Vec::new(),
         };
         assert_eq!(
             older,
@@ -402,6 +483,8 @@ mod tests {
             tpm: true,
             network: true,
             share: None,
+            network_mode: NetworkMode::Shared,
+            forwards: Vec::new(),
         };
         let value = serde_json::to_value(Request::Change { name: "win".into(), settings }).unwrap();
         assert_eq!(value["ask"], json!("change"));
@@ -448,6 +531,44 @@ mod tests {
                 assert_eq!(read_line::<Answer>(&mut reader).unwrap(), Some(answer));
             }
         }
+    }
+
+    #[test]
+    fn a_networks_mode_and_forwards_read_and_write_as_the_apps_agree() {
+        assert_eq!(serde_json::to_value(NetworkMode::Shared).unwrap(), json!({"mode": "shared"}));
+        assert_eq!(
+            serde_json::to_value(NetworkMode::Bridged { adapter: "Ethernet".into() }).unwrap(),
+            json!({"mode": "bridged", "adapter": "Ethernet"})
+        );
+        let settings: MachineSettings = serde_json::from_value(json!({
+            "memory_mb": 8192, "processors": 4, "card": {"card": "none"}, "nvapi_wrapper": true,
+            "network_mode": {"mode": "bridged", "adapter": "Wi-Fi"},
+            "forwards": [{"host_port": 8080, "guest_port": 80}]
+        }))
+        .unwrap();
+        assert_eq!(settings.network_mode, NetworkMode::Bridged { adapter: "Wi-Fi".into() });
+        assert_eq!(settings.forwards, [Forward { host_port: 8080, guest_port: 80 }]);
+        // A service from before bridging says nothing of it, and a status still reads.
+        let status: Answer = serde_json::from_value(
+            json!({"answer": "status", "version": "0.9.0", "machines": [], "cards": []}),
+        )
+        .unwrap();
+        assert!(matches!(status, Answer::Status { bridging, .. } if !bridging.available));
+    }
+
+    #[test]
+    fn forwards_are_kept_to_their_rules() {
+        let forward = |host_port, guest_port| Forward { host_port, guest_port };
+        assert_eq!(forwards_refusal(&[]), None);
+        assert_eq!(forwards_refusal(&[forward(8080, 80), forward(2222, 22), forward(1, 65535)]), None);
+        // Two of this PC's ports may lead to one guest port, but not one of this PC's to two.
+        assert_eq!(forwards_refusal(&[forward(8080, 80), forward(8081, 80)]), None);
+        assert!(forwards_refusal(&[forward(0, 80)]).is_some());
+        assert!(forwards_refusal(&[forward(80, 0)]).is_some());
+        assert!(forwards_refusal(&[forward(8080, 80), forward(8080, 81)]).is_some());
+        let many: Vec<Forward> = (1..=MOST_FORWARDS as u16 + 1).map(|port| forward(port, port)).collect();
+        assert!(forwards_refusal(&many).is_some());
+        assert_eq!(forwards_refusal(&many[..MOST_FORWARDS]), None);
     }
 
     #[test]

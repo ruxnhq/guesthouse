@@ -14,7 +14,9 @@
 //! service can't be reached). Nothing is sent to the service, whatever is pressed.
 
 use guesthouse_control::client::Unreached;
-use guesthouse_control::{Card, CardInfo, Machine, SnapshotInfo, State, System};
+use guesthouse_control::{
+    AdapterInfo, Bridging, Card, CardInfo, Forward, Machine, NetworkMode, SnapshotInfo, State, System,
+};
 use windows_reactor::WindowTheme;
 
 use super::{Account, Form, Kind, Line, Main, Making, Page, Ready, ReportStage};
@@ -176,6 +178,13 @@ fn status() -> Status {
         tpm: system == System::Windows,
         network: true,
         share: None,
+        // The Windows machine has two forwards, so the section has rows to look at.
+        network_mode: NetworkMode::Shared,
+        forwards: if name == "win11" {
+            vec![Forward { host_port: 8080, guest_port: 80 }, Forward { host_port: 3390, guest_port: 3389 }]
+        } else {
+            Vec::new()
+        },
         size_gb: Some(256),
         // The stopped Windows machine has two, so the section has rows to look at.
         snapshots: if name == "win11" {
@@ -222,6 +231,22 @@ fn status() -> Status {
             card("AMD Radeon RX 7900 XTX", Some(24560), false),
             card("Intel(R) UHD Graphics 770", None, false),
         ],
+        bridging: Bridging {
+            available: true,
+            reason: None,
+            adapters: vec![
+                AdapterInfo {
+                    name: "Ethernet".to_owned(),
+                    description: "Realtek PCIe 2.5GbE".to_owned(),
+                    wifi: false,
+                },
+                AdapterInfo {
+                    name: "Wi-Fi".to_owned(),
+                    description: "Intel Wi-Fi 6E AX211".to_owned(),
+                    wifi: true,
+                },
+            ],
+        },
     }
 }
 

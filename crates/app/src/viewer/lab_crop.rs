@@ -1,6 +1,8 @@
 //! Lab only: a window that shows one rectangle of a running machine's screen, and nothing else.
 //!
-//! `guesthouse --lab-crop-window NAME X Y W H TITLE` opens it, for the machine of that name or id.
+//! `guesthouse --lab-crop-window NAME X Y W H TITLE [FILE]` opens it, for the machine of that name or
+//! id. A program's window can move in the guest, so a FILE given is read again whenever it changes,
+//! and the "X Y W H" in it moves the rectangle, and resizes the window with it.
 //! It's the first piece of showing one of the guest's programs as a window of its own: the window is
 //! the rectangle at its own size, the pointer lands where it points in the guest, and keys go as they
 //! do in the viewer. Nothing else of the viewer comes along. There is no pill, no capture, no shared
@@ -26,12 +28,16 @@ use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::slot_of;
 use guesthouse_frame_socket::SOCKET_NAME as FRAMES_SOCKET;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 /// The first argument that asks for this window. Nothing a user or the desktop passes looks like it.
 pub const ARGUMENT: &str = "--lab-crop-window";
-const USAGE: &str = "guesthouse --lab-crop-window NAME X Y W H TITLE";
+const USAGE: &str = "guesthouse --lab-crop-window NAME X Y W H TITLE [FILE]";
+/// How often the rectangle's file is looked at. A program moved in the guest can wait that long.
+const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 /// Another id than the app's, or a running app would be asked to activate and this process would end.
 const CROP_APP_ID_SUFFIX: &str = ".LabCrop";
 
@@ -41,6 +47,8 @@ pub struct Request {
     pub machine: String,
     pub crop: Crop,
     pub title: String,
+    /// The file to take the rectangle from whenever it changes.
+    pub follow: Option<PathBuf>,
 }
 
 /// The request in these arguments, the program's name left out. `None` if they don't ask for this
@@ -50,13 +58,17 @@ pub fn request(arguments: &[String]) -> Option<Result<Request, String>> {
     if first != ARGUMENT {
         return None;
     }
-    let [machine, x, y, width, height, title] = rest else {
-        return Some(Err(format!("Usage: {USAGE}")));
+    let (machine, x, y, width, height, title, follow) = match rest {
+        [machine, x, y, width, height, title] => (machine, x, y, width, height, title, None),
+        [machine, x, y, width, height, title, file] => {
+            (machine, x, y, width, height, title, Some(PathBuf::from(file)))
+        }
+        _ => return Some(Err(format!("Usage: {USAGE}"))),
     };
     let Some(crop) = Crop::parse(&[x, y, width, height].map(String::as_str).join(" ")) else {
         return Some(Err(format!("X Y W H are four whole numbers, W and H above 0. Usage: {USAGE}")));
     };
-    Some(Ok(Request { machine: machine.clone(), crop, title: title.clone() }))
+    Some(Ok(Request { machine: machine.clone(), crop, title: title.clone(), follow }))
 }
 
 /// The machine of this name, or of this id.
@@ -151,10 +163,41 @@ fn open_window(
     window.present();
     // The own surface waits for the page it's on to settle. This window has no page to slide in.
     screen.page_shown();
+    if let Some(file) = &request.follow {
+        follow_file(&screen, &window, file.clone(), context.clone());
+    }
     let _ = write_log(
         context,
         &format!("lab crop window: {} at {:?}, titled {}", machine.name, request.crop, request.title),
     );
+}
+
+/// Takes the rectangle from `file` each time it changes, for as long as the window is open. A file
+/// that isn't there or doesn't hold a rectangle leaves the one shown as it is.
+fn follow_file(screen: &Screen, window: &adw::ApplicationWindow, file: PathBuf, context: Arc<Context>) {
+    let screen = screen.clone();
+    let window = window.downgrade();
+    let mut seen: Option<SystemTime> = None;
+    glib::timeout_add_local(FOLLOW_EVERY, move || {
+        if window.upgrade().is_none() {
+            return glib::ControlFlow::Break;
+        }
+        let changed = fs::metadata(&file).and_then(|found| found.modified()).ok();
+        if changed.is_some() && changed != seen {
+            seen = changed;
+            match fs::read_to_string(&file).ok().as_deref().and_then(Crop::parse) {
+                Some(crop) => {
+                    screen.set_crop(Some(crop));
+                    let _ = write_log(&context, &format!("lab crop window: now at {crop:?}"));
+                }
+                None => {
+                    let _ =
+                        write_log(&context, &format!("lab crop window: no X Y W H in {}", file.display()));
+                }
+            }
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 #[cfg(test)]
@@ -177,13 +220,23 @@ mod tests {
         let mut given = arguments("--lab-crop-window Win11 10 20 300 400");
         given.push("Calculator in Windows".to_owned());
         let crop = Crop { x: 10, y: 20, width: 300, height: 400 };
-        let wanted = Request { machine: "Win11".to_owned(), crop, title: "Calculator in Windows".to_owned() };
+        let title = "Calculator in Windows".to_owned();
+        let wanted = Request { machine: "Win11".to_owned(), crop, title, follow: None };
         assert_eq!(request(&given), Some(Ok(wanted)));
+    }
+
+    #[test]
+    fn a_file_after_the_title_is_followed() {
+        let given = arguments("--lab-crop-window Win11 10 20 300 400 Calc /run/cell");
+        let followed = request(&given).and_then(Result::ok).and_then(|request| request.follow);
+        assert_eq!(followed, Some(PathBuf::from("/run/cell")));
     }
 
     #[test]
     fn a_request_that_is_wrong_says_so() {
         assert!(matches!(request(&arguments("--lab-crop-window Win11 10 20 300")), Some(Err(_))));
+        let too_many = arguments("--lab-crop-window Win11 10 20 300 400 Calc /run/cell more");
+        assert!(matches!(request(&too_many), Some(Err(_))));
         assert!(matches!(request(&arguments("--lab-crop-window Win11 10 20 0 400 Calc")), Some(Err(_))));
         assert!(matches!(request(&arguments("--lab-crop-window Win11 a 20 300 400 Calc")), Some(Err(_))));
     }

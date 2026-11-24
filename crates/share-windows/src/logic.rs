@@ -618,7 +618,8 @@ mod tests {
     #[test]
     fn the_command_line_is_read() {
         let Command::Run(args) =
-            parse("--port 564 --share files --read-only --drive t --prefer u --log C:\\x.log --check").unwrap()
+            parse("--port 564 --share files --read-only --drive t --prefer u --log C:\\x.log --check")
+                .unwrap()
         else {
             panic!("not a run")
         };

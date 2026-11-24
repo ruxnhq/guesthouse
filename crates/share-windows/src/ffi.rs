@@ -53,6 +53,11 @@ pub const FLAG_CASE_SENSITIVE_SEARCH: u32 = 1 << 0;
 pub const FLAG_CASE_PRESERVED_NAMES: u32 = 1 << 1;
 pub const FLAG_UNICODE_ON_DISK: u32 = 1 << 2;
 pub const FLAG_READ_ONLY_VOLUME: u32 = 1 << 9;
+/// The `FileContext` WinFsp hands the callbacks is the open handle's own (`UserContext2`). Without
+/// it, it's the file's, which every handle to the file shares, and a context made for each open
+/// and freed at each close, as this program's are, is freed twice once a file is open twice: a test
+/// had Explorer crash all three drives' programs with heap corruption (0xc0000374) that way.
+pub const FLAG_UM_FILE_CONTEXT_IS_USER_CONTEXT2: u32 = 1 << 16;
 
 /// `FSP_FSCTL_VOLUME_INFO`.
 #[repr(C)]

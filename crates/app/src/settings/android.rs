@@ -4,6 +4,7 @@
 use super::{Shared, is_off};
 use crate::rows::{choice_row, explain};
 use adw::prelude::*;
+use guesthouse_app_core::android_setup::PLAY_NOTE;
 use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::render_cards::render_cards;
 use guesthouse_app_core::tasks::Status;
@@ -18,6 +19,7 @@ const VM_MUST_BE_OFF: &str = "The VM must be off to change this.";
 pub struct Android {
     group: Option<adw::PreferencesGroup>,
     card: Option<adw::ComboRow>,
+    play: Option<adw::SwitchRow>,
 }
 
 /// Every card with a render node, by address, with what to call it.
@@ -38,7 +40,7 @@ fn choices(shared: &Shared, chosen: &str) -> Vec<(String, String)> {
 impl Android {
     pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Self {
         if !shared.machine.borrow().android() {
-            return Self { group: None, card: None };
+            return Self { group: None, card: None, play: None };
         }
         let acceleration = adw::ActionRow::builder().title("GPU Acceleration").subtitle(SHORT).build();
         explain(&acceleration, NOTE);
@@ -57,7 +59,19 @@ impl Android {
             saving.save();
         });
         group.add(&row);
-        Self { group: Some(group.clone()), card: Some(row) }
+        let play = adw::SwitchRow::builder()
+            .title("Play Services")
+            .subtitle("Through microG, from the next start")
+            .active(shared.machine.borrow().android_play)
+            .build();
+        explain(&play, PLAY_NOTE);
+        let saving = shared.clone();
+        play.connect_active_notify(move |play| {
+            saving.machine.borrow_mut().android_play = play.is_active();
+            saving.save();
+        });
+        group.add(&play);
+        Self { group: Some(group.clone()), card: Some(row), play: Some(play) }
     }
 
     pub fn set_status(&self, status: &Status) {
@@ -65,6 +79,9 @@ impl Android {
         let off = is_off(status);
         if let Some(card) = &self.card {
             card.set_sensitive(off);
+        }
+        if let Some(play) = &self.play {
+            play.set_sensitive(off);
         }
         group.set_description((!off).then_some(VM_MUST_BE_OFF));
     }

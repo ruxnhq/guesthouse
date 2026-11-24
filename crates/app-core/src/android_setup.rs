@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const ANDROID_TITLE: &str = "Android";
+/// What Play services through microG means, for New Machine and the machine's settings.
+pub const PLAY_NOTE: &str = "microG stands in for Google's Play services, so apps that need them sign in, get \
+                         notifications and find your location. Apps come from Aurora Store or F-Droid rather \
+                         than the Play Store, and apps that check Play Integrity may refuse to run. It can be \
+                         turned off and on later in the machine's settings, and keeps its data.";
 pub const ANDROID_SIZES: Sizes = Sizes { cores: 4, ram: 8, disk: 32 };
 /// Android's data partition, for its apps and what they keep. Games can want a lot of it.
 pub const MIN_ANDROID_DATA_GIB: u32 = 8;

@@ -734,6 +734,53 @@ pub fn sorted_names(folder: &Path) -> Vec<String> {
     names
 }
 
+/// Fields a machine has from how it's made, which settings chosen before it's made don't replace.
+const MADE_FIELDS: [&str; 10] =
+    ["name", "disk", "vars", "iso", "installing", "kind", "opencore", "android_data", "disk_folder", "user"];
+
+/// What changed between two versions of a machine's settings, field by field: a new value, or `None` for
+/// a field gone back to its default, which the file leaves out. Fields a machine gets from how it's made
+/// aren't among them.
+pub type SettingsChanges = Vec<(String, Option<serde_json::Value>)>;
+
+/// The settings changed from `before` to `after`, as New Machine's draft of a machine's settings gives
+/// them, to be applied once the machine is made.
+pub fn settings_changes(before: &Machine, after: &Machine) -> SettingsChanges {
+    let as_map = |machine: &Machine| match serde_json::to_value(machine) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    let (before, after) = (as_map(before), as_map(after));
+    let mut changes: SettingsChanges = after
+        .iter()
+        .filter(|(key, value)| before.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), Some(value.clone())))
+        .collect();
+    changes.extend(before.keys().filter(|key| !after.contains_key(*key)).map(|key| (key.clone(), None)));
+    changes.retain(|(key, _)| !MADE_FIELDS.contains(&key.as_str()));
+    changes
+}
+
+impl Machine {
+    /// This machine with `changes` applied: a field set, or taken back to its default.
+    pub fn with_changes(&self, changes: &SettingsChanges) -> Result<Machine> {
+        let mut map = match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return Err(Failure::new("The machine's settings could not be read.")),
+        };
+        for (key, value) in changes {
+            match value {
+                Some(value) => map.insert(key.clone(), value.clone()),
+                None => map.remove(key),
+            };
+        }
+        let mut changed: Machine = serde_json::from_value(serde_json::Value::Object(map))
+            .map_err(|error| Failure(format!("The settings chosen could not be applied: {error}")))?;
+        changed.id.clone_from(&self.id);
+        Ok(changed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1337,5 +1384,18 @@ mod tests {
         assert_eq!(id_from_argument(&context, &format!("{}/", folder.display())).unwrap(), "windowsarc");
         let elsewhere = id_from_argument(&context, "/tmp/windowsarc").unwrap_err();
         assert!(elsewhere.0.contains("folder name"), "{}", elsewhere.0);
+    }
+    #[test]
+    fn settings_chosen_before_a_machine_is_made_are_applied_to_it_and_nothing_it_was_made_with() {
+        let seed = Machine::new("", "Draft", "", "");
+        let chosen = Machine { passt: true, android_play: true, name: "Other".into(), ..seed.clone() };
+        let changes = settings_changes(&seed, &chosen);
+        let made = Machine { tpm: true, ..sample() };
+        let applied = made.with_changes(&changes).unwrap();
+        assert!(applied.passt && applied.android_play && applied.tpm, "chosen ones set, made ones kept");
+        assert_eq!((applied.name.as_str(), applied.id.as_str()), (made.name.as_str(), made.id.as_str()));
+        let back = settings_changes(&chosen, &seed);
+        let undone = applied.with_changes(&back).unwrap();
+        assert!(!undone.passt && !undone.android_play, "a setting taken back to its default goes back");
     }
 }

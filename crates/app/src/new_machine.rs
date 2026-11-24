@@ -6,12 +6,13 @@ use crate::disk_place_row::DiskPlaceRow;
 use crate::driver_row::DriverRow;
 use crate::recipe_dialog;
 use crate::rows::{bottom_bar, choice_row, number_row, row_button};
+use crate::settings::SettingsDialog;
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::account::{default_user, name_problem, password_problem};
 use guesthouse_app_core::actions::android_card_of;
 use guesthouse_app_core::android_setup::{
-    ANDROID_SIZES, ANDROID_TITLE, MIN_ANDROID_DATA_GIB, NewAndroid, create_android,
+    ANDROID_SIZES, ANDROID_TITLE, MIN_ANDROID_DATA_GIB, NewAndroid, PLAY_NOTE, create_android,
 };
 use guesthouse_app_core::card_choice::{CardChoice, default_choice, windows_card_choices};
 use guesthouse_app_core::defaults::{NO_GPU, account_name, sizes_for_disc, suggested_name};
@@ -25,6 +26,7 @@ use guesthouse_app_core::library::{
     Extras, MAX_DISK_GIB, MIN_PLAIN_DISK_GIB, MIN_WINDOWS_DISK_GIB, NewMachine, create_with,
 };
 use guesthouse_app_core::machine::{Kind, MIN_CORES, MIN_RAM_GIB, Machine};
+use guesthouse_app_core::machine::{SettingsChanges, settings_changes};
 use guesthouse_app_core::macos_setup::{
     MACOS_SIZES, MACOS_TITLE, MIN_MACOS_DISK_GIB, NewMac, create_macos, how_it_installs,
 };
@@ -70,10 +72,8 @@ const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
 const ANDROID_ROW_NOTE: &str = "Choose the folder of an image of Android for VMs.";
 const NO_DISC_YET: &str = "None chosen yet.";
-const PLAY_NOTE: &str = "microG stands in for Google's Play services, so apps that need them sign in, get \
-                         notifications and find your location. Apps come from Aurora Store or F-Droid rather \
-                         than the Play Store, and apps that check Play Integrity may refuse to run. It can be \
-                         turned off and on later in the machine's settings, and keeps its data.";
+/// What a draft's files are called, so its settings show what a machine of its kind has.
+const DRAFT_MARK: &str = "draft";
 const DETAILS: &str = "details";
 const HEADING_SPACING: i32 = 4;
 const HEADING_MARGIN: i32 = 12;
@@ -100,6 +100,8 @@ struct Parts {
     image_row: adw::ActionRow,
     /// Play services through microG, for Android.
     play: adw::SwitchRow,
+    /// What was changed there, applied to the machine once it's made.
+    settings_changes: RefCell<SettingsChanges>,
     /// The group with the disc or image, which macOS has no need of.
     disc: adw::PreferencesGroup,
     /// The two steps: what the machine runs, then its details.
@@ -180,6 +182,20 @@ fn hardware_row(group: &adw::PreferencesGroup, title: &str, lowest: f64, highest
     let row = number_row(title, lowest, lowest, highest);
     group.add(&row);
     row
+}
+
+/// The machine as made, with the settings chosen before it was made applied and saved.
+fn apply_changes(
+    context: &guesthouse_app_core::context::Context,
+    made: Machine,
+    changes: &SettingsChanges,
+) -> guesthouse_app_core::failure::Result<Machine> {
+    if changes.is_empty() {
+        return Ok(made);
+    }
+    let changed = made.with_changes(changes)?;
+    changed.save(context)?;
+    Ok(changed)
 }
 
 /// What the first step offers.
@@ -355,6 +371,13 @@ impl NewMachineDialog {
         let disk = hardware_row(&hardware, "Disk in GiB", MIN_PLAIN_DISK_GIB.into(), MAX_DISK_GIB.into());
         disk.set_subtitle(DISK_NOTE);
         let disk_place = DiskPlaceRow::new(window, &hardware);
+        let all_settings = adw::ActionRow::builder()
+            .title("All Settings")
+            .subtitle("Display, network, sharing and more")
+            .build();
+        let open_settings = row_button("Open");
+        all_settings.add_suffix(&open_settings);
+        hardware.add(&all_settings);
         let account = adw::PreferencesGroup::builder().title("Account").visible(false).build();
         page.add(&account);
         let user = adw::EntryRow::builder().title("User name").build();
@@ -456,6 +479,7 @@ impl NewMachineDialog {
             iso_row,
             image_row,
             play,
+            settings_changes: RefCell::default(),
             disc,
             navigation,
             details,
@@ -509,6 +533,8 @@ impl NewMachineDialog {
         });
         let handle = this.clone();
         choose_android.connect_clicked(move |_| handle.on_choose_android());
+        let handle = this.clone();
+        open_settings.connect_clicked(move |_| handle.open_all_settings());
         let dialog = this.0.dialog.clone();
         cancel_choice.connect_clicked(move |_| {
             dialog.close();
@@ -692,10 +718,11 @@ impl NewMachineDialog {
         };
         let context = parts.window.context();
         let working = context.clone();
+        let changes = self.0.settings_changes.borrow().clone();
         let this = self.clone();
         in_background(
             &context,
-            move || create_android(&working, &new),
+            move || create_android(&working, &new).and_then(|made| apply_changes(&working, made, &changes)),
             move |result| match result {
                 Ok(machine) => {
                     this.0.window.add_machine(machine);
@@ -720,10 +747,11 @@ impl NewMachineDialog {
         };
         let context = parts.window.context();
         let working = context.clone();
+        let changes = self.0.settings_changes.borrow().clone();
         let this = self.clone();
         in_background(
             &context,
-            move || create_macos(&working, &new),
+            move || create_macos(&working, &new).and_then(|made| apply_changes(&working, made, &changes)),
             move |result| match result {
                 Ok(machine) => {
                     let window = &this.0.window;
@@ -783,9 +811,61 @@ impl NewMachineDialog {
         self.0.verdict_text.set_visible(!subtitle.is_empty());
     }
 
+    /// The machine as it will be made, as far as this dialog knows it, for its settings to start from.
+    fn draft_seed(&self) -> Machine {
+        let parts = &self.0;
+        let kind = parts.iso.borrow().as_ref().map_or(Kind::Plain, |iso| iso.kind);
+        let android = parts.android_image.borrow().is_some();
+        let macos = parts.macos.get();
+        Machine {
+            kind: if android || macos { Kind::Plain } else { kind },
+            cores: parts.cores.value() as u32,
+            ram_gib: parts.ram.value() as u32,
+            android_data: if android { DRAFT_MARK.to_owned() } else { String::new() },
+            android_play: android && parts.play.is_active(),
+            opencore: if macos { DRAFT_MARK.to_owned() } else { String::new() },
+            ..Machine::new("", parts.name.text().trim(), "", "")
+        }
+    }
+
+    /// Every setting of the machine to be, on the settings' own pages. What changes there is kept and
+    /// applied once the machine is made; the sizes and the switches on this page follow it.
+    fn open_all_settings(&self) {
+        let parts = &self.0;
+        parts.cores.update();
+        parts.ram.update();
+        let seed = self.draft_seed();
+        let start = seed.with_changes(&parts.settings_changes.borrow()).unwrap_or_else(|_| seed.clone());
+        let access = Access {
+            remote_desktop: Some(parts.remote_desktop.is_active()),
+            ssh: Some(parts.ssh.is_active()),
+        };
+        let settings = SettingsDialog::draft(&parts.window, start, access);
+        settings.present_over(&parts.dialog);
+        let this = self.clone();
+        let reading = settings.clone();
+        settings.dialog().connect_closed(move |_| {
+            let edited = reading.machine();
+            let parts = &this.0;
+            let mut changes = settings_changes(&seed, &edited);
+            // This page's own rows hold these, and stay what's used.
+            changes.retain(|(key, _)| !matches!(key.as_str(), "cores" | "ram_gib" | "android_play"));
+            *parts.settings_changes.borrow_mut() = changes;
+            parts.cores.set_value(edited.cores.into());
+            parts.ram.set_value(edited.ram_gib.into());
+            parts.play.set_active(edited.android_play);
+            if let Some(access) = reading.access() {
+                parts.remote_desktop.set_active(access.remote_desktop.unwrap_or(false));
+                parts.ssh.set_active(access.ssh.unwrap_or(false));
+            }
+        });
+    }
+
     /// The first step's choice: the details for that kind, and for a disc or an image, the chooser at once.
     fn pick(&self, kind: Pick) {
         let parts = &self.0;
+        // Settings chosen for another kind don't carry over.
+        parts.settings_changes.borrow_mut().clear();
         if kind == Pick::Import {
             parts.dialog.close();
             crate::import::ask(&parts.window);
@@ -1132,10 +1212,13 @@ impl NewMachineDialog {
         });
         let extras = Extras { lean, scan_exclusions: skipped, ..extras };
         let working = context.clone();
+        let changes = self.0.settings_changes.borrow().clone();
         let this = self.clone();
         in_background(
             &context,
-            move || create_with(&working, &new, &extras),
+            move || {
+                create_with(&working, &new, &extras).and_then(|made| apply_changes(&working, made, &changes))
+            },
             move |result| match result {
                 Ok(machine) => {
                     let window = &this.0.window;

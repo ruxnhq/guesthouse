@@ -5,6 +5,7 @@
 //! as one that stopped reading leaves it, is let go.
 
 use crate::store::{Settings, Store};
+use guesthouse_control::report::clock;
 use guesthouse_control::{Event, State, address_in};
 use guesthouse_host_windows::events::Sink;
 use std::collections::{BTreeMap, VecDeque};
@@ -14,7 +15,6 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How many of a machine's events a window that starts watching is sent first.
 const HISTORY: usize = 500;
@@ -106,7 +106,7 @@ impl Machines {
             ((address_changed && entry.state != State::Preparing).then(|| entry.settings.clone()), kept)
         };
         // The file is written with the machines free, as a slow disk must not hold up the others.
-        keep_event(&self.store.events(name), &self.store.events_before(name), now(), &kept);
+        keep_event(&self.store.events(name), &self.store.events_before(name), clock::now(), &kept);
         if let Some(settings) = saved
             && let Err(error) = self.store.save(name, &settings)
         {
@@ -148,33 +148,7 @@ fn event_line(seconds: u64, event: &Event) -> Option<String> {
     let kind = value.get("kind")?.as_str()?;
     let text = value.get("text")?.as_str()?;
     let text = text.replace(['\r', '\n'], " ");
-    Some(format!("{} {kind} {text}\n", utc(seconds)))
-}
-
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs())
-}
-
-/// Seconds since 1970 as `YYYY-MM-DD HH:MM:SS UTC`.
-fn utc(seconds: u64) -> String {
-    let days = (seconds / 86_400) as i64;
-    let rest = seconds % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC", rest / 3600, rest % 3600 / 60, rest % 60)
-}
-
-/// The year, month and day that is `days` after 1970-01-01, in the proleptic Gregorian calendar.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 } as u32;
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
+    Some(format!("{} {kind} {text}\n", clock::utc(seconds)))
 }
 
 struct Told {
@@ -237,14 +211,6 @@ mod tests {
         assert_eq!(machines.lock()["win"].settings.address.as_deref(), Some("172.29.1.2"));
         assert_eq!(machines.store.load()[0].1.address.as_deref(), Some("172.29.1.2"));
         let _ = std::fs::remove_dir_all(machines.store.root());
-    }
-
-    #[test]
-    fn a_time_is_written_in_utc() {
-        assert_eq!(utc(0), "1970-01-01 00:00:00 UTC");
-        assert_eq!(utc(951_782_400 + 86_399), "2000-02-29 23:59:59 UTC");
-        assert_eq!(utc(1_767_225_600), "2026-01-01 00:00:00 UTC");
-        assert_eq!(utc(1_709_251_199), "2024-02-29 23:59:59 UTC");
     }
 
     #[test]

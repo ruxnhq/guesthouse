@@ -6,21 +6,29 @@
 //! - `answer` reads the server's answer to a sent report.
 //! - `kind` and `summary` are what sorts a report before anyone opens it.
 //! - `parts` is how the service's files come over the pipe, and are put back together.
+//! - `stage` makes the files from what was gathered, `send` is how they are posted, and `issue` is
+//!   the link that opens an issue about a sent report.
+//! - `clock` writes times in UTC.
 //! - `scrub` and `trim` make each file fit to send, and `manifest` says what the bundle holds.
 //!
 //! Nothing here calls into Windows, so it builds and is tested anywhere.
 
 pub mod answer;
+pub mod clock;
 pub mod contract;
+pub mod issue;
 pub mod kind;
 pub mod manifest;
 pub mod parts;
 pub mod scrub;
+pub mod send;
+pub mod stage;
 pub mod summary;
 pub mod trim;
 
 pub use answer::read_answer;
 pub use contract::{KEPT_DAYS, MOST_REPORT_BYTES, NEW_ISSUE, report_address};
+pub use issue::issue_link;
 pub use kind::ProblemKind;
 pub use manifest::{MANIFEST_FILE, manifest};
 pub use parts::{PIECE_BYTES, Parts, pieces};

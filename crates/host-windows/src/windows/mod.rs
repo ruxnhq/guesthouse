@@ -43,7 +43,7 @@ pub fn machine(
         network,
         guest: record.guest,
         console_access: settings.console_access.clone(),
-        share: settings.share.clone(),
+        shares: settings.shares.clone(),
     }
 }
 
@@ -58,8 +58,8 @@ const SHARE_PROGRAM_NAME: &str = "guesthouse-guest-share.exe";
 const WINFSP_INSTALLER_NAME: &str = "winfsp.msi";
 
 /// Where a Windows guest finds what the host shares: `report.ps1` reads this file, from the root of
-/// its Windows volume, mounts the share as a drive and links the drive onto the desktop. Its one
-/// line is `crate::guest::share_marker`'s. With no share it isn't there.
+/// its Windows volume, mounts each share as a drive and links the drive onto the desktop. Its lines
+/// are `crate::guest::share_marker`'s. With no share it isn't there.
 pub const SHARE_FILE: &str = r"Guesthouse\share.txt";
 
 /// Lets a stopped machine's disk grow to `size_gb`. The guest's own last partition is grown into
@@ -181,7 +181,7 @@ fn refresh_windows_disk(
     disk: &Path,
     card: Option<&Card>,
     nvapi_wrapper: bool,
-    share: Option<&Share>,
+    shares: &[Share],
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let setup = screen_setup();
@@ -205,23 +205,23 @@ fn refresh_windows_disk(
     let report = windows.root.join(crate::guest::REPORT_PATH);
     std::fs::write(&report, crate::guest::REPORT)
         .map_err(|error| format!("{}: {error}", report.display()))?;
-    give_share(&windows.root, share, sink)?;
+    give_share(&windows.root, shares, sink)?;
     match setup {
         Some(setup) => give_screen(disk, &windows.root, &setup, card, sink),
         None => Ok(()),
     }
 }
 
-/// Tells the guest of its share, with the marker `report.ps1` reads, and gives it the program that
-/// mounts the share and WinFsp's installer. With no share the marker goes. A program or installer
-/// the host hasn't got is said and leaves the guest without a drive, never without a boot.
-fn give_share(root: &Path, share: Option<&Share>, sink: &dyn Sink) -> Result<(), String> {
+/// Tells the guest of its shares, with the marker `report.ps1` reads, and gives it the program that
+/// mounts them and WinFsp's installer. With no share the marker goes. A program or installer the
+/// host hasn't got is said and leaves the guest without a drive, never without a boot.
+fn give_share(root: &Path, shares: &[Share], sink: &dyn Sink) -> Result<(), String> {
     let marker = root.join(SHARE_FILE);
-    let Some(share) = share else {
+    if shares.is_empty() {
         let _ = std::fs::remove_file(&marker);
         return Ok(());
-    };
-    std::fs::write(&marker, crate::guest::share_marker(share.read_only))
+    }
+    std::fs::write(&marker, crate::guest::share_marker(shares))
         .map_err(|error| format!("{}: {error}", marker.display()))?;
     let folder = root.join(SHARE_FOLDER);
     let beside = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.to_path_buf()));

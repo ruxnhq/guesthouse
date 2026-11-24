@@ -651,40 +651,16 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
     ));
     rows.push(network_row(main, draft, open && draft.network, context));
     rows.push(forwards_row(draft, open && draft.network, context));
-    rows.push(row_under(
-        glyph::SHARE,
-        "Shared folder",
-        share_words(Some(machine.system)),
-        share_view(
-            TextBox::new()
-                .placeholder_text("None. A folder of this PC's to share")
-                .text(draft.share_folder.as_str())
-                .is_enabled(open)
-                .automation_name("Shared folder")
-                .on_text_changed(context.callback(|text: Rc<str>| Message::SetShareFolder(text.to_string()))),
-            button(
-                "Browse…",
-                glyph::FOLDER,
-                context.message(Message::BrowseFolder(FolderFor::Machine)),
-                false,
-            )
-            .is_enabled(open),
-            CheckBox::new()
-                .content("Read-only")
-                .is_checked(draft.share_read_only)
-                .is_enabled(open)
-                .on_is_checked_changed(context.callback(Message::SetShareReadOnly)),
-        ),
-    ));
+    rows.push(shares_row(machine.system, draft, open, context));
     rows.push(disk_row(machine, draft, stopped, context));
 
     let changed = draft.changed(machine);
     let save = button("Save", glyph::SAVE, context.message(Message::SaveSettings), true)
-        .is_enabled(open && changed && draft.settings().is_some() && draft.forwards_problem().is_none());
+        .is_enabled(open && changed && draft.settings().is_some() && draft.problem().is_none());
     let undo = button("Undo", glyph::UNDO, context.message(Message::UndoSettings), false)
         .is_enabled(open && (changed || draft.refused.is_some()));
     let mut foot: Vec<View> = vec![save.into(), undo.into()];
-    let problem = draft.forwards_problem();
+    let problem = draft.problem();
     let (words, bad) = match (&draft.refused, stopped) {
         (Some(reason), _) => (Some(reason.as_str()), true),
         (None, false) => (Some("Its settings change while it's off. Stop it first."), false),
@@ -815,6 +791,71 @@ fn forwards_row(draft: &Draft, enabled: bool, context: &ViewContext<Main>) -> Vi
         if bridged { BRIDGED_FORWARDS_NOTE } else { FORWARDS_NOTE },
         StackPanel::new().spacing(8.0).children(rows).into(),
     )
+}
+
+/// The shared folders: a folder's field, its Browse button, its read-only box and its remove button
+/// each, and one to add.
+fn shares_row(system: System, draft: &Draft, enabled: bool, context: &ViewContext<Main>) -> View {
+    let mut rows: Vec<View> = Vec::new();
+    for (place, share) in draft.shares.iter().enumerate() {
+        let field = TextBox::new()
+            .placeholder_text("A folder of this PC's to share")
+            .text(share.folder.as_str())
+            .is_enabled(enabled)
+            .automation_name("Shared folder")
+            .on_text_changed(
+                context.callback(move |text: Rc<str>| Message::SetShareFolder(place, text.to_string())),
+            );
+        let browse = button(
+            "Browse…",
+            glyph::FOLDER,
+            context.message(Message::BrowseFolder(FolderFor::Machine(place))),
+            false,
+        )
+        .is_enabled(enabled);
+        let read_only = CheckBox::new()
+            .content("Read-only")
+            .is_checked(share.read_only)
+            .is_enabled(enabled)
+            .vertical_alignment(VerticalAlignment::Center)
+            .on_is_checked_changed(
+                context.callback(move |checked| Message::SetShareReadOnly(place, checked)),
+            );
+        let remove = square(glyph::CLOSE, "Remove the shared folder")
+            .is_enabled(enabled)
+            .on_click(context.message(Message::RemoveShare(place)));
+        let line = Grid::new()
+            .columns([GridLength::STAR, GridLength::Auto, GridLength::Auto, GridLength::Auto])
+            .column_spacing(8.0)
+            .children((field, browse.grid_column(1), read_only.grid_column(2), remove.grid_column(3)));
+        rows.push(line.into());
+    }
+    let add = button("Add a folder", glyph::ADD, context.message(Message::AddShare), false)
+        .is_enabled(enabled && draft.shares.len() < guesthouse_control::MOST_SHARES);
+    rows.push(add.into());
+    if let Some(problem) = draft.shares_problem().filter(|_| !draft.shares.is_empty()) {
+        rows.push(caption(&problem).foreground(ThemeBrush::SystemCritical).into());
+    }
+    row_under(
+        glyph::SHARE,
+        "Shared folders",
+        shares_words(system),
+        StackPanel::new().spacing(8.0).children(rows).into(),
+    )
+}
+
+/// Where a machine's shared folders are in the guest.
+fn shares_words(system: System) -> &'static str {
+    match system {
+        System::Windows => {
+            "Each is a drive of its own from S:, linked on the guest's desktop as Shared folder, Shared folder 2 \
+             and on, from its next start. The machine's own account is let into each folder. At most 8."
+        }
+        System::Linux => {
+            "At /mnt/shared in the guest, then /mnt/shared2 and on, from its next start. The machine's own \
+             account is let into each folder. At most 8."
+        }
+    }
 }
 
 /// What a forward does, which needs the shared network and a running machine.

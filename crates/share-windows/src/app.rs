@@ -183,10 +183,15 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
 
     // SAFETY: plain call.
     let used = unsafe { GetLogicalDrives() };
-    let drive = match &args.drive {
-        Some(drive) => drive.clone(),
-        None => logic::first_free_drive(used).ok_or("every drive from S: to Z: is in use")?,
+    // A drive asked for is the only one tried. Otherwise each free one from S: is, in turn, as
+    // another folder's copy of this program may take one between the look and the mount.
+    let drives = match &args.drive {
+        Some(drive) => vec![drive.clone()],
+        None => logic::free_drives(used),
     };
+    if drives.is_empty() {
+        return Err("every drive from S: to Z: is in use".into());
+    }
     let security = security_descriptor(args.read_only)?;
     let shared = Shared::install(client, root, args.read_only, &args.share, security, api);
     let api = shared.api();
@@ -195,11 +200,25 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
     // SAFETY: the callbacks in `fs::interface` are written for WinFsp's threads.
     let file_system = unsafe { api.create(DISK_DEVICE_NAME, &params, fs::interface()) }
         .map_err(|s| format!("WinFsp cannot create the file system (status {s:#010x})"))?;
-    // SAFETY: `file_system` is live until it is deleted below.
-    if let Err(s) = unsafe { api.set_mount_point(file_system, &drive) } {
+    let mut mounted = None;
+    let mut refused = Vec::new();
+    for drive in &drives {
+        // SAFETY: `file_system` is live until it is deleted below.
+        match unsafe { api.set_mount_point(file_system, drive) } {
+            Ok(()) => {
+                mounted = Some(drive.clone());
+                break;
+            }
+            Err(s) => refused.push(format!("{drive} (status {s:#010x})")),
+        }
+    }
+    let Some(drive) = mounted else {
         // SAFETY: nothing runs yet.
         unsafe { api.delete(file_system) };
-        return Err(format!("WinFsp cannot mount at {drive} (status {s:#010x})"));
+        return Err(format!("WinFsp cannot mount at {}", refused.join(", ")));
+    };
+    if !refused.is_empty() {
+        log.line(&format!("WinFsp could not mount at {}, so tried the next", refused.join(", ")));
     }
     // SAFETY: as above.
     if let Err(s) = unsafe { api.start_dispatcher(file_system) } {

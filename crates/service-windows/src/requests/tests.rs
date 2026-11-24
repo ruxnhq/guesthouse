@@ -177,7 +177,7 @@ fn new_machine(setup: &Setup, name: &str) -> NewMachine {
         user: String::new(),
         tpm: true,
         network: true,
-        share: None,
+        shares: Vec::new(),
     }
 }
 
@@ -390,7 +390,7 @@ fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
         nvapi_wrapper: false,
         tpm: true,
         network: true,
-        share: None,
+        shares: Vec::new(),
         network_mode: NetworkMode::Shared,
         forwards: Vec::new(),
         nested_virtualization: false,
@@ -421,7 +421,7 @@ fn hardware(memory_mb: u64, card: Card) -> MachineSettings {
         nvapi_wrapper: true,
         tpm: true,
         network: true,
-        share: None,
+        shares: Vec::new(),
         network_mode: NetworkMode::Shared,
         forwards: Vec::new(),
         nested_virtualization: false,
@@ -555,7 +555,7 @@ fn a_new_machine_is_made_with_its_user_and_edition_and_boots_with_its_switches()
         edition: " Windows 11 Home ".into(),
         tpm: false,
         network: false,
-        share: Some(share.clone()),
+        shares: vec![share.clone()],
         ..new_machine(&setup, "win")
     };
     assert_eq!(ask(service, Request::Create { machine }).last(), Some(&Answer::Done { reason: None }));
@@ -563,15 +563,15 @@ fn a_new_machine_is_made_with_its_user_and_edition_and_boots_with_its_switches()
     assert_eq!((prepared.user.as_str(), prepared.edition.as_str()), ("pat", "Windows 11 Home"));
     let shown = &status(service)[0];
     assert_eq!(
-        (shown.tpm, shown.network, &shown.share, shown.size_gb),
-        (false, false, &Some(share), Some(128))
+        (shown.tpm, shown.network, &shown.shares, shown.size_gb),
+        (false, false, &vec![share], Some(128))
     );
 
     ask(service, Request::Start { name: "win".into() });
     wait_for(service, "win", State::Running);
     let booted = service.work.booted.lock().unwrap()[0].clone();
     assert_eq!((booted.tpm, booted.network), (false, false));
-    assert_eq!(booted.share, Some(host_settings::Share { folder, read_only: true }));
+    assert_eq!(booted.shares, [host_settings::Share { folder, read_only: true, slot: 0 }]);
     ask(service, Request::Stop { name: "win".into() });
     wait_for(service, "win", State::Stopped);
 }
@@ -593,9 +593,9 @@ fn a_user_edition_or_share_the_rules_refuse_makes_no_machine() {
     assert!(refused(NewMachine { user: "Administrator".into(), ..new_machine(&setup, "x") }));
     assert!(refused(NewMachine { edition: r"..\x".into(), ..new_machine(&setup, "x") }));
     let missing = Share { folder: setup.root.join("missing"), read_only: false };
-    assert!(refused(NewMachine { share: Some(missing), ..new_machine(&setup, "x") }));
+    assert!(refused(NewMachine { shares: vec![missing], ..new_machine(&setup, "x") }));
     let remote = Share { folder: PathBuf::from(r"\\server\share"), read_only: false };
-    assert!(refused(NewMachine { share: Some(remote), ..new_machine(&setup, "x") }));
+    assert!(refused(NewMachine { shares: vec![remote], ..new_machine(&setup, "x") }));
     assert!(status(&setup.service).is_empty());
 }
 
@@ -605,8 +605,8 @@ fn a_share_the_user_may_not_open_is_refused_on_a_change_but_an_unchanged_one_isn
     let service = &setup.service;
     let folder = setup.root.join("shared");
     fs::create_dir_all(&folder).unwrap();
-    let share = Some(Share { folder, read_only: false });
-    let machine = NewMachine { share: share.clone(), ..new_machine(&setup, "win") };
+    let share = vec![Share { folder, read_only: false }];
+    let machine = NewMachine { shares: share.clone(), ..new_machine(&setup, "win") };
     ask(service, Request::Create { machine });
     let asked_by_another = |hardware: MachineSettings| {
         let (answers, received) = channel();
@@ -614,16 +614,62 @@ fn a_share_the_user_may_not_open_is_refused_on_a_change_but_an_unchanged_one_isn
         service.answer(request, &mut Window { answers, readable: false, gone: false });
         received.try_iter().collect::<Vec<_>>()
     };
-    let other = Some(Share { folder: setup.root.clone(), read_only: false });
+    let mut other = share.clone();
+    other.push(Share { folder: setup.root.clone(), read_only: false });
     assert!(matches!(
-        asked_by_another(MachineSettings { share: other, ..hardware(8192, Card::Default) }).as_slice(),
+        asked_by_another(MachineSettings { shares: other, ..hardware(8192, Card::Default) }).as_slice(),
         [Answer::Refused { .. }]
     ));
-    let kept = MachineSettings { share: share.clone(), network: false, ..hardware(16384, Card::Default) };
+    let kept = MachineSettings { shares: share.clone(), network: false, ..hardware(16384, Card::Default) };
     assert_eq!(asked_by_another(kept), [Answer::Ok]);
     assert_eq!((status(service)[0].memory_mb, status(service)[0].network), (16384, false));
     assert_eq!(asked_by_another(hardware(16384, Card::Default)), [Answer::Ok], "a share can always go");
-    assert_eq!(status(service)[0].share, None);
+    assert_eq!(status(service)[0].shares, []);
+}
+
+#[test]
+fn a_machine_shares_several_folders_and_one_gone_leaves_its_slot_empty() {
+    let setup = setup("several-shares", Pretend::default());
+    let service = &setup.service;
+    let folders: Vec<PathBuf> = ["a", "b", "c"].iter().map(|name| setup.root.join(name)).collect();
+    for folder in &folders {
+        fs::create_dir_all(folder).unwrap();
+    }
+    let shares: Vec<Share> =
+        folders.iter().map(|folder| Share { folder: folder.clone(), read_only: false }).collect();
+    let twice = vec![shares[0].clone(), shares[0].clone()];
+    assert!(matches!(
+        ask(service, Request::Create { machine: NewMachine { shares: twice, ..new_machine(&setup, "win") } })
+            .as_slice(),
+        [Answer::Refused { .. }]
+    ));
+    let machine = NewMachine { shares: shares.clone(), ..new_machine(&setup, "win") };
+    assert_eq!(ask(service, Request::Create { machine }).last(), Some(&Answer::Done { reason: None }));
+    assert_eq!(status(service)[0].shares, shares);
+
+    fs::remove_dir(&folders[1]).unwrap();
+    ask(service, Request::Start { name: "win".into() });
+    wait_for(service, "win", State::Running);
+    let booted = service.work.booted.lock().unwrap()[0].clone();
+    let slots: Vec<(PathBuf, usize)> =
+        booted.shares.iter().map(|share| (share.folder.clone(), share.slot)).collect();
+    assert_eq!(slots, [(folders[0].clone(), 0), (folders[2].clone(), 2)]);
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+#[test]
+fn a_machine_kept_with_one_share_reads_as_a_list_of_it() {
+    let setup = setup("kept-share", Pretend::default());
+    let store = setup.service.machines.store.clone();
+    store.make("win").unwrap();
+    let folder = setup.root.join("old");
+    let older = serde_json::json!({"memory_mb": 8192, "processors": 4, "card": {"card": "default"},
+        "share": {"folder": folder, "read_only": true}});
+    let settings: crate::store::Settings = serde_json::from_value(older).unwrap();
+    assert_eq!(settings.shares, [Share { folder, read_only: true }]);
+    let written = serde_json::to_value(&settings).unwrap();
+    assert!(written.get("share").is_none() && written["shares"].is_array());
 }
 
 #[test]
@@ -666,19 +712,17 @@ fn a_share_is_checked_again_as_whoever_starts_the_machine() {
     let folder = setup.root.join("shared");
     fs::create_dir_all(&folder).unwrap();
     let machine =
-        NewMachine { share: Some(Share { folder, read_only: false }), ..new_machine(&setup, "win") };
+        NewMachine { shares: vec![Share { folder, read_only: false }], ..new_machine(&setup, "win") };
     ask(service, Request::Create { machine });
     let (answers, received) = channel();
     service
         .answer(Request::Start { name: "win".into() }, &mut Window { answers, readable: false, gone: false });
     assert_eq!(received.try_iter().collect::<Vec<_>>(), [Answer::Ok], "it still starts");
     wait_for(service, "win", State::Running);
-    assert_eq!(service.work.booted.lock().unwrap()[0].share, None, "but shares nothing");
+    assert_eq!(service.work.booted.lock().unwrap()[0].shares, [], "but shares nothing");
     let (history, _) = service.machines().watch("win").unwrap();
     assert!(
-        history
-            .iter()
-            .any(|event| matches!(event, Event::Problem(words) if words.contains("shares no folder")))
+        history.iter().any(|event| matches!(event, Event::Problem(words) if words.contains("doesn't share")))
     );
     ask(service, Request::Stop { name: "win".into() });
     wait_for(service, "win", State::Stopped);

@@ -1,7 +1,7 @@
 //! What a machine is given, and the HCS document that asks for it. Nothing here touches the host, so
 //! it's tested on any system.
 
-use crate::settings::{SHARE_NAME, Share};
+use crate::settings::Share;
 use guesthouse_hcs::schema::{
     Attachment, AttachmentType, Chipset, ComPort, ComputeSystem, ComputeTopology, Devices, Empty, GuestState,
     Isolation, IsolationType, Memory, NetworkAdapter, PLAN9_LINUX_METADATA, PLAN9_PORT, PLAN9_READ_ONLY,
@@ -48,9 +48,9 @@ pub struct Machine {
     pub more_disks: Vec<Attachment>,
     /// Who may open the machine's console, as SIDs' text. With nobody, it has no console.
     pub console_access: Vec<String>,
-    /// A folder of the host's the guest sees, by Plan 9 in both: Linux mounts it with 9p, and Windows has
-    /// Guesthouse's own program mount it with WinFsp.
-    pub share: Option<Share>,
+    /// The folders of the host's the guest sees, by Plan 9 in both, each by its own name on the one
+    /// port: Linux mounts them with 9p, and Windows has Guesthouse's own program mount them with WinFsp.
+    pub shares: Vec<Share>,
 }
 
 impl Machine {
@@ -132,17 +132,21 @@ impl Machine {
                         .iter()
                         .map(|card| (NETWORK_CARD.to_owned(), card.clone()))
                         .collect(),
-                    plan9: self.share.as_ref().map(|share| Plan9 {
-                        shares: vec![Plan9Share {
-                            name: SHARE_NAME.to_owned(),
-                            access_name: SHARE_NAME.to_owned(),
-                            path: text(&share.folder),
-                            port: if windows { PLAN9_WINDOWS_PORT } else { PLAN9_PORT },
-                            // Linux keeps its owners and modes in the files' extended attributes;
-                            // Windows' files have none to keep.
-                            flags: if windows { 0 } else { PLAN9_LINUX_METADATA }
-                                | if share.read_only { PLAN9_READ_ONLY } else { 0 },
-                        }],
+                    plan9: (!self.shares.is_empty()).then(|| Plan9 {
+                        shares: self
+                            .shares
+                            .iter()
+                            .map(|share| Plan9Share {
+                                name: share.name(),
+                                access_name: share.name(),
+                                path: text(&share.folder),
+                                port: if windows { PLAN9_WINDOWS_PORT } else { PLAN9_PORT },
+                                // Linux keeps its owners and modes in the files' extended attributes;
+                                // Windows' files have none to keep.
+                                flags: if windows { 0 } else { PLAN9_LINUX_METADATA }
+                                    | if share.read_only { PLAN9_READ_ONLY } else { 0 },
+                            })
+                            .collect(),
                     }),
                     // Virtual SMB is not used for guests: a real test found its share unreachable from Windows.
                     virtual_smb: None,
@@ -182,18 +186,19 @@ mod tests {
             guest: Guest::Windows,
             more_disks: Vec::new(),
             console_access: Vec::new(),
-            share: None,
+            shares: Vec::new(),
         }
     }
 
     #[test]
     fn a_share_goes_to_each_system_by_plan_9_on_its_own_port() {
         let devices = |system: Machine, share: Option<Share>| {
-            let document = serde_json::to_value(Machine { share, ..system }.document()).unwrap();
+            let shares = share.into_iter().collect();
+            let document = serde_json::to_value(Machine { shares, ..system }.document()).unwrap();
             document["VirtualMachine"]["Devices"].clone()
         };
-        let read_only = Some(Share { folder: PathBuf::from(r"D:\files"), read_only: true });
-        let writable = Some(Share { folder: PathBuf::from(r"D:\files"), read_only: false });
+        let read_only = Some(Share { folder: PathBuf::from(r"D:\files"), read_only: true, slot: 0 });
+        let writable = Some(Share { folder: PathBuf::from(r"D:\files"), read_only: false, slot: 0 });
 
         let windows = devices(machine(), read_only.clone());
         assert_eq!(
@@ -217,6 +222,21 @@ mod tests {
             assert!(none.get("Plan9").is_none());
             assert!(none.get("VirtualSmb").is_none());
         }
+    }
+
+    #[test]
+    fn several_shares_are_on_the_one_port_each_named_by_its_slot() {
+        let share = |folder: &str, slot| Share { folder: PathBuf::from(folder), read_only: slot == 2, slot };
+        // The second of three was refused at this boot, so its name isn't given to the third.
+        let shares = vec![share(r"D:\a", 0), share(r"D:\c", 2)];
+        let document = serde_json::to_value(Machine { shares, ..machine() }.document()).unwrap();
+        assert_eq!(
+            document["VirtualMachine"]["Devices"]["Plan9"],
+            json!({"Shares": [
+                {"Name": "shared", "AccessName": "shared", "Path": r"D:\a", "Port": 50001, "Flags": 0},
+                {"Name": "shared3", "AccessName": "shared3", "Path": r"D:\c", "Port": 50001, "Flags": 1},
+            ]})
+        );
     }
 
     #[test]

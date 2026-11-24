@@ -17,7 +17,7 @@ use guesthouse_control::report::{ProblemKind, issue_link};
 use guesthouse_control::updates::Latest;
 use guesthouse_control::{
     Answer, Bridging, Card, CardInfo, Event, Forward, Machine, MachineSettings, NetworkMode, NewMachine,
-    Share, State, System, forwards_refusal, valid_name, valid_user,
+    Share, State, System, forwards_refusal, shares_refusal, valid_name, valid_user,
 };
 use windows_reactor::*;
 
@@ -51,8 +51,8 @@ pub const EDITIONS: [&str; 6] = [
 pub enum FolderFor {
     /// The new machine's form.
     Form,
-    /// The shown machine's page.
-    Machine,
+    /// A shared folder's row on the shown machine's page, by its place.
+    Machine(usize),
 }
 
 /// The share a folder field and its read-only box say, once the field holds a path.
@@ -290,7 +290,7 @@ impl Form {
             user: user.to_owned(),
             tpm: self.tpm,
             network: self.network,
-            share: share_of(&self.share_folder, self.share_read_only),
+            shares: share_of(&self.share_folder, self.share_read_only).into_iter().collect(),
         })
     }
 }
@@ -304,7 +304,7 @@ pub fn settings_of(machine: &Machine) -> MachineSettings {
         nvapi_wrapper: machine.nvapi_wrapper,
         tpm: machine.tpm,
         network: machine.network,
-        share: machine.share.clone(),
+        shares: machine.shares.clone(),
         network_mode: machine.network_mode.clone(),
         forwards: machine.forwards.clone(),
         nested_virtualization: machine.nested_virtualization,
@@ -324,9 +324,8 @@ pub struct Draft {
     pub tpm: bool,
     pub nested_virtualization: bool,
     pub network: bool,
-    /// The folder to share, as typed or picked. Empty shares none.
-    pub share_folder: String,
-    pub share_read_only: bool,
+    /// The folders to share, a row each, as the person is editing them.
+    pub shares: Vec<ShareRow>,
     /// Whether the card is on the shared network or bridged onto an adapter of this PC's.
     pub network_mode: NetworkMode,
     /// The port forwards, a row each, as the person is editing them.
@@ -338,6 +337,14 @@ pub struct Draft {
     pub saving: bool,
     /// Why the service said no, until they're changed again.
     pub refused: Option<String>,
+}
+
+/// A shared folder as its field and its read-only box hold it: the field may be empty while it's
+/// being typed.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct ShareRow {
+    pub folder: String,
+    pub read_only: bool,
 }
 
 /// A port forward as its two boxes hold it: either may be empty while it's being typed.
@@ -376,12 +383,14 @@ impl Draft {
             tpm: machine.tpm,
             nested_virtualization: machine.nested_virtualization,
             network: machine.network,
-            share_folder: machine
-                .share
-                .as_ref()
-                .map(|share| share.folder.display().to_string())
-                .unwrap_or_default(),
-            share_read_only: machine.share.as_ref().is_some_and(|share| share.read_only),
+            shares: machine
+                .shares
+                .iter()
+                .map(|share| ShareRow {
+                    folder: share.folder.display().to_string(),
+                    read_only: share.read_only,
+                })
+                .collect(),
             network_mode: machine.network_mode.clone(),
             forwards: machine.forwards.iter().map(ForwardRow::of).collect(),
             size_gb: machine.size_gb.map(|gb| gb as f64),
@@ -400,7 +409,7 @@ impl Draft {
             nvapi_wrapper: self.nvapi_wrapper,
             tpm: self.tpm,
             network: self.network,
-            share: share_of(&self.share_folder, self.share_read_only),
+            shares: self.shares.iter().filter_map(|row| share_of(&row.folder, row.read_only)).collect(),
             network_mode: self.network_mode.clone(),
             forwards: self.forwards.iter().map(ForwardRow::forward).collect::<Option<Vec<_>>>()?,
             nested_virtualization: self.nested_virtualization,
@@ -417,9 +426,26 @@ impl Draft {
         forwards_refusal(&forwards)
     }
 
+    /// Why the shared folders can't be saved as they are, if they can't, in the service's own
+    /// words. A row with no folder yet is said apart.
+    pub fn shares_problem(&self) -> Option<String> {
+        let shares: Vec<Share> =
+            self.shares.iter().filter_map(|row| share_of(&row.folder, row.read_only)).collect();
+        if shares.len() < self.shares.len() {
+            return Some("Give each shared folder a path, or remove it.".to_owned());
+        }
+        shares_refusal(&shares)
+    }
+
+    /// Why these can't be saved as they are, if they can't.
+    pub fn problem(&self) -> Option<String> {
+        self.forwards_problem().or_else(|| self.shares_problem())
+    }
+
     /// Whether the person has changed something from what `machine`'s settings say.
     pub fn changed(&self, machine: &Machine) -> bool {
-        self.settings() != Some(settings_of(machine))
+        // A shared folder's row with no path yet isn't in the settings, and is a change still.
+        self.settings() != Some(settings_of(machine)) || self.shares.len() != machine.shares.len()
     }
 
     /// The size to grow `machine`'s disk to, if it's one it could grow to: larger than it is now,
@@ -621,8 +647,10 @@ pub enum Message {
     SetTpm(bool),
     SetNested(bool),
     SetNetwork(bool),
-    SetShareFolder(String),
-    SetShareReadOnly(Option<bool>),
+    AddShare,
+    RemoveShare(usize),
+    SetShareFolder(usize, String),
+    SetShareReadOnly(usize, Option<bool>),
     /// The size to grow the disk to, which Grow asks for.
     SetSize(Option<f64>),
     /// Ask the service to let the disk grow to the size in the field.
@@ -747,7 +775,7 @@ impl Main {
             return;
         }
         let Some(draft) = self.draft.as_ref().filter(|draft| !draft.saving) else { return };
-        if draft.settings().is_none() || draft.forwards_problem().is_some() {
+        if draft.settings().is_none() || draft.problem().is_some() {
             return;
         }
         // Binding the bridge's switch to the adapter can drop this PC's own network for a few
@@ -776,7 +804,7 @@ impl Main {
                 machine.nvapi_wrapper = settings.nvapi_wrapper;
                 machine.tpm = settings.tpm;
                 machine.network = settings.network;
-                machine.share = settings.share;
+                machine.shares = settings.shares;
                 machine.network_mode = settings.network_mode;
                 machine.forwards = settings.forwards;
                 machine.nested_virtualization = settings.nested_virtualization;
@@ -1377,9 +1405,11 @@ impl Component for Main {
             Message::PickedFolder(FolderFor::Form, Some(path)) => {
                 self.form.share_folder = path.display().to_string();
             }
-            Message::PickedFolder(FolderFor::Machine, Some(path)) => {
-                self.edit(|draft| draft.share_folder = path.display().to_string());
-            }
+            Message::PickedFolder(FolderFor::Machine(index), Some(path)) => self.edit(|draft| {
+                if let Some(row) = draft.shares.get_mut(index) {
+                    row.folder = path.display().to_string();
+                }
+            }),
             Message::Create => self.create(),
             Message::SetMemory(value) => self.edit(|draft| draft.memory_mb = value),
             Message::SetProcessors(value) => self.edit(|draft| draft.processors = value),
@@ -1430,10 +1460,26 @@ impl Component for Main {
             Message::SetTpm(on) => self.edit(|draft| draft.tpm = on),
             Message::SetNested(on) => self.edit(|draft| draft.nested_virtualization = on),
             Message::SetNetwork(on) => self.edit(|draft| draft.network = on),
-            Message::SetShareFolder(folder) => self.edit(|draft| draft.share_folder = folder),
-            Message::SetShareReadOnly(checked) => {
-                self.edit(|draft| draft.share_read_only = checked.unwrap_or(false))
-            }
+            Message::AddShare => self.edit(|draft| {
+                if draft.shares.len() < guesthouse_control::MOST_SHARES {
+                    draft.shares.push(ShareRow::default());
+                }
+            }),
+            Message::RemoveShare(index) => self.edit(|draft| {
+                if index < draft.shares.len() {
+                    draft.shares.remove(index);
+                }
+            }),
+            Message::SetShareFolder(index, folder) => self.edit(|draft| {
+                if let Some(row) = draft.shares.get_mut(index) {
+                    row.folder = folder;
+                }
+            }),
+            Message::SetShareReadOnly(index, checked) => self.edit(|draft| {
+                if let Some(row) = draft.shares.get_mut(index) {
+                    row.read_only = checked.unwrap_or(false);
+                }
+            }),
             Message::SetSize(value) => self.edit(|draft| draft.size_gb = value),
             Message::Grow => self.grow(),
             Message::SnapshotLabel(label) => self.snapshot_label = label,
@@ -1504,7 +1550,7 @@ mod tests {
             nvapi_wrapper: true,
             tpm: true,
             network: true,
-            share: None,
+            shares: Vec::new(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
             nested_virtualization: false,
@@ -1540,6 +1586,31 @@ mod tests {
         assert!(draft.changed(&machine));
         draft.processors = Some(0.0);
         assert_eq!(draft.settings(), None);
+    }
+
+    #[test]
+    fn shared_folders_are_edited_as_rows_and_asked_for_once_each_has_a_path() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        draft.shares.push(ShareRow::default());
+        assert!(draft.changed(&machine));
+        assert!(draft.shares_problem().unwrap().contains("a path"));
+        assert_eq!(draft.problem(), draft.shares_problem());
+        draft.shares[0].folder = r#""D:\files""#.to_owned();
+        draft.shares.push(ShareRow { folder: r"E:\more".to_owned(), read_only: true });
+        assert_eq!(draft.problem(), None);
+        let shares = draft.settings().unwrap().shares;
+        assert_eq!(
+            shares,
+            [
+                Share { folder: PathBuf::from(r"D:\files"), read_only: false },
+                Share { folder: PathBuf::from(r"E:\more"), read_only: true },
+            ]
+        );
+        draft.shares[1].folder = r"d:\FILES\".to_owned();
+        assert!(draft.shares_problem().unwrap().contains("twice"));
+        draft.shares.clear();
+        assert!(!draft.changed(&machine));
     }
 
     #[test]

@@ -13,18 +13,25 @@ use crate::guest::linux::{
 };
 use crate::machine::Guest;
 use crate::record::{Record, files_disk};
-use crate::settings::{PrepareSettings, SHARE_NAME, Share};
+use crate::settings::{PrepareSettings, Share};
 use guesthouse_hcs::disk::{self, Kind, VirtualDisk};
 use guesthouse_hcs::drivers::copy_folder;
 use guesthouse_hcs::gpu::Card;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The file on the files disk that names the share for gpu.sh, as `NAME ro` or `NAME rw`.
+/// The file on the files disk that names the shares for gpu.sh, a line each, as `NAME PORT ro` or
+/// `NAME PORT rw`.
 const SHARE: &str = r"guesthouse\share";
 
-fn share_line(share: &Share) -> String {
-    format!("{SHARE_NAME} {}\n", if share.read_only { "ro" } else { "rw" })
+fn share_lines(shares: &[Share]) -> String {
+    shares
+        .iter()
+        .map(|share| {
+            let mode = if share.read_only { "ro" } else { "rw" };
+            format!("{} {} {mode}\n", share.name(), guesthouse_hcs::schema::PLAN9_PORT)
+        })
+        .collect()
 }
 
 /// The folder on the files disk that holds the guest's own scripts.
@@ -111,7 +118,7 @@ fn make(
     }
     let password = new_password()?;
     write(&root, ACCOUNT, &account(&settings.user, &password))?;
-    refresh(&root, card, None, sink)?;
+    refresh(&root, card, &[], sink)?;
 
     Record { guest: Guest::Linux, installer: Some(iso.to_owned()), ..Record::default() }.save(disk_path)?;
     write_account(disk_path, &settings.user, &password, sink)?;
@@ -127,7 +134,7 @@ fn make(
 pub fn refresh_disk(
     files: &Path,
     card: Option<&Card>,
-    share: Option<&Share>,
+    shares: &[Share],
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let mut attached = VirtualDisk::open(files, Kind::Vhdx).map_err(|error| error.to_string())?;
@@ -136,22 +143,21 @@ pub fn refresh_disk(
         .into_iter()
         .next()
         .ok_or_else(|| format!("{} has no volume on it.", files.display()))?;
-    refresh(&volume.root, card, share, sink)
+    refresh(&volume.root, card, shares, sink)
 }
 
 /// The GPU files on the files disk at `root`. WSL's own libraries go first and the driver's on top,
 /// as WSL lays one over the other. Only the card's driver folder is kept, so an old driver's goes.
-fn refresh(root: &Path, card: Option<&Card>, share: Option<&Share>, sink: &dyn Sink) -> Result<(), String> {
+fn refresh(root: &Path, card: Option<&Card>, shares: &[Share], sink: &dyn Sink) -> Result<(), String> {
     // The guest runs its scripts from here at every start, so these are always this build's.
     for (path, text) in FILES.iter().filter(|(path, _)| path.starts_with(GUEST_SCRIPTS)) {
         write(root, path, &unix_text(text))?;
     }
-    // gpu.sh mounts the share it names, and unmounts one it doesn't.
-    match share {
-        Some(share) => write(root, SHARE, &share_line(share))?,
-        None => {
-            let _ = fs::remove_file(root.join(SHARE));
-        }
+    // gpu.sh mounts the shares it names, and unmounts those it doesn't.
+    if shares.is_empty() {
+        let _ = fs::remove_file(root.join(SHARE));
+    } else {
+        write(root, SHARE, &share_lines(shares))?;
     }
     let lib = root.join(WSL_LIB);
     for source in library_folders().into_iter().filter(|folder| folder.is_dir()) {
@@ -266,13 +272,13 @@ mod host_tests {
     #[ignore = "copies this host's WSL libraries"]
     fn the_files_disk_gets_wsl_and_the_drivers_libraries_with_dxcore() {
         let root = std::env::temp_dir().join(format!("gh-files-{}", std::process::id()));
-        refresh(&root, None, None, &Kept::default()).unwrap();
+        refresh(&root, None, &[], &Kept::default()).unwrap();
         let lib = root.join(WSL_LIB);
         assert!(lib.join(DXCORE).is_file(), "WSL's DXCore");
         assert!(lib.join("libcuda.so.1").is_file(), "the driver's CUDA");
         assert!(lib.join("nvidia-smi").is_file(), "the driver's nvidia-smi");
         assert!(root.join(WSL_DRIVERS).is_dir());
-        refresh(&root, None, None, &Kept::default()).unwrap();
+        refresh(&root, None, &[], &Kept::default()).unwrap();
         let _ = fs::remove_dir_all(root);
     }
 }

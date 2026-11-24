@@ -125,24 +125,30 @@ if [ -n "$parent" ] && [ -n "$number" ] && command -v growpart > /dev/null; then
     fi
 fi
 
-# The host's shared folder, when it gives one, by 9p over a Hyper-V socket to the host's port 564,
-# with the options hcsshim's Linux guests mount theirs with (internal/guest/storage/plan9). The host writes the file naming it at
-# each boot, and takes the file away when the machine has no share, and then it's unmounted.
-share=/mnt/shared
+# The host's shared folders, when it gives any, by 9p over a Hyper-V socket to the host's Plan 9
+# server, with the options hcsshim's Linux guests mount theirs with (internal/guest/storage/plan9).
+# The host writes the file naming them at each boot, a line each, "NAME PORT rw" or "NAME PORT ro",
+# and each is mounted at /mnt/NAME: /mnt/shared, then /mnt/shared2 and on. The file is taken away
+# when the machine has no share, and a folder of these the file doesn't name is unmounted.
+wanted=" "
 if [ -f "$files/guesthouse/share" ]; then
-    read -r share_name share_mode < "$files/guesthouse/share"
-    mkdir -p "$share"
-    if ! mountpoint -q "$share"; then
-        modprobe hv_sock 2> /dev/null
-        # The socket's descriptor is handed to mount, which keeps the connection once it has it.
-        python3 - "$share_name" "$share_mode" "$share" << 'EOF' 2>&1 | say_each share
+    modprobe hv_sock 2> /dev/null
+    while read -r share_name share_port share_mode; do
+        case "$share_name" in shared | shared[0-9]*) ;; *) continue ;; esac
+        case "$share_port" in '' | *[!0-9]*) continue ;; esac
+        share=/mnt/$share_name
+        wanted="$wanted$share "
+        mkdir -p "$share"
+        if ! mountpoint -q "$share"; then
+            # The socket's descriptor is handed to mount, which keeps the connection once it has it.
+            python3 - "$share_name" "$share_port" "$share_mode" "$share" << 'EOF' 2>&1 | say_each share
 import socket, subprocess, sys
-name, mode, target = sys.argv[1:4]
+name, port, mode, target = sys.argv[1:5]
 packet = 65536
 connection = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
 connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, packet)
 connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, packet)
-connection.connect((socket.VMADDR_CID_HOST, 564))
+connection.connect((socket.VMADDR_CID_HOST, int(port)))
 fd = connection.fileno()
 options = f"trans=fd,rfdno={fd},wfdno={fd},msize={packet}"
 if mode == "ro":
@@ -150,11 +156,14 @@ if mode == "ro":
 options += f",aname={name}"
 sys.exit(subprocess.run(["mount", "-t", "9p", "-o", options, target, target], pass_fds=[fd]).returncode)
 EOF
-    fi
-    if mountpoint -q "$share"; then say "share: at $share"; else say "share: not mounted"; fi
-elif mountpoint -q "$share"; then
-    umount "$share"
+        fi
+        if mountpoint -q "$share"; then say "share: at $share"; else say "share: not mounted at $share"; fi
+    done < "$files/guesthouse/share"
 fi
+for share in /mnt/shared /mnt/shared[0-9]*; do
+    case "$wanted" in *" $share "*) continue ;; esac
+    if mountpoint -q "$share"; then umount "$share"; fi
+done
 
 if [ -e /dev/dxg ]; then say "dxg: present"; else say "dxg: missing"; fi
 for driver in /usr/lib/wsl/drivers/*; do

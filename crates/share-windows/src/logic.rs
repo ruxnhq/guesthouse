@@ -246,12 +246,13 @@ pub fn vsock_service_guid(port: u32) -> (u32, u16, u16, [u8; 8]) {
 pub const HV_GUID_PARENT: (u32, u16, u16, [u8; 8]) =
     (0xa42e_7cda, 0xd03f, 0x480c, [0x9c, 0xc2, 0xa4, 0xde, 0x20, 0xab, 0xb8, 0x78]);
 
-/// The first drive letter of S: to Z: that isn't in `used`, which is `GetLogicalDrives`' bits, A as
-/// bit 0.
-pub fn first_free_drive(used: u32) -> Option<String> {
+/// The drive letters of S: to Z: that aren't in `used`, which is `GetLogicalDrives`' bits, A as
+/// bit 0, in order.
+pub fn free_drives(used: u32) -> Vec<String> {
     ('S'..='Z')
-        .find(|letter| used & (1 << (*letter as u32 - 'A' as u32)) == 0)
+        .filter(|letter| used & (1 << (*letter as u32 - 'A' as u32)) == 0)
         .map(|letter| format!("{letter}:"))
+        .collect()
 }
 
 /// A drive as the user wrote it, `s`, `S` or `S:`, as `S:`.
@@ -540,14 +541,16 @@ mod tests {
     }
 
     #[test]
-    fn the_default_drive_is_the_first_free_from_s() {
-        assert_eq!(first_free_drive(0), Some("S:".to_owned()));
-        assert_eq!(first_free_drive(1 << 18), Some("T:".to_owned()));
-        assert_eq!(first_free_drive((1 << 18) | (1 << 19) | (1 << 21)), Some("U:".to_owned()));
+    fn the_default_drives_are_the_free_ones_from_s() {
+        let first = |used| free_drives(used).into_iter().next();
+        assert_eq!(free_drives(0).len(), 8);
+        assert_eq!(first(0), Some("S:".to_owned()));
+        assert_eq!(first(1 << 18), Some("T:".to_owned()));
+        assert_eq!(free_drives((1 << 18) | (1 << 19) | (1 << 21))[..2], ["U:", "W:"]);
         let s_to_z: u32 = (18..=25).map(|bit| 1u32 << bit).sum();
-        assert_eq!(first_free_drive(s_to_z), None);
+        assert_eq!(first(s_to_z), None);
         // Lower letters in use don't matter.
-        assert_eq!(first_free_drive(0b111), Some("S:".to_owned()));
+        assert_eq!(first(0b111), Some("S:".to_owned()));
     }
 
     #[test]

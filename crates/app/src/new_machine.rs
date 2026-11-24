@@ -5,7 +5,7 @@ use crate::common::{choose_file, choose_folder, in_background};
 use crate::disk_place_row::DiskPlaceRow;
 use crate::driver_row::DriverRow;
 use crate::recipe_dialog;
-use crate::rows::{bottom_bar, choice_row, number_row, page_heading, row_button};
+use crate::rows::{bottom_bar, choice_row, number_row, row_button};
 use crate::window::Window;
 use adw::prelude::*;
 use guesthouse_app_core::account::{default_user, name_problem, password_problem};
@@ -66,11 +66,15 @@ const WIDTH: i32 = 520;
 const HEIGHT: i32 = 720;
 const NOTE_MARGIN: i32 = 12;
 const CARD_TITLE: &str = "Card";
-const MACOS_ROW_NOTE: &str = "Needs no ISO. Apple's installer is downloaded for it, and macOS \
-                              support the first time.";
 const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
-const ANDROID_ROW_NOTE: &str = "Needs no ISO. Choose the folder of an image of Android for VMs.";
+const ANDROID_ROW_NOTE: &str = "Choose the folder of an image of Android for VMs.";
+const NO_DISC_YET: &str = "None chosen yet.";
+const DETAILS: &str = "details";
+const HEADING_SPACING: i32 = 4;
+const HEADING_MARGIN: i32 = 12;
+const CARD_SPACING: i32 = 10;
+const CARD_ICON_SIZE: i32 = 32;
 const ANDROID_NAME: &str = "Android";
 const ANDROID_DISK_NOTE: &str =
     "For Android's apps and their data. Its file starts small and grows as they fill it.";
@@ -88,11 +92,20 @@ struct Parts {
     dialog: adw::Dialog,
     create_button: gtk::Button,
     iso_row: adw::ActionRow,
+    /// The Android image, in the disc's place for an Android machine.
+    image_row: adw::ActionRow,
+    /// The group with the disc or image, which macOS has no need of.
+    disc: adw::PreferencesGroup,
+    /// The two steps: what the machine runs, then its details.
+    navigation: adw::NavigationView,
+    details: adw::NavigationPage,
     /// Whether macOS was chosen, and not a disc.
     macos: Cell<bool>,
     /// The Android image chosen in place of a disc.
     android_image: RefCell<Option<String>>,
-    verdict: adw::ActionRow,
+    /// What the chosen disc or system makes, as the details' heading and the line under it.
+    verdict_title: gtk::Label,
+    verdict_text: gtk::Label,
     hardware: adw::PreferencesGroup,
     name: adw::EntryRow,
     account: adw::PreferencesGroup,
@@ -163,40 +176,162 @@ fn hardware_row(group: &adw::PreferencesGroup, title: &str, lowest: f64, highest
     row
 }
 
+/// What the first step offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    Windows,
+    Ubuntu,
+    Android,
+    Macos,
+    Other,
+    Import,
+}
+
+impl Pick {
+    const ALL: [Pick; 6] =
+        [Self::Windows, Self::Ubuntu, Self::Android, Self::Macos, Self::Other, Self::Import];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Windows => "Windows",
+            Self::Ubuntu => "Ubuntu",
+            Self::Android => ANDROID_TITLE,
+            Self::Macos => MACOS_NAME,
+            Self::Other => "Another System",
+            Self::Import => "Import",
+        }
+    }
+
+    fn note(self) -> &'static str {
+        match self {
+            Self::Windows => "With the GPU. From a Windows disc.",
+            Self::Ubuntu => "Installs itself, with the GPU.",
+            Self::Android => "Its own image. Play services if you want them.",
+            Self::Macos => "Apple's installer is downloaded.",
+            Self::Other => "Any disc, installed by hand.",
+            Self::Import => "A machine exported from Guesthouse.",
+        }
+    }
+
+    /// What the details say before a disc is chosen.
+    fn disc_note(self) -> &'static str {
+        match self {
+            Self::Windows => "Choose a Windows 10 or 11 disc. Its edition and language are read from it.",
+            Self::Ubuntu => "Choose an Ubuntu disc. It installs with no hands, and gets the GPU.",
+            _ => "Choose the disc to install from. A system Guesthouse doesn't know runs on the CPU.",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Windows => "preferences-desktop-apps-symbolic",
+            Self::Ubuntu => "utilities-terminal-symbolic",
+            Self::Android => "phone-symbolic",
+            Self::Macos => "video-display-symbolic",
+            Self::Other => "media-optical-symbolic",
+            Self::Import => "document-open-symbolic",
+        }
+    }
+
+    fn preview(self) -> bool {
+        matches!(self, Self::Android | Self::Macos)
+    }
+}
+
+/// One choice of the first step: its icon, name and one line, with a mark for a preview.
+fn kind_card(pick: Pick) -> gtk::Button {
+    let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).build();
+    let icon = gtk::Image::builder()
+        .icon_name(pick.icon())
+        .pixel_size(CARD_ICON_SIZE)
+        .halign(gtk::Align::Start)
+        .build();
+    column.append(&icon);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let title = gtk::Label::builder().label(pick.title()).xalign(0.0).build();
+    title.add_css_class("heading");
+    top.append(&title);
+    if pick.preview() {
+        let preview = gtk::Label::new(Some(PREVIEW));
+        preview.add_css_class("preview-tag");
+        preview.add_css_class("caption-heading");
+        top.append(&preview);
+    }
+    column.append(&top);
+    let note = gtk::Label::builder().label(pick.note()).xalign(0.0).wrap(true).max_width_chars(18).build();
+    note.add_css_class("dim-label");
+    note.add_css_class("caption");
+    column.append(&note);
+    let button = gtk::Button::builder().child(&column).build();
+    button.add_css_class("kind-card");
+    button
+}
+
+/// The first step: a grid of what a machine can run, and the buttons each answers to.
+fn kind_page(cancel: &gtk::Button) -> (adw::NavigationPage, Vec<(Pick, gtk::Button)>) {
+    let grid = gtk::Grid::builder()
+        .column_spacing(CARD_SPACING)
+        .row_spacing(CARD_SPACING)
+        .column_homogeneous(true)
+        .margin_top(HEADING_MARGIN)
+        .margin_bottom(HEADING_MARGIN)
+        .margin_start(HEADING_MARGIN * 2)
+        .margin_end(HEADING_MARGIN * 2)
+        .build();
+    let mut buttons = Vec::new();
+    for (at, pick) in Pick::ALL.into_iter().enumerate() {
+        let card = kind_card(pick);
+        grid.attach(&card, (at % 2) as i32, (at / 2) as i32, 1, 1);
+        buttons.push((pick, card));
+    }
+    let title = gtk::Label::builder()
+        .label("New Machine")
+        .xalign(0.0)
+        .margin_top(HEADING_MARGIN)
+        .margin_start(HEADING_MARGIN * 2)
+        .build();
+    title.add_css_class("page-title");
+    let lead = gtk::Label::builder()
+        .label("Choose what it will run.")
+        .xalign(0.0)
+        .margin_start(HEADING_MARGIN * 2)
+        .build();
+    lead.add_css_class("dim-label");
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.append(&title);
+    column.append(&lead);
+    column.append(&grid);
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());
+    toolbar.set_content(Some(&gtk::ScrolledWindow::builder().child(&column).vexpand(true).build()));
+    toolbar.add_bottom_bar(&bottom_bar(&[cancel]));
+    (adw::NavigationPage::builder().title("New Machine").child(&toolbar).build(), buttons)
+}
+
 impl NewMachineDialog {
     pub fn new(window: &Window) -> Self {
         let context = window.context();
         let create_button = gtk::Button::builder().label("Create").sensitive(false).build();
         create_button.add_css_class("suggested-action");
         let cancel = gtk::Button::with_label("Cancel");
+        let cancel_choice = gtk::Button::with_label("Cancel");
         let header = adw::HeaderBar::builder().show_title(false).build();
         let page = adw::PreferencesPage::new();
         let disc = adw::PreferencesGroup::new();
         page.add(&disc);
-        let iso_row =
-            adw::ActionRow::builder().title("ISO").subtitle("Choose the disc to install from.").build();
+        let iso_row = adw::ActionRow::builder().title("Disc").subtitle(NO_DISC_YET).build();
         let choose = row_button("Choose");
         iso_row.add_suffix(&choose);
         disc.add(&iso_row);
-        let macos_row = adw::ActionRow::builder().title(MACOS_TITLE).subtitle(MACOS_ROW_NOTE).build();
-        let preview = gtk::Label::builder().label(PREVIEW).valign(gtk::Align::Center).build();
-        preview.add_css_class("dim-label");
-        preview.add_css_class("caption-heading");
-        macos_row.add_suffix(&preview);
-        let use_macos = row_button("Use");
-        macos_row.add_suffix(&use_macos);
-        disc.add(&macos_row);
-        let android_row = adw::ActionRow::builder().title(ANDROID_TITLE).subtitle(ANDROID_ROW_NOTE).build();
-        let android_preview = gtk::Label::builder().label(PREVIEW).valign(gtk::Align::Center).build();
-        android_preview.add_css_class("dim-label");
-        android_preview.add_css_class("caption-heading");
-        android_row.add_suffix(&android_preview);
+        let image_row =
+            adw::ActionRow::builder().title("Image").subtitle(ANDROID_ROW_NOTE).visible(false).build();
         let choose_android = row_button("Choose");
-        android_row.add_suffix(&choose_android);
-        disc.add(&android_row);
-        let verdict = adw::ActionRow::builder().visible(false).activatable(false).build();
-        verdict.add_css_class("verdict");
-        disc.add(&verdict);
+        image_row.add_suffix(&choose_android);
+        disc.add(&image_row);
+        let verdict_title = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        verdict_title.add_css_class("page-title");
+        let verdict_text = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        verdict_text.add_css_class("dim-label");
         let hardware = adw::PreferencesGroup::new();
         hardware.set_sensitive(false);
         page.add(&hardware);
@@ -274,7 +409,16 @@ impl NewMachineDialog {
             .build();
         note.add_css_class("dim-label");
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.append(&page_heading("", "New Machine"));
+        let heading = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(HEADING_SPACING)
+            .margin_top(HEADING_MARGIN)
+            .margin_start(HEADING_MARGIN * 2)
+            .margin_end(HEADING_MARGIN * 2)
+            .build();
+        heading.append(&verdict_title);
+        heading.append(&verdict_text);
+        column.append(&heading);
         column.append(&page);
         column.append(&note);
         page.set_vexpand(true);
@@ -282,20 +426,29 @@ impl NewMachineDialog {
         toolbar.set_content(Some(&column));
         toolbar.add_top_bar(&header);
         toolbar.add_bottom_bar(&bottom_bar(&[&cancel, &create_button]));
+        let details = adw::NavigationPage::builder().title("Details").tag(DETAILS).child(&toolbar).build();
+        let (start, kinds) = kind_page(&cancel_choice);
+        let navigation = adw::NavigationView::new();
+        navigation.replace(&[start]);
         let dialog = adw::Dialog::builder()
             .title("New Machine")
             .content_width(WIDTH)
             .content_height(HEIGHT)
-            .child(&toolbar)
+            .child(&navigation)
             .build();
         let this = Self(Rc::new(Parts {
             window: window.clone(),
             dialog,
             create_button,
             iso_row,
+            image_row,
+            disc,
+            navigation,
+            details,
             macos: Cell::new(false),
             android_image: RefCell::default(),
-            verdict,
+            verdict_title,
+            verdict_text,
             hardware,
             name,
             account,
@@ -341,9 +494,15 @@ impl NewMachineDialog {
             }
         });
         let handle = this.clone();
-        use_macos.connect_clicked(move |_| handle.choose_macos());
-        let handle = this.clone();
         choose_android.connect_clicked(move |_| handle.on_choose_android());
+        let dialog = this.0.dialog.clone();
+        cancel_choice.connect_clicked(move |_| {
+            dialog.close();
+        });
+        for (kind, button) in kinds {
+            let handle = this.clone();
+            button.connect_clicked(move |_| handle.pick(kind));
+        }
         this
     }
 
@@ -566,6 +725,13 @@ impl NewMachineDialog {
     }
 
     pub fn read_iso(&self, path: String) {
+        // A disc chosen with no kind picked first, as the page checks do, goes straight to the details.
+        if self.0.navigation.visible_page().and_then(|page| page.tag()).as_deref() != Some(DETAILS) {
+            self.0.navigation.push(&self.0.details);
+        }
+        self.0.disc.set_visible(true);
+        self.0.iso_row.set_visible(true);
+        self.0.image_row.set_visible(false);
         self.0.macos.set(false);
         *self.0.android_image.borrow_mut() = None;
         self.0.disk.set_subtitle(DISK_NOTE);
@@ -596,10 +762,36 @@ impl NewMachineDialog {
     }
 
     fn show_verdict(&self, title: &str, subtitle: &str) {
-        let verdict = &self.0.verdict;
-        verdict.set_visible(true);
-        verdict.set_title(&gtk::glib::markup_escape_text(title));
-        verdict.set_subtitle(&gtk::glib::markup_escape_text(subtitle));
+        self.0.verdict_title.set_label(title);
+        self.0.verdict_text.set_label(subtitle);
+        self.0.verdict_text.set_visible(!subtitle.is_empty());
+    }
+
+    /// The first step's choice: the details for that kind, and for a disc or an image, the chooser at once.
+    fn pick(&self, kind: Pick) {
+        let parts = &self.0;
+        if kind == Pick::Import {
+            parts.dialog.close();
+            crate::import::ask(&parts.window);
+            return;
+        }
+        parts.navigation.push(&parts.details);
+        let disc = matches!(kind, Pick::Windows | Pick::Ubuntu | Pick::Other);
+        parts.disc.set_visible(kind != Pick::Macos);
+        parts.iso_row.set_visible(disc);
+        parts.image_row.set_visible(kind == Pick::Android);
+        match kind {
+            Pick::Macos => self.choose_macos(),
+            Pick::Android => {
+                self.show_verdict(ANDROID_TITLE, ANDROID_ROW_NOTE);
+                self.on_choose_android();
+            }
+            Pick::Import => {}
+            Pick::Windows | Pick::Ubuntu | Pick::Other => {
+                self.show_verdict(kind.title(), kind.disc_note());
+                self.on_choose();
+            }
+        }
     }
 
     /// `reason` says why this disc is only a plain VM here, if it is.

@@ -185,7 +185,13 @@ async fn new_machine(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>) {
     check(&failures, text_of(&window).contains("No Machines"), "an empty library says so");
     shot_after_paint(&window, &folder, "04-library-empty").await;
     window.show_new_machine();
-    glib::timeout_future(SETTLE).await;
+    glib::timeout_future(LONG).await;
+    check(
+        &failures,
+        text_of(&window).contains("Choose what it will run."),
+        "New Machine starts with what it runs",
+    );
+    shot_after_paint(&window, &folder, "05a-new-machine-kinds").await;
     let iso = make_iso(&folder);
     window.open_new_machine().unwrap().read_iso(iso);
     glib::timeout_future(LONG).await;

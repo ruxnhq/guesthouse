@@ -61,10 +61,14 @@ pub fn what_machines_are(context: &Context) -> &'static str {
     let ubuntu_gpu = ubuntu_install_ready(context) && sensor_daemon(context).exists();
     match (gpu_ready(context), ubuntu_gpu) {
         (true, true) => {
-            "A machine is Windows with GPU-PV, Ubuntu with its GPU, or anything else that boots from an ISO."
+            "A machine can be Windows or Ubuntu with this PC's GPU, Android, macOS, or anything else on a disc."
         }
-        (true, false) => "A machine is Windows with GPU-PV, or anything else that boots from an ISO.",
-        (false, true) => "A machine is Ubuntu with its GPU, or anything else that boots from an ISO.",
+        (true, false) => {
+            "A machine can be Windows with this PC's GPU, Android, macOS, or anything else on a disc."
+        }
+        (false, true) => {
+            "A machine can be Ubuntu with this PC's GPU, Android, macOS, or anything else on a disc."
+        }
         (false, false) => {
             "A machine is anything that boots from an ISO. It runs on the CPU for now, as GPU \
                            machines aren't available yet."
@@ -200,12 +204,12 @@ mod tests {
         let scratch = Scratch::new();
         let mut context = scratch_context(&scratch);
         context.paths.qemu = scratch.path("bin/qemu");
-        assert!(what_machines_are(&context).starts_with("A machine is Windows with GPU-PV, or"));
+        assert!(what_machines_are(&context).starts_with("A machine can be Windows with this PC's GPU, Android"));
         scratch.write("bin/nvfwd-sensord", "");
         fs::create_dir_all(guest_sources(&context).join(SEED_FOLDER)).unwrap();
-        assert!(what_machines_are(&context).contains("Ubuntu with its GPU"));
+        assert!(what_machines_are(&context).contains("Windows or Ubuntu with this PC's GPU"));
         fs::remove_dir_all(context.paths.guest_files()).unwrap();
-        assert!(what_machines_are(&context).starts_with("A machine is Ubuntu"));
+        assert!(what_machines_are(&context).starts_with("A machine can be Ubuntu"));
     }
 
     #[test]

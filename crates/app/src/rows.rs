@@ -182,3 +182,37 @@ pub fn message_page(icon: &str, title: &str, words: &str, next: &gtk::Button) ->
     page.append(next);
     page
 }
+
+/// The widest an explanation behind an info button gets, in characters.
+const INFO_CHARS: i32 = 44;
+const INFO_MARGIN: i32 = 12;
+
+/// A small button that opens the longer explanation of a row or group, so the row itself can say what it
+/// is in one line.
+pub fn info_button(text: &str) -> gtk::MenuButton {
+    let label = gtk::Label::builder()
+        .label(text)
+        .wrap(true)
+        .max_width_chars(INFO_CHARS)
+        .xalign(0.0)
+        .margin_top(INFO_MARGIN)
+        .margin_bottom(INFO_MARGIN)
+        .margin_start(INFO_MARGIN)
+        .margin_end(INFO_MARGIN)
+        .build();
+    let button = gtk::MenuButton::builder()
+        .icon_name("help-about-symbolic")
+        .valign(gtk::Align::Center)
+        .tooltip_text("More about this")
+        .popover(&gtk::Popover::builder().child(&label).build())
+        .build();
+    button.add_css_class("flat");
+    button.add_css_class("info-button");
+    name_for_readers(&button, "More about this");
+    button
+}
+
+/// Adds an info button to a row, before its other suffixes, for the explanation that doesn't fit in it.
+pub fn explain(row: &impl IsA<adw::ActionRow>, text: &str) {
+    row.as_ref().add_suffix(&info_button(text));
+}

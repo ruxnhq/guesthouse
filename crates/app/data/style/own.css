@@ -186,6 +186,29 @@
 }
 
 /* What the chosen disc was read as, set apart from the rows round it. */
-row.verdict {
-  background-color: alpha(@accent_bg_color, 0.12);
+/* New Machine's first step: one card per kind of machine. */
+button.kind-card {
+  padding: 14px 16px;
+  border-radius: 20px;
+  background-color: @card_bg_color;
+  box-shadow: 0 0 0 1px @hairline;
+}
+
+button.kind-card:hover {
+  box-shadow: 0 0 0 1px alpha(@accent_bg_color, 0.6);
+}
+
+.preview-tag {
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: @accent_color;
+  background-color: alpha(@accent_bg_color, 0.14);
+}
+
+/* The info button beside a row, for the explanation that doesn't fit in it. */
+.info-button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  opacity: 0.7;
 }

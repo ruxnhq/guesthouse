@@ -774,10 +774,10 @@ fn the_transforms_script_goes_to_the_guest_and_only_a_change_is_logged() {
     setup_chose_card(&context, serde_json::json!({"device": 0x2B85}));
     scratch.write("program/guest/nv-media-foundation.ps1", "register the transforms");
     let answers = [
-        "kept 12 values of 2 transforms\r\n",
-        "nothing to register: the INF names no transforms\r\n",
-        "skipped a line that can't be read: HKCR,one\r\nregistered 11 of 11 values of 2 transforms, failed 0\r\n",
-        "left HKLM\\a\\key Name as it is set\r\nregistered 0 of 12, failed 0, left 1 of the switch's as set\r\n",
+        "kept 12 values of 2 transforms in 380 ms\r\n",
+        "nothing to register: the INF has no transforms for the card, read in 350 ms\r\n",
+        "skipped a line that can't be read: HKCR,one\r\nregistered 11 of 11 values of 2 transforms, failed 0, in 412 ms\r\n",
+        "left HKLM\\a\\key Name as it is set\r\nregistered 0 of 12, failed 0, left 1 of the switch's as set, in 9 ms\r\n",
     ];
     let agent = Arc::new(ScriptedAgent::answering(&answers));
     context.agent = agent.clone();
@@ -789,7 +789,7 @@ fn the_transforms_script_goes_to_the_guest_and_only_a_change_is_logged() {
     register_media_transforms(&mut task).unwrap();
     let log = crate::log::read_log(&context);
     assert!(log.contains("media transforms: skipped a line that can't be read: HKCR,one"), "{log}");
-    assert!(log.contains("registered 11 of 11 values of 2 transforms"), "{log}");
+    assert!(log.contains("registered 11 of 11 values of 2 transforms, failed 0, in 412 ms"), "{log}");
     assert!(!log.contains("the switch's"), "{log}");
     register_media_transforms(&mut task).unwrap();
     let log = crate::log::read_log(&context);

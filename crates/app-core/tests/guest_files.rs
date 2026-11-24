@@ -100,7 +100,7 @@ fn the_transforms_script_leaves_the_switch_as_someone_set_it() {
     let (before, after) = script.split_once(left).expect("a switch value with other data is left");
     assert!(!before.contains("Write-Entry $entry"), "it is left before anything is written");
     assert!(after.trim_start().starts_with("$left++"), "and counted, so the start says so");
-    assert!(script.contains("if (-not ($written -or $failed -or $left)) { return \"kept $all\" }"));
+    assert!(script.contains("if (-not ($written -or $failed -or $left)) { return \"kept $all in "));
 }
 
 /// The helper for dragged files listens on the guest's network, so both the firewall rule and the

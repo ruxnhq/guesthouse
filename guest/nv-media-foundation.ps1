@@ -207,15 +207,20 @@ function Write-Entry($entry) {
 # starts with 'kept' when everything was there, with 'registered' when something was written, failed
 # or left as someone set it, with 'nothing to register' for a driver whose INF has no transforms for
 # the card, and with 'no transforms registered' when the card isn't known or the INF doesn't list it.
+# Once the INF was read, the last line ends with how long this took: the whole INF is read at every
+# start, and the start waits for it.
 function Register-Transforms($folder, $card) {
     if ($card -notmatch $deviceNumber) { return "no transforms registered: '$card' isn't a card's device number" }
     $inf = Join-Path $folder $infName
     if (-not (Test-Path -LiteralPath $inf)) { return "nothing to register: no $inf" }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     # An INF with no mark of its encoding is in the system's own, as Windows reads it.
     $found = Read-Registrations ([IO.File]::ReadAllLines($inf, [Text.Encoding]::Default)) $folder $card
-    if (-not $found.Listed) { return "no transforms registered: $inf doesn't list the card $card" }
+    if (-not $found.Listed) {
+        return "no transforms registered: $inf doesn't list the card $card, read in $($clock.ElapsedMilliseconds) ms"
+    }
     if (-not $found.Entries.Count -and -not $found.Skipped) {
-        return "nothing to register: $inf has no transforms for the card $card"
+        return "nothing to register: $inf has no transforms for the card $card, read in $($clock.ElapsedMilliseconds) ms"
     }
     foreach ($line in $found.Skipped) {
         "skipped a line that can't be read: $($line.Substring(0, [Math]::Min($line.Length, $shown)))"
@@ -240,10 +245,10 @@ function Register-Transforms($folder, $card) {
         }
     }
     $all = "$($found.Entries.Count) values of $($found.Transforms.Count) transforms"
-    if (-not ($written -or $failed -or $left)) { return "kept $all" }
+    if (-not ($written -or $failed -or $left)) { return "kept $all in $($clock.ElapsedMilliseconds) ms" }
     $said = "registered $written of $all, failed $failed"
     if ($left) { $said += ", left $left of the switch's as set" }
-    $said
+    "$said, in $($clock.ElapsedMilliseconds) ms"
 }
 
 Register-Transforms $store $card

@@ -117,7 +117,7 @@ pub enum Engine {
     Video(VideoEngine),
 }
 
-/// One of the card's video decoders or encoders.
+/// One of the card's video engines: a decoder, an encoder or an optical flow engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoEngine {
     /// The RM's engine number.

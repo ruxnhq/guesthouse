@@ -12,7 +12,7 @@
 //! submission names the buffers it may use in a `BO_HANDLES` chunk, which makes amdgpu bring them in
 //! first and keep them in until the work retires.
 
-use crate::ioctl::{self, call, get64, put32, put64};
+use crate::ioctl::{self, call, get32, get64, put32, put64};
 use crate::memory::GemHandle;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -54,6 +54,18 @@ const BO_LIST_ENTRY_SIZE: usize = 12;
 const BO_LIST_ENTRIES: usize = 16;
 const BO_LIST_SIZE: usize = 24;
 const BO_ENTRY_SIZE: usize = 8;
+
+// drm_amdgpu_bo_list_in again, for the ioctl that makes a list: the operation and the list's handle
+// come before the number and the pointer, and the answer is the list's handle.
+const LIST_OPERATION: usize = 0;
+const LIST_HANDLE: usize = 4;
+const LIST_NUMBER: usize = 8;
+const LIST_ENTRY_SIZE: usize = 12;
+const LIST_ENTRIES: usize = 16;
+const LIST_OUT_HANDLE: usize = 0;
+const OP_CREATE: u32 = 0;
+const OP_DESTROY: u32 = 1;
+const OP_UPDATE: u32 = 2;
 
 // drm_amdgpu_cs in/out, 24 bytes.
 const CS_CTX_ID: usize = 0;
@@ -245,6 +257,35 @@ pub struct Ib {
     pub bytes: u32,
 }
 
+/// Makes the list of buffers a submission may touch, or replaces the one `existing` names. Making a
+/// list only looks the handles up and takes a reference on each buffer; every submission that names it
+/// still has the kernel lock and validate each buffer in it. What a submission saves is the lookup
+/// and the building of the list from the handles it would otherwise carry.
+pub fn make_bo_list(file: &impl AsRawFd, buffers: &[GemHandle], existing: Option<u64>) -> io::Result<u64> {
+    let entries = bo_entries(buffers);
+    let mut request = [0u8; 24];
+    put32(&mut request, LIST_OPERATION, if existing.is_some() { OP_UPDATE } else { OP_CREATE });
+    put32(&mut request, LIST_HANDLE, existing.unwrap_or(0) as u32);
+    put32(&mut request, LIST_NUMBER, buffers.len() as u32);
+    put32(&mut request, LIST_ENTRY_SIZE, BO_ENTRY_SIZE as u32);
+    put64(&mut request, LIST_ENTRIES, entries.as_ptr() as u64);
+    ioctl::drm_ioctl(file, ioctl::call::bo_list(), &mut request)?;
+    let handle = get32(&request, LIST_OUT_HANDLE);
+    if handle == 0 {
+        return Err(io::Error::other("the kernel gave no handle for the buffer list"));
+    }
+    Ok(u64::from(handle))
+}
+
+/// Lets the kernel free the list `handle` names, and with it its hold on every buffer in it. A list
+/// that is merely forgotten keeps those buffers referenced until the file closes.
+pub fn destroy_bo_list(file: &impl AsRawFd, handle: u64) -> io::Result<()> {
+    let mut request = [0u8; 24];
+    put32(&mut request, LIST_OPERATION, OP_DESTROY);
+    put32(&mut request, LIST_HANDLE, handle as u32);
+    ioctl::drm_ioctl(file, ioctl::call::bo_list(), &mut request)
+}
+
 /// Submits one IB and asks the kernel to signal `signal` when it retires. The IB is already at
 /// `ib_va` in this file's address space, `ib_bytes` long, for the engine family `ip_type`. No
 /// buffers are named, which suits a probe whose buffers are small and just made.
@@ -256,30 +297,34 @@ pub fn submit(
     ib_bytes: u32,
     signal: &Syncobj,
 ) -> io::Result<u64> {
-    submit_all(file, context, ip_type, &[Ib { address: ib_va, bytes: ib_bytes }], &[], signal)
+    submit_all(file, context, ip_type, &[Ib { address: ib_va, bytes: ib_bytes }], &[], None, signal)
 }
 
 /// Submits IBs to run in order on one engine, and asks the kernel to signal `signal` when the last
-/// retires. `buffers`, handles on `file`, are kept in place until then.
+/// retires. `buffers`, handles on `file`, are kept in place until then, or `list` names the list
+/// already made of them.
 pub fn submit_all(
     file: &impl AsRawFd,
     context: &Context,
     ip_type: u32,
     ibs: &[Ib],
     buffers: &[GemHandle],
+    list: Option<u64>,
     signal: &Syncobj,
 ) -> io::Result<u64> {
-    submit_after(file, context, ip_type, ibs, buffers, &[], signal)
+    submit_after(file, context, ip_type, ibs, buffers, list, &[], signal)
 }
 
 /// As [`submit_all`], with the IBs held on the card until every sync object in `after`, on `file`,
 /// has been signalled.
+#[allow(clippy::too_many_arguments)]
 pub fn submit_after(
     file: &impl AsRawFd,
     context: &Context,
     ip_type: u32,
     ibs: &[Ib],
     buffers: &[GemHandle],
+    list: Option<u64>,
     after: &[Syncobj],
     signal: &Syncobj,
 ) -> io::Result<u64> {
@@ -312,7 +357,8 @@ pub fn submit_after(
         write_chunk(&mut slot, CHUNK_ID_SYNCOBJ_IN, waits.len(), waits.as_ptr() as u64);
         chunks.push(slot);
     }
-    if !buffers.is_empty() {
+    // The list is named by its handle when one was made, so its handles are only sent the once.
+    if list.is_none() && !buffers.is_empty() {
         let mut slot = [0u8; CHUNK_SIZE];
         write_chunk(&mut slot, CHUNK_ID_BO_HANDLES, BO_LIST_SIZE / 4, bo_list.as_ptr() as u64);
         chunks.push(slot);
@@ -321,7 +367,7 @@ pub fn submit_after(
 
     let mut request = [0u8; CS_REQUEST_SIZE];
     put32(&mut request, CS_CTX_ID, context.id());
-    put32(&mut request, CS_BO_LIST, 0);
+    put32(&mut request, CS_BO_LIST, list.unwrap_or(0) as u32);
     put32(&mut request, CS_NUM_CHUNKS, chunk_pointers.len() as u32);
     put64(&mut request, CS_CHUNKS, chunk_pointers.as_ptr() as u64);
     ioctl::drm_ioctl(file, call::cs(), &mut request)?;

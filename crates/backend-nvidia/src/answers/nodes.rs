@@ -1,11 +1,12 @@
 //! The engine nodes the guest sees, from the list of engines the RM reports.
 //!
 //! Each engine the card has gets a node, and names go by the engine's real index, so a card with only
-//! the fourth JPEG engine says so. JPEG and optical flow engines have no channels here and the guest
-//! doesn't mind which numbers their nodes have, so only engines that have been run get a node. A card
-//! with others shows fewer nodes. Which those are, and their types, is the generation's.
+//! the fourth JPEG engine says so. JPEG engines have no channels here, optical flow engines have one
+//! only where the generation says so, and the guest doesn't mind which numbers their nodes have, so
+//! only engines that have been run get a node. A card with others shows fewer nodes. Which those
+//! are, and their types, is the generation's.
 
-use crate::profile::EngineNodes;
+use crate::profile::{EngineNodes, Generation};
 
 // The guest's engine kinds.
 pub const ENGINE_OTHER: u32 = 0;
@@ -63,7 +64,8 @@ pub struct Node {
     pub in_flight: u32,
     /// The RM's copy engine, for nodes that copy.
     pub copy_engine: u32,
-    /// The RM's engine and which of its kind it is, for nodes that decode or encode.
+    /// The RM's engine and which of its kind it is, for nodes whose contexts get a channel on a
+    /// video engine: a decoder, an encoder, or an optical flow engine.
     pub video: Option<(u32, u32)>,
 }
 
@@ -86,6 +88,16 @@ impl Node {
 
     fn named(kind: u32, name: impl Into<String>) -> Self {
         Self { name: name.into(), ..Self::new(kind, ENGINE_OTHER) }
+    }
+
+    /// The class of a channel on this node's video engine, if its contexts get one.
+    pub fn video_class(&self, generation: &Generation) -> Option<u32> {
+        let (rm_engine, _) = self.video?;
+        if RM_OPTICAL_FLOW.contains(&rm_engine) {
+            return generation.nodes.optical_flow_class;
+        }
+        let encodes = self.engine == ENGINE_VIDEO_ENCODE;
+        Some(if encodes { generation.video_encode_class } else { generation.video_decode_class })
     }
 }
 
@@ -168,7 +180,8 @@ pub fn node_list(engines: &[u32], graphics_copy: Option<u32>, types: &EngineNode
         nodes.push(video_node(types, kind, ENGINE_VIDEO_ENCODE, RM_ENCODE[index], index));
     }
     for (index, kind) in known(engines, &RM_OPTICAL_FLOW, types.optical_flow) {
-        nodes.push(Node::named(kind, format!("OFA_{index}")));
+        let video = types.optical_flow_class.map(|_| (RM_OPTICAL_FLOW[index], index as u32));
+        nodes.push(Node { video, ..Node::named(kind, format!("OFA_{index}")) });
     }
     for (index, kind) in known(engines, &RM_JPEG, types.jpeg) {
         nodes.push(Node::named(kind, format!("JPEG_Decode_{index}")));
@@ -239,9 +252,10 @@ pub fn copy_record_flags(node: &Node, shared: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::BLACKWELL;
+    use crate::profile::{ADA, AMPERE, BLACKWELL};
 
     const COPY_FLAGS: u32 = 0x1A0;
+    const RM_FIRST_OPTICAL_FLOW: u32 = RM_OPTICAL_FLOW[0];
 
     fn nodes_of(engines: &[u32], graphics_copy: Option<u32>) -> Vec<Node> {
         node_list(engines, graphics_copy, &BLACKWELL.nodes)
@@ -277,6 +291,22 @@ mod tests {
         let plain = nodes_of(&[0x01, 0x09], None).len();
         assert_eq!(nodes_of(&[0x01, 0x09, 0x14, 0x2B], None).len(), plain);
         assert_eq!(nodes_of(&[0x01, 0x09, 0x13], None).len(), plain + 1);
+    }
+
+    #[test]
+    fn an_optical_flow_node_runs_on_its_engine_only_where_the_generation_has_a_class_for_it() {
+        let optical_flow = |generation: &Generation| {
+            let nodes = node_list(&[0x01, 0x09, RM_FIRST_OPTICAL_FLOW], None, &generation.nodes);
+            nodes.into_iter().find(|node| node.name == "OFA_0").unwrap()
+        };
+        let amperes = optical_flow(&AMPERE);
+        assert_eq!(amperes.video, Some((RM_FIRST_OPTICAL_FLOW, 0)));
+        assert_eq!(amperes.video_class(&AMPERE), AMPERE.nodes.optical_flow_class);
+        for generation in [&BLACKWELL, &ADA] {
+            let listed = optical_flow(generation);
+            assert_eq!((listed.video, listed.video_class(generation)), (None, None), "{}", generation.name);
+            assert_eq!(node_entry(&listed), node_entry(&amperes), "the guest is told the same");
+        }
     }
 
     #[test]

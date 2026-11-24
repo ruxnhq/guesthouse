@@ -88,7 +88,8 @@ fn median_submit(device: &Device, context: &Context, ib: Ib, buffers: &[GemHandl
     for _ in 0..REPEATS {
         let signal = Syncobj::create(device).unwrap();
         let started = Instant::now();
-        guesthouse_backend_amd::submit_all(device, context, HW_IP_DMA, &[ib], buffers, &signal).unwrap();
+        guesthouse_backend_amd::submit_all(device, context, HW_IP_DMA, &[ib], buffers, None, &signal)
+            .unwrap();
         times.push(started.elapsed().as_secs_f64() * 1e6);
         let event = signal.arm_eventfd(device).unwrap();
         assert!(guesthouse_backend_amd::wait_eventfd(&event, WAIT_MS).unwrap(), "did not complete");

@@ -56,9 +56,9 @@ It's on by default. With `GUESTHOUSE_AMD_GL_COPY=1` in the environment the app o
 
 ## Sharing the card
 
-Off by default since 0.7.7. With `GUESTHOUSE_AMD_GIVE_WAY=1` in the environment the app or `guesthouse-vm` starts the machine from, a guest gives way when it sees others waiting for the card, so a small app on the host, in a container or in another VM gets turns between the guest's work. It helped a container's vkmark beside two Windows guests on a Radeon 780M (#276).
+Off by default since 0.7.7. With `GUESTHOUSE_AMD_GIVE_WAY=1` in the environment the app or `guesthouse-vm` starts the machine from, a guest gives way when it sees others waiting for the card. It then sends one piece of work at a time instead of several, so a small app on the host, in a container or in another VM waits for one of the guest's at most, not for all of them. With nobody else on the card nothing changes, and the guest's own programs, such as Windows' compositor beside a game, don't count as others.
 
-It was on for everyone in 0.7.6, and a guest alone on the card could then give way to itself. On a tester's 780M, GravityMark ran at under a third of 0.7.5's score (#327). With the switch on, that still happens, so turn it on only when the card is shared and the others matter more than the guest's speed. It also doesn't see every client yet. A host app with very short jobs beside one guest wasn't noticed in a test on a Radeon 610M.
+In 0.7.6 it was on for everyone and also paused after each piece of work. A guest alone on the card could then give way to itself, and on a tester's Radeon 780M GravityMark ran at under a third of 0.7.5's score (#327). That's fixed: on the same 780M, GravityMark alone now scores the same with the switch on as with it off. A small app gets less than it did in 0.7.6 beside a busy guest, and more than with the switch off.
 
 ## Hardware video
 

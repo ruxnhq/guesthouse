@@ -119,6 +119,9 @@ const CAPS_DRIVER_MODEL: usize = 0x150;
 const SCHEDULER_MULTIPLE_ENGINES: u32 = 1 << 0;
 const SCHEDULER_PREEMPTION: u32 = 1 << 2;
 const SCHEDULER_NO_COMMAND_PATCHING: u32 = 1 << 3;
+/// The guest's kernel refuses a cross-adapter allocation from a card that doesn't say this, and a
+/// heap of a program's own memory is one.
+const MEMORY_CROSS_ADAPTER: u32 = 1 << 4;
 const MEMORY_VIRTUAL_ADDRESSING: u32 = 1 << 5;
 const MEMORY_GPU_PAGING: u32 = 1 << 6;
 const MEMORY_PARAVIRTUAL: u32 = 1 << 10;
@@ -153,7 +156,8 @@ pub fn driver_caps(query: CapsQuery, node_count: u32, out: &mut Vec<u8>) -> Resu
             set_u32(answer, CAPS_QUEUED_FLIPS, 1);
             let scheduler = SCHEDULER_MULTIPLE_ENGINES | SCHEDULER_PREEMPTION | SCHEDULER_NO_COMMAND_PATCHING;
             set_u32(answer, CAPS_SCHEDULER, scheduler);
-            let memory = MEMORY_VIRTUAL_ADDRESSING | MEMORY_GPU_PAGING | MEMORY_PARAVIRTUAL;
+            let memory =
+                MEMORY_CROSS_ADAPTER | MEMORY_VIRTUAL_ADDRESSING | MEMORY_GPU_PAGING | MEMORY_PARAVIRTUAL;
             set_u32(answer, CAPS_MEMORY_MANAGER, memory);
             set_u32(answer, CAPS_ASYMMETRIC_NODES, 1);
             set_u32(answer, CAPS_DRIVER_MODEL, DRIVER_MODEL_CAPS);
@@ -365,6 +369,14 @@ mod tests {
     fn caps_need_room_for_their_fields() {
         let query = CapsQuery { kind: CapsQuery::GENERAL, out_size: 0x10 };
         assert_eq!(driver_caps(query, 8, &mut Vec::new()), Err(Malformed));
+    }
+
+    #[test]
+    fn the_memory_manager_takes_cross_adapter_allocations() {
+        let mut out = Vec::new();
+        driver_caps(CapsQuery { kind: CapsQuery::GENERAL, out_size: 0x154 }, 8, &mut out).unwrap();
+        let caps = u32_at(&out, CAPS_MEMORY_MANAGER);
+        assert_eq!(caps.map(|caps| caps & MEMORY_CROSS_ADAPTER), Ok(MEMORY_CROSS_ADAPTER));
     }
 
     #[test]

@@ -43,6 +43,7 @@ const DRM_SYNCOBJ_EVENTFD: u64 = 0xCF;
 const DRM_AMDGPU_GEM_CREATE: u64 = 0x00;
 const DRM_AMDGPU_GEM_MMAP: u64 = 0x01;
 const DRM_AMDGPU_CTX: u64 = 0x02;
+const DRM_AMDGPU_BO_LIST: u64 = 0x03;
 const DRM_AMDGPU_CS: u64 = 0x04;
 const DRM_AMDGPU_INFO: u64 = 0x05;
 const DRM_AMDGPU_GEM_METADATA: u64 = 0x06;
@@ -74,6 +75,9 @@ pub mod call {
     }
     pub fn ctx() -> u64 {
         number(IOCTL_READ_WRITE, DRM_COMMAND_BASE + DRM_AMDGPU_CTX, 16)
+    }
+    pub fn bo_list() -> u64 {
+        number(IOCTL_READ_WRITE, DRM_COMMAND_BASE + DRM_AMDGPU_BO_LIST, 24)
     }
     pub fn cs() -> u64 {
         number(IOCTL_READ_WRITE, DRM_COMMAND_BASE + DRM_AMDGPU_CS, 24)

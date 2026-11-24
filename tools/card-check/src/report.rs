@@ -54,10 +54,16 @@ fn verdict_lines(findings: &Findings) -> String {
         Verdict::Experimental { generation, ever_run: true } => {
             format!("Verdict: experimental. {generation} has run a guest, but this card has not.\n")
         }
-        Verdict::Experimental { generation, ever_run: false } => format!(
-            "Verdict: experimental. {generation} has never run a guest. The decoder and encoder engines \
-             listed above are what fills in the node types still unset for it.\n"
-        ),
+        Verdict::Experimental { generation, ever_run: false } => {
+            let video_runs = findings.generation.is_some_and(|generation| generation.nodes.video_runs);
+            let unset = if video_runs {
+                ""
+            } else {
+                " The decoder and encoder engines listed above are what fills in the node types still \
+                 unset for it."
+            };
+            format!("Verdict: experimental. {generation} has never run a guest.{unset}\n")
+        }
         Verdict::Refused(reason) => format!("Verdict: refused. {reason}\n"),
     }
 }
@@ -79,6 +85,7 @@ fn generation_class_lines(findings: &Findings) -> String {
     if generation.nodes.video_runs {
         wanted.extend([generation.video_decode_class, generation.video_encode_class]);
     }
+    wanted.extend(generation.nodes.optical_flow_class);
     let mut missing: Vec<u32> = Vec::new();
     for class in wanted {
         if !findings.classes.contains(&class) && !missing.contains(&class) {

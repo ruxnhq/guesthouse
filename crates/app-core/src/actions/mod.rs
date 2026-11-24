@@ -41,7 +41,7 @@ pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
 use guest_files::{
     name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
-    place_system_files, write_device_key,
+    place_system_files, register_media_transforms, write_device_key,
 };
 use identity::set_up_identity;
 pub(crate) use identity::will_stage;
@@ -355,6 +355,7 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
             place_driver_files(task)?;
             place_nvapi_wrapper(task)?;
             place_profile_store(task)?;
+            register_media_transforms(task)?;
             name_display(task)
         }
         Some(GpuMaker::Amd) => {

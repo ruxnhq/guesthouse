@@ -112,7 +112,8 @@ impl AdapterAnswers {
         self.engines.get(node as usize) == Some(&ENGINE_VIDEO_ENCODE)
     }
 
-    /// Whether a node is one of the card's video decoders or encoders that can run.
+    /// Whether a node's contexts get a channel on a video engine: a decoder or an encoder that can
+    /// run, or an optical flow engine that takes contexts.
     pub fn node_is_video(&self, node: u32) -> bool {
         self.video_nodes.get(node as usize) == Some(&true)
     }

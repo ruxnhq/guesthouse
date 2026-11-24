@@ -162,11 +162,17 @@ pub fn file_list(files: &[GuestFile]) -> String {
     files.iter().map(|file| format!("{}\t{}\t{}\n", file.folder, file.source, file.name)).collect()
 }
 
+/// The PCI device number of the card setup chose, which is how the driver's INF knows the card.
+pub fn setup_card_device(context: &Context) -> Option<u32> {
+    let device = read_setup(context).get("card")?.get("device")?.as_u64()?;
+    Some(device as u32)
+}
+
 /// The list for this PC's driver and card.
 pub fn guest_file_list(context: &Context) -> Result<String> {
     let setup = read_setup(context);
-    let device = setup.get("card").and_then(|card| card.get("device")).and_then(|device| device.as_u64());
-    let device = device.ok_or_else(|| Failure::new("Setup doesn't know the card yet."))? as u32;
+    let device =
+        setup_card_device(context).ok_or_else(|| Failure::new("Setup doesn't know the card yet."))?;
     let pci = setup.get("card").and_then(|card| card.get("pci")).and_then(|pci| pci.as_str());
     let subsystem = pci.map_or(0, |pci| card_subsystem(&context.pci_devices.join(pci)));
     let files = guest_files(&read_infs(&driver_folder(context))?, device, subsystem);

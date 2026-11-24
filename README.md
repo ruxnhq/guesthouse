@@ -38,7 +38,7 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 | **Windows hosts** · Windows 11 Home or Pro, no Hyper-V needed | **The app** · give it an ISO, and it installs the guest with its GPU |
 
 > [!NOTE]
-> **Early days.** Linux 0.7.7 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS guests are a [preview](docs/macos.md). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
+> **Early days.** Linux 0.8.0 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS guests are a [preview](docs/macos.md). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
 
 ## Install
 
@@ -53,6 +53,17 @@ The script is meant to be read first, and [what it does](docs/install.md) is wri
 **Windows 11** · Home or Pro, x64
 
 Get the installer from **[guesthouse.ruxn.com](https://guesthouse.ruxn.com/#download)**. [How it works on Windows](docs/windows-host.md).
+
+## What a machine can do
+
+On Linux hosts, from 0.8.0.
+
+- **Duplicate, throwaway, export.** Copy a machine in a second, run one that forgets everything when it stops, or move one to another PC as a single file. [Copies](docs/copies.md).
+- **Ready-made machines.** Pick a recipe at install and the machine comes set up, with Steam on Windows or the CUDA toolkit on Ubuntu. Or write your own. [Recipes](docs/recipes.md).
+- **Lean Windows.** Install Windows without the apps most people never open in a VM. Off unless you choose it. [What it takes out](docs/recipes.md#lean-windows).
+- **Snapshots before a risky start.** A machine can save a snapshot by itself before a change that may leave Windows unable to come up, such as a new display driver. Off by default.
+- **See how the card is shared.** The library shows each running machine's part of the card.
+- **No window needed.** Everything above is in `guesthouse-vm` too. [The commands](docs/headless.md).
 
 ## Is it safe?
 

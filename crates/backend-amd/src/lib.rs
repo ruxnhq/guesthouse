@@ -19,6 +19,7 @@
 // Linux only: it talks to amdgpu through ioctl. Other systems get an empty crate.
 #![cfg(target_os = "linux")]
 
+mod buffer_list;
 mod card_name;
 mod channel_order;
 mod copy_ib;
@@ -64,7 +65,7 @@ pub use memory::{
     tiling as buffer_tiling,
 };
 pub use share::VARIABLE as GIVE_WAY_VARIABLE;
-pub use share::{RunTimes, Share};
+pub use share::{OwnEnds, RunTimes, Share};
 pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_after, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
 pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
@@ -142,6 +143,10 @@ pub struct AmdBackend {
     gives_way: bool,
     /// OpenGL in a window keeps the blt present and its copies, see [`gl_present`].
     gl_copies: bool,
+    /// When the guest's runs ended on each engine, over all its spaces, for giving way.
+    own_ends: share::OwnEnds,
+    /// When runs were last judged for giving way.
+    judged_at: Option<Instant>,
     /// Runs the core has had prepared and not yet let go, by the doorbell that sends each.
     prepared: HashMap<u64, PreparedRun>,
     /// Video runs the core has had prepared and not yet let go, by the doorbell that sends each.
@@ -265,6 +270,8 @@ impl AmdBackend {
             patience: Patience::RUN,
             gives_way: false,
             gl_copies: false,
+            own_ends: share::OwnEnds::default(),
+            judged_at: None,
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
@@ -299,6 +306,9 @@ impl AmdBackend {
     pub fn give_way(&mut self) {
         log::info!("{GIVE_WAY_VARIABLE} is on: the guest gives way when it sees others waiting for the card");
         self.gives_way = true;
+        for space in self.spaces.values_mut() {
+            space.vm.keep_finished();
+        }
     }
 
     /// Keeps OpenGL in a window on the blt present, which the guest copies twice, see
@@ -1051,6 +1061,37 @@ fn ranges_fit(ranges: &[GpuRange], start: u64, end: u64) -> bool {
     ranges.iter().all(|range| range.start >= start && range.end <= end && range.start <= range.end)
 }
 
+/// How often finished runs are judged for giving way at most, as it looks at every space's runs.
+const JUDGE_EVERY: Duration = Duration::from_millis(1);
+
+/// Judges every space's finished runs for giving way, against the guest's own work in all its
+/// spaces: see [`share`]. A run that another space sent before this one's started is ended on the
+/// card by then, so it is noted from the card's times, retired or not, before anything is judged.
+fn settle_shares(spaces: &mut HashMap<SpaceId, Space>, own: &mut share::OwnEnds) {
+    let mut finished = Vec::new();
+    for (&id, space) in spaces.iter_mut() {
+        finished.extend(space.vm.take_finished().into_iter().map(|run| (id, run)));
+    }
+    if finished.is_empty() {
+        return;
+    }
+    for space in spaces.values() {
+        for (ip_type, ended) in space.vm.ends_on_card() {
+            own.noted(ip_type, ended);
+        }
+    }
+    for (_, run) in &finished {
+        own.noted(run.ip_type, run.times.ended);
+    }
+    finished.sort_by_key(|(_, run)| run.times.started);
+    for (id, run) in finished {
+        let own_end = own.last_by(run.ip_type, run.times.started);
+        if let Some(space) = spaces.get_mut(&id) {
+            space.vm.judge(run, own_end);
+        }
+    }
+}
+
 /// Where in this process a command buffer lies, if it lies in guest pages, which the CPU reads
 /// where they are. A guest writes its commands with its CPU, so that is where they are.
 fn guest_command_bytes(memory: &HashMap<MemoryId, Bo>, space: &SpaceVm, ib: &Ib) -> Option<*const u8> {
@@ -1449,8 +1490,11 @@ impl Backend for AmdBackend {
             )));
         }
         let space = SpaceId(self.new_id());
-        let vm = SpaceVm::open(&self.device)
+        let mut vm = SpaceVm::open(&self.device)
             .map_err(|error| BackendError::new(format!("opening the card for an address space: {error}")))?;
+        if self.gives_way {
+            vm.keep_finished();
+        }
         self.spaces.insert(space, Space { ranges: ranges.to_vec(), mappings: BTreeMap::new(), vm });
         log::debug!("address space {space:?} opened");
         Ok(space)
@@ -1683,9 +1727,20 @@ impl Backend for AmdBackend {
             .filter(|_| space.vm.holds(work.fence_gpu_address, FENCE_BYTES));
         if let Some(writer) = writer {
             // While others wait for the card, the space sends one run at a time and pauses between.
-            if self.gives_way && !space.vm.may_send(node.ip_type) {
-                return WorkStart::Busy;
-            }
+            let space = if self.gives_way {
+                let now = Instant::now();
+                if self.judged_at.is_none_or(|at| now.saturating_duration_since(at) >= JUDGE_EVERY) {
+                    self.judged_at = Some(now);
+                    settle_shares(&mut self.spaces, &mut self.own_ends);
+                }
+                let Some(space) = self.spaces.get_mut(&work.space) else { return WorkStart::QueueFailed };
+                if !space.vm.may_send(node.ip_type) {
+                    return WorkStart::Busy;
+                }
+                space
+            } else {
+                space
+            };
             // The card writes the fence itself when the run is through, so nothing waits here.
             let written =
                 space.vm.fence_writer(card.va_alignment, writer, work.fence_gpu_address, work.fence_value);

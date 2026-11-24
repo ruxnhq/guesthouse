@@ -58,6 +58,7 @@ fn a_run_waits_on_the_card_for_a_run_on_another_open() {
         HW_IP_DMA,
         &[runs[0].0],
         &[],
+        None,
         &first_done,
     )
     .unwrap();
@@ -65,8 +66,17 @@ fn a_run_waits_on_the_card_for_a_run_on_another_open() {
     let wait = Syncobj::from_sync_file(&other, &sync_file).unwrap();
     let context = Context::create(&other).unwrap();
     let done = Syncobj::create(&other).unwrap();
-    guesthouse_backend_amd::submit_after(&other, &context, HW_IP_DMA, &[runs[1].0], &[], &[wait], &done)
-        .unwrap();
+    guesthouse_backend_amd::submit_after(
+        &other,
+        &context,
+        HW_IP_DMA,
+        &[runs[1].0],
+        &[],
+        None,
+        &[wait],
+        &done,
+    )
+    .unwrap();
     let event = done.arm_eventfd(&other).unwrap();
     assert!(guesthouse_backend_amd::wait_eventfd(&event, 2000).unwrap(), "did not complete");
     assert!(first_done.signalled(&first_file).unwrap(), "the run it waited for retired first");

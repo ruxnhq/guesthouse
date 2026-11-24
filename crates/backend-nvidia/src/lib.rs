@@ -40,7 +40,7 @@ mod tiling;
 pub mod wakes;
 
 use answers::adapter::{AdapterAnswers, Inputs};
-use answers::nodes::{ENGINE_VIDEO_ENCODE, Node, node_list};
+use answers::nodes::{Node, node_list};
 use answers::perf_data;
 use answers::registry::AdapterRegistry;
 use channel::{ListChannel, VideoEngine};
@@ -79,6 +79,8 @@ pub(crate) const UNFINISHED_ENTRIES_LIMIT: u64 = 4000;
 
 /// What the guest's runtime says a Vulkan context is for. Vulkan's video queue families can also
 /// transfer, and it uses them for plain copies, so its contexts on video nodes get copy channels.
+/// Vulkan Video needs the engine's own channel there, which they get on a generation whose profile
+/// says it runs.
 const CLIENT_HINT_VULKAN: u32 = 4;
 
 /// A word in a video context's private data, which we set to one.
@@ -301,14 +303,12 @@ impl<R: Rm> NvidiaBackend<R> {
 
     /// The video engine this work's commands are for, if they are for one.
     pub(crate) fn video_engine(&self, work: &Work<'_>) -> Option<VideoEngine> {
-        if work.client_hint == CLIENT_HINT_VULKAN {
+        if work.client_hint == CLIENT_HINT_VULKAN && !self.generation.nodes.vulkan_video_runs {
             return None;
         }
         let node = self.nodes.get(work.node as usize)?;
         let (rm_engine, instance) = node.video?;
-        let encodes = node.engine == ENGINE_VIDEO_ENCODE;
-        let generation = self.generation;
-        let class = if encodes { generation.video_encode_class } else { generation.video_decode_class };
+        let class = node.video_class(self.generation)?;
         Some(VideoEngine { rm_engine, class, instance })
     }
 
@@ -632,7 +632,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     }
 
     /// A context on a video node gets a one in its answer. Measured: left at zero, Direct3D 11 still
-    /// decodes, and `cuvidCreateDecoder` fails.
+    /// decodes, and `cuvidCreateDecoder` fails. The optical flow node's context has only run with it.
     fn finish_context_data(&mut self, node: u32, private: &mut [u8]) {
         if self.answers.node_is_video(node)
             && let Some(field) = private.get_mut(VIDEO_CONTEXT_WORD..VIDEO_CONTEXT_WORD + 4)

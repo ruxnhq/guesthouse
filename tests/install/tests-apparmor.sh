@@ -59,6 +59,29 @@ t_running_the_same_version_again_adds_a_missing_rule() {
     grep -qxF "$SWTPM_RULE_LINE" "$(swtpm_local)" || fail "the rule isn't in the profile's local file"
 }
 
+# With no sudo the rule still stops the install, as only root can add it. The command it names has the
+# rule and not the bridge helper, so root can run it, and the next run goes through.
+t_without_sudo_the_rule_is_in_the_command_root_can_run() {
+    release 1.0
+    give_everything
+    give_apparmor
+    rm -rf "$T/system/libexec"
+    rm "$T/bin/sudo"
+    install_version 1.0
+    check_exit 1
+    check_said "this needs sudo, and it's not here."
+    check_said "It lets swtpm, the virtual TPM a Windows machine needs, write in your run folder"
+    check_said "There's no sudo here, so QEMU's bridge helper is left out."
+    sandbox sh -c "$(sed -n 's/.*then run me again: //p' "$T/said")" >"$T/root-said" 2>&1 ||
+        fail "the command it named for root failed"
+    grep -qxF "$SWTPM_RULE_LINE" "$(swtpm_local)" || fail "the rule isn't in the profile's local file"
+    grep -qxF "$SWTPM_SOCKET_LINE" "$(swtpm_local)" || fail "the socket rule isn't in the profile's local file"
+    install_version 1.0
+    check_exit 0
+    check_said "This puts it in, as root:"
+    check_there "$H/.local/lib/guesthouse/current/guesthouse"
+}
+
 t_with_no_apparmor_or_no_profile_nothing_is_added() {
     release 1.0
     give_everything

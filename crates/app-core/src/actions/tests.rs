@@ -2,6 +2,7 @@ use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::gpu_check::gpu_found;
 use super::guest_files::{
     name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
+    register_media_transforms,
 };
 use super::guest_upload::stand_in::FilesGuest;
 use super::window_speed::apply_window_speed;
@@ -758,6 +759,82 @@ fn with_no_profile_store_script_the_guest_is_not_asked() {
     context.agent = agent.clone();
     let host = RecordingHost::default();
     place_profile_store(&mut placing_task(&context, &host)).unwrap();
+    assert!(agent.requests.lock().unwrap().is_empty());
+}
+
+fn setup_chose_card(context: &Context, card: serde_json::Value) {
+    let fields = serde_json::json!({ "card": card });
+    crate::settings::write_setup(context, fields.as_object().cloned().unwrap()).unwrap();
+}
+
+#[test]
+fn the_transforms_script_goes_to_the_guest_and_only_a_change_is_logged() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    setup_chose_card(&context, serde_json::json!({"device": 0x2B85}));
+    scratch.write("program/guest/nv-media-foundation.ps1", "register the transforms");
+    let answers = [
+        "kept 12 values of 2 transforms\r\n",
+        "nothing to register: the INF names no transforms\r\n",
+        "skipped a line that can't be read: HKCR,one\r\nregistered 11 of 11 values of 2 transforms, failed 0\r\n",
+    ];
+    let agent = Arc::new(ScriptedAgent::answering(&answers));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    register_media_transforms(&mut task).unwrap();
+    register_media_transforms(&mut task).unwrap();
+    assert!(!crate::log::read_log(&context).contains("media transforms"));
+    register_media_transforms(&mut task).unwrap();
+    let log = crate::log::read_log(&context);
+    assert!(log.contains("media transforms: skipped a line that can't be read: HKCR,one"), "{log}");
+    assert!(log.contains("registered 11 of 11 values of 2 transforms"), "{log}");
+    assert_eq!(task.error, "", "a guest without them is as it was");
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked.len(), 3);
+    assert_eq!(asked[0].2, "$card = '2B85'\nregister the transforms", "setup's card, as the INF writes it");
+}
+
+/// The driver's INF gives each card its own transforms, so a machine on the PC's second NVIDIA card
+/// must not be given the ones of the card setup chose.
+#[test]
+fn the_transforms_script_is_told_the_card_the_machine_runs_on() {
+    use crate::setup::cards::stand_in::{NAMES, fake_pci};
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    context.pci_devices = scratch.path("pci");
+    context.pci_names = scratch.write("pci.ids", NAMES);
+    fake_pci(&scratch, "0000:01:00.0", 0x2B85, "0x10de", "0x030000");
+    fake_pci(&scratch, "0000:02:00.0", 0x2C02, "0x10de", "0x030000");
+    setup_chose_card(&context, serde_json::json!({"device": 0x2B85, "pci": "0000:01:00.0"}));
+    scratch.write("program/guest/nv-media-foundation.ps1", "register the transforms");
+    let agent = Arc::new(ScriptedAgent::answering(&["kept\r\n", "kept\r\n"]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    task.machine.use_windows_card(GpuMaker::Nvidia, "0000:02:00.0");
+    register_media_transforms(&mut task).unwrap();
+    task.machine.use_windows_card(GpuMaker::Nvidia, "0000:03:00.0");
+    register_media_transforms(&mut task).unwrap();
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked.len(), 1, "a card that has gone has no number to give");
+    assert!(asked[0].2.starts_with("$card = '2C02'\n"), "{}", asked[0].2);
+    assert!(crate::log::read_log(&context).contains("media transforms: the machine's card isn't known"));
+}
+
+#[test]
+fn with_no_transforms_script_or_no_card_the_guest_is_not_asked() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    let agent = Arc::new(ScriptedAgent::answering(&[]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    scratch.write("program/guest/nv-media-foundation.ps1", "register the transforms");
+    register_media_transforms(&mut placing_task(&context, &host)).unwrap();
+    assert!(crate::log::read_log(&context).contains("media transforms: the machine's card isn't known"));
+    fs::remove_file(context.paths.guest_files().join("nv-media-foundation.ps1")).unwrap();
+    setup_chose_card(&context, serde_json::json!({"device": 0x2B85}));
+    register_media_transforms(&mut placing_task(&context, &host)).unwrap();
     assert!(agent.requests.lock().unwrap().is_empty());
 }
 

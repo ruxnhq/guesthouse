@@ -1,6 +1,7 @@
 //! Puts the driver's files in an existing guest's system folders. The driver's own folder reaches the
 //! guest at install, but a program like a benchmark's launcher looks in System32 by name. The same for
-//! NVIDIA's settings store, which the driver's installer would make and a game reads its profile from.
+//! NVIDIA's settings store, which the driver's installer would make and a game reads its profile from,
+//! and for its Media Foundation transforms, which the driver's INF would register.
 
 use super::Task;
 use super::desktop::{GUEST_FOLDER, put_guest_file};
@@ -11,9 +12,10 @@ use crate::failure::Result;
 use crate::gpu_identity::{INTEL_RENDER, Shown, read_state};
 use crate::log::write_log;
 use crate::setup::amd_system_files::runtime_file_list;
+use crate::setup::cards::nvidia_card_at;
 use crate::setup::guest_driver::guest_driver;
 use crate::setup::guest_driver::{INTEL_STORE_FOLDER, NVIDIA_STORE_FOLDER};
-use crate::setup::guest_files::guest_file_list;
+use crate::setup::guest_files::{guest_file_list, setup_card_device};
 use crate::setup::intel::intel_driver_folder;
 use crate::setup::intel_system_list::read_system_list;
 use crate::text::base64_encode;
@@ -24,6 +26,11 @@ use std::fs;
 const SCRIPT_NAME: &str = "nv-files.ps1";
 const PROFILES_SCRIPT: &str = "nv-profiles.ps1";
 const PROFILES_SECONDS: u64 = 30;
+const TRANSFORMS_SCRIPT: &str = "nv-media-foundation.ps1";
+const TRANSFORMS_SECONDS: u64 = 30;
+/// How the transforms script's answer starts when it wrote nothing: the registry had it all, or the
+/// driver's INF asks for none for this card.
+const TRANSFORMS_UNCHANGED: [&str; 2] = ["kept", "nothing to register"];
 const DISPLAY_NAME_SCRIPT: &str = "display-name.ps1";
 const DISPLAY_NAME_SECONDS: u64 = 20;
 const SETMODE_SCRIPT: &str = "setmode.ps1";
@@ -116,6 +123,40 @@ pub(super) fn place_profile_store(task: &mut Task) -> Result<()> {
     }
     if !all_kept(&said) {
         write_log(task.context, &format!("profile store: {}", said.trim()))?;
+    }
+    Ok(())
+}
+
+/// The PCI device number of the NVIDIA card the machine runs on: the one it was given, or setup's.
+fn nvidia_device(task: &Task) -> Option<u32> {
+    match task.machine.windows_card_address() {
+        Some(pci) => nvidia_card_at(task.context, pci).map(|card| card.device),
+        None => setup_card_device(task.context),
+    }
+}
+
+/// NVIDIA's Media Foundation transforms, which a program that asks Media Foundation for a hardware
+/// encoder finds the card's through. The driver's INF registers them on a PC, and a guest never
+/// installs it. The guest reads what to register from the INF in its driver folder, at every start, so
+/// a driver changed since is followed. The INF gives each card the transforms it has, and Windows
+/// sees the device under the number Guesthouse gave it, so the script is told the card's own. A
+/// guest without them is as it was before this, so what goes wrong is logged and the start says
+/// nothing.
+pub(super) fn register_media_transforms(task: &mut Task) -> Result<()> {
+    let Some(device) = nvidia_device(task) else {
+        write_log(task.context, "media transforms: the machine's card isn't known, so none are registered")?;
+        return Ok(());
+    };
+    let script = match guest_script(task.context, TRANSFORMS_SCRIPT) {
+        Ok(script) => script,
+        Err(failure) => {
+            write_log(task.context, &format!("media transforms: {}", failure.0))?;
+            return Ok(());
+        }
+    };
+    let said = task.ask_guest(&format!("$card = '{device:04X}'\n{script}"), TRANSFORMS_SECONDS);
+    if !TRANSFORMS_UNCHANGED.iter().any(|start| said.trim().starts_with(start)) {
+        write_log(task.context, &format!("media transforms: {}", said.trim()))?;
     }
     Ok(())
 }

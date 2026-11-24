@@ -32,6 +32,8 @@ pub struct Inner {
     pub scale: u32,
     pub version: u64,
     pub layout: Layout,
+    /// A line to send in place of the layout, for a helper that sends one this build cannot read.
+    pub layout_line: Option<String>,
     pub welcome: Welcome,
     pub requests: Vec<Value>,
     pub tokens_refused: usize,
@@ -68,6 +70,7 @@ impl FakeHelper {
             scale: 100,
             version: PROTOCOL_VERSION,
             layout,
+            layout_line: None,
             welcome: Welcome::Hello,
             requests: Vec::new(),
             tokens_refused: 0,
@@ -189,7 +192,7 @@ fn serve(stream: TcpStream, token: &str, inner: &Mutex<Inner>, responder: &Mutex
                 let inner = inner.lock().unwrap();
                 let hello = hello_line(&inner.session, inner.screen, inner.scale)
                     .replace(&format!("\"v\":{PROTOCOL_VERSION}"), &format!("\"v\":{}", inner.version));
-                (hello, layout_line(&inner.layout))
+                (hello, inner.layout_line.clone().unwrap_or_else(|| layout_line(&inner.layout)))
             };
             let _ = writer.write_all(format!("{hello}\n{layout}\n").as_bytes());
         }

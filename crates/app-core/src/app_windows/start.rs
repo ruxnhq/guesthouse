@@ -2,7 +2,7 @@
 //! Nothing here runs for a machine that has app windows off: the link is refused first, so no agent
 //! request is made and no helper starts.
 
-use super::client::Client;
+use super::client::{Client, Update};
 use super::forward::{forward_word, host_port, running_machine_has_forward};
 use super::link::{HelperStarter, LinkConfig, Status};
 use super::switch::{is_on, off_text};
@@ -19,10 +19,10 @@ use std::time::{Duration, Instant};
 /// The helper's file, start script and task share this name, as the other helpers' do. The task is
 /// found by the file's name, and the helper before it is ended by it.
 pub const HELPER: &str = "app-windows";
-/// The helper's C# source, which goes along with the script for the guest to compile. It is a
-/// variable of this name that the start script finds set, as `$helper` holds the script.
+/// The helper's C# source, which goes along with the script for the guest to compile. The start script
+/// finds it as `$source`, in Base64, as it finds the script as `$helper`.
 pub const SOURCE_FILE: &str = "app-windows.cs";
-const SOURCE_VARIABLE: &str = "helperSource";
+const SOURCE_VARIABLE: &str = "source";
 const SCRIPT_FILE: &str = "app-windows.ps1";
 const START_SCRIPT_FILE: &str = "app-windows-start.ps1";
 /// The helper compiles its calls to Windows before it listens, and the first start also opens the
@@ -31,6 +31,8 @@ const START_SECONDS: u64 = 30;
 const STARTED_WORD: &str = "started";
 const NOBODY_WORD: &str = "nobody is logged in";
 /// How often a command that waits looks at the link.
+/// What the link says of a line it could not use, which a log shows and a command quotes.
+const LEFT_OUT: &str = "was left out";
 const LOOK: Duration = Duration::from_millis(100);
 
 /// Starts the machine's helper through its agent.
@@ -150,15 +152,34 @@ impl MachineLink {
     /// Waits for the helper's hello and its first layout, which includes starting it if it was not
     /// running. Gives up at once when the start itself said it cannot.
     pub fn wait_ready(&mut self) -> Result<()> {
-        let patience = self.context.app_windows.patience;
-        let until = Instant::now() + patience;
+        let timing = self.context.app_windows.timing;
+        let until = Instant::now() + self.context.app_windows.patience;
         let name = self.machine.name.clone();
+        // A helper that says hello and then sends a layout this build cannot read is the likeliest
+        // mismatch with the guest, and waiting out the whole time for it would say nothing of why.
+        let mut left_out: Option<(Instant, String)> = None;
         loop {
+            for update in self.client.poll() {
+                if let Update::Note(text) = update
+                    && text.contains(LEFT_OUT)
+                {
+                    left_out.get_or_insert((Instant::now(), text));
+                }
+            }
             if self.client.model().seq().is_some() {
                 return Ok(());
             }
             if let Some(why) = self.starter.failure() {
                 return Err(Failure(why));
+            }
+            let up = *self.client.status() == Status::Up;
+            if let Some((since, text)) = &left_out
+                && up
+                && since.elapsed() >= timing.hello
+            {
+                return Err(Failure(format!(
+                    "The helper in {name} sent no layout this program can read. {text}"
+                )));
             }
             if Instant::now() >= until {
                 break;
@@ -171,7 +192,8 @@ impl MachineLink {
         }))
     }
 
-    /// Ends the helper if this link started it, so that a look leaves the guest as it was.
+    /// Ends the helper if this link started it, so that no helper a look started is left running. What
+    /// the helper did to the guest's windows while it ran is not undone by this.
     pub fn end_if_started(self) {
         let (context, machine, slot) = (self.context.clone(), self.machine.clone(), self.slot);
         let started = self.starter.did_start();

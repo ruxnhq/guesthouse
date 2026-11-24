@@ -121,7 +121,7 @@ fn a_helper_that_is_not_running_is_started_with_its_script_its_source_and_its_st
     let requests = agent.requests.lock().unwrap().clone();
     let start = &requests[0].2;
     let expected = format!(
-        "$helperName = 'app-windows'\nstop it\n$helper = '{}'\n$helperSource = '{}'\nstart it",
+        "$helperName = 'app-windows'\nstop it\n$helper = '{}'\n$source = '{}'\nstart it",
         base64_encode(b"the helper"),
         base64_encode(b"the source")
     );
@@ -193,4 +193,26 @@ fn a_machine_with_no_token_is_refused_in_words() {
     fs::remove_file(machine.token_file(&context)).unwrap();
     let refused = connect(&context, &machine, None).err().unwrap();
     assert!(refused.0.contains("has no token"), "{refused}");
+}
+
+#[test]
+fn a_layout_that_cannot_be_read_is_said_and_not_waited_out() {
+    let scratch = Scratch::new();
+    let (context, machine, _) = rig(&scratch, &[], true);
+    let helper = FakeHelper::start(&token_of(&context, &machine));
+    // The helper's cells lack the fields the contract names.
+    helper.with(|inner| {
+        inner.layout_line =
+            Some(r#"{"t":"layout","seq":1,"screen":{"w":1,"h":1},"cells":[{"id":"1"}]}"#.into());
+    });
+    let context = Arc::new(Context {
+        app_windows: LinkSettings { port: Some(helper.port), ..context.app_windows },
+        ..(*context).clone()
+    });
+    let started = std::time::Instant::now();
+    let mut link = connect(&context, &machine, None).unwrap();
+    let failure = link.wait_ready().unwrap_err();
+    assert!(failure.0.contains("sent no layout this program can read"), "{failure}");
+    assert!(failure.0.contains("a layout message that cannot be read"), "the reason is in it: {failure}");
+    assert!(started.elapsed() < Duration::from_secs(2), "the patience was 3 s");
 }

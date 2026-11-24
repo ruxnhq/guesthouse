@@ -102,5 +102,5 @@ Invoke-WebRequest -Uri "$base/$installer" -OutFile $back -UseBasicParsing
 if ((Get-Sha256 $back) -ne $sha) { throw "The installer downloaded from $base/$installer isn't the one built." }
 Remove-Item -LiteralPath $back
 
-Write-Output "Released the Windows host $version: $base/$installer"
+Write-Output "Released the Windows host ${version}: $base/$installer"
 Write-Output "Next, in a pull request: the Windows version in site\public\index.html, then cf deploy public from site."

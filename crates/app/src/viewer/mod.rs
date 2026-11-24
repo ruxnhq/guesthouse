@@ -586,7 +586,7 @@ impl ScreenPage {
                 "Keys go to the guest. Another window takes them back".to_owned()
             }
             _ if screen.has_keyboard() => {
-                format!("Typing goes to the guest. {CAPTURE_KEYS} sends it the desktop's shortcuts too")
+                format!("Typing goes to the guest. {CAPTURE_KEYS} sends shortcuts too")
             }
             _ => "Click the screen to send it keys".to_owned(),
         };

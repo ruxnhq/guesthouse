@@ -61,10 +61,7 @@
 .spec {
   padding: 7px 12px;
   border-radius: 12px;
-  font-family: monospace;
-  font-size: 0.8em;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.85em;
 }
 
 .state-dot {
@@ -119,6 +116,12 @@
 
 .machine-thumbnail {
   border-radius: 12px;
+}
+
+/* A machine with no picture of its screen yet shows what it runs. */
+image.machine-thumbnail {
+  color: alpha(@card_fg_color, 0.65);
+  background-color: alpha(@card_fg_color, 0.06);
 }
 
 /* The viewer's bar. It lies over the guest's screen, so it is dark in light mode too. */

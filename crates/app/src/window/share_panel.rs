@@ -14,6 +14,17 @@ const TITLE: &str = "Sharing the Card";
 struct Shown {
     group: adw::PreferencesGroup,
     rows: Vec<adw::ActionRow>,
+    /// Why some figures aren't read on this card, behind the group's info button.
+    info: gtk::MenuButton,
+}
+
+/// Puts `text` in an info button's popover, and hides the button when there's nothing to say.
+fn set_info(button: &gtk::MenuButton, text: &str) {
+    let label = button.popover().and_then(|popover| popover.child()).and_downcast::<gtk::Label>();
+    if let Some(label) = label {
+        label.set_label(text);
+    }
+    button.set_visible(!text.is_empty());
 }
 
 pub struct SharePanel {
@@ -40,7 +51,9 @@ fn group_of(card: &CardShare) -> Shown {
     for found in &rows {
         group.add(found);
     }
-    Shown { group, rows }
+    let info = crate::rows::info_button("");
+    group.set_header_suffix(Some(&info));
+    Shown { group, rows, info }
 }
 
 impl SharePanel {
@@ -78,7 +91,7 @@ impl SharePanel {
         }
         for (card, found) in cards.iter().zip(&shown.1) {
             // Set at each look, as whether a card's figures are read can change while it runs.
-            found.group.set_description(card_note(card));
+            set_info(&found.info, card_note(card).unwrap_or_default());
             let lines =
                 std::iter::once(whole_line(&card.whole)).chain(card.machines.iter().map(machine_line));
             for (line, row) in lines.zip(&found.rows) {

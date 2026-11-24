@@ -8,8 +8,8 @@ set -e
 FOLDER=$(realpath -m "${1:?usage: page-shots.sh FOLDER}")
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 PROGRAM=${CARGO_TARGET_DIR:-$HERE/../../target}/debug/examples/page_shots
-BROADWAY_DISPLAY=:49
-BROADWAY_PORT=28949
+BROADWAY_DISPLAY=${PAGE_SHOTS_DISPLAY:-:49}
+BROADWAY_PORT=${PAGE_SHOTS_PORT:-28949}
 rm -rf "$FOLDER"
 mkdir -p "$FOLDER/home" "$FOLDER/shm" "$FOLDER/program/guest" "$FOLDER/program/qemu/pc-bios" "$FOLDER/shots" "$FOLDER/bin"
 if [ -n "$2" ]; then cp -a "$2/." "$FOLDER/home/"; fi

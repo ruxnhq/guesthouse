@@ -2,10 +2,9 @@
 //! hero shows the chosen machine at length from the same facts.
 
 use super::Window;
-use crate::application::APP_ID;
 use crate::rows::{confirm, on_yes, question};
 use adw::prelude::*;
-use guesthouse_app_core::machine::Machine;
+use guesthouse_app_core::machine::{Kind, Machine};
 use guesthouse_app_core::setup::checks::{machine_card_warning, machine_gpu_warning};
 use guesthouse_app_core::start_checks::SECOND_INSTANCE_REFUSAL;
 use guesthouse_app_core::tasks::{State, Status, no_slot_text};
@@ -73,10 +72,22 @@ fn card_button(label: &str) -> gtk::Button {
     button
 }
 
+/// The icon a machine shows until it has a picture of its screen: what it runs, as New Machine names it.
+pub fn kind_icon(machine: &Machine) -> &'static str {
+    match machine.kind {
+        Kind::Windows => "preferences-desktop-apps-symbolic",
+        Kind::Linux => "utilities-terminal-symbolic",
+        Kind::Plain if machine.android() => "phone-symbolic",
+        Kind::Plain if machine.macos() => "video-display-symbolic",
+        Kind::Plain if machine.linux_gpu => "utilities-terminal-symbolic",
+        Kind::Plain => "media-optical-symbolic",
+    }
+}
+
 impl MachineCard {
     pub fn new(window: &Window, machine: Machine) -> Self {
         let icon = gtk::Image::builder()
-            .icon_name(APP_ID)
+            .icon_name(kind_icon(&machine))
             .pixel_size(ICON_SIZE)
             .width_request(THUMBNAIL_WIDTH)
             .height_request(THUMBNAIL_HEIGHT)

@@ -1079,6 +1079,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-p9"
+version = "0.9.0"
+
+[[package]]
 name = "guesthouse-replay"
 version = "0.9.0"
 dependencies = [

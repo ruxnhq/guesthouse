@@ -20,6 +20,7 @@ default-members = [
     "crates/installer-windows",
     "crates/jail",
     "crates/messages",
+    "crates/p9",
     "crates/replay",
     "crates/sensors",
     "crates/service-windows",

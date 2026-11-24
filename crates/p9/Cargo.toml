@@ -1,0 +1,11 @@
+[package]
+name = "guesthouse-p9"
+description = "A 9P2000.L client, for a Windows guest to read and write a host folder that Hyper-V's Plan 9 device serves."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -103,6 +103,7 @@ impl VmPlan {
         }
         let mut ports = vec![self.agent_port];
         ports.extend(self.files_port);
+        ports.extend(self.app_windows_port);
         ports.extend(self.forwarded_ports(Protocol::Tcp));
         ports
     }

@@ -3,7 +3,9 @@
 use super::arguments::words;
 use super::passt_age::{PROBE_DNS_HOST, PasstAge};
 use super::{PASST_FD, SHARE_ADDRESS, TAP_FD, VmPlan};
-use crate::network::{self, CONTROL_MAC, GUEST_AGENT_PORT, GUEST_FILES_PORT, Mode, bridge_helper};
+use crate::network::{
+    self, CONTROL_MAC, GUEST_AGENT_PORT, GUEST_APP_WINDOWS_PORT, GUEST_FILES_PORT, Mode, bridge_helper,
+};
 use crate::text::{qemu_value, shell_quote};
 
 /// Passt copies the host's address by default, and these can't clash with the private link. Its
@@ -137,6 +139,9 @@ impl VmPlan {
         let mut link = format!("hostfwd=tcp:127.0.0.1:{}-:{GUEST_AGENT_PORT}", self.agent_port);
         if let Some(port) = self.files_port {
             link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_FILES_PORT}");
+        }
+        if let Some(port) = self.app_windows_port {
+            link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_APP_WINDOWS_PORT}");
         }
         if self.share.is_some() {
             let program = shell_quote(&self.share_program.to_string_lossy());

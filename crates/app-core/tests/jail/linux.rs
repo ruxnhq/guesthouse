@@ -275,6 +275,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         jail: Some(jail),
         agent_port: free_port(),
         files_port: None,
+        app_windows_port: None,
         network,
         ..plan
     };

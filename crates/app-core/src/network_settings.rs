@@ -28,6 +28,10 @@ pub fn reserved_ports(context: &Context) -> BTreeMap<u32, String> {
         let agent = u32::from(slot.agent_port());
         found.entry(agent).or_insert_with(|| "the port Guesthouse talks to a VM's agent on".to_owned());
         found.insert(slot.files_port().into(), "the port Guesthouse sends a VM dropped files on".to_owned());
+        found.insert(
+            crate::app_windows::host_port_of(slot).into(),
+            "the port Guesthouse reaches a VM's app windows helper on".to_owned(),
+        );
         found.insert(slot.debug_port().into(), "a VM's debug port".to_owned());
     }
     found
@@ -376,5 +380,15 @@ mod tests {
         let context = scratch_context(&scratch);
         let reserved = reserved_ports(&context);
         assert!(slots::all().all(|slot| reserved.contains_key(&slot.agent_port().into())));
+    }
+
+    #[test]
+    fn every_slots_app_windows_port_is_reserved() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let reserved = reserved_ports(&context);
+        assert!(
+            slots::all().all(|slot| reserved.contains_key(&crate::app_windows::host_port_of(slot).into()))
+        );
     }
 }

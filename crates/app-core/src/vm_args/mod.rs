@@ -144,6 +144,9 @@ pub struct VmPlan {
     pub agent_port: u16,
     /// Where the app reaches the helper for dropped and dragged files, which only Windows has.
     pub files_port: Option<u16>,
+    /// Where the app reaches the app windows helper. Only a Windows machine that has app windows
+    /// switched on has one: with it off, QEMU gets the same words it always did.
+    pub app_windows_port: Option<u16>,
     pub cores: u32,
     pub ram: String,
     pub screen: String,
@@ -243,6 +246,8 @@ impl VmPlan {
             firmware: context.paths.firmware.clone(),
             agent_port: context.paths.agent_port(slot),
             files_port: (machine.kind == crate::machine::Kind::Windows).then(|| slot.files_port()),
+            app_windows_port: crate::app_windows::is_on(context, machine)
+                .then(|| crate::app_windows::host_port(context, Some(slot))),
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
             // Its device takes any size, where the VGA only has the firmware's.

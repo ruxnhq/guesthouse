@@ -492,3 +492,20 @@ fn ubuntus_own_line_gets_none_of_the_machines_network_or_share() {
         assert_eq!(rules.network.tcp_bind, Ports::Only(vec![plan.ssh_port()]));
     }
 }
+
+#[test]
+fn the_jail_lets_qemu_listen_for_the_app_windows_helper_only_when_it_is_on() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows();
+    let plan_for = |context: &crate::context::Context| {
+        let plan = VmPlan::new(context, &machine, Boot::Gpu, slots::number(2), 0);
+        VmPlan { jail: Some(jail(true)), qemu: "/usr/bin/qemu-system-x86_64".into(), ..plan }
+    };
+    let off = plan_for(&context).qemu_jail_plan(&jail(true)).network.tcp_bind;
+    assert_eq!(off, Ports::Only(vec![18767, 18867, 8080]), "as before");
+    std::fs::create_dir_all(machine.folder(&context)).unwrap();
+    crate::app_windows::set_on(&context, &machine, true).unwrap();
+    let on = plan_for(&context).qemu_jail_plan(&jail(true)).network.tcp_bind;
+    assert_eq!(on, Ports::Only(vec![18767, 18867, 18967, 8080]));
+}

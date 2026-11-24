@@ -522,3 +522,48 @@ fn the_first_card_has_the_machines_own_address_in_every_network_mode() {
         }
     }
 }
+
+fn with_app_windows(context: &Context, machine: &Machine, on: bool) {
+    fs::create_dir_all(machine.folder(context)).unwrap();
+    crate::app_windows::set_on(context, machine, on).unwrap();
+}
+
+#[test]
+fn app_windows_on_adds_one_forward_for_its_helper_after_the_files_helpers() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    with_app_windows(&context, &windows(), true);
+    let plan = VmPlan::new(&context, &windows(), Boot::Gpu, slots::first(), 0);
+    assert_eq!(plan.app_windows_port, Some(18965));
+    assert_eq!(
+        value_after(&plan.qemu_arguments(), "-nic"),
+        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
+         hostfwd=tcp:127.0.0.1:18965-:8769"
+    );
+    let second = VmPlan::new(&context, &windows(), Boot::Gpu, slots::number(2), 0);
+    assert!(value_after(&second.qemu_arguments(), "-nic").ends_with("hostfwd=tcp:127.0.0.1:18967-:8769"));
+}
+
+#[test]
+fn with_app_windows_off_or_never_set_qemu_gets_the_words_it_always_did() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = windows();
+    let never = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
+    with_app_windows(&context, &machine, true);
+    with_app_windows(&context, &machine, false);
+    let off = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
+    assert_eq!(never.qemu_arguments(), off.qemu_arguments());
+    assert_eq!((never.app_windows_port, off.app_windows_port), (None, None));
+    assert!(!never.qemu_arguments().join(" ").contains("8769"));
+}
+
+#[test]
+fn only_a_windows_machine_can_have_the_forward_whatever_a_file_says() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = plain_machine();
+    fs::create_dir_all(machine.folder(&context)).unwrap();
+    fs::write(machine.folder(&context).join(crate::app_windows::SWITCH_FILE), "{\"on\":true}").unwrap();
+    assert_eq!(VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0).app_windows_port, None);
+}

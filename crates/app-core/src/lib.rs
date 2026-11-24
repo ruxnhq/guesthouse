@@ -38,6 +38,7 @@ pub mod gpu_support;
 pub mod guest_files;
 pub mod guest_memory;
 pub mod guest_shell;
+pub mod guest_windows;
 pub mod headless;
 pub mod held_memory;
 pub mod host;

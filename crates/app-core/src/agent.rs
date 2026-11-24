@@ -159,13 +159,13 @@ fn helper_stop(context: &Context, name: &str) -> Result<String> {
 
 /// What starts a helper: the helper's own file in Base64, and its start script. Any helper of the
 /// same name is ended first, as one left by an earlier viewer holds the port the new one needs.
-fn helper_start(context: &Context, name: &str) -> Result<String> {
+pub(crate) fn helper_start(context: &Context, name: &str) -> Result<String> {
     let helper = base64_encode(&fs::read(context.paths.guest_files().join(format!("{name}.ps1")))?);
     let start = guest_script(context, &format!("{name}-start.ps1"))?;
     Ok(format!("{}\n$helper = '{helper}'\n{start}", helper_stop(context, name)?))
 }
 
-fn stop_helper(context: &Context, machine: &Machine, slot: Option<Slot>, name: &str) {
+pub(crate) fn stop_helper(context: &Context, machine: &Machine, slot: Option<Slot>, name: &str) {
     if let Ok(script) = helper_stop(context, name) {
         context.ask_guest(machine, &script, QUICK_SECONDS, slot);
     }

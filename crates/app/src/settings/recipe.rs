@@ -1,5 +1,5 @@
 //! The recipe a machine was made for: where it came from, how its steps went, what it runs, and a
-//! button to run the steps again. A machine made with none has no group here.
+//! button to run the steps again. A machine made with none has no row here.
 
 use super::Shared;
 use crate::recipe_dialog;
@@ -20,12 +20,14 @@ pub struct Recipe {
 
 impl Recipe {
     /// `None` for a machine with no recipe.
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Option<Self> {
+    /// `None` for a draft too: New Machine chooses its recipe.
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Option<Self> {
+        if shared.is_draft() {
+            return None;
+        }
         let context = shared.window.context();
         let machine = shared.machine.borrow().clone();
         let chosen = read_chosen(&context, &machine)?;
-        let group = adw::PreferencesGroup::builder().title("Recipe").build();
-        page.add(&group);
         let row = adw::ActionRow::builder()
             .title(chosen.recipe.name.as_str())
             .subtitle(origin_and_outcome(&context, &machine).unwrap_or_default())

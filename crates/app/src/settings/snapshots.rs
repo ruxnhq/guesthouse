@@ -1,8 +1,9 @@
-//! Snapshots: taking one, going back, and deleting.
+//! Snapshots: taking one, going back, and deleting. A draft has no disk to take one of, so it shows
+//! only whether Guesthouse takes its own.
 
 use super::{Shared, is_off};
 use crate::common::in_background;
-use crate::rows::{boxed_rows, confirm, icon_button, on_yes, question, row_button};
+use crate::rows::{boxed_rows, confirm, explain, icon_button, on_yes, question, row_button};
 use adw::prelude::*;
 use guesthouse_app_core::auto_snapshot::{NOT_FOR_THROWAWAY, disk_can_hold};
 use guesthouse_app_core::machine::Kind;
@@ -16,10 +17,14 @@ use std::rc::Rc;
 const NOT_INSTALLED: &str = "Windows has not finished installing.";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 const AUTO_TITLE: &str = "Snapshot Before Risky Changes";
+const AUTO_SHORT: &str = "Guesthouse keeps one of its own";
 const AUTO_NOTE: &str = "Before a start that changes Windows in a way it might not come back from, Guesthouse \
                          takes a snapshot of its own. It replaces the last one, and yours stay. If that start \
                          fails, you can go back to it.";
-const AUTO_DISK: &str = "This disk can't hold snapshots, as only a qcow2 disk can.";
+const AUTO_DISK: &str = "This disk can't hold snapshots, as only a qcow2 disk can";
+const SHORT: &str = "Kept inside the disk file";
+const HELP: &str = "Snapshots live inside the disk file, which grows as the guest changes what they hold. One \
+                    keeps the disk and the firmware settings as they were.";
 const AUTO_BY: &str = "Taken by Guesthouse before a start";
 const AUTO_ICON: &str = "document-save-symbolic";
 
@@ -48,17 +53,19 @@ pub struct Snapshots(Rc<Parts>);
 
 impl Snapshots {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
-        let group = adw::PreferencesGroup::builder()
-            .title("Snapshots")
-            .description("They live inside the disk file, which grows as the guest changes what they hold.")
-            .build();
+        let draft = shared.is_draft();
+        let windows = shared.machine.borrow().kind == Kind::Windows;
+        let group = adw::PreferencesGroup::builder().title("Snapshots").build();
         // Ubuntu's are left out for now: a snapshot here keeps a firmware file, and it has none.
-        group.set_visible(shared.machine.borrow().kind != Kind::Linux);
+        group.set_visible(shared.machine.borrow().kind != Kind::Linux && (!draft || windows));
         page.add(&group);
         let take = row_button("Take Snapshot");
         take.set_sensitive(false);
-        group.set_header_suffix(Some(&take));
-        let auto = (shared.machine.borrow().kind == Kind::Windows).then(|| Self::auto_row(shared, &group));
+        if !draft {
+            group.set_description(Some(SHORT));
+            group.set_header_suffix(Some(&super::header_with(HELP, &take)));
+        }
+        let auto = windows.then(|| Self::auto_row(shared, &group));
         let this = Self(Rc::new(Parts {
             shared: shared.clone(),
             group,
@@ -77,7 +84,8 @@ impl Snapshots {
 
     fn auto_row(shared: &Shared, group: &adw::PreferencesGroup) -> adw::SwitchRow {
         let on = shared.machine.borrow().auto_snapshot_on();
-        let row = adw::SwitchRow::builder().title(AUTO_TITLE).subtitle(AUTO_NOTE).active(on).build();
+        let row = adw::SwitchRow::builder().title(AUTO_TITLE).subtitle(AUTO_SHORT).active(on).build();
+        explain(&row, AUTO_NOTE);
         let saving = shared.clone();
         row.connect_active_notify(move |row| {
             saving.machine.borrow_mut().auto_snapshot = Some(row.is_active());
@@ -88,6 +96,9 @@ impl Snapshots {
     }
 
     fn read(&self) {
+        if self.0.shared.is_draft() {
+            return;
+        }
         let context = self.0.shared.window.context();
         let machine = self.0.shared.machine.borrow().clone();
         let reading = context.clone();
@@ -118,10 +129,10 @@ impl Snapshots {
         } else {
             (!self.0.disk_can_hold.get()).then_some(AUTO_DISK)
         };
-        if row.is_sensitive() != why.is_none() || row.subtitle().as_deref() != Some(why.unwrap_or(AUTO_NOTE))
+        if row.is_sensitive() != why.is_none() || row.subtitle().as_deref() != Some(why.unwrap_or(AUTO_SHORT))
         {
             row.set_sensitive(why.is_none());
-            row.set_subtitle(why.unwrap_or(AUTO_NOTE));
+            row.set_subtitle(why.unwrap_or(AUTO_SHORT));
         }
     }
 

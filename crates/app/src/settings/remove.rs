@@ -13,20 +13,16 @@ pub struct Remove {
 }
 
 impl Remove {
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
-        let group = adw::PreferencesGroup::builder().title("Remove").build();
-        page.add(&group);
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Self {
         let machine = shared.machine.borrow().clone();
         let owned = machine.owns_files(&shared.window.context());
         let folder = Path::new(&machine.disk).parent().unwrap_or(Path::new("/")).display().to_string();
         let row = adw::ActionRow::builder()
             .title(if owned { "Delete Machine" } else { "Remove From Library" })
-            .subtitle(if owned {
-                "Deletes its disk too.".to_owned()
-            } else {
-                format!("Its disk stays in {folder}.")
-            })
+            .subtitle(if owned { "Its disk too".to_owned() } else { format!("Its disk stays in {folder}") })
             .use_markup(false)
+            // A draft isn't in the library yet.
+            .visible(!shared.is_draft())
             .build();
         let button = row_button(if owned { "Delete" } else { "Remove" });
         button.add_css_class("destructive-action");

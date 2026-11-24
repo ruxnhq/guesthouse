@@ -24,7 +24,8 @@ pub struct Usb(Rc<Parts>);
 
 impl Usb {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
-        let group = adw::PreferencesGroup::builder().title("USB Devices").build();
+        // A draft is never running, which a device needs.
+        let group = adw::PreferencesGroup::builder().title("USB Devices").visible(!shared.is_draft()).build();
         page.add(&group);
         let refresh = icon_button("view-refresh-symbolic", "Look Again");
         group.set_header_suffix(Some(&refresh));
@@ -42,6 +43,9 @@ impl Usb {
     }
 
     fn read(&self) {
+        if self.0.shared.is_draft() {
+            return;
+        }
         let context = self.0.shared.window.context();
         let machine = self.0.shared.machine.borrow().clone();
         let running = self.0.running.get();
@@ -160,9 +164,9 @@ impl Usb {
         let parts = &self.0;
         let running = status.state == State::Running;
         parts.group.set_description(Some(if running {
-            "Attached devices leave this PC until they are detached or the VM stops."
+            "They leave this PC until detached or the VM stops"
         } else {
-            "The VM must be running to attach one."
+            "The VM must be running to attach one"
         }));
         let changed = parts.busy.replace(status.busy) != status.busy;
         if changed || parts.running.replace(running) != running {

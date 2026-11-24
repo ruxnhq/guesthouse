@@ -1,8 +1,9 @@
 //! The screen: its size, rate and HDR, the driver behind them, and the viewer's overlay. A change
-//! reaches a running machine at once if it's on the display driver, and otherwise the next start.
+//! reaches a running machine at once if it's on the display driver, and otherwise the next start. The
+//! switches to turn off when a picture goes wrong are on the Advanced page.
 
 use super::Shared;
-use crate::rows::{choice_row, row_button};
+use crate::rows::{choice_row, explain, row_button};
 use crate::viewer::{FULLSCREEN_KEYS, OVERLAY_KEYS};
 use adw::prelude::*;
 use guesthouse_app_core::display::{
@@ -16,24 +17,31 @@ use guesthouse_app_core::tasks::{State, Status};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-const RATE_NOTE: &str = "Set each time the machine starts.";
-const BASIC_NOTE: &str =
-    "Windows is on its basic display, which has one rate. This is for the display driver.";
-const HDR_NOTE: &str = "Windows goes to HDR when the machine starts, or at once if it's running.";
+const RATE_NOTE: &str = "Set at each start";
+const BASIC_NOTE: &str = "Windows is on its basic display, which has one rate";
+const RATE_INFO: &str = "Windows gets the rate each time the machine starts, or at once if it runs on the display \
+                         driver. Its basic display has only one.";
+const HDR_NOTE: &str = "At the next start, or at once if it's running";
+const WINDOW_SPEED_SHORT: &str = "Off if a program's window flickers";
 const WINDOW_SPEED_NOTE: &str = "Windows copies every frame of a program that draws in a window, unless it counts \
                                  the program as a game. On, no program outside the Windows folder is held back \
                                  that way, which can double its frame rate. On NVIDIA it also has Vulkan and \
                                  OpenGL present through DXGI, without their copy of every frame. Turn it off if a \
                                  program's window flickers or stays blank. Takes effect when the machine starts.";
-const DRIVER_ROW: &str = "Display driver";
-const DRIVER_IN: &str = "In Windows. It was signed on this machine with a certificate made for it, which Windows \
-                         trusts as a root. Its private key was deleted before the install.";
-const DRIVER_NEXT: &str = "Goes into Windows by itself at the next start. It's signed there with a certificate \
-                           made for this machine, which Windows then trusts as a root. Its private key is deleted \
-                           before the install.";
+const DRIVER_ROW: &str = "Display Driver";
+const DRIVER_IN: &str = "In Windows";
+const DRIVER_NEXT: &str = "Goes into Windows at the next start";
+const DRIVER_NOTE: &str = "Guesthouse's display driver is signed on each machine with a certificate made for it, \
+                           which Windows trusts as a root. Its private key is deleted before the install.";
+const DIRECT_SHORT: &str = "Off if the picture goes wrong";
 const DIRECT_NOTE: &str = "Hands the guest's frames to your desktop as they are, so they can reach the display \
                            sooner, and HDR can where the desktop shows it. Turn it off if the picture goes wrong.";
-const DRIVER_NONE: &str = "This build has no display driver, so Windows stays on its basic display.";
+const DRIVER_NONE: &str = "Not in this build, so Windows stays on its basic display";
+const OVERLAY_NOTE: &str = "Shows frames a second and the host GPU's load over the screen.";
+const BAR_NOTE: &str =
+    "The bar over the screen hides, and comes back when the pointer rests at the top edge of the window.";
+const MATCH_NOTE: &str =
+    "Windows' screen takes the size of the viewer's window. The screen size above is what it starts with.";
 
 struct Parts {
     shared: Shared,
@@ -51,23 +59,25 @@ struct Parts {
 pub struct Display(Rc<Parts>);
 
 impl Display {
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
+    /// The expert switches go in `graphics`, on the Advanced page.
+    pub fn new(shared: &Shared, page: &adw::PreferencesPage, graphics: &adw::PreferencesGroup) -> Self {
         let machine = shared.machine.borrow().clone();
         let group = adw::PreferencesGroup::builder().title("Display").build();
         group.set_visible(machine.kind == Kind::Windows);
         page.add(&group);
-        let screen = choice_row("Screen size", &SCREENS);
+        let screen = choice_row("Screen Size", &SCREENS);
         screen.set_selected(SCREENS.iter().position(|size| *size == machine.screen).unwrap_or(0) as u32);
         group.add(&screen);
         let mut names: Vec<String> = REFRESH_RATES.iter().map(|hz| format!("{hz} Hz")).collect();
         names.push("Custom".to_owned());
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let rate = choice_row("Refresh rate", &names);
+        let rate = choice_row("Refresh Rate", &names);
+        explain(&rate, RATE_INFO);
         let current = REFRESH_RATES.iter().position(|hz| *hz == machine.refresh_hz);
         rate.set_selected(current.unwrap_or(REFRESH_RATES.len()) as u32);
         group.add(&rate);
         let custom = adw::EntryRow::builder()
-            .title("Custom rate in Hz")
+            .title("Custom Rate")
             .text(machine.refresh_hz.to_string())
             .show_apply_button(true)
             .input_purpose(gtk::InputPurpose::Digits)
@@ -76,17 +86,21 @@ impl Display {
         let hdr = adw::SwitchRow::builder().title("HDR").active(machine.hdr).build();
         group.add(&hdr);
         let window_speed = adw::SwitchRow::builder()
-            .title("Faster programs in a window")
+            .title("Faster Programs in a Window")
             .active(machine.window_speed())
-            .subtitle(WINDOW_SPEED_NOTE)
+            .subtitle(WINDOW_SPEED_SHORT)
             .build();
+        explain(&window_speed, WINDOW_SPEED_NOTE);
         let saving = shared.clone();
         window_speed.connect_active_notify(move |row| {
             saving.machine.borrow_mut().window_speed_off = !row.is_active();
             saving.save();
         });
-        group.add(&window_speed);
+        if machine.kind == Kind::Windows {
+            graphics.add(&window_speed);
+        }
         let driver = adw::ActionRow::builder().title(DRIVER_ROW).build();
+        explain(&driver, DRIVER_NOTE);
         let install = row_button("Install Driver");
         driver.add_suffix(&install);
         group.add(&driver);
@@ -104,21 +118,20 @@ impl Display {
         }));
         this.show_custom_rate();
         this.connect();
-        this.add_viewer_group(page);
+        this.add_viewer_group(page, graphics);
         this
     }
 
-    fn add_viewer_group(&self, page: &adw::PreferencesPage) {
+    fn add_viewer_group(&self, page: &adw::PreferencesPage, graphics: &adw::PreferencesGroup) {
         let group = adw::PreferencesGroup::builder().title("Viewer").build();
         page.add(&group);
         let shared = &self.0.shared;
         let overlay = adw::SwitchRow::builder()
-            .title("Performance overlay")
+            .title("Performance Overlay")
             .active(shared.machine.borrow().overlay)
-            .subtitle(format!(
-                "Shows frames a second and the host GPU's load over the screen. {OVERLAY_KEYS} turns it on and off there."
-            ))
+            .subtitle(format!("{OVERLAY_KEYS} turns it on and off"))
             .build();
+        explain(&overlay, OVERLAY_NOTE);
         let saving = shared.clone();
         overlay.connect_active_notify(move |row| {
             saving.machine.borrow_mut().overlay = row.is_active();
@@ -126,23 +139,23 @@ impl Display {
         });
         group.add(&overlay);
         let direct = adw::SwitchRow::builder()
-            .title("Direct frames")
+            .title("Direct Frames")
             .active(shared.machine.borrow().direct_frames())
-            .subtitle(DIRECT_NOTE)
+            .subtitle(DIRECT_SHORT)
             .build();
+        explain(&direct, DIRECT_NOTE);
         let saving = shared.clone();
         direct.connect_active_notify(move |row| {
             saving.machine.borrow_mut().direct_frames_off = !row.is_active();
             saving.save();
         });
-        group.add(&direct);
+        graphics.add(&direct);
         let bar = adw::SwitchRow::builder()
-            .title("Hide the bar")
+            .title("Hide the Bar")
             .active(shared.machine.borrow().bar_hides())
-            .subtitle(
-                "The bar over the screen hides, and comes back when the pointer rests at the top edge of the window.",
-            )
+            .subtitle("It comes back at the window's top edge")
             .build();
+        explain(&bar, BAR_NOTE);
         let saving = shared.clone();
         bar.connect_active_notify(move |row| {
             saving.machine.borrow_mut().bar_stays = !row.is_active();
@@ -150,9 +163,9 @@ impl Display {
         });
         group.add(&bar);
         let fullscreen = adw::SwitchRow::builder()
-            .title("Open in fullscreen")
+            .title("Open in Fullscreen")
             .active(shared.machine.borrow().opens_fullscreen)
-            .subtitle(format!("The viewer goes fullscreen when it opens. {FULLSCREEN_KEYS} leaves it."))
+            .subtitle(format!("{FULLSCREEN_KEYS} leaves it"))
             .build();
         let saving = shared.clone();
         fullscreen.connect_active_notify(move |row| {
@@ -160,14 +173,18 @@ impl Display {
             saving.save();
         });
         group.add(&fullscreen);
+        // A draft Windows machine gets its GPU once it's made and installed.
+        let gpu = {
+            let machine = shared.machine.borrow();
+            machine.has_gpu() || (shared.is_draft() && machine.kind == Kind::Windows)
+        };
         let window_size = adw::SwitchRow::builder()
-            .title("Match the window")
+            .title("Match the Window")
             .active(shared.machine.borrow().sizes_to_window())
-            .visible(shared.machine.borrow().has_gpu())
-            .subtitle(
-                "Windows' screen takes the size of the viewer's window. The resolution above is what it starts with.",
-            )
+            .visible(gpu)
+            .subtitle("Windows' screen follows the window's size")
             .build();
+        explain(&window_size, MATCH_NOTE);
         let saving = shared.clone();
         window_size.connect_active_notify(move |row| {
             saving.machine.borrow_mut().window_size_off = !row.is_active();
@@ -249,6 +266,9 @@ impl Display {
 
     fn state(&self) -> DisplayState {
         let shared = &self.0.shared;
+        if shared.is_draft() {
+            return DisplayState::default();
+        }
         read_state(&shared.window.context(), &shared.machine.borrow())
     }
 
@@ -260,6 +280,9 @@ impl Display {
     fn changed(&self) {
         self.0.shared.save();
         let shared = &self.0.shared;
+        if shared.is_draft() {
+            return;
+        }
         if let Err(failure) = forget_note(&shared.window.context(), &shared.machine.borrow()) {
             shared.window.problem(&failure.0);
         }

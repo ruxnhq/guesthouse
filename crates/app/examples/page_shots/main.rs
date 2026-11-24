@@ -11,6 +11,7 @@ mod fake_qemu;
 use adw::prelude::*;
 use gtk::glib;
 use guesthouse_app::application::application;
+use guesthouse_app::settings::SettingsDialog;
 use guesthouse_app::window::{MachineHandle, Window};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::library::{NewMachine, create};
@@ -300,11 +301,34 @@ fn library_machines(context: &Arc<Context>, window: &Window, folder: &Path) -> V
 async fn settings_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>, machine: MachineHandle) {
     window.show_settings(machine);
     glib::timeout_future(LONG).await;
-    check(&failures, shows(&window, "Hardware").await, "settings open");
-    shot_after_paint(&window, &folder, "07-settings-hardware").await;
+    check(&failures, shows(&window, "Cores").await, "settings open on the overview");
+    let text = text_of(&window);
+    check(
+        &failures,
+        text.contains("Duplicate") && text.contains("Export") && text.contains("Remove From Library"),
+        "the overview has the machine's actions",
+    );
+    check(&failures, !text.contains("V-Cache"), "expert switches aren't on the overview");
+    shot_after_paint(&window, &folder, "07-settings-overview").await;
+    show_page(&window, "advanced");
+    glib::timeout_future(SETTLE).await;
+    let text = text_of(&window);
+    check(
+        &failures,
+        ["V-Cache Pinning", "Video Memory Cap", "MAC Address", "Start Without a Jail", "Direct Frames"]
+            .iter()
+            .all(|title| text.contains(title)),
+        "the advanced page has the expert switches",
+    );
+    shot_after_paint(&window, &folder, "07c-settings-advanced").await;
     show_page(&window, "display");
     glib::timeout_future(SETTLE).await;
     check(&failures, text_of(&window).contains("Viewer"), "the display page has the viewer's settings");
+    check(
+        &failures,
+        !text_of(&window).contains("Direct Frames"),
+        "the display page leaves expert switches out",
+    );
     shot_after_paint(&window, &folder, "07b-settings-display").await;
     show_page(&window, "storage");
     glib::timeout_future(SETTLE).await;
@@ -367,7 +391,7 @@ async fn settings_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>
     let mode = combos.iter().find(|row| row.title() == "Mode").unwrap();
     mode.set_selected(2);
     glib::timeout_future(SETTLE).await;
-    check(&failures, text_of(&window).contains("Bridge status"), "Bridged shows the bridge's status");
+    check(&failures, text_of(&window).contains("Bridge Status"), "Bridged shows the bridge's status");
     shot_after_paint(&window, &folder, "10-settings-network-bridged").await;
     click(&window, "Show What to Do");
     glib::timeout_future(LONG).await;
@@ -378,12 +402,12 @@ async fn settings_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>
     click(&window, "Add");
     glib::timeout_future(SETTLE).await;
     let entries = all_of::<adw::EntryRow>(&window);
-    let host = entries.iter().find(|row| row.title() == "Host port").unwrap();
-    let guest = entries.iter().find(|row| row.title() == "Guest port").unwrap();
+    let host = entries.iter().find(|row| row.title() == "Host Port").unwrap();
+    let guest = entries.iter().find(|row| row.title() == "Guest Port").unwrap();
     host.set_text("80");
     guest.set_text("80");
     glib::timeout_future(SETTLE).await;
-    check(&failures, text_of(&window).contains("need root"), "a low port is refused as it's typed");
+    check(&failures, shows(&window, "need root").await, "a low port is refused as it's typed");
     shot_after_paint(&window, &folder, "12-forward-refused").await;
     host.set_text("28080");
     glib::timeout_future(SETTLE).await;
@@ -393,6 +417,110 @@ async fn settings_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>
     scroll_to(&window, "Port Forwards");
     glib::timeout_future(SETTLE).await;
     shot_after_paint(&window, &folder, "13-forward-listed").await;
+    close_dialogs(&window).await;
+}
+
+/// The overview of each other kind shows only what it has. macOS and Android are shown without joining
+/// the library.
+async fn other_kinds(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>, plain: MachineHandle) {
+    window.show_settings(plain.clone());
+    check(&failures, shows(&window, "Set Up the Guest").await, "a plain machine has its own Linux's GPU");
+    check(&failures, !text_of(&window).contains("Sound"), "a plain machine has no sound");
+    shot_after_paint(&window, &folder, "07d-settings-plain").await;
+    close_dialogs(&window).await;
+    let base = plain.borrow().clone();
+    let disk = folder.join("win.qcow2").display().to_string();
+    let mac = Machine { opencore: disk.clone(), ..Machine::new("mac", "macOS", &base.disk, &base.vars) };
+    let android = Machine {
+        kind: Kind::Plain,
+        android_data: disk,
+        ..Machine::new("droid", "Android", &base.disk, &base.vars)
+    };
+    let mac = Machine { kind: Kind::Plain, ..mac };
+    for (machine, name, says) in
+        [(mac, "07e-settings-macos", "Disk"), (android, "07f-settings-android", "Data Disk")]
+    {
+        // Not in the library, so the walk after this starts the machines it always has.
+        window.show_settings(Rc::new(std::cell::RefCell::new(machine)));
+        check(&failures, shows(&window, "GPU Acceleration").await, &format!("{name} has its GPU"));
+        check(&failures, text_of(&window).contains(says), &format!("{name} shows its {says}"));
+        check(
+            &failures,
+            !text_of(&window).contains("Set Up the Guest"),
+            &format!("{name} has no Linux GPU rows"),
+        );
+        window.show_settings_page("storage");
+        glib::timeout_future(SETTLE).await;
+        check(&failures, text_of(&window).contains("Snapshots"), &format!("{name} has its snapshots"));
+        shot_after_paint(&window, &folder, name).await;
+        close_dialogs(&window).await;
+    }
+}
+
+/// New Machine's draft: its changes stay in the value, and what needs a made machine isn't there.
+async fn draft_pages(
+    window: Window,
+    context: Arc<Context>,
+    folder: PathBuf,
+    failures: Rc<Cell<u32>>,
+    machine: &Machine,
+) {
+    // As New Machine may hand it over: no name, no id, and no disk yet.
+    let draft = Machine {
+        id: String::new(),
+        name: String::new(),
+        disk: String::new(),
+        drives: Vec::new(),
+        ..machine.clone()
+    };
+    let settings = SettingsDialog::draft(&window, draft, guesthouse_app_core::remote_access::Access::NEW);
+    let changes = Rc::new(Cell::new(0));
+    let counting = changes.clone();
+    settings.connect_changed(move || counting.set(counting.get() + 1));
+    settings.present_over(window.widget());
+    glib::timeout_future(LONG).await;
+    let text = text_of(&window);
+    check(&failures, text.contains("Cores"), "a draft's settings open");
+    check(&failures, !text.contains("Duplicate") && !text.contains("Grow"), "a draft has no machine actions");
+    shot_after_paint(&window, &folder, "07g-settings-draft").await;
+    let rows = all_of::<adw::SpinRow>(&window);
+    if let Some(cores) = rows.iter().find(|row| row.title() == "Cores") {
+        cores.set_value(cores.value() + 1.0);
+    }
+    glib::timeout_future(SETTLE).await;
+    check(
+        &failures,
+        settings.machine().cores == machine.cores + 1 && changes.get() > 0,
+        "a draft's change stays in the value",
+    );
+    settings.show_page("storage");
+    glib::timeout_future(SETTLE).await;
+    check(&failures, !text_of(&window).contains("Take Snapshot"), "a draft has no snapshots to take");
+    shot_after_paint(&window, &folder, "08e-settings-draft-storage").await;
+    settings.show_page("network");
+    glib::timeout_future(SETTLE).await;
+    let combos = all_of::<adw::ComboRow>(&window);
+    if let Some(mode) = combos.iter().find(|row| row.title() == "Mode" && row.is_mapped()) {
+        mode.set_selected(2);
+    }
+    glib::timeout_future(SETTLE).await;
+    let bridged = settings.machine();
+    check(
+        &failures,
+        bridged.network_mode == guesthouse_app_core::network::Mode::Bridged && !bridged.mac.is_empty(),
+        "a draft with no name takes a change its setter saves",
+    );
+    check(&failures, bridged.name.is_empty() && bridged.id.is_empty(), "a draft keeps its own name and id");
+    check(&failures, !context.paths.machines.join("draft").exists(), "nothing of a draft is saved");
+    close_dialogs(&window).await;
+    // A plain draft has drives of this PC to add, and no snapshots.
+    let plain = Machine { kind: Kind::Plain, ..Machine::new("", "", "", "") };
+    let settings = SettingsDialog::draft(&window, plain, guesthouse_app_core::remote_access::Access::NEW);
+    settings.present_over(window.widget());
+    glib::timeout_future(LONG).await;
+    settings.show_page("storage");
+    glib::timeout_future(SETTLE).await;
+    check(&failures, text_of(&window).contains("Add Drive"), "a plain draft can be given a drive");
     close_dialogs(&window).await;
 }
 
@@ -472,9 +600,25 @@ async fn ubuntu_pages(window: Window, context: Arc<Context>, folder: PathBuf, fa
     glib::timeout_future(LONG).await;
     check(&failures, text_of(&window).contains("GPU preview"), "the library marks Ubuntu's GPU as a preview");
     window.show_settings(machine.clone());
-    check(&failures, shows(&window, "This is a preview").await, "its settings say so plainly");
+    check(&failures, shows(&window, "A preview").await, "its settings say so plainly");
     check(&failures, !text_of(&window).contains("Port Forwards"), "what it doesn't have isn't shown");
-    scroll_to(&window, "Ubuntu");
+    check(
+        &failures,
+        !text_of(&window).lines().any(|line| line == "Network"),
+        "Ubuntu's fixed network has no page",
+    );
+    show_page(&window, "advanced");
+    glib::timeout_future(SETTLE).await;
+    check(
+        &failures,
+        !text_of(&window).contains("MAC Address"),
+        "Ubuntu's fixed network has no advanced rows",
+    );
+    show_page(&window, "devices");
+    glib::timeout_future(SETTLE).await;
+    check(&failures, text_of(&window).contains("USB Devices"), "Ubuntu has USB devices");
+    show_page(&window, "overview");
+    glib::timeout_future(SETTLE).await;
     shot_after_paint(&window, &folder, "24-ubuntu-settings").await;
     close_dialogs(&window).await;
     fake_forwarded::serve(&context.run_folder(None));
@@ -562,6 +706,9 @@ async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     shot_after_paint(&window, &folder, "06-library").await;
     update_banner(window.clone(), context.clone(), folder.clone(), failures.clone()).await;
     settings_pages(window.clone(), folder.clone(), failures.clone(), machines[1].clone()).await;
+    other_kinds(window.clone(), folder.clone(), failures.clone(), machines[0].clone()).await;
+    let windows = machines[1].borrow().clone();
+    draft_pages(window.clone(), context.clone(), folder.clone(), failures.clone(), &windows).await;
     window.show_log();
     glib::timeout_future(SETTLE).await;
     shot_after_paint(&window, &folder, "19-log").await;

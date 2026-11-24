@@ -17,8 +17,9 @@ use std::rc::Rc;
 
 const WIDTH: i32 = 480;
 const HEIGHT: i32 = 560;
+const SHORT: &str = "Whole disks, for the guest alone";
 const HELP: &str = "Whole disks of this PC. The guest can read and write all of one, and this PC can't use \
-                    it while the machine runs.";
+                    it while the machine runs. Changes apply the next time the VM starts.";
 const INSTALLING: &str = "Drives can be added once Windows is installed.";
 const NEXT_START: &str = "Changes apply the next time the VM starts.";
 const AT_MOST: &str = "A machine can have 3 drives at most.";
@@ -51,13 +52,13 @@ impl Drives {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
         let group = adw::PreferencesGroup::builder()
             .title("Drives of This PC")
-            .description(HELP)
+            .description(SHORT)
             // Ubuntu's machine has no controller to put them on, and Android has no driver for one.
             .visible(shared.machine.borrow().kind != Kind::Linux && !shared.machine.borrow().android())
             .build();
         page.add(&group);
         let add = row_button("Add Drive");
-        group.set_header_suffix(Some(&add));
+        group.set_header_suffix(Some(&super::header_with(HELP, &add)));
         let this = Self(Rc::new(Parts {
             shared: shared.clone(),
             group,
@@ -128,7 +129,8 @@ impl Drives {
             .subtitle_lines(4)
             .use_markup(false)
             .build();
-        if view.closed.contains(&drive.id) {
+        // A draft's drive is opened once the machine is made and started, and asked for then.
+        if view.closed.contains(&drive.id) && !self.0.shared.is_draft() {
             let access = row_button("Give Access");
             let this = self.clone();
             let chosen = drive.id.clone();
@@ -140,7 +142,7 @@ impl Drives {
         let chosen = drive.id.clone();
         remove.connect_clicked(move |_| {
             let shared = &this.0.shared;
-            shared.change(|machine| remove_drive(&shared.window.context(), machine, &chosen));
+            shared.change(|context, machine| remove_drive(context, machine, &chosen));
             this.read();
         });
         row.add_suffix(&remove);
@@ -222,7 +224,7 @@ impl Drives {
                 closing.close();
                 let shared = &this.0.shared;
                 let drive = Drive { id: chosen.clone() };
-                shared.change(|machine| add_drive(&shared.window.context(), machine, drive));
+                shared.change(|context, machine| add_drive(context, machine, drive));
                 this.read();
             });
             group.add(&row);
@@ -246,9 +248,9 @@ impl Drives {
         let text = if installing {
             INSTALLING.to_owned()
         } else if running {
-            format!("{HELP} {NEXT_START}")
+            NEXT_START.to_owned()
         } else {
-            HELP.to_owned()
+            SHORT.to_owned()
         };
         parts.group.set_description(Some(&text));
         if parts.running.replace(running) != running {

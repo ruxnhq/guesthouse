@@ -205,7 +205,7 @@ function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
     $task = Get-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue
     $wrong = -not $task -or
         $task.Actions[0].Execute -ne $shareProgram -or $task.Actions[0].Arguments -ne $Arguments -or
-        -not ($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }) -or
+        -not ($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' -and $_.Repetition.Interval -eq 'PT1M' }) -or
         $task.Principal.UserId -ne 'SYSTEM' -or
         $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries -or
         $task.Settings.ExecutionTimeLimit -ne 'PT0S' -or $task.Settings.RestartCount -ne 999
@@ -215,7 +215,11 @@ function Set-ShareTask($Slot, [string]$Arguments, [switch]$NoStart) {
             Add-ShareLogLine $Slot 'stopped by the report to set its task right'
         }
         $action = New-ScheduledTaskAction -Execute $shareProgram -Argument $Arguments
+        # Run again every minute from boot, which starts the program only when no copy runs, as a
+        # new run is ignored while one does: the task's restart on failure doesn't restart a
+        # program that crashed, and its drive would be gone until the next boot.
         $trigger = New-ScheduledTaskTrigger -AtStartup
+        $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest

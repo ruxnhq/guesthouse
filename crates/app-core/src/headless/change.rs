@@ -23,7 +23,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 19] = [
+const SETTINGS: [&str; 20] = [
     "cores",
     "ram",
     "vram",
@@ -41,6 +41,7 @@ const SETTINGS: [&str; 19] = [
     "start-unjailed",
     "remote-desktop",
     "ssh",
+    "app-windows",
     "auto-snapshot",
     "throwaway",
 ];
@@ -179,6 +180,16 @@ pub(super) fn set(
             choose(context, &machine, service, on)?;
             said(out, key, switch(on))?;
             return take_to_windows(context, &machine, out);
+        }
+        crate::app_windows::SETTING => {
+            only_for_windows(&machine, key)?;
+            let on = on_or_off(key, value)?;
+            crate::app_windows::set_on(context, &machine, on)?;
+            said(out, key, switch(on))?;
+            if status(context, &machine).state == State::Running {
+                writeln!(out, "A running machine gets the way in that it needs at its next start.")?;
+            }
+            return Ok(());
         }
         "screen" => {
             only_for_windows(&machine, key)?;
@@ -358,6 +369,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         for service in Service::ALL {
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;
         }
+        line(out, crate::app_windows::SETTING, &switch(crate::app_windows::is_on(context, machine)))?;
         let lean = switch(crate::lean::is_lean(context, machine));
         match crate::lean::state_text(context, machine) {
             Some(done) if lean == "on" => line(out, "lean", &format!("on. {done}"))?,

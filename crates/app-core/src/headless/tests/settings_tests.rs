@@ -302,3 +302,38 @@ fn only_windows_has_remote_desktop_and_ssh() {
     assert_eq!(refused(&context, "set plain ssh off"), "ssh is only for a Windows machine with GPU-PV.");
     assert!(!said(&context, "show plain").0.contains("remote-desktop"));
 }
+
+#[test]
+fn app_windows_is_off_until_set_on_and_only_a_windows_machine_has_it() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "win", "Win", Kind::Windows);
+    make(&context, "plain", "Plain", Kind::Plain);
+    assert!(said(&context, "show win").0.contains("app-windows off\n"));
+    assert_eq!(said(&context, "set win app-windows on"), ("app-windows is now on.\n".to_owned(), Ok(())));
+    assert!(said(&context, "show win").0.contains("app-windows on\n"));
+    let machine = load(&context, "win").unwrap();
+    assert!(crate::app_windows::is_on(&context, &machine));
+    assert_eq!(said(&context, "set win app-windows no").0, "app-windows is now off.\n");
+    assert!(!machine.folder(&context).join(crate::app_windows::SWITCH_FILE).exists());
+    assert_eq!(refused(&context, "set win app-windows maybe"), "app-windows is on or off.");
+    assert_eq!(
+        refused(&context, "set plain app-windows on"),
+        "app-windows is only for a Windows machine with GPU-PV."
+    );
+    assert!(!said(&context, "show plain").0.contains("app-windows"));
+}
+
+#[test]
+fn a_running_machine_is_told_it_gets_the_way_in_at_its_next_start() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = make(&context, "win", "Win", Kind::Windows);
+    running(&context, &machine, 40);
+    let (out, result) = said(&context, "set win app-windows on");
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        out,
+        "app-windows is now on.\nA running machine gets the way in that it needs at its next start.\n"
+    );
+}

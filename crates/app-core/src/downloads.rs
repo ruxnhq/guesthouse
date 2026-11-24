@@ -55,7 +55,7 @@ pub fn size_at(url: &str) -> Option<u64> {
         .lines()
         .filter_map(|line| line.strip_prefix("content-length:"))
         .filter_map(|value| value.trim().parse().ok())
-        .last()
+        .next_back()
 }
 
 pub fn sha256(file: &Path) -> Result<String> {

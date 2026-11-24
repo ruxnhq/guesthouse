@@ -3,7 +3,8 @@
 An Android machine boots Guesthouse's own build of LineageOS 24 (Android 17) for VMs, its `virtio_x86_64`
 target, as a userdebug build. It draws through QEMU's virtio GPU on the host's card: OpenGL ES through virgl
 and Vulkan through Venus, on NVIDIA, AMD or Intel. It is based on LineageOS and isn't an official LineageOS
-build.
+build. Android is a trademark of Google LLC, and LineageOS a trademark of LineageOS. The image isn't made or
+endorsed by either, and holds no Google apps or services.
 
 What Guesthouse adds to LineageOS:
 

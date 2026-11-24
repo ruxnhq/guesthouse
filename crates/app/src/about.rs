@@ -12,6 +12,9 @@ const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const WHAT_IT_IS: &str = "Runs VMs that use this PC's GPU while the PC keeps using it too: Windows, Linux, Android and \
                           macOS, on NVIDIA, AMD and Intel cards. Some of these are still previews.";
 const LICENCE: &str = "Free software, under the GNU General Public License, version 2 or later.";
+/// The names the app says, as the README and THIRD-PARTY.md give them in full.
+const MARKS: &str = "Windows, macOS, Android and the cards' names are trademarks of their owners. Guesthouse isn't \
+                     made or endorsed by Microsoft, Apple, Google, NVIDIA, AMD or Intel.";
 const LINK_SPACING: i32 = 8;
 const WIDTH: i32 = 500;
 const ICON_SIZE: i32 = 56;
@@ -57,6 +60,9 @@ pub fn show(window: &Window) {
     let licence = centred(LICENCE, "caption");
     licence.add_css_class("dim-label");
     column.append(&licence);
+    let marks = centred(MARKS, "caption");
+    marks.add_css_class("dim-label");
+    column.append(&marks);
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::builder().show_title(false).build());
     view.set_content(Some(&column));

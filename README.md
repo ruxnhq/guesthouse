@@ -101,7 +101,7 @@ The service is in `crates/service-windows`, and the serial relay it needs beside
 
 ## Bring your own
 
-There are no NVIDIA, AMD, Intel or Microsoft binaries in this repo. You bring your own Windows ISO and GPU driver, and [THIRD-PARTY.md](THIRD-PARTY.md) lists what comes from others. Guesthouse has nothing to do with NVIDIA, AMD, Intel or Microsoft.
+There are no NVIDIA, AMD, Intel or Microsoft binaries in this repo. You bring your own Windows ISO and GPU driver, and [THIRD-PARTY.md](THIRD-PARTY.md) lists what comes from others. Guesthouse isn't made, endorsed or supported by NVIDIA, AMD, Intel, Microsoft, Apple, Google, the LineageOS project or Canonical. macOS comes from Apple under Apple's licence, and the Android image is Guesthouse's own build of LineageOS, not Google's Android.
 
 ## Thanks
 
@@ -111,7 +111,7 @@ QEMU; Microsoft's dxgkrnl for Linux, the public source for how GPU-PV talks; NVI
 
 Copyright (C) 2026 RUXN LLC and contributors. GPL-2.0-or-later, the QEMU patch included, apart from what [THIRD-PARTY.md](THIRD-PARTY.md) lists. See [LICENSE](LICENSE).
 
-<sub>NVIDIA, GeForce, AMD, Radeon, Intel, Arc and Windows are trademarks of their owners.</sub>
+<sub>NVIDIA, GeForce and CUDA are trademarks of NVIDIA Corporation. AMD and Radeon are trademarks of Advanced Micro Devices, Inc. Intel and Arc are trademarks of Intel Corporation. Microsoft, Windows and Direct3D are trademarks of the Microsoft group of companies. Apple and macOS are trademarks of Apple Inc. Google, Android and Google Play are trademarks of Google LLC. LineageOS is a trademark of LineageOS. Ubuntu is a trademark of Canonical Ltd. Linux is the registered trademark of Linus Torvalds. Vulkan and OpenGL ES are trademarks of the Khronos Group Inc. Other names are trademarks of their owners, used here only to say what Guesthouse works with.</sub>
 
 <div align="center">
 <br>

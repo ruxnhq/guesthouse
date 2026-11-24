@@ -26,4 +26,4 @@ The screen, keyboard and mouse in the app's window, sound, the default network, 
 
 ## Apple's licence
 
-Apple's licence for macOS only allows it on Apple hardware. Whether you run it here is up to you.
+Apple's licence for macOS only allows it on Apple hardware. Whether you run it here is up to you. Apple and macOS are trademarks of Apple Inc., and Guesthouse isn't made, endorsed or supported by Apple.

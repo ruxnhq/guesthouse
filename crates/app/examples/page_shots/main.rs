@@ -721,7 +721,7 @@ async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     close_dialogs(&window).await;
     let sheets = [
         ("preferences", "19b-preferences", "Colour Scheme"),
-        ("about", "19c-about", "Free software"),
+        ("about", "19c-about", "trademarks of their owners"),
         ("report", "19d-report", "What Went Wrong"),
         ("shortcuts", "19e-shortcuts", "Guest Screen"),
     ];

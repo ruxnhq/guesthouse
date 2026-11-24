@@ -128,24 +128,25 @@ try {
     Send-Line "disk: C: couldn't grow: $($_.Exception.Message)"
 }
 
-# The host's shared folder, when it gives one, is a drive of its own. The host serves it over Plan 9
-# on a Hyper-V socket, and Guesthouse's own program (guesthouse-guest-share.exe, which the host puts in
-# C:\Guesthouse\share with WinFsp's installer) mounts it with WinFsp: it runs from a task of its own,
-# as SYSTEM from the start, and is started again if it ends. The host writes C:\Guesthouse\share.txt
-# at each boot when the machine has a share, one line, "NAME PORT rw" or "NAME PORT ro" (shared 50001
-# rw), and takes the file away when it has none: then the task goes, and the drive with it, and the
-# link on everyone's desktop. Only the link is ever deleted, never what it points to.
+# The host's shared folders, when it gives any, are drives of their own. The host serves them over
+# Plan 9 on a Hyper-V socket, each by its own name on the one port, and Guesthouse's own program
+# (guesthouse-guest-share.exe, which the host puts in C:\Guesthouse\share with WinFsp's installer)
+# mounts each with WinFsp: one copy a folder, each run from a task of its own, as SYSTEM from the
+# start, and started again if it ends. The host writes C:\Guesthouse\share.txt at each boot when the
+# machine has shares, a line each, "NAME PORT rw" or "NAME PORT ro" (shared 50001 rw). NAME is
+# "shared" for the first folder of the machine's settings and "sharedN" for the Nth after it, and
+# that number names the folder's task, log and desktop link here, the first's with none, as when
+# there could be only one. A folder the file doesn't name loses its task, and so its drive, and the
+# link on everyone's desktop. Only a link is ever deleted, never what it points to.
 $shareFile = 'C:\Guesthouse\share.txt'
 $shareFolder = 'C:\Guesthouse\share'
 $shareProgram = Join-Path $shareFolder 'guesthouse-guest-share.exe'
 $shareInstaller = Join-Path $shareFolder 'winfsp.msi'
-$shareLog = Join-Path $shareFolder 'share.log'
-$shareTaskName = 'Guesthouse shared folder'
+$shareTaskPrefix = 'Guesthouse shared folder'
 $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
-$shareLink = Join-Path $desktop 'Shared folder.lnk'
 # The first version of this linked the share's folder itself under this name, with a symbolic link.
 $oldShareLink = Join-Path $desktop 'Shared folder'
-$shareTask = Get-ScheduledTask -TaskName $shareTaskName -ErrorAction SilentlyContinue
+$booted = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 
 function Remove-OldShareLink {
     $old = Get-Item -LiteralPath $oldShareLink -Force -ErrorAction SilentlyContinue
@@ -155,30 +156,93 @@ function Remove-OldShareLink {
     }
 }
 
+# What the folder with this number has here: the first's names have no number.
+function Get-ShareSlot([int]$Number) {
+    $suffix = if ($Number -eq 1) { '' } else { " $Number" }
+    $logName = if ($Number -eq 1) { 'share.log' } else { "share$Number.log" }
+    [pscustomobject]@{
+        Number = $Number
+        Task   = "$shareTaskPrefix$suffix"
+        Link   = Join-Path $desktop "Shared folder$suffix.lnk"
+        Log    = Join-Path $shareFolder $logName
+    }
+}
+
 # WinFsp is installed when its registry key says where, as its own installer writes it. Only its
 # core feature is wanted, with no reboot, which a guest nobody is watching can't be asked for.
 function Test-WinFsp {
     [bool](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\WinFsp' -ErrorAction SilentlyContinue).InstallDir
 }
 
-# The drive the program's log says it last mounted, "S:", if that drive is there.
-function Get-ShareDrive {
-    $mounted = Select-String -LiteralPath $shareLog -Pattern 'mounted at ([A-Za-z]:)' -ErrorAction SilentlyContinue |
-        Select-Object -Last 1
-    if ($mounted) {
-        $drive = $mounted.Matches[0].Groups[1].Value.ToUpperInvariant()
+# The drive a folder's program has mounted it at, "S:", if it has this boot: its log was written
+# since the guest started and its last line says "mounted at S:", which the program writes last
+# once the drive is there. A log from an earlier boot could name a drive another folder has now.
+function Get-ShareDrive($Slot) {
+    $log = Get-Item -LiteralPath $Slot.Log -ErrorAction SilentlyContinue
+    if (-not $log -or $log.LastWriteTime -lt $booted) { return $null }
+    $last = Get-Content -LiteralPath $Slot.Log -Tail 1 -ErrorAction SilentlyContinue
+    if ($last -match '^mounted at ([A-Za-z]:)$') {
+        $drive = $Matches[1].ToUpperInvariant()
         if (Test-Path -LiteralPath "$drive\") { return $drive }
     }
     return $null
 }
 
+# Puts the folder's task right whenever it isn't what's wanted, as the report's own task is, and
+# starts it if it isn't running.
+function Set-ShareTask($Slot, [string]$Arguments) {
+    $task = Get-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue
+    $wrong = -not $task -or
+        $task.Actions[0].Execute -ne $shareProgram -or $task.Actions[0].Arguments -ne $Arguments -or
+        -not ($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }) -or
+        $task.Principal.UserId -ne 'SYSTEM' -or
+        $task.Settings.DisallowStartIfOnBatteries -or $task.Settings.StopIfGoingOnBatteries -or
+        $task.Settings.ExecutionTimeLimit -ne 'PT0S' -or $task.Settings.RestartCount -ne 999
+    if ($wrong) {
+        if ($task) { Stop-ScheduledTask -TaskName $Slot.Task -ErrorAction SilentlyContinue }
+        $action = New-ScheduledTaskAction -Execute $shareProgram -Argument $Arguments
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
+            -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        Register-ScheduledTask -TaskName $Slot.Task -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    }
+    if ((Get-ScheduledTask -TaskName $Slot.Task).State -ne 'Running') { Start-ScheduledTask -TaskName $Slot.Task }
+}
+
+# The folders the host gives, each with its number. A line that isn't one is said and passed over.
+$shares = @()
 if (Test-Path -LiteralPath $shareFile) {
-    try {
-        $fields = @((Get-Content -LiteralPath $shareFile -TotalCount 1).Trim() -split '\s+')
-        if ($fields.Count -ne 3 -or $fields[1] -notmatch '^\d+$' -or $fields[2] -notin 'rw', 'ro') {
-            throw "$shareFile doesn't say 'NAME PORT rw' or 'NAME PORT ro'"
+    foreach ($line in @(Get-Content -LiteralPath $shareFile)) {
+        if (-not $line.Trim()) { continue }
+        $fields = @($line.Trim() -split '\s+')
+        if ($fields.Count -ne 3 -or $fields[0] -notmatch '^shared(\d*)$' -or $fields[1] -notmatch '^\d+$' -or $fields[2] -notin 'rw', 'ro') {
+            Send-Line "share: $shareFile has '$line', which isn't 'NAME PORT rw' or 'NAME PORT ro'"
+            continue
         }
-        $shareName, $sharePort, $shareMode = $fields
+        $null = $fields[0] -match '^shared(\d*)$'
+        $number = if ($Matches[1]) { [int]$Matches[1] } else { 1 }
+        if ($number -lt 1) { continue }
+        $shares += [pscustomobject]@{ Name = $fields[0]; Port = $fields[1]; ReadOnly = $fields[2] -eq 'ro'; Slot = Get-ShareSlot $number }
+    }
+}
+
+# What's here of a folder no longer given goes: its task, which unmounts its drive, and its link.
+$kept = @($shares | ForEach-Object { $_.Slot.Task })
+foreach ($task in @(Get-ScheduledTask -TaskName "$shareTaskPrefix*" -ErrorAction SilentlyContinue)) {
+    if ($task.TaskName -notmatch "^$([regex]::Escape($shareTaskPrefix))( \d+)?$" -or $task.TaskName -in $kept) { continue }
+    Stop-ScheduledTask -TaskName $task.TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+$keptLinks = @($shares | ForEach-Object { $_.Slot.Link })
+foreach ($link in @(Get-ChildItem -LiteralPath $desktop -Filter 'Shared folder*.lnk' -Force -ErrorAction SilentlyContinue)) {
+    if ($link.Name -notmatch '^Shared folder( \d+)?\.lnk$' -or $link.FullName -in $keptLinks) { continue }
+    Remove-Item -LiteralPath $link.FullName -Force -ErrorAction SilentlyContinue
+}
+
+if ($shares.Count) {
+    $ready = $true
+    try {
         if (-not (Test-Path -LiteralPath $shareProgram)) {
             throw "$shareProgram isn't there, so the host had none to give"
         }
@@ -192,57 +256,48 @@ if (Test-Path -LiteralPath $shareFile) {
             Send-Line "share: WinFsp's installer ended with $($install.ExitCode)"
             if (-not (Test-WinFsp)) { throw "WinFsp isn't installed (its installer ended with $($install.ExitCode))" }
         }
-
-        # The task is put right whenever it isn't what's wanted, as the report's own task is.
-        $arguments = "--port $sharePort --share $shareName"
-        if ($shareMode -eq 'ro') { $arguments += ' --read-only' }
-        $arguments += " --log $shareLog"
-        $wrong = -not $shareTask -or
-            $shareTask.Actions[0].Execute -ne $shareProgram -or $shareTask.Actions[0].Arguments -ne $arguments -or
-            -not ($shareTask.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }) -or
-            $shareTask.Principal.UserId -ne 'SYSTEM' -or
-            $shareTask.Settings.DisallowStartIfOnBatteries -or $shareTask.Settings.StopIfGoingOnBatteries -or
-            $shareTask.Settings.ExecutionTimeLimit -ne 'PT0S' -or $shareTask.Settings.RestartCount -ne 999
-        if ($wrong) {
-            if ($shareTask) { Stop-ScheduledTask -TaskName $shareTaskName -ErrorAction SilentlyContinue }
-            $action = New-ScheduledTaskAction -Execute $shareProgram -Argument $arguments
-            $trigger = New-ScheduledTaskTrigger -AtStartup
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
-                -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-            $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-            Register-ScheduledTask -TaskName $shareTaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-        }
-        if ((Get-ScheduledTask -TaskName $shareTaskName).State -ne 'Running') { Start-ScheduledTask -TaskName $shareTaskName }
-
-        # The program says "mounted at S:" in its log once the drive is there.
-        $drive = $null
-        $waited = [Diagnostics.Stopwatch]::StartNew()
-        while (-not $drive -and $waited.Elapsed.TotalSeconds -lt 60) {
-            $drive = Get-ShareDrive
-            if (-not $drive) { Start-Sleep -Seconds 1 }
-        }
-        if (-not $drive) {
-            $tail = @(Get-Content -LiteralPath $shareLog -Tail 5 -ErrorAction SilentlyContinue) -join ' | '
-            throw "no drive within a minute; the program's log ends with: $tail"
-        }
-        $link = (New-Object -ComObject WScript.Shell).CreateShortcut($shareLink)
-        $link.TargetPath = "$drive\"
-        $link.Save()
-        Send-Line "share: at $drive"
     } catch {
-        Send-Line "share: not mounted: $($_.Exception.Message)"
-        # A shortcut from an earlier start would lead nowhere.
-        Remove-Item -LiteralPath $shareLink -Force -ErrorAction SilentlyContinue
+        $ready = $false
+        foreach ($share in $shares) {
+            Send-Line "share: $($share.Name) not mounted: $($_.Exception.Message)"
+            Remove-Item -LiteralPath $share.Slot.Link -Force -ErrorAction SilentlyContinue
+        }
     }
-    Remove-OldShareLink
-} else {
-    if ($shareTask) {
-        Stop-ScheduledTask -TaskName $shareTaskName -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $shareTaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+    # One after another, in the settings' order, so the first folder takes the first free drive
+    # from S: and the next the one after. A minute is waited for them all, not for each, so the
+    # report isn't held long when the host isn't serving them; a folder started after the minute
+    # still mounts, and its link is made at the next start.
+    $waited = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($share in $(if ($ready) { $shares } else { @() })) {
+        try {
+            $arguments = "--port $($share.Port) --share $($share.Name)"
+            if ($share.ReadOnly) { $arguments += ' --read-only' }
+            $arguments += " --log $($share.Slot.Log)"
+            Set-ShareTask $share.Slot $arguments
+
+            # The program says "mounted at S:" in its log once the drive is there.
+            $drive = Get-ShareDrive $share.Slot
+            while (-not $drive -and $waited.Elapsed.TotalSeconds -lt 60) {
+                Start-Sleep -Seconds 1
+                $drive = Get-ShareDrive $share.Slot
+            }
+            if (-not $drive) {
+                $tail = @(Get-Content -LiteralPath $share.Slot.Log -Tail 5 -ErrorAction SilentlyContinue) -join ' | '
+                throw "no drive within a minute; the program's log ends with: $tail"
+            }
+            $link = (New-Object -ComObject WScript.Shell).CreateShortcut($share.Slot.Link)
+            $link.TargetPath = "$drive\"
+            $link.Save()
+            Send-Line "share: $($share.Name) at $drive"
+        } catch {
+            Send-Line "share: $($share.Name) not mounted: $($_.Exception.Message)"
+            # A shortcut from an earlier start would lead nowhere.
+            Remove-Item -LiteralPath $share.Slot.Link -Force -ErrorAction SilentlyContinue
+        }
     }
-    Remove-Item -LiteralPath $shareLink -Force -ErrorAction SilentlyContinue
-    Remove-OldShareLink
 }
+Remove-OldShareLink
 
 # The guest's screen, when the host gave it one, before the last line, as the host takes that line
 # to mean the guest is set up.

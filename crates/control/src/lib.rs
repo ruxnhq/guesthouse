@@ -87,8 +87,10 @@ pub struct MachineSettings {
     pub tpm: bool,
     #[serde(default = "on")]
     pub network: bool,
-    #[serde(default)]
-    pub share: Option<Share>,
+    /// The folders the guest sees, in order. An app or service from before there could be more
+    /// than one sends `share`, one or none, which reads as a list of it.
+    #[serde(default, alias = "share", deserialize_with = "shares_or_share")]
+    pub shares: Vec<Share>,
     /// Which network the machine's card is plugged into. An app from before bridging sends none,
     /// which reads as the shared one.
     #[serde(default)]
@@ -125,8 +127,10 @@ pub struct NewMachine {
     pub tpm: bool,
     #[serde(default = "on")]
     pub network: bool,
-    #[serde(default)]
-    pub share: Option<Share>,
+    /// The folders the guest sees, in order. An app or service from before there could be more
+    /// than one sends `share`, one or none, which reads as a list of it.
+    #[serde(default, alias = "share", deserialize_with = "shares_or_share")]
+    pub shares: Vec<Share>,
 }
 
 /// How a machine's network card reaches the network.
@@ -197,12 +201,52 @@ pub struct AdapterInfo {
 /// The guest's administrator when none is named.
 pub const DEFAULT_USER: &str = "guesthouse";
 
-/// A folder of this PC's the guest sees: on its desktop in Windows, and at /mnt/shared in Ubuntu.
+/// A folder of this PC's the guest sees: as a drive linked on its desktop in Windows, and at
+/// /mnt/shared in Ubuntu, then /mnt/shared2 and on for the folders after the first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Share {
     pub folder: PathBuf,
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// The most folders a machine shares: a Windows guest gives each a drive of its own, S: to Z:.
+pub const MOST_SHARES: usize = 8;
+
+/// Reads the folders a machine shares as a list, or as the one `share`, or none, that an app or a
+/// service from before there could be more sends.
+pub fn shares_or_share<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<Vec<Share>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Many(Vec<Share>),
+        One(Option<Share>),
+    }
+    Ok(match Either::deserialize(reader)? {
+        Either::Many(shares) => shares,
+        Either::One(share) => share.into_iter().collect(),
+    })
+}
+
+/// Why a machine can't share these folders, if it can't: there are too many, or one is there
+/// twice, which Windows' paths are the same as whatever their letters' case.
+pub fn shares_refusal(shares: &[Share]) -> Option<String> {
+    if shares.len() > MOST_SHARES {
+        return Some(format!("A machine shares {MOST_SHARES} folders at most."));
+    }
+    for (place, share) in shares.iter().enumerate() {
+        if share.folder.as_os_str().is_empty() {
+            return Some("A shared folder needs a path.".into());
+        }
+        let same = |other: &Share| {
+            other.folder.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()
+                == share.folder.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()
+        };
+        if shares[..place].iter().any(same) {
+            return Some(format!("{} is shared twice.", share.folder.display()));
+        }
+    }
+    None
 }
 
 /// Whether `name` can be a guest's administrator in both systems: Ubuntu's rule for a user, which
@@ -315,8 +359,10 @@ pub struct Machine {
     pub tpm: bool,
     #[serde(default = "on")]
     pub network: bool,
-    #[serde(default)]
-    pub share: Option<Share>,
+    /// The folders the guest sees, in order. An app or service from before there could be more
+    /// than one sends `share`, one or none, which reads as a list of it.
+    #[serde(default, alias = "share", deserialize_with = "shares_or_share")]
+    pub shares: Vec<Share>,
     #[serde(default)]
     pub network_mode: NetworkMode,
     #[serde(default)]
@@ -448,7 +494,7 @@ mod tests {
             user: String::new(),
             tpm: true,
             network: true,
-            share: None,
+            shares: Vec::new(),
         };
         let value = serde_json::to_value(Request::Create { machine: new }).unwrap();
         assert_eq!(value["machine"]["card"], json!({"card": "named", "name": "NVIDIA GeForce RTX 5090"}));
@@ -463,7 +509,7 @@ mod tests {
             nvapi_wrapper: true,
             tpm: true,
             network: true,
-            share: None,
+            shares: Vec::new(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
             nested_virtualization: false,
@@ -478,7 +524,7 @@ mod tests {
             "card": {"card": "default"}
         }))
         .unwrap();
-        assert!(made.tpm && made.network && made.share.is_none() && made.user.is_empty());
+        assert!(made.tpm && made.network && made.shares.is_empty() && made.user.is_empty());
     }
 
     #[test]
@@ -500,7 +546,7 @@ mod tests {
             nvapi_wrapper: false,
             tpm: true,
             network: true,
-            share: None,
+            shares: Vec::new(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
             nested_virtualization: true,
@@ -653,5 +699,36 @@ mod tests {
         assert!(!valid_name(""));
         assert!(!valid_name("../x"));
         assert!(!valid_name("a b"));
+    }
+
+    #[test]
+    fn shares_read_as_a_list_and_as_the_one_share_an_older_app_sends() {
+        let one = json!({"folder": "D:\\files", "read_only": true});
+        let share = Share { folder: PathBuf::from(r"D:\files"), read_only: true };
+        let base =
+            json!({"memory_mb": 8192, "processors": 4, "card": {"card": "default"}, "nvapi_wrapper": true});
+        let read = |extra: serde_json::Value| {
+            let mut value = base.clone();
+            value.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<MachineSettings>(value).unwrap().shares
+        };
+        assert_eq!(read(json!({})), []);
+        assert_eq!(read(json!({"share": null})), []);
+        assert_eq!(read(json!({"share": one})), std::slice::from_ref(&share));
+        assert_eq!(read(json!({"shares": [one, {"folder": "E:\\more"}]})).len(), 2);
+        let settings: MachineSettings = serde_json::from_value(base).unwrap();
+        let written = serde_json::to_value(MachineSettings { shares: vec![share], ..settings }).unwrap();
+        assert_eq!(written["shares"][0]["folder"], json!("D:\\files"));
+    }
+
+    #[test]
+    fn shares_are_eight_at_most_and_each_folder_once() {
+        let share = |folder: &str| Share { folder: PathBuf::from(folder), read_only: false };
+        assert_eq!(shares_refusal(&[share(r"C:\a"), share(r"C:\b")]), None);
+        assert!(shares_refusal(&[share(r"C:\a"), share(r"c:\A\")]).unwrap().contains("twice"));
+        assert!(shares_refusal(&[share("")]).is_some());
+        let many: Vec<Share> = (0..=MOST_SHARES).map(|n| share(&format!(r"C:\{n}"))).collect();
+        assert!(shares_refusal(&many).unwrap().contains("at most"));
+        assert_eq!(shares_refusal(&many[..MOST_SHARES]), None);
     }
 }

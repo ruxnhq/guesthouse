@@ -17,15 +17,32 @@ pub enum GpuChoice {
     None,
 }
 
-/// A folder of the host's the guest sees, under the name `SHARE_NAME`.
+/// A folder of the host's the guest sees, under the name `share_name(slot)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Share {
     pub folder: PathBuf,
     pub read_only: bool,
+    /// Its place in the machine's settings, from 0, which names it. A folder left out of a boot,
+    /// as it was refused, leaves its place empty, so the ones after keep their names.
+    #[serde(default)]
+    pub slot: usize,
 }
 
-/// What the host's shared folder is called, to HCS and in the guest.
-pub const SHARE_NAME: &str = "shared";
+impl Share {
+    /// What the folder is called, to HCS and in the guest.
+    pub fn name(&self) -> String {
+        share_name(self.slot)
+    }
+}
+
+/// What the folder in a machine's settings at `slot` is called, to HCS and in the guest: `shared`
+/// for the first, as when there could be only one, then `shared2` and on.
+pub fn share_name(slot: usize) -> String {
+    match slot {
+        0 => "shared".to_owned(),
+        _ => format!("shared{}", slot + 1),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepareSettings {
@@ -71,9 +88,9 @@ pub struct BootSettings {
     /// DLSS needs it; some games' anti-cheat refuses it, as it isn't signed. Off, NVIDIA's goes back.
     #[serde(default = "on")]
     pub nvapi_wrapper: bool,
-    /// A folder of the host's the guest sees, if any.
+    /// The folders of the host's the guest sees, by slot.
     #[serde(default)]
-    pub share: Option<Share>,
+    pub shares: Vec<Share>,
     /// The physical adapter the machine is bridged onto, by name, when it joins the host's own
     /// network and doesn't take Guesthouse's shared one.
     #[serde(default)]
@@ -117,7 +134,7 @@ impl BootSettings {
             until_report: false,
             console_access: Vec::new(),
             nvapi_wrapper: true,
-            share: None,
+            shares: Vec::new(),
             bridge: None,
             ssh_port: None,
         }

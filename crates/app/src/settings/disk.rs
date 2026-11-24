@@ -132,6 +132,8 @@ impl Disk {
         dialog.set_extra_child(Some(&boxed_rows(&[size.upcast_ref()])));
         let shared = self.0.shared.clone();
         on_yes(&dialog, move || {
+            // A number typed and not yet entered is only taken when the field is told to.
+            size.update();
             let gib = (size.value() as u32).to_string();
             shared.window.launch("grow", &shared.machine.borrow(), &[gib], None);
         });

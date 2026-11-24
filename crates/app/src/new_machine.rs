@@ -1041,6 +1041,10 @@ impl NewMachineDialog {
 
     fn on_create(&self) {
         let parts = &self.0;
+        // A number typed and not yet entered is only taken when its field is told to.
+        for field in [&parts.cores, &parts.ram, &parts.disk] {
+            field.update();
+        }
         if parts.macos.get() {
             return self.create_macos();
         }

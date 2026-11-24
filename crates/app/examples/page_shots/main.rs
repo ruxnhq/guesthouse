@@ -319,6 +319,13 @@ async fn settings_pages(window: Window, folder: PathBuf, failures: Rc<Cell<u32>>
     check(&failures, text.contains("Seagate Expansion, 2.0 TB"), "a disk is shown by make and size");
     check(&failures, !text.contains("Partition"), "no partition is given");
     shot_after_paint(&window, &folder, "08-settings-disk-snapshots").await;
+    check(&failures, click(&window, "Grow"), "the disk can be grown");
+    glib::timeout_future(SETTLE).await;
+    shot_after_paint(&window, &folder, "08e-grow-disk").await;
+    if let Some(question) = window.widget().visible_dialog() {
+        question.force_close();
+    }
+    glib::timeout_future(SETTLE).await;
     let add = all_of::<gtk::Button>(&window).into_iter().find(|b| b.label().as_deref() == Some("Add Drive"));
     check(&failures, add.is_some_and(|button| !button.is_sensitive()), "three drives are the most");
     // Only for a user who isn't root, as root opens anything.

@@ -9,7 +9,7 @@ use crate::store::{OWN_FILES, Settings, Store, empty, usable_name};
 use guesthouse_control::report::pieces;
 use guesthouse_control::{
     Answer, Bridging, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NetworkMode, NewMachine,
-    Request, Share, SnapshotInfo, State, System, forwards_refusal, valid_edition, valid_user,
+    Request, Share, SnapshotInfo, State, System, forwards_refusal, shares_refusal, valid_edition, valid_user,
 };
 use guesthouse_host_windows::events::Sink;
 use guesthouse_host_windows::machine::Guest;
@@ -295,7 +295,7 @@ impl<W: Work> Service<W> {
                     nvapi_wrapper: entry.settings.nvapi_wrapper,
                     tpm: entry.settings.tpm,
                     network: entry.settings.network,
-                    share: entry.settings.share.clone(),
+                    shares: entry.settings.shares.clone(),
                     network_mode: entry.settings.network_mode.clone(),
                     forwards: entry.settings.forwards.clone(),
                     nested_virtualization: entry.settings.nested_virtualization,
@@ -360,10 +360,13 @@ impl<W: Work> Service<W> {
                 "An edition is named with letters, digits and spaces, as Windows names them.".into(),
             );
         }
-        if let Some(share) = &machine.share
-            && let Err(reason) = share_refusal(share, connection)
-        {
+        if let Some(reason) = shares_refusal(&machine.shares) {
             return Some(reason);
+        }
+        for share in &machine.shares {
+            if let Err(reason) = share_refusal(share, connection) {
+                return Some(reason);
+            }
         }
         let image = &machine.image;
         if !image.is_absolute() || image.to_string_lossy().starts_with(r"\\") {
@@ -423,7 +426,7 @@ impl<W: Work> Service<W> {
             nvapi_wrapper: true,
             tpm: machine.tpm,
             network: machine.network,
-            share: machine.share.clone(),
+            shares: machine.shares.clone(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
             nested_virtualization: false,
@@ -580,20 +583,28 @@ impl<W: Work> Service<W> {
         let disk = store.disk(&name);
         drop_installer(store, &name, &disk);
         let entry_settings = self.machines.lock()[&name].settings.clone();
-        // The share is checked again at every start, as whoever is starting the machine, and held
+        // Each share is checked again at every start, as whoever is starting the machine, and held
         // open while it runs: what was checked when it was chosen could have been put in a link's
-        // place since, and the boot gives the folder to the machine as the system.
-        let mut held = None;
-        let share = entry_settings.share.as_ref().and_then(|share| match share_refusal(share, connection) {
-            Ok(folder) => {
-                held = Some(folder);
-                Some(host_settings::Share { folder: share.folder.clone(), read_only: share.read_only })
+        // place since, and the boot gives the folder to the machine as the system. One refused
+        // leaves only itself out, and its slot empty, so the others keep their names in the guest.
+        let mut held = Vec::new();
+        let mut shares = Vec::new();
+        for (slot, share) in entry_settings.shares.iter().enumerate() {
+            match share_refusal(share, connection) {
+                Ok(folder) => {
+                    held.push(folder);
+                    shares.push(host_settings::Share {
+                        folder: share.folder.clone(),
+                        read_only: share.read_only,
+                        slot,
+                    });
+                }
+                Err(reason) => self.machines.tell(
+                    &name,
+                    Event::Problem(format!("This boot doesn't share {}: {reason}", share.folder.display())),
+                ),
             }
-            Err(reason) => {
-                self.machines.tell(&name, Event::Problem(format!("This boot shares no folder: {reason}")));
-                None
-            }
-        });
+        }
         // An Ubuntu guest's SSH port, chosen again if another program has taken it since.
         let (ssh_port, said) = keep_port(&self.machines, &*self.work, &name);
         if let Some(said) = said {
@@ -610,7 +621,7 @@ impl<W: Work> Service<W> {
             tpm: entry_settings.tpm,
             nested_virtualization: entry_settings.nested_virtualization,
             network: entry_settings.network,
-            share,
+            shares,
             bridge: match &entry_settings.network_mode {
                 NetworkMode::Shared => None,
                 NetworkMode::Bridged { adapter } => Some(adapter.clone()),
@@ -736,10 +747,13 @@ impl<W: Work> Service<W> {
         if let Some(reason) = forwards_refusal(&wanted.forwards) {
             return Answer::Refused { reason };
         }
+        if let Some(reason) = shares_refusal(&wanted.shares) {
+            return Answer::Refused { reason };
+        }
         let (before, shared_before, mode_before) = {
             let entries = self.machines.lock();
             let settings = &entries[&name].settings;
-            (settings.card.clone(), settings.share.clone(), settings.network_mode.clone())
+            (settings.card.clone(), settings.shares.clone(), settings.network_mode.clone())
         };
         // A mode is checked only when it changes, as a card is: an adapter that's gone since needn't
         // stop a change of memory.
@@ -760,13 +774,13 @@ impl<W: Work> Service<W> {
                 };
             }
         }
-        // A share is checked again only when it changes: the user who shared it may not be the
-        // one asking now, and needn't be for its memory to change.
-        if wanted.share != shared_before
-            && let Some(share) = &wanted.share
-            && let Err(reason) = share_refusal(share, connection)
-        {
-            return Answer::Refused { reason };
+        // A share is checked only when it's new, or read-only before and writable now: the user
+        // who shared one that's kept may not be the one asking, and needn't be for its memory to
+        // change. A share can always go.
+        for share in wanted.shares.iter().filter(|share| !shared_before.contains(share)) {
+            if let Err(reason) = share_refusal(share, connection) {
+                return Answer::Refused { reason };
+            }
         }
         if wanted.card != before {
             // Asked before the machines are held, as the cards can take a moment to read.
@@ -814,7 +828,7 @@ impl<W: Work> Service<W> {
                 nvapi_wrapper: wanted.nvapi_wrapper,
                 tpm: wanted.tpm,
                 network: wanted.network,
-                share: wanted.share,
+                shares: wanted.shares,
                 // With no network, or on another one, the guest's last address leads nowhere.
                 address: entry
                     .settings
@@ -868,12 +882,18 @@ impl<W: Work> Service<W> {
         if saved.nested_virtualization {
             words.push_str(", nested virtualization");
         }
-        match &saved.share {
-            Some(share) => {
-                let how = if share.read_only { "read-only" } else { "to read and write" };
-                words.push_str(&format!(", and {} shared {how}.", share.folder.display()));
-            }
-            None => words.push_str(", and no shared folder."),
+        if saved.shares.is_empty() {
+            words.push_str(", and no shared folder.");
+        } else {
+            let shared: Vec<String> = saved
+                .shares
+                .iter()
+                .map(|share| {
+                    let how = if share.read_only { "read-only" } else { "to read and write" };
+                    format!("{} shared {how}", share.folder.display())
+                })
+                .collect();
+            words.push_str(&format!(", and {}.", shared.join(", ")));
         }
         self.machines.tell(&name, Event::Note(words));
         Answer::Ok

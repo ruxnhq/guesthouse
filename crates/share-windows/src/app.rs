@@ -1,12 +1,15 @@
 //! The program: its command line, the connection to the host, and the drive.
 //!
-//! It is run as SYSTEM by a scheduled task, and a drive mounted from there is in the global
-//! namespace, so every user of the guest sees it. It runs until it's killed or the connection to
+//! It is run as SYSTEM by a scheduled task, and mounts its drive through the Mount Manager, which
+//! WinFsp does for a mount point written `\\.\S:`: the drive is then a volume of the system's, so
+//! every user of the guest sees it and Explorer keeps listing it. A plain drive letter, which a
+//! test had first, was in the global namespace only as a link, and Explorer dropped it from This PC
+//! the next time it listed the drives, though it was still there. It runs until it's killed or the connection to
 //! the host drops, and then it unmounts and exits with 1, so the task that runs it starts it again.
 
 use crate::ffi::{
     DISK_DEVICE_NAME, FLAG_CASE_PRESERVED_NAMES, FLAG_CASE_SENSITIVE_SEARCH, FLAG_READ_ONLY_VOLUME,
-    FLAG_UNICODE_ON_DISK, VolumeParams,
+    FLAG_UM_FILE_CONTEXT_IS_USER_CONTEXT2, FLAG_UNICODE_ON_DISK, VolumeParams,
 };
 use crate::fs::{self, Shared};
 use crate::hv::{CONNECT_PATIENCE, HvStream};
@@ -164,7 +167,10 @@ fn volume_params(args: &Args) -> VolumeParams {
     params.file_info_timeout = FILE_INFO_TIMEOUT;
     // Names are case-sensitive on the host and the 9P share, and case is kept. Windows' ACLs aren't
     // kept: the same descriptor answers for every file.
-    params.flags = FLAG_CASE_SENSITIVE_SEARCH | FLAG_CASE_PRESERVED_NAMES | FLAG_UNICODE_ON_DISK;
+    params.flags = FLAG_CASE_SENSITIVE_SEARCH
+        | FLAG_CASE_PRESERVED_NAMES
+        | FLAG_UNICODE_ON_DISK
+        | FLAG_UM_FILE_CONTEXT_IS_USER_CONTEXT2;
     if args.read_only {
         params.flags |= FLAG_READ_ONLY_VOLUME;
     }
@@ -183,10 +189,15 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
 
     // SAFETY: plain call.
     let used = unsafe { GetLogicalDrives() };
-    let drive = match &args.drive {
-        Some(drive) => drive.clone(),
-        None => logic::first_free_drive(used).ok_or("every drive from S: to Z: is in use")?,
+    // A drive asked for is the only one tried. Otherwise each free one from S: is, in turn, as
+    // another folder's copy of this program may take one between the look and the mount.
+    let drives = match &args.drive {
+        Some(drive) => vec![drive.clone()],
+        None => logic::drives_to_try(used, args.prefer.as_deref()),
     };
+    if drives.is_empty() {
+        return Err("every drive from S: to Z: is in use".into());
+    }
     let security = security_descriptor(args.read_only)?;
     let shared = Shared::install(client, root, args.read_only, &args.share, security, api);
     let api = shared.api();
@@ -195,11 +206,25 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
     // SAFETY: the callbacks in `fs::interface` are written for WinFsp's threads.
     let file_system = unsafe { api.create(DISK_DEVICE_NAME, &params, fs::interface()) }
         .map_err(|s| format!("WinFsp cannot create the file system (status {s:#010x})"))?;
-    // SAFETY: `file_system` is live until it is deleted below.
-    if let Err(s) = unsafe { api.set_mount_point(file_system, &drive) } {
+    let mut mounted = None;
+    let mut refused = Vec::new();
+    for drive in &drives {
+        // SAFETY: `file_system` is live until it is deleted below.
+        match unsafe { api.set_mount_point(file_system, &logic::mount_manager_point(drive)) } {
+            Ok(()) => {
+                mounted = Some(drive.clone());
+                break;
+            }
+            Err(s) => refused.push(format!("{drive} (status {s:#010x})")),
+        }
+    }
+    let Some(drive) = mounted else {
         // SAFETY: nothing runs yet.
         unsafe { api.delete(file_system) };
-        return Err(format!("WinFsp cannot mount at {drive} (status {s:#010x})"));
+        return Err(format!("WinFsp cannot mount at {}", refused.join(", ")));
+    };
+    if !refused.is_empty() {
+        log.line(&format!("WinFsp could not mount at {}, so tried the next", refused.join(", ")));
     }
     // SAFETY: as above.
     if let Err(s) = unsafe { api.start_dispatcher(file_system) } {
@@ -217,4 +242,26 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
         api.delete(file_system);
     }
     Ok(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_open_handle_has_a_context_of_its_own() {
+        let args = Args {
+            port: 50001,
+            share: "shared".into(),
+            read_only: true,
+            drive: None,
+            prefer: None,
+            log: None,
+            check: false,
+        };
+        let params = volume_params(&args);
+        assert_eq!(FLAG_UM_FILE_CONTEXT_IS_USER_CONTEXT2, 1 << 16, "WinFsp's bit for it");
+        assert_ne!(params.flags & FLAG_UM_FILE_CONTEXT_IS_USER_CONTEXT2, 0);
+        assert_ne!(params.flags & FLAG_READ_ONLY_VOLUME, 0);
+    }
 }

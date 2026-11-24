@@ -10,16 +10,21 @@ pub const REPORT_FILE: &str = r"Guesthouse\report.txt";
 /// The report's last line, on either system's serial port.
 pub const REPORT_DONE: &str = "guesthouse: report done";
 
-/// The one line `Guesthouse\share.txt` holds when a Windows guest has a share: the share's name, the
+/// What `Guesthouse\share.txt` holds when a Windows guest has shares: a line for each, its name, the
 /// port of the host's Plan 9 server it reaches it on, and `rw` or `ro`, as `shared 50001 rw`.
-/// `report.ps1` reads it and starts `guesthouse-guest-share.exe` with them.
-pub fn share_marker(read_only: bool) -> String {
-    format!(
-        "{} {} {}\r\n",
-        crate::settings::SHARE_NAME,
-        guesthouse_hcs::schema::PLAN9_WINDOWS_PORT,
-        if read_only { "ro" } else { "rw" }
-    )
+/// `report.ps1` reads them and starts `guesthouse-guest-share.exe` with each line's.
+pub fn share_marker(shares: &[crate::settings::Share]) -> String {
+    shares
+        .iter()
+        .map(|share| {
+            format!(
+                "{} {} {}\r\n",
+                share.name(),
+                guesthouse_hcs::schema::PLAN9_WINDOWS_PORT,
+                if share.read_only { "ro" } else { "rw" }
+            )
+        })
+        .collect()
 }
 
 /// What the host writes on a guest's serial port to ask it to shut down. HCS's own request needs
@@ -123,16 +128,21 @@ mod tests {
     }
 
     #[test]
-    fn the_share_marker_is_one_line_the_report_reads_as_name_port_and_mode() {
-        assert_eq!(share_marker(false), "shared 50001 rw\r\n");
-        assert_eq!(share_marker(true), "shared 50001 ro\r\n");
-        // The report splits the first line on white space and takes those three, as the host wrote them.
+    fn the_share_marker_is_a_line_a_share_the_report_reads_as_name_port_and_mode() {
+        use crate::settings::Share;
+        let share = |slot, read_only| Share { folder: "D:\\x".into(), read_only, slot };
+        assert_eq!(share_marker(&[share(0, false)]), "shared 50001 rw\r\n");
+        assert_eq!(
+            share_marker(&[share(0, true), share(2, false)]),
+            "shared 50001 ro\r\nshared3 50001 rw\r\n"
+        );
+        assert_eq!(share_marker(&[]), "");
+        // The report splits each line on white space and takes those three, as the host wrote them,
+        // and takes the slot from the name.
         assert!(REPORT.contains("-split '\\s+'"));
         assert!(REPORT.contains(r"C:\Guesthouse\share.txt"));
         assert!(REPORT.contains("-eq 'ro'"));
-        let marker = share_marker(true);
-        let fields: Vec<&str> = marker.split_whitespace().collect();
-        assert_eq!(fields, [crate::settings::SHARE_NAME, "50001", "ro"]);
+        assert!(REPORT.contains("'^shared(\\d*)$'"));
         // And what it runs and installs is where the host puts it.
         assert!(REPORT.contains(r"$shareFolder = 'C:\Guesthouse\share'"));
         assert!(REPORT.contains("'guesthouse-guest-share.exe'"));

@@ -48,8 +48,15 @@ pub struct Settings {
     pub tpm: bool,
     #[serde(default = "on")]
     pub network: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share: Option<Share>,
+    /// The folders it shares. A machine from before there could be more than one has `share`, one
+    /// or none.
+    #[serde(
+        default,
+        alias = "share",
+        deserialize_with = "guesthouse_control::shares_or_share",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub shares: Vec<Share>,
     /// Which network its card is plugged into. A machine from before bridging has the shared one.
     #[serde(default, skip_serializing_if = "is_shared")]
     pub network_mode: NetworkMode,
@@ -88,7 +95,7 @@ impl Settings {
             nvapi_wrapper: true,
             tpm: true,
             network: true,
-            share: None,
+            shares: Vec::new(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
             nested_virtualization: false,

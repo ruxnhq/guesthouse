@@ -144,7 +144,7 @@ impl Options {
             console_access: Vec::new(),
             nvapi_wrapper: self.nvapi_wrapper,
             // Sharing a folder, and bridging, are the app's, through the service.
-            share: None,
+            shares: Vec::new(),
             bridge: None,
             // The loopback's port for SSH is the service's, as it keeps each machine's.
             ssh_port: None,

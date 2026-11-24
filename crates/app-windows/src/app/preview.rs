@@ -177,7 +177,7 @@ fn status() -> Status {
         nvapi_wrapper: true,
         tpm: system == System::Windows,
         network: true,
-        share: None,
+        shares: Vec::new(),
         // The Windows machine has two forwards, so the section has rows to look at.
         network_mode: NetworkMode::Shared,
         forwards: if name == "win11" {

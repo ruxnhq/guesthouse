@@ -83,15 +83,33 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
         }
     }
     // A shared folder that has gone isn't worth not booting for, so the machine boots without it.
-    let share = settings.share.clone().filter(|share| {
-        let there = share.folder.is_dir();
-        if !there {
+    let mut shares: Vec<_> = settings
+        .shares
+        .iter()
+        .filter(|share| {
+            let there = share.folder.is_dir();
+            if !there {
+                sink.problem(format!(
+                    "The shared folder {} isn't there, so this boot doesn't share it.",
+                    share.folder.display()
+                ));
+            }
+            there
+        })
+        .cloned()
+        .collect();
+    // The machine's own account opens the shared folders too, as it does its disks. A folder it
+    // can't be let into isn't worth not booting for, so the machine boots without it. It's let in
+    // before the guest is told of its shares, so the guest isn't told of one it can't have.
+    shares.retain(|share| match system::grant_vm_access(&settings.name, &share.folder) {
+        Ok(()) => true,
+        Err(error) => {
             sink.problem(format!(
-                "The shared folder {} isn't there, so this boot shares nothing.",
+                "This boot doesn't share {}, as the machine couldn't be let into it: {error}",
                 share.folder.display()
             ));
+            false
         }
-        there
     });
     let mut record = Record::load(&disk)?;
     if record.mac.is_none() {
@@ -100,10 +118,10 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     }
     match record.guest {
         Guest::Windows => {
-            refresh_windows_disk(&disk, card.as_ref(), settings.nvapi_wrapper, share.as_ref(), sink.as_ref())?
+            refresh_windows_disk(&disk, card.as_ref(), settings.nvapi_wrapper, &shares, sink.as_ref())?
         }
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref(), share.as_ref(), sink.as_ref())?;
+            linux::refresh_disk(&files_disk(&disk), card.as_ref(), &shares, sink.as_ref())?;
             if !record.installed {
                 sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }
@@ -116,7 +134,7 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
         (None, None)
     };
     let mut machine = machine(settings, disk, &record, adapter);
-    machine.share = share;
+    machine.shares = shares;
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
     let mut opened = vec![machine.disk.clone(), machine.guest_state_path(), machine.runtime_state_path()];
@@ -125,14 +143,6 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     opened.extend(crate::snapshots::chain(&machine.disk)?);
     for path in &opened {
         system::grant_vm_access(&machine.name, path).map_err(|error| error.to_string())?;
-    }
-    // The machine's own account opens the shared folder too, as it does its disks. A folder it
-    // can't be let into isn't worth not booting for, so the machine boots without it.
-    if let Some(share) = &machine.share
-        && let Err(error) = system::grant_vm_access(&machine.name, &share.folder)
-    {
-        sink.problem(format!("This boot shares no folder, as the machine couldn't be let into it: {error}"));
-        machine.share = None;
     }
 
     let document = machine.document();

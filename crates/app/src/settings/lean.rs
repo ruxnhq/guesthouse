@@ -1,15 +1,16 @@
 //! Lean Windows on a machine made with it: that it was, what it took out, and a button to do it again
-//! in the running guest. A machine made without it has no group here.
+//! in the running guest. A machine made without it has no row here.
 
 use super::Shared;
 use crate::recipe_dialog;
-use crate::rows::row_button;
+use crate::rows::{explain, row_button};
 use adw::prelude::*;
 use guesthouse_app_core::actions::LEAN_TASK;
 use guesthouse_app_core::lean::{is_lean, state_text, what_it_does};
 use guesthouse_app_core::tasks::{State, Status};
 
 const TITLE: &str = "Lean Windows";
+const SHORT: &str = "Made without Windows' extra apps";
 const NOTE: &str =
     "Made without the apps Windows adds for every account. Run Again takes out any that came back.";
 const NOT_RUNNING: &str = "The machine has to be running: this runs in the guest.";
@@ -20,22 +21,22 @@ pub struct Lean {
     shared: Shared,
 }
 
-/// The row's words: what lean Windows is, and what it did in this machine, once it has.
+/// The row's words: what it did in this machine, once it has, and what lean Windows is till then.
 fn said(shared: &Shared) -> String {
     let done = state_text(&shared.window.context(), &shared.machine.borrow());
-    done.map_or_else(|| NOTE.to_owned(), |done| format!("{NOTE} {done}"))
+    done.unwrap_or_else(|| SHORT.to_owned())
 }
 
 impl Lean {
     /// `None` for a machine made without it.
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Option<Self> {
+    /// `None` for a draft too: New Machine chooses it.
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Option<Self> {
         let context = shared.window.context();
-        if !is_lean(&context, &shared.machine.borrow()) {
+        if shared.is_draft() || !is_lean(&context, &shared.machine.borrow()) {
             return None;
         }
-        let group = adw::PreferencesGroup::builder().build();
-        page.add(&group);
         let row = adw::ActionRow::builder().title(TITLE).subtitle(said(shared)).subtitle_lines(0).build();
+        explain(&row, NOTE);
         let show = row_button("Show");
         let again = row_button("Run Again");
         again.set_sensitive(false);

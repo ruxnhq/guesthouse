@@ -1,7 +1,8 @@
-//! Cores, memory, pinning and sound.
+//! Cores, memory and sound on the Overview, and V-Cache pinning and the video memory cap on the Advanced
+//! page.
 
 use super::{Shared, is_off};
-use crate::rows::number_row;
+use crate::rows::{explain, number_row};
 use adw::prelude::*;
 use guesthouse_app_core::host::{cpu_list, physical_cores, vcache_cpus};
 use guesthouse_app_core::limits::{cores_range, ram_field};
@@ -10,11 +11,18 @@ use guesthouse_app_core::settings::max_vram_gib_for;
 use guesthouse_app_core::tasks::Status;
 
 const VM_MUST_BE_OFF: &str = "The VM must be off to change these.";
-const SOUND_NOTE: &str = "Through PipeWire. Off, the guest's sound card plays nothing, and QEMU gets no way to your \
-                          audio server or any other socket of your desktop's.";
+const SOUND_SHORT: &str = "Through PipeWire";
+const SOUND_NOTE: &str = "Off, the guest's sound card plays nothing, and QEMU gets no way to your audio server or any \
+                          other socket of your desktop's.";
+const VRAM_TITLE: &str = "Video Memory Cap";
+const VRAM_NOTE: &str = "The most video memory one program in Windows can have. A program that goes past it loses \
+                         its GPU device, and others carry on. 0 is no cap.";
+const PIN_NOTE: &str =
+    "Keeps the VM on the cores that sit beside the CPU's 3D V-Cache, which games run faster on.";
 
 pub struct Hardware {
     group: adw::PreferencesGroup,
+    advanced: adw::PreferencesGroup,
     cores: adw::SpinRow,
     ram: adw::SpinRow,
     vram: adw::SpinRow,
@@ -29,55 +37,70 @@ impl Hardware {
         self.vram.clone()
     }
 
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
+    /// The sound row, which the Overview shows after the disk.
+    pub fn sound_row(&self) -> &adw::SwitchRow {
+        &self.sound
+    }
+
+    /// Cores and RAM go in `group`, and the expert rows in `advanced`.
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup, advanced: &adw::PreferencesGroup) -> Self {
         let context = shared.window.context();
         let machine = shared.machine.borrow().clone();
-        let group = adw::PreferencesGroup::builder().title("Hardware").build();
-        page.add(&group);
         let host_cores = physical_cores(&context.cpus);
         let (least_cores, most_cores) = cores_range(&context, &machine);
         let cores = number_row("Cores", machine.cores.into(), least_cores.into(), most_cores.into());
-        cores.set_subtitle(&format!("This PC has {host_cores} cores."));
+        cores.set_subtitle(&format!("This PC has {host_cores}"));
         group.add(&cores);
         let wanted = machine.ram_gib.into();
         let field = ram_field(&context, &machine);
         // What it has stays, so a setting that no longer fits isn't changed behind the user's back.
-        let ram = number_row(
-            "RAM in GiB",
-            machine.ram_gib.into(),
-            field.lower as f64,
-            field.upper.max(wanted) as f64,
-        );
-        ram.set_subtitle(&field.subtitle);
+        let ram =
+            number_row("RAM", machine.ram_gib.into(), field.lower as f64, field.upper.max(wanted) as f64);
+        // The first sentence is the figure, and the reasons behind it go behind the info button.
+        match field.subtitle.split_once(". ") {
+            Some((figure, reasons)) => {
+                ram.set_subtitle(figure);
+                explain(&ram, reasons);
+            }
+            None => ram.set_subtitle(field.subtitle.trim_end_matches('.')),
+        }
         group.add(&ram);
-        let vram = number_row(
-            "Video memory cap in GiB",
-            machine.vram_gib.into(),
-            0.0,
-            max_vram_gib_for(&context, &machine).into(),
-        );
-        vram.set_subtitle(
-            "0 is no cap. A program that goes past it loses its GPU device, and others carry on.",
-        );
-        vram.set_visible(machine.kind == Kind::Windows);
-        group.add(&vram);
         let cpus = vcache_cpus(&context.cpus);
-        let pin = adw::SwitchRow::builder().title("V-Cache pinning").active(machine.vcache_pin).build();
+        let pin = adw::SwitchRow::builder().title("V-Cache Pinning").active(machine.vcache_pin).build();
         pin.set_subtitle(&if cpus.is_empty() {
-            "This CPU has no V-Cache cores.".to_owned()
+            "This CPU has no V-Cache cores".to_owned()
         } else {
-            format!("Keeps the VM on CPUs {}.", cpu_list(&cpus))
+            format!("On CPUs {}", cpu_list(&cpus))
         });
-        group.add(&pin);
-        // Only a GPU machine has ever had sound, and macOS and Android guests count as one.
+        explain(&pin, PIN_NOTE);
+        advanced.add(&pin);
+        let vram =
+            number_row(VRAM_TITLE, machine.vram_gib.into(), 0.0, max_vram_gib_for(&context, &machine).into());
+        vram.set_subtitle("In GiB, 0 for none");
+        explain(&vram, VRAM_NOTE);
+        // Only Windows' GPU-PV has a cap. The row is still made, as the card's row sets its top.
+        if machine.kind == Kind::Windows {
+            advanced.add(&vram);
+        }
+        // Only a GPU machine has ever had sound, and macOS and Android guests count as one. The Overview
+        // adds it after the disk.
         let sound = adw::SwitchRow::builder()
             .title("Sound")
-            .subtitle(SOUND_NOTE)
+            .subtitle(SOUND_SHORT)
             .active(machine.sound)
             .visible(machine.kind == Kind::Windows || machine.macos() || machine.android())
             .build();
-        group.add(&sound);
-        let this = Self { group, cores, ram, vram, pin, pin_possible: !cpus.is_empty(), sound };
+        explain(&sound, SOUND_NOTE);
+        let this = Self {
+            group: group.clone(),
+            advanced: advanced.clone(),
+            cores,
+            ram,
+            vram,
+            pin,
+            pin_possible: !cpus.is_empty(),
+            sound,
+        };
         this.connect(shared);
         this
     }
@@ -118,5 +141,6 @@ impl Hardware {
         self.pin.set_sensitive(off && self.pin_possible);
         self.sound.set_sensitive(off);
         self.group.set_description((!off).then_some(VM_MUST_BE_OFF));
+        self.advanced.set_description((!off).then_some(VM_MUST_BE_OFF));
     }
 }

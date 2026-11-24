@@ -2,12 +2,13 @@
 //! PC's cards with that card's own drivers, so any maker's card will do. The card is the only choice.
 
 use super::{Shared, is_off};
-use crate::rows::choice_row;
+use crate::rows::{choice_row, explain};
 use adw::prelude::*;
 use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::render_cards::render_cards;
 use guesthouse_app_core::tasks::Status;
 
+const SHORT: &str = "A preview, on this PC's GPU";
 const NOTE: &str = "Android draws through QEMU's virtio GPU on this PC's card: OpenGL ES through virgl and \
                     Vulkan through Venus. Its screen and input come through this window. A preview.";
 const AUTOMATIC: &str = "Any, NVIDIA's first";
@@ -35,19 +36,20 @@ fn choices(shared: &Shared, chosen: &str) -> Vec<(String, String)> {
 }
 
 impl Android {
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Self {
         if !shared.machine.borrow().android() {
             return Self { group: None, card: None };
         }
-        let group = adw::PreferencesGroup::builder().title("Android GPU").build();
-        page.add(&group);
-        group.add(&adw::ActionRow::builder().title("GPU acceleration").subtitle(NOTE).build());
+        let acceleration = adw::ActionRow::builder().title("GPU Acceleration").subtitle(SHORT).build();
+        explain(&acceleration, NOTE);
+        group.add(&acceleration);
         let chosen = shared.machine.borrow().android_gpu.clone();
         let choices = choices(shared, &chosen);
         let names: Vec<&str> = choices.iter().map(|(_, name)| name.as_str()).collect();
         let row = choice_row("Card", &names);
-        row.set_subtitle(CARD_NOTE);
+        explain(&row, CARD_NOTE);
         row.set_selected(choices.iter().position(|(pci, _)| *pci == chosen).unwrap_or(0) as u32);
+        super::value_as_subtitle(&row);
         let saving = shared.clone();
         row.connect_selected_notify(move |row| {
             let Some((pci, _)) = choices.get(row.selected() as usize) else { return };
@@ -55,7 +57,7 @@ impl Android {
             saving.save();
         });
         group.add(&row);
-        Self { group: Some(group), card: Some(row) }
+        Self { group: Some(group.clone()), card: Some(row) }
     }
 
     pub fn set_status(&self, status: &Status) {

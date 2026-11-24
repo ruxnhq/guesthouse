@@ -3,9 +3,11 @@
 
 use super::gpu_choice::add_gpu_choice_saying;
 use super::{Shared, is_off};
+use crate::rows::explain;
 use adw::prelude::*;
 use guesthouse_app_core::tasks::Status;
 
+const SHORT: &str = "A preview, on this PC's GPU";
 const NOTE: &str = "macOS draws through reims-vgpu on this PC's GPU, and its screen and input come through \
                     this window. A preview: so far it has only run on my PC, on an NVIDIA card.";
 const NVIDIA: &str = "The NVIDIA card";
@@ -18,15 +20,15 @@ pub struct Macos {
 }
 
 impl Macos {
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Self {
         if !shared.machine.borrow().macos() {
             return Self { group: None, card: None };
         }
-        let group = adw::PreferencesGroup::builder().title("macOS GPU").build();
-        page.add(&group);
-        group.add(&adw::ActionRow::builder().title("GPU acceleration").subtitle(NOTE).build());
-        let card = add_gpu_choice_saying(shared, &group, NVIDIA, CARD_NOTE);
-        Self { group: Some(group), card }
+        let row = adw::ActionRow::builder().title("GPU Acceleration").subtitle(SHORT).build();
+        explain(&row, NOTE);
+        group.add(&row);
+        let card = add_gpu_choice_saying(shared, group, NVIDIA, CARD_NOTE);
+        Self { group: Some(group.clone()), card }
     }
 
     pub fn set_status(&self, status: &Status) {

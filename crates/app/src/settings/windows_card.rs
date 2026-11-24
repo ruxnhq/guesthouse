@@ -1,9 +1,10 @@
 //! Which card a Windows machine's GPU-PV runs on. Windows in it was installed for that card's maker,
-//! so the row offers only cards of the same maker, and only while the machine is off. It's there on a
-//! PC with more than one card to run on, or when the machine's own card is gone.
+//! so the row offers only cards of the same maker, and only while the machine is off. It's a choice on a
+//! PC with more than one card to run on, or when the machine's own card is gone, and otherwise just says
+//! which card it is.
 
 use super::{Shared, is_off};
-use crate::rows::choice_row;
+use crate::rows::{choice_row, explain};
 use adw::prelude::*;
 use guesthouse_app_core::card_choice::{
     learn_machines_card, machines_choice, same_maker_choices, windows_card_choices,
@@ -22,7 +23,7 @@ pub struct WindowsCard {
 
 impl WindowsCard {
     /// `cap` is the video memory cap's row, as another card can allow another cap.
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage, cap: adw::SpinRow) -> Self {
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup, cap: adw::SpinRow) -> Self {
         let machine = shared.machine.borrow().clone();
         let context = shared.window.context();
         if machine.kind != Kind::Windows {
@@ -31,15 +32,19 @@ impl WindowsCard {
         let choices = same_maker_choices(&context, &machine);
         let offered = windows_card_choices(&context);
         let own_card_here = offered.iter().any(|choice| choice.is_machines(&machine));
+        let at = machines_choice(&choices, &machine);
         if offered.len() < 2 && own_card_here {
+            let label = choices.get(at).map(|choice| choice.label.clone()).unwrap_or_default();
+            let row = adw::ActionRow::builder().title(TITLE).subtitle(label).use_markup(false).build();
+            explain(&row, NOTE);
+            group.add(&row);
             return Self { row: None };
         }
-        let group = adw::PreferencesGroup::builder().title("GPU").build();
-        page.add(&group);
         let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
         let row = choice_row(TITLE, &labels);
-        row.set_subtitle(NOTE);
-        row.set_selected(machines_choice(&choices, &machine) as u32);
+        explain(&row, NOTE);
+        row.set_selected(at as u32);
+        super::value_as_subtitle(&row);
         let saving = shared.clone();
         row.connect_selected_notify(move |row| {
             let Some(choice) = choices.get(row.selected() as usize) else { return };

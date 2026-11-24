@@ -9,6 +9,8 @@ use guesthouse_app_core::network_settings::{add_forward, read_forward, remove_fo
 use std::cell::RefCell;
 use std::rc::Rc;
 
+const HELP: &str = "A program on this PC connects to a host port, and reaches a port in the guest. Only this PC \
+                    reaches it that way. Other PCs can reach the guest when its network is Bridged.";
 const FORWARD_HELP: &str = "A program on this PC connects to the host port, and reaches the guest port.";
 
 struct Parts {
@@ -50,12 +52,12 @@ impl Forwards {
     pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
         let group = adw::PreferencesGroup::builder()
             .title("Port Forwards")
-            .description("They reach the guest from this PC only. Other PCs can use Bridged.")
+            .description("From this PC only")
             .visible(shared.machine.borrow().kind != Kind::Linux)
             .build();
         page.add(&group);
         let add = row_button("Add");
-        group.set_header_suffix(Some(&add));
+        group.set_header_suffix(Some(&super::header_with(HELP, &add)));
         let this = Self(Rc::new(Parts { shared: shared.clone(), group, add, rows: RefCell::default() }));
         let handle = this.clone();
         this.0.add.connect_clicked(move |_| handle.on_add());
@@ -70,14 +72,13 @@ impl Forwards {
         }
         let forwards = parts.shared.machine.borrow().forwards.clone();
         for item in forwards {
-            let note =
-                format!("127.0.0.1:{} on this PC reaches port {} in the guest.", item.host, item.guest);
+            let note = format!("127.0.0.1:{} reaches guest port {}", item.host, item.guest);
             let row = adw::ActionRow::builder().title(item.text()).subtitle(note).build();
             let remove = icon_button("user-trash-symbolic", "Remove Forward");
             let this = self.clone();
             remove.connect_clicked(move |_| {
                 let shared = &this.0.shared;
-                shared.change(|machine| remove_forward(&shared.window.context(), machine, &item));
+                shared.change(|context, machine| remove_forward(context, machine, &item));
                 this.show();
             });
             row.add_suffix(&remove);
@@ -91,11 +92,11 @@ impl Forwards {
         let typed = Typed {
             protocol: choice_row("Protocol", &names),
             host: adw::EntryRow::builder()
-                .title("Host port")
+                .title("Host Port")
                 .input_purpose(gtk::InputPurpose::Digits)
                 .build(),
             guest: adw::EntryRow::builder()
-                .title("Guest port")
+                .title("Guest Port")
                 .input_purpose(gtk::InputPurpose::Digits)
                 .build(),
         };
@@ -115,7 +116,7 @@ impl Forwards {
         on_yes(&dialog, move || {
             let shared = &this.0.shared;
             if let Ok(item) = typed.read(shared) {
-                shared.change(|machine| add_forward(&shared.window.context(), machine, item));
+                shared.change(|context, machine| add_forward(context, machine, item));
                 this.show();
             }
         });

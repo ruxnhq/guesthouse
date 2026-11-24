@@ -3,7 +3,7 @@
 
 use super::{Shared, is_off};
 use crate::common::{chosen_path, in_background};
-use crate::rows::{boxed_rows, on_yes, question, row_button};
+use crate::rows::{boxed_rows, explain, on_yes, question, row_button};
 use adw::prelude::*;
 use gtk::gio;
 use guesthouse_app_core::duplicate::{
@@ -16,10 +16,15 @@ use guesthouse_app_core::throwaway::set_throwaway;
 const NOT_INSTALLED: &str = "It has not finished installing.";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 
+const THROWAWAY_SHORT: &str = "Starts clean every time";
+const EXPORT_NOTE: &str = "One file with its disk and settings, for Guesthouse on another PC. It holds the guest's \
+                           password and agent token, so keep it as safe as the machine.";
 const THROWAWAY_TEXT: &str = "Starts clean every time, and what it writes to its disk is gone when it shuts down. \
                               Its shared folder and host drives keep what is written to them.";
 
 pub struct Copies {
+    /// A draft has nothing to copy yet.
+    shown: bool,
     shared: Shared,
     duplicate: gtk::Button,
     export: gtk::Button,
@@ -27,13 +32,9 @@ pub struct Copies {
 }
 
 impl Copies {
-    pub fn new(shared: &Shared, page: &adw::PreferencesPage) -> Self {
-        let group = adw::PreferencesGroup::builder().title("Copies").build();
-        page.add(&group);
-        let row = adw::ActionRow::builder()
-            .title("Duplicate")
-            .subtitle("A copy with a disk of its own. This machine stays as it is.")
-            .build();
+    pub fn new(shared: &Shared, group: &adw::PreferencesGroup) -> Self {
+        let row =
+            adw::ActionRow::builder().title("Duplicate").subtitle("A copy with a disk of its own").build();
         let duplicate = row_button("Duplicate…");
         duplicate.set_sensitive(false);
         let asking = shared.clone();
@@ -42,37 +43,40 @@ impl Copies {
         group.add(&row);
         let throwaway = adw::SwitchRow::builder()
             .title("Throwaway")
-            .subtitle(THROWAWAY_TEXT)
+            .subtitle(THROWAWAY_SHORT)
             .active(shared.machine.borrow().throwaway)
             .build();
+        explain(&throwaway, THROWAWAY_TEXT);
         let changing = shared.clone();
         throwaway.connect_active_notify(move |row| {
             let on = row.is_active();
             if changing.machine.borrow().throwaway == on {
                 return;
             }
-            let context = changing.window.context();
-            changing.change(|machine| set_throwaway(&context, machine, on));
+            changing.change(|context, machine| set_throwaway(context, machine, on));
             row.set_active(changing.machine.borrow().throwaway);
         });
         group.add(&throwaway);
-        let row = adw::ActionRow::builder()
-            .title("Export")
-            .subtitle(
-                "One file with its disk and settings, for Guesthouse on another PC. It holds the guest's \
-                       password and agent token, so keep it as safe as the machine.",
-            )
-            .build();
+        let export_row =
+            adw::ActionRow::builder().title("Export").subtitle("One file, with its password inside").build();
+        explain(&export_row, EXPORT_NOTE);
         let export = row_button("Export…");
         export.set_sensitive(false);
         let asking = shared.clone();
         export.connect_clicked(move |_| ask_where(&asking));
-        row.add_suffix(&export);
-        group.add(&row);
-        Self { shared: shared.clone(), duplicate, export, throwaway }
+        export_row.add_suffix(&export);
+        group.add(&export_row);
+        let shown = !shared.is_draft();
+        for row in [row.upcast_ref::<gtk::Widget>(), throwaway.upcast_ref(), export_row.upcast_ref()] {
+            row.set_visible(shown);
+        }
+        Self { shown, shared: shared.clone(), duplicate, export, throwaway }
     }
 
     pub fn set_status(&self, status: &Status) {
+        if !self.shown {
+            return;
+        }
         let installing = self.shared.machine.borrow().installing;
         let can = is_off(status) && !installing;
         self.duplicate.set_sensitive(can);

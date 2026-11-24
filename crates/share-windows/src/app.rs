@@ -1,7 +1,10 @@
 //! The program: its command line, the connection to the host, and the drive.
 //!
-//! It is run as SYSTEM by a scheduled task, and a drive mounted from there is in the global
-//! namespace, so every user of the guest sees it. It runs until it's killed or the connection to
+//! It is run as SYSTEM by a scheduled task, and mounts its drive through the Mount Manager, which
+//! WinFsp does for a mount point written `\\.\S:`: the drive is then a volume of the system's, so
+//! every user of the guest sees it and Explorer keeps listing it. A plain drive letter, which a
+//! test had first, was in the global namespace only as a link, and Explorer dropped it from This PC
+//! the next time it listed the drives, though it was still there. It runs until it's killed or the connection to
 //! the host drops, and then it unmounts and exits with 1, so the task that runs it starts it again.
 
 use crate::ffi::{
@@ -204,7 +207,7 @@ fn serve(args: &Args, log: &Log) -> Result<i32, String> {
     let mut refused = Vec::new();
     for drive in &drives {
         // SAFETY: `file_system` is live until it is deleted below.
-        match unsafe { api.set_mount_point(file_system, drive) } {
+        match unsafe { api.set_mount_point(file_system, &logic::mount_manager_point(drive)) } {
             Ok(()) => {
                 mounted = Some(drive.clone());
                 break;

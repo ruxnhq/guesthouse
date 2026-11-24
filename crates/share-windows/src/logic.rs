@@ -255,6 +255,11 @@ pub fn free_drives(used: u32) -> Vec<String> {
         .collect()
 }
 
+/// The mount point that has WinFsp mount a drive, `S:`, through the Mount Manager: `\\.\S:`.
+pub fn mount_manager_point(drive: &str) -> String {
+    format!(r"\\.\{drive}")
+}
+
 /// A drive as the user wrote it, `s`, `S` or `S:`, as `S:`.
 pub fn normalize_drive(text: &str) -> Option<String> {
     let letter = text.strip_suffix(':').unwrap_or(text);
@@ -538,6 +543,11 @@ mod tests {
         assert_eq!((d1, d2, d3), (564, 0xFACB, 0x11E6));
         assert_eq!(d4, [0xBD, 0x58, 0x64, 0x00, 0x6A, 0x79, 0x86, 0xD3]);
         assert_eq!(HV_GUID_PARENT.0, 0xa42e7cda);
+    }
+
+    #[test]
+    fn a_drive_is_mounted_through_the_mount_manager() {
+        assert_eq!(mount_manager_point("S:"), r"\\.\S:");
     }
 
     #[test]

@@ -24,7 +24,9 @@ const DESCRIPTION_HEIGHT: i32 = 120;
 const NO_MACHINE: &str = "None, it's about the app";
 const GUEST_LOGS_NOTE: &str = "From a running Windows guest: Guesthouse's own guest logs, display events, the \
                               adapter and its driver, Windows' build, and whether a crash dump was written, by \
-                              name, time and size. Never the dump itself, memory or your files.";
+                              name, time and size. Never the dump itself, memory or your files. From Android: \
+                              the errors and crashes its apps wrote to logcat in its last runs, with e-mail \
+                              addresses taken out.";
 const SERIAL_NOTE: &str = "What Windows or Linux wrote to its serial port. Turned off, the app's log can still \
                            hold a few of the guest's answers to the app's own scripts.";
 const GATHERING: &str = "Gathering what goes in…";
@@ -90,7 +92,7 @@ impl ReportDialog {
         explain(&guest_serial, SERIAL_NOTE);
         let guest_logs = adw::SwitchRow::builder()
             .title("Logs From Inside the Guest")
-            .subtitle("From a running Windows guest")
+            .subtitle("From a running Windows guest, or Android's logcat")
             .active(true)
             .build();
         explain(&guest_logs, GUEST_LOGS_NOTE);

@@ -26,7 +26,7 @@ them into one file here. It shows what's in the file and asks before sending any
   --no-guest-serial   leaves out what the guest wrote to its serial port.
   --no-guest-logs     doesn't ask a running Windows guest for its own logs: Guesthouse's guest logs,
                       display events, the adapter and build, and whether a crash dump was written
-                      (its name, time and size, never the dump).
+                      (its name, time and size, never the dump). It leaves out Android's logcat too.
   --save-only         writes the file and stops, with nothing sent.
   --help              this.
 ";

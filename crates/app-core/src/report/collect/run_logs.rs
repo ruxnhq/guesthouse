@@ -8,9 +8,10 @@ use super::{Collection, Request};
 use crate::context::Context;
 use crate::kept_logs::{kept_folder, kept_names, kept_started};
 use crate::machine::Machine;
+use crate::report::scrub::scrub_emails;
 use crate::run_files::{
-    GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, KEPT_HOST_LOGS, KEPT_SUFFIX, files_since, kept_run_of,
-    local_time, run_of,
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, KEPT_HOST_LOGS, KEPT_SUFFIX, files_since,
+    kept_run_of, local_time, run_of,
 };
 use crate::slots;
 use crate::tasks::{read_task, task_path};
@@ -27,6 +28,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
             .copied()
             .filter(|name| match *name {
                 GUEST_SERIAL => request.guest_serial,
+                GUEST_LOGCAT => request.guest_logs,
                 INSTALL_SERIAL => {
                     request.guest_serial && (request.kind.wants_install_log() || machine.installing)
                 }
@@ -34,7 +36,8 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
             })
             .collect()
     };
-    let current: Vec<&str> = wanted(&[&HOST_LOGS[..], &[GUEST_SERIAL, INSTALL_SERIAL]].concat());
+    let current: Vec<&str> =
+        wanted(&[&HOST_LOGS[..], &[GUEST_SERIAL, INSTALL_SERIAL, GUEST_LOGCAT]].concat());
     for slot in slots::all() {
         let folder = context.run_folder(Some(slot));
         let place = format!("runs/slot-{}", slot.number());
@@ -83,7 +86,14 @@ fn add_all(
     since: std::time::SystemTime,
 ) {
     for (name, path) in files_since(folder, names, suffix, since) {
+        let before = found.items.len();
         found.add_file_if_there(&format!("{place}/{name}"), &path);
+        // Apps write what they like to logcat, an account's address among it.
+        if name == GUEST_LOGCAT
+            && let Some(item) = found.items.get_mut(before)
+        {
+            item.text = scrub_emails(&item.text);
+        }
     }
 }
 
@@ -134,6 +144,24 @@ mod tests {
         collect(&context, &machine, &request(true), &mut found);
         let names: Vec<&str> = found.names().collect();
         assert_eq!(names, ["runs/slot-0/vm-gpupv.out", "runs/slot-0/qemu.log"], "an earlier run's stay out");
+    }
+
+    #[test]
+    fn androids_logcat_follows_the_guest_logs_switch_and_loses_addresses() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let folder = context.run_folder(Some(slots::first()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join(MACHINE_NOTE), "phone").unwrap();
+        fs::write(folder.join("logcat.log"), "E Auth: no token for quillon.marrow@example.com\n").unwrap();
+        let machine = Machine::new("phone", "Phone", "/d", "/v");
+        let mut found = Collection::default();
+        collect(&context, &machine, &request(true), &mut found);
+        assert_eq!(found.names().count(), 0, "left out with the guest's own logs");
+        let mut found = Collection::default();
+        collect(&context, &machine, &Request { guest_logs: true, ..request(true) }, &mut found);
+        assert_eq!(found.names().collect::<Vec<_>>(), ["runs/slot-0/logcat.log"]);
+        assert_eq!(found.items[0].text, "E Auth: no token for <email>\n");
     }
 
     #[test]

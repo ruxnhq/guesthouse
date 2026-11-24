@@ -5,7 +5,7 @@
 //! `MACHINE_NOTE`, names the machine.
 
 use crate::daemon;
-use crate::vm_args::{self, INSTALL_LOG};
+use crate::vm_args::{self, INSTALL_LOG, LOGCAT_FILE};
 use crate::vm_host::MACHINE_NOTE;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -35,6 +35,8 @@ pub const KEPT_HOST_LOGS: [&str; 2] = [daemon::OUTPUT_FILE, "qemu.log"];
 pub const GUEST_SERIAL: &str = "serial.log";
 /// What an Ubuntu install wrote to its serial port.
 pub const INSTALL_SERIAL: &str = INSTALL_LOG;
+/// What Android's logcat wrote to its second console: errors and crashes, from every app.
+pub const GUEST_LOGCAT: &str = LOGCAT_FILE;
 /// The suffix of the logs kept from the run before.
 pub const KEPT_SUFFIX: &str = ".1";
 

@@ -15,6 +15,7 @@ const USER_MARK: &str = "<user>";
 const HOST_MARK: &str = "<host>";
 const UUID_MARK: &str = "<uuid>";
 const MAC_MARK: &str = "<mac>";
+const EMAIL_MARK: &str = "<email>";
 /// The machine a report is about. Any other is this with a number, from 2.
 const MACHINE_MARK: &str = "machine";
 /// IDs that are words the app's own lines use, or that its folders and programs are called. As a bare
@@ -188,6 +189,18 @@ pub fn scrub_names(text: &str, names: &[(&str, &str)]) -> String {
                 .to_owned()
         })
         .into_owned()
+}
+
+/// Takes out what has the shape of an e-mail address, for a log that apps write what they like to.
+/// Not for a host's logs, where a unit such as `getty@tty1.service` has that shape too.
+pub fn scrub_emails(text: &str) -> String {
+    static SHAPE: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+        Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b").ok()
+    });
+    match SHAPE.as_ref() {
+        Some(shape) => shape.replace_all(text, EMAIL_MARK).into_owned(),
+        None => text.to_owned(),
+    }
 }
 
 fn apply(rules: &[(Regex, String)], text: &str) -> String {

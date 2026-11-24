@@ -18,7 +18,7 @@ mod throwaway;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
-pub use android::{AndroidBoot, AndroidCard};
+pub use android::{AndroidBoot, AndroidCard, LOGCAT_FILE};
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
 pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;

@@ -5,7 +5,9 @@
 
 use crate::context::Context;
 use crate::report::trim::trim;
-use crate::run_files::{GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run};
+use crate::run_files::{
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run,
+};
 use crate::vm_host::MACHINE_NOTE;
 use std::fs;
 use std::io;
@@ -23,10 +25,10 @@ pub fn kept_folder(context: &Context, id: &str) -> PathBuf {
     context.paths.state.join(KEPT_FOLDER).join(id)
 }
 
-/// Every log a run can have that a report might take, the guest's serial output among them, which the
-/// report leaves out if the tester says so.
+/// Every log a run can have that a report might take, the guest's serial output and Android's logcat
+/// among them, which the report leaves out if the tester says so.
 pub fn kept_names() -> Vec<&'static str> {
-    HOST_LOGS.iter().copied().chain([GUEST_SERIAL, INSTALL_SERIAL]).collect()
+    HOST_LOGS.iter().copied().chain([GUEST_SERIAL, INSTALL_SERIAL, GUEST_LOGCAT]).collect()
 }
 
 /// Copies the run in this run folder into its machine's kept logs, if it has a note and any logs. A

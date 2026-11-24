@@ -518,7 +518,13 @@ impl Machine {
 
     /// What sort of guest it is, such as "Windows with GPU-PV", which says nothing of whose it is.
     pub fn kind_name(&self) -> &'static str {
-        self.kind.name()
+        if self.android() {
+            "Android"
+        } else if self.macos() {
+            "macOS"
+        } else {
+            self.kind.name()
+        }
     }
 
     /// The summary, with what's known of the screen.

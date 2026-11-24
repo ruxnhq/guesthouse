@@ -25,7 +25,7 @@ const HOST_MEMORY: &str = "4G";
 /// refuses that unless the GPU hands out resource UUIDs. Our QEMU's patch adds them to the GL device.
 const GPU_SETTINGS: [&str; 4] = ["venus=on", "blob=on", "resource_uuid=on", "hostmem"];
 /// Android's logcat comes out on its second console, and the guest's own shell on its first.
-const LOGCAT_FILE: &str = "logcat.log";
+pub const LOGCAT_FILE: &str = "logcat.log";
 const KERNEL_LOG_FILE: &str = "serial.log";
 /// NVIDIA's Vulkan and EGL manifests, where its driver puts them, and on NixOS.
 const NVIDIA_ICD: &str = "nvidia_icd.json";

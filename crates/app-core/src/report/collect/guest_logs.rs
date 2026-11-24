@@ -4,7 +4,8 @@
 //! only costs this part.
 //!
 //! A Linux guest has no agent the host can ask over the same channel, so nothing comes from inside
-//! one here.
+//! one here. Android has none either, and its logcat, which it writes to a console of its own, goes
+//! in with the run's logs instead.
 
 use super::{Collection, Request};
 use crate::agent::guest_script;
@@ -25,6 +26,8 @@ pub(super) const GUEST_USER_MARK: &str = "<guest-user>";
 pub(super) const GUEST_PC_MARK: &str = "<guest-pc>";
 /// Accounts every Windows has, whose names are words in its own logs and say nothing of whose it is.
 const BUILT_IN_ACCOUNTS: [&str; 4] = ["Administrator", "Guest", "DefaultAccount", "WDAGUtilityAccount"];
+const ANDROID_LOGCAT: &str = "Android has no agent to ask. What its logcat wrote, errors and crashes from every \
+                              app, is with the run's logs as logcat.log.";
 const NEEDS_RUNNING: &str = "Logs from inside the guest need the machine running, so there are none here.";
 
 /// What the guest's answer holds.
@@ -43,6 +46,10 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
     found.machine_running = running.is_some();
     if !request.guest_logs {
         found.notes.push("Logs from inside the guest were left out, as asked.".to_owned());
+        return;
+    }
+    if machine.android() {
+        found.notes.push(ANDROID_LOGCAT.to_owned());
         return;
     }
     if machine.kind == Kind::Linux || machine.kind == Kind::Plain {

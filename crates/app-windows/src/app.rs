@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use guesthouse_control::client::Unreached;
+use guesthouse_control::report::{ProblemKind, issue_link};
 use guesthouse_control::updates::Latest;
 use guesthouse_control::{
     Answer, Card, CardInfo, Event, Machine, MachineSettings, NewMachine, Share, State, System, valid_name,
@@ -22,6 +23,7 @@ use windows_reactor::*;
 
 use crate::bridge::{self, Ended, Job, Seen, Watch, Window};
 use crate::console::{self, Console};
+use crate::report::{self, Asked, Prepared};
 
 #[cfg(feature = "preview")]
 mod preview;
@@ -90,6 +92,57 @@ fn live() -> bool {
 pub enum Page {
     Machine,
     New,
+    /// Report a problem, which can be reached when the service can't be.
+    Report,
+}
+
+/// The report page: what's been written so far, and how far the report has got.
+#[derive(Clone)]
+pub struct ReportPage {
+    /// The machine the problem is with, by name, if any.
+    pub machine: Option<String>,
+    pub kind: ProblemKind,
+    /// What went wrong, in the person's words.
+    pub what: String,
+    /// How to reach them, if they give one.
+    pub contact: String,
+    pub stage: ReportStage,
+}
+
+impl Default for ReportPage {
+    fn default() -> Self {
+        ReportPage {
+            machine: None,
+            kind: ProblemKind::default(),
+            what: String::new(),
+            contact: String::new(),
+            stage: ReportStage::Writing { problem: None },
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum ReportStage {
+    /// Being written, and why the last try to make it failed, if it did.
+    Writing { problem: Option<String> },
+    /// Being made, on a thread of its own.
+    Preparing,
+    /// Made, and shown for the person to look at. Nothing has been sent.
+    Ready(Ready),
+}
+
+/// A report that's been made.
+#[derive(Clone)]
+pub struct Ready {
+    pub prepared: Prepared,
+    /// Being sent now.
+    pub sending: bool,
+    /// The ID the report server gave it, once it's sent.
+    pub id: Option<String>,
+    /// Why it wasn't sent or saved, in words.
+    pub problem: Option<String>,
+    /// Where a copy was saved, if one was.
+    pub saved: Option<String>,
 }
 
 /// One line of a log.
@@ -398,6 +451,7 @@ pub struct Main {
     /// The label typed for the next snapshot of the shown machine.
     pub snapshot_label: String,
     pub form: Form,
+    pub report: ReportPage,
     /// The selected machine's settings, as the person is changing them.
     pub draft: Option<Draft>,
     pub making: Option<Making>,
@@ -421,6 +475,9 @@ pub const DELETE_KEY: &str = "delete";
 /// The tag of the navigation's New machine item. It has a space, which no machine's name can.
 pub const NEW_TAG: &str = " new";
 
+/// The tag of the navigation's Report a problem item.
+pub const REPORT_TAG: &str = " report";
+
 #[derive(Clone)]
 pub enum Message {
     Hwnd(isize),
@@ -433,6 +490,28 @@ pub enum Message {
     /// An item of the navigation was chosen, by its tag: a machine's name, or `NEW_TAG`.
     Navigate(Option<String>),
     NewMachine,
+    /// Open the report page, from the service-away page too.
+    OpenReport,
+    /// Leave the report page for the machines, or the away page.
+    CloseReport,
+    /// A machine was chosen for the report: 0 is none, then each in the list's order.
+    ReportMachine(Option<usize>),
+    /// A kind was chosen, by its place in `ProblemKind::ALL`.
+    ReportKind(Option<usize>),
+    ReportWhat(String),
+    ReportContact(String),
+    /// Make the report, which sends nothing.
+    ReportPrepare,
+    ReportPrepared(Result<Prepared, String>),
+    ReportSend,
+    ReportSent(Result<String, String>),
+    /// Open Save As, and copy the archive where the person says.
+    ReportSave,
+    ReportSaved(Result<std::path::PathBuf, String>),
+    /// Open a new issue with the sent report's ID in it.
+    ReportIssue,
+    /// Delete what was made and write another.
+    ReportStartOver,
     Start,
     Stop,
     /// An item of a machine's More menu, by its key.
@@ -619,6 +698,122 @@ impl Main {
         if !opened {
             self.tell("The folder picker didn't open. Type the folder's path instead.", true);
         }
+    }
+
+    /// Opens the report page. A report not begun is about the machine that's shown.
+    fn open_report(&mut self) {
+        if self.page != Page::Report
+            && matches!(self.report.stage, ReportStage::Writing { .. })
+            && self.report.machine.is_none()
+            && self.report.what.is_empty()
+        {
+            self.report.machine = self.selected.clone().filter(|name| {
+                self.status().is_some_and(|status| status.machines.iter().any(|m| &m.name == name))
+            });
+        }
+        self.page = Page::Report;
+    }
+
+    /// What the report needs from the last status and the form.
+    fn asked(&self) -> Asked {
+        let status = self.status();
+        let machine = self.report.machine.clone().filter(|name| {
+            status.is_some_and(|status| status.machines.iter().any(|machine| &machine.name == name))
+        });
+        Asked {
+            machine_system: machine.as_ref().and_then(|name| {
+                status?.machines.iter().find(|machine| &machine.name == name).map(|machine| machine.system)
+            }),
+            machine,
+            machines: status
+                .map(|status| status.machines.iter().map(|machine| machine.name.clone()).collect())
+                .unwrap_or_default(),
+            card: status.and_then(|status| {
+                status.cards.iter().find(|card| card.default).map(|card| card.name.clone())
+            }),
+            kind: self.report.kind,
+            description: self.report.what.clone(),
+            contact: self.report.contact.clone(),
+        }
+    }
+
+    fn prepare_report(&mut self) {
+        if !self.live || !matches!(self.report.stage, ReportStage::Writing { .. }) {
+            return;
+        }
+        self.report.stage = ReportStage::Preparing;
+        report::prepare(self.asked(), self.window.clone());
+    }
+
+    fn ready(&mut self) -> Option<&mut Ready> {
+        match &mut self.report.stage {
+            ReportStage::Ready(ready) => Some(ready),
+            _ => None,
+        }
+    }
+
+    fn send_report(&mut self) {
+        let live = self.live;
+        let window = self.window.clone();
+        let Some(ready) = self.ready().filter(|ready| !ready.sending && ready.id.is_none()) else { return };
+        if !live {
+            return;
+        }
+        ready.sending = true;
+        ready.problem = None;
+        report::send(&ready.prepared, window);
+    }
+
+    fn save_report(&mut self) {
+        let (hwnd, live, window) = (self.hwnd, self.live, self.window.clone());
+        let Some(ready) = self.ready() else { return };
+        if !live {
+            return;
+        }
+        let prepared = ready.prepared.clone();
+        let name = prepared
+            .archive
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "guesthouse-report.tar.gz".to_owned());
+        let failed = window.clone();
+        let opened = crate::system::pick_save(hwnd, &name, move |path| {
+            // Nothing chosen is nothing to say.
+            if let Some(path) = path {
+                let _ = window.tell(Message::ReportSaved(report::save(&prepared, &path)));
+            }
+        });
+        if !opened {
+            let words = "The save dialog didn't open.".to_owned();
+            let _ = failed.tell(Message::ReportSaved(Err(words)));
+        }
+    }
+
+    fn open_issue(&mut self) {
+        let link = match &self.report.stage {
+            ReportStage::Ready(Ready { id: Some(id), prepared, .. }) => issue_link(id, &prepared.summary),
+            _ => return,
+        };
+        if self.live
+            && let Err(words) = crate::system::open_link(&link)
+        {
+            self.tell(words, true);
+        }
+    }
+
+    fn start_over(&mut self) {
+        let busy = match &self.report.stage {
+            ReportStage::Preparing => true,
+            ReportStage::Ready(ready) => ready.sending,
+            ReportStage::Writing { .. } => false,
+        };
+        if busy {
+            return;
+        }
+        if self.live {
+            report::clear();
+        }
+        self.report = ReportPage::default();
     }
 
     fn tell(&mut self, text: impl Into<String>, bad: bool) {
@@ -881,6 +1076,7 @@ impl Component for Main {
             snapshot_ask: None,
             snapshot_label: String::new(),
             form: Form::default(),
+            report: ReportPage::default(),
             draft: None,
             making: None,
             console: None,
@@ -927,6 +1123,7 @@ impl Component for Main {
                 }
             }
             Message::Navigate(Some(tag)) if tag == NEW_TAG => self.page = Page::New,
+            Message::Navigate(Some(tag)) if tag == REPORT_TAG => self.open_report(),
             Message::Navigate(Some(name)) => {
                 let known =
                     self.status().is_some_and(|status| status.machines.iter().any(|m| m.name == name));
@@ -941,6 +1138,63 @@ impl Component for Main {
             }
             Message::Navigate(None) => {}
             Message::NewMachine => self.page = Page::New,
+            Message::OpenReport => self.open_report(),
+            Message::CloseReport => self.page = Page::Machine,
+            Message::ReportMachine(index) => {
+                let names: Vec<String> = self
+                    .status()
+                    .map(|status| status.machines.iter().map(|machine| machine.name.clone()).collect())
+                    .unwrap_or_default();
+                self.report.machine =
+                    index.and_then(|index| index.checked_sub(1)).and_then(|n| names.get(n).cloned());
+            }
+            Message::ReportKind(Some(index)) => {
+                if let Some(kind) = ProblemKind::ALL.get(index) {
+                    self.report.kind = *kind;
+                }
+            }
+            Message::ReportKind(None) => {}
+            Message::ReportWhat(text) => self.report.what = text,
+            Message::ReportContact(text) => self.report.contact = text,
+            Message::ReportPrepare => self.prepare_report(),
+            Message::ReportPrepared(result) => {
+                if matches!(self.report.stage, ReportStage::Preparing) {
+                    self.report.stage = match result {
+                        Ok(prepared) => ReportStage::Ready(Ready {
+                            prepared,
+                            sending: false,
+                            id: None,
+                            problem: None,
+                            saved: None,
+                        }),
+                        Err(problem) => ReportStage::Writing { problem: Some(problem) },
+                    };
+                }
+            }
+            Message::ReportSend => self.send_report(),
+            Message::ReportSent(result) => {
+                if let Some(ready) = self.ready() {
+                    ready.sending = false;
+                    match result {
+                        Ok(id) => ready.id = Some(id),
+                        Err(problem) => ready.problem = Some(problem),
+                    }
+                }
+            }
+            Message::ReportSave => self.save_report(),
+            Message::ReportSaved(result) => {
+                if let Some(ready) = self.ready() {
+                    match result {
+                        Ok(path) => {
+                            ready.saved = Some(path.display().to_string());
+                            ready.problem = None;
+                        }
+                        Err(problem) => ready.problem = Some(problem),
+                    }
+                }
+            }
+            Message::ReportIssue => self.open_issue(),
+            Message::ReportStartOver => self.start_over(),
             Message::Start => self.ask(Job::Start),
             Message::Stop => self.ask(Job::Stop),
             Message::More(key) => {

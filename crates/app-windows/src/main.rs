@@ -6,8 +6,8 @@
 //! user and asks the service on its pipe, through `guesthouse-control`, and holds no rule of its own.
 //! It's WinUI 3 through Microsoft's windows-reactor: `app.rs` is the app's state and what changes
 //! it, `window.rs` what's shown, `bridge.rs` the calls to the service, `screen.rs` remoteman's
-//! viewer, `console.rs` a machine's own screen in Windows' Remote Desktop control, and `system.rs`
-//! the rest of what's asked of Windows.
+//! viewer, `console.rs` a machine's own screen in Windows' Remote Desktop control, `report.rs` a bug
+//! report's making and sending, and `system.rs` the rest of what's asked of Windows.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -17,6 +17,8 @@ mod app;
 mod bridge;
 #[cfg(windows)]
 mod console;
+#[cfg(windows)]
+mod report;
 #[cfg(windows)]
 mod screen;
 #[cfg(windows)]

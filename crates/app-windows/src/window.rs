@@ -9,12 +9,13 @@
 use std::rc::Rc;
 
 use guesthouse_control::client::Unreached;
+use guesthouse_control::report::{KEPT_DAYS, ProblemKind, stage::size_words};
 use guesthouse_control::{Card, CardInfo, Machine, State, System};
 use windows_reactor::*;
 
 use crate::app::{
     self, Account, ConsoleState, DELETE_KEY, Draft, EDITIONS, FolderFor, Kind, Line, Main, Message, NEW_TAG,
-    Page,
+    Page, REPORT_TAG, Ready, ReportStage,
 };
 
 /// The app's icon, the same as the GTK app's, for where it's shown large.
@@ -80,6 +81,12 @@ mod glyph {
     pub const GROW: &str = "\u{E740}";
     pub const SNAPSHOT: &str = "\u{E722}";
     pub const BACK: &str = "\u{E7A7}";
+    pub const FEEDBACK: &str = "\u{E939}";
+    pub const DOCUMENT: &str = "\u{E8A5}";
+    pub const EDIT: &str = "\u{E70F}";
+    pub const MAIL: &str = "\u{E715}";
+    pub const SEND: &str = "\u{E724}";
+    pub const OPEN: &str = "\u{E8A7}";
 }
 
 pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
@@ -108,7 +115,8 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
         title_bar = title_bar.subtitle(format!("service {}", status.version));
     }
     let body: View = match &main.seen {
-        Err(words) => away(words),
+        Err(_) if main.page == Page::Report => report_page(main, context, true),
+        Err(words) => away(words, context),
         Ok(_) => navigation(main, context),
     };
     let news = InfoBar::new()
@@ -143,7 +151,7 @@ fn logo() -> EncodedImage {
 // ---- Where the service can't be asked ----
 
 /// In place of everything else when the service can't be asked.
-fn away(words: &str) -> View {
+fn away(words: &str, context: &ViewContext<Main>) -> View {
     let mut parts: Vec<View> = vec![
         icon(glyph::WARNING, 48.0).foreground(ThemeBrush::SystemCaution).into(),
         subtitle(words).text_alignment(TextAlignment::Center).text_wrapping(TextWrapping::Wrap).into(),
@@ -158,6 +166,12 @@ fn away(words: &str) -> View {
              it's called Guesthouse there. Until then, run guesthouse-service.exe run in an elevated prompt.",
         ));
     }
+    parts.push(
+        button("Report a problem", glyph::FEEDBACK, context.message(Message::OpenReport), false)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .margin(Thickness::new(0.0, 8.0, 0.0, 0.0))
+            .into(),
+    );
     parts.push(
         StackPanel::new()
             .orientation(Orientation::Horizontal)
@@ -181,7 +195,7 @@ fn navigation(main: &Main, context: &ViewContext<Main>) -> View {
     let machines = main.status().map(|status| status.machines.as_slice()).unwrap_or_default();
     let selected = match main.page {
         Page::Machine => main.selected.as_deref(),
-        Page::New => None,
+        Page::New | Page::Report => None,
     };
     let items = machines.iter().map(|machine| {
         let item = NavigationViewItem::new()
@@ -202,8 +216,14 @@ fn navigation(main: &Main, context: &ViewContext<Main>) -> View {
         .icon(Icon::font(glyph::ADD))
         .content("New machine")
         .is_selected(main.page == Page::New);
+    let report = NavigationViewItem::new()
+        .tag(REPORT_TAG)
+        .icon(Icon::font(glyph::FEEDBACK))
+        .content("Report a problem")
+        .is_selected(main.page == Page::Report);
     let page: View = match (main.page, main.machine()) {
         (Page::New, _) => new_page(main, context),
+        (Page::Report, _) => report_page(main, context, false),
         (Page::Machine, Some(machine)) => machine_page(main, machine, context),
         (Page::Machine, None) => empty(context),
     };
@@ -222,7 +242,7 @@ fn navigation(main: &Main, context: &ViewContext<Main>) -> View {
                 .vertical_alignment(VerticalAlignment::Center),
         )
         .keyed_menu_items(items)
-        .footer_menu_items((new,))
+        .footer_menu_items((new, report))
         .on_selected_tag_changed(
             context.callback(|tag: Option<Rc<str>>| Message::Navigate(tag.map(|tag| tag.to_string()))),
         )
@@ -1075,6 +1095,229 @@ fn delete_dialog(name: &str, context: &ViewContext<Main>) -> ContentDialog {
         .default_button(ContentDialogButton::Close)
         .is_open(true)
         .on_closed(context.callback(Message::DeleteAnswered))
+}
+
+// ---- Report a problem ----
+
+/// What goes in a report, and what never does, said before it's made.
+const REPORT_ABOUT: &str = "A report is what the developer needs to see what went wrong: the service's log, this PC's \
+     Windows version and whether the services Guesthouse needs are running, the Hyper-V events about \
+     Guesthouse's machines, and for a machine you pick, its settings, its snapshots' list and its events. \
+     Never a guest's password or screen key, its disks, or what it holds.";
+
+/// The report page. `standalone` is when the service can't be reached, so the page has no navigation
+/// beside it and says how to go back.
+fn report_page(main: &Main, context: &ViewContext<Main>, standalone: bool) -> View {
+    let report = &main.report;
+    let mut sections: Vec<View> = Vec::new();
+    if standalone {
+        sections.push(
+            button("Back", glyph::BACK, context.message(Message::CloseReport), false)
+                .automation_name("Back")
+                .into(),
+        );
+    }
+    sections.push(
+        StackPanel::new()
+            .spacing(4.0)
+            .children((
+                title("Report a problem"),
+                caption(
+                    "Prepare makes the report and shows you what's in it. Nothing is sent until you press Send.",
+                ),
+            ))
+            .into(),
+    );
+    match &report.stage {
+        ReportStage::Writing { problem } => report_form(main, problem.as_deref(), context, &mut sections),
+        ReportStage::Preparing => sections.push(
+            StackPanel::new()
+                .spacing(HEADING_GAP)
+                .children((
+                    strong("Making the report"),
+                    ProgressBar::new().is_indeterminate(true),
+                    caption("Asking the service for its files, taking out names, and packing them."),
+                ))
+                .into(),
+        ),
+        ReportStage::Ready(ready) => report_ready(ready, context, &mut sections),
+    }
+    page(sections)
+}
+
+fn report_form(main: &Main, problem: Option<&str>, context: &ViewContext<Main>, sections: &mut Vec<View>) {
+    let report = &main.report;
+    let names: Vec<&str> = main
+        .status()
+        .map(|status| status.machines.iter().map(|machine| machine.name.as_str()).collect())
+        .unwrap_or_default();
+    let mut machines: Vec<String> = vec!["None, the PC itself".to_owned()];
+    machines.extend(names.iter().map(|name| (*name).to_owned()));
+    let chosen = report
+        .machine
+        .as_deref()
+        .and_then(|machine| names.iter().position(|name| *name == machine))
+        .map_or(0, |at| at + 1);
+    let machine = ComboBox::new()
+        .items_source(machines)
+        .selected_index(Some(chosen))
+        .width(280.0)
+        .automation_name("Machine")
+        .on_selection_changed(context.callback(Message::ReportMachine));
+    let kinds: Vec<String> = ProblemKind::ALL.iter().map(|kind| kind.label().to_owned()).collect();
+    let kind = ComboBox::new()
+        .items_source(kinds)
+        .selected_index(ProblemKind::ALL.iter().position(|kind| *kind == report.kind))
+        .width(280.0)
+        .automation_name("Kind of problem")
+        .on_selection_changed(context.callback(Message::ReportKind));
+    let what = TextBox::new()
+        .placeholder_text("What you did, what you expected, and what happened instead")
+        .text(report.what.as_str())
+        .accepts_return(true)
+        .text_wrapping(TextWrapping::Wrap)
+        .height(140.0)
+        .automation_name("What went wrong")
+        .on_text_changed(context.callback(|text: Rc<str>| Message::ReportWhat(text.to_string())));
+    let contact = TextBox::new()
+        .placeholder_text("An email or a name, if you'd like an answer")
+        .text(report.contact.as_str())
+        .width(280.0)
+        .automation_name("Contact")
+        .on_text_changed(context.callback(|text: Rc<str>| Message::ReportContact(text.to_string())));
+    sections.push(group(
+        "The problem",
+        vec![
+            row(
+                glyph::SETUP,
+                "Machine",
+                &["The machine it's about, if it's about one. Its settings and events go in the report."],
+                Some(machine.into()),
+            ),
+            row(glyph::PROBLEM, "Kind", &[], Some(kind.into())),
+            row_under(glyph::EDIT, "What went wrong", "In your own words.", what.into()),
+            row(
+                glyph::MAIL,
+                "Contact",
+                &["Optional. It goes to the developer with the report, and not in a public issue."],
+                Some(contact.into()),
+            ),
+        ],
+    ));
+    sections.push(caption(&format!("{REPORT_ABOUT} It's kept {KEPT_DAYS} days.")).into());
+    if let Some(problem) = problem {
+        sections.push(
+            InfoBar::new()
+                .is_open(true)
+                .is_closable(false)
+                .severity(InfoBarSeverity::Error)
+                .title("The report wasn't made")
+                .message(problem)
+                .into(),
+        );
+    }
+    sections.push(
+        button("Prepare", glyph::FEEDBACK, context.message(Message::ReportPrepare), true)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .into(),
+    );
+}
+
+fn report_ready(ready: &Ready, context: &ViewContext<Main>, sections: &mut Vec<View>) {
+    let prepared = &ready.prepared;
+    let sent = ready.id.is_some();
+    let file_words = format!("{} files, {} packed.", prepared.files.len(), size_words(prepared.bytes));
+    let intro = if sent {
+        "It's sent."
+    } else {
+        "This is everything in the report. Send posts it to the developer, who reads it and deletes it \
+         after 30 days. Save puts a copy where you choose, to attach to an issue yourself."
+    };
+    sections.push(StackPanel::new().spacing(4.0).children((strong(&file_words), caption(intro))).into());
+    let files: Vec<View> = prepared
+        .files
+        .iter()
+        .map(|(name, bytes)| row(glyph::DOCUMENT, name, &[&size_words(*bytes as u64)], None))
+        .collect();
+    sections.push(group("In the report", files));
+    if !prepared.missing.is_empty() {
+        let missing: Vec<View> = prepared
+            .missing
+            .iter()
+            .map(|(name, reason)| row(glyph::WARNING, name, &[reason], None))
+            .collect();
+        sections.push(group("Not in it", missing));
+    }
+    if let Some(id) = &ready.id {
+        sections.push(
+            InfoBar::new()
+                .is_open(true)
+                .is_closable(false)
+                .severity(InfoBarSeverity::Success)
+                .title("Sent")
+                .message(format!(
+                    "The report's ID is {id}. Give it to the developer, or open an issue with it."
+                ))
+                .into(),
+        );
+        sections.push(
+            StackPanel::new()
+                .orientation(Orientation::Horizontal)
+                .spacing(8.0)
+                .children((
+                    TextBlock::new()
+                        .text(id.as_str())
+                        .font_family(MONO)
+                        .is_text_selection_enabled(true)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    button("Copy", glyph::COPY, context.message(Message::Copy(id.clone())), false)
+                        .automation_name("Copy the report's ID"),
+                    button("Open an issue", glyph::OPEN, context.message(Message::ReportIssue), true),
+                ))
+                .into(),
+        );
+        sections.push(
+            caption("The issue holds only the ID and what sorts the report, as an issue is public.").into(),
+        );
+    }
+    if let Some(problem) = &ready.problem {
+        sections.push(
+            InfoBar::new()
+                .is_open(true)
+                .is_closable(false)
+                .severity(InfoBarSeverity::Error)
+                .title("That didn't work")
+                .message(problem.as_str())
+                .into(),
+        );
+    }
+    if let Some(saved) = &ready.saved {
+        sections.push(caption(&format!("A copy is saved as {saved}.")).into());
+    }
+    let mut buttons: Vec<View> = Vec::new();
+    if !sent {
+        buttons.push(
+            button("Send", glyph::SEND, context.message(Message::ReportSend), true)
+                .is_enabled(!ready.sending)
+                .into(),
+        );
+    }
+    buttons.push(
+        button("Save…", glyph::SAVE, context.message(Message::ReportSave), false)
+            .is_enabled(!ready.sending)
+            .into(),
+    );
+    buttons.push(
+        button("Start over", glyph::UNDO, context.message(Message::ReportStartOver), false)
+            .is_enabled(!ready.sending)
+            .into(),
+    );
+    if ready.sending {
+        buttons.push(ProgressRing::new().is_active(true).width(20.0).height(20.0).into());
+        buttons.push(caption("Sending.").vertical_alignment(VerticalAlignment::Center).into());
+    }
+    sections
+        .push(StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children(buttons).into());
 }
 
 // ---- The pieces the pages are made of ----

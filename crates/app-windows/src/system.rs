@@ -17,7 +17,8 @@ use windows_sys::Win32::System::DataExchange::{
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::Controls::Dialogs::{
-    GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR,
+    OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows_sys::Win32::UI::Shell::{
     BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, SHBrowseForFolderW, SHGetPathFromIDListW,
@@ -102,6 +103,54 @@ fn open_dialog(owner: isize) -> Option<PathBuf> {
     let picked = unsafe {
         let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
         let picked = GetOpenFileNameW(&mut dialog) != 0;
+        if com >= 0 {
+            CoUninitialize();
+        }
+        picked
+    };
+    if !picked {
+        return None;
+    }
+    let end = file.iter().position(|&unit| unit == 0).unwrap_or(file.len());
+    Some(PathBuf::from(String::from_utf16_lossy(&file[..end])))
+}
+
+/// Windows' Save As dialog for a report, on a thread of its own, as the open dialog is. `name` is the
+/// file name it starts with. `chosen` gets the path, or `None` when nothing was chosen. Returns
+/// whether the dialog could open.
+pub fn pick_save(owner: isize, name: &str, chosen: impl FnOnce(Option<PathBuf>) + Send + 'static) -> bool {
+    let name = name.to_owned();
+    thread::Builder::new().name("save dialog".into()).spawn(move || chosen(save_dialog(owner, &name))).is_ok()
+}
+
+fn save_dialog(owner: isize, name: &str) -> Option<PathBuf> {
+    let filter: Vec<u16> =
+        "Guesthouse report (*.tar.gz)\0*.tar.gz\0All files\0*.*\0\0".encode_utf16().collect();
+    let title: Vec<u16> = "Save the report\0".encode_utf16().collect();
+    let extension: Vec<u16> = "gz\0".encode_utf16().collect();
+    let mut file = vec![0u16; LONGEST_PATH];
+    // The name it starts with, which always fits, as a file's name is far shorter than the buffer.
+    for (unit, put) in name.encode_utf16().take(file.len() - 1).zip(file.iter_mut()) {
+        *put = unit;
+    }
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner as HWND,
+        lpstrFilter: filter.as_ptr(),
+        nFilterIndex: 1,
+        lpstrFile: file.as_mut_ptr(),
+        nMaxFile: file.len() as u32,
+        lpstrTitle: title.as_ptr(),
+        lpstrDefExt: extension.as_ptr(),
+        Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    // SAFETY: as in `open_dialog`: COM is started on this thread for the dialog and ended after it,
+    // and every pointer in `dialog` is to a buffer above that outlives the call, the strings end in
+    // nulls as the call wants, and `nMaxFile` is the path buffer's length.
+    let picked = unsafe {
+        let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let picked = GetSaveFileNameW(&mut dialog) != 0;
         if com >= 0 {
             CoUninitialize();
         }

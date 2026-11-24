@@ -152,6 +152,19 @@ fn file_name(name: &str, scrubber: &Scrubber, taken: &[(String, String)]) -> Opt
     Some(chosen)
 }
 
+/// A size for the person: bytes, then KB, then MB, with a decimal from 10 up.
+pub fn size_words(bytes: u64) -> String {
+    const KB: f64 = 1000.0;
+    let size = bytes as f64;
+    if bytes < 1000 {
+        format!("{bytes} bytes")
+    } else if size < KB * KB {
+        format!("{:.1} KB", size / KB)
+    } else {
+        format!("{:.1} MB", size / (KB * KB))
+    }
+}
+
 /// What a report is made again with when it was too big: half as much of each file.
 pub fn halved(per_file: usize) -> usize {
     (per_file / 2).max(1024)
@@ -290,6 +303,14 @@ mod tests {
         let staged = stage(&parts, &scrubber(), &facts(), FIRST_LIMIT);
         assert_eq!(staged.files[0].0, "a_b.txt");
         assert_eq!(staged.files[1].0, "a_b.txt-2");
+    }
+
+    #[test]
+    fn a_size_is_in_words() {
+        assert_eq!(size_words(0), "0 bytes");
+        assert_eq!(size_words(999), "999 bytes");
+        assert_eq!(size_words(1500), "1.5 KB");
+        assert_eq!(size_words(2_500_000), "2.5 MB");
     }
 
     #[test]

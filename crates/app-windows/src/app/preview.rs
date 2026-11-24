@@ -9,14 +9,18 @@
 //!
 //! The states are `running`, `linux`, `starting`, `empty`, `away`, `refused`, `new`, `making`,
 //! `failed`, `delete`, `settings` (a stopped machine's settings being changed) and `settings-refused`
-//! (the service said no to them). Nothing is sent to the service, whatever is pressed.
+//! (the service said no to them), `report-new` (the report page, being written), `report` (a
+//! prepared report, and `report-sent` once it has an ID) and `report-away` (the report page when the
+//! service can't be reached). Nothing is sent to the service, whatever is pressed.
 
 use guesthouse_control::client::Unreached;
 use guesthouse_control::{Card, CardInfo, Machine, SnapshotInfo, State, System};
 use windows_reactor::WindowTheme;
 
-use super::{Account, Form, Kind, Line, Main, Making, Page};
+use super::{Account, Form, Kind, Line, Main, Making, Page, Ready, ReportStage};
 use crate::bridge::Status;
+use crate::report::Prepared;
+use guesthouse_control::report::Summary;
 
 const STATE: &str = "GUESTHOUSE_APP_PREVIEW";
 const THEME: &str = "GUESTHOUSE_APP_THEME";
@@ -100,6 +104,28 @@ pub fn stage(main: &mut Main) {
                 sha256: "0".repeat(64),
                 notes: String::new(),
             });
+        }
+        "report-new" => {
+            show(main, "win11", State::Stopped);
+            main.page = Page::Report;
+            main.report.machine = Some("win11".to_owned());
+            main.report.what = "It stays black after the logo, and the log says nothing.".to_owned();
+        }
+        "report" | "report-sent" => {
+            show(main, "win11", State::Stopped);
+            main.page = Page::Report;
+            main.report.machine = Some("win11".to_owned());
+            main.report.stage = ReportStage::Ready(Ready {
+                prepared: report(),
+                sending: false,
+                id: (state == "report-sent").then(|| "0a1b2c3d4e".to_owned()),
+                problem: None,
+                saved: None,
+            });
+        }
+        "report-away" => {
+            main.seen = Err(Unreached::NoService.words().to_owned());
+            main.page = Page::Report;
         }
         "delete" => {
             show(main, "ubuntu", State::Stopped);
@@ -196,6 +222,47 @@ fn status() -> Status {
             card("AMD Radeon RX 7900 XTX", Some(24560), false),
             card("Intel(R) UHD Graphics 770", None, false),
         ],
+    }
+}
+
+/// A prepared report, with nothing on disk behind it.
+fn report() -> Prepared {
+    let mut summary = Summary::default();
+    summary.set("version", "0.10.0");
+    summary.set("host", "windows");
+    summary.set("os", "Windows 11 Pro 24H2 build 26100");
+    summary.set("card", "NVIDIA GeForce RTX 5090");
+    summary.set("machine", "windows");
+    summary.set("kind", "wont-start");
+    let files = [
+        ("service.log", 41_207),
+        ("setup.log", 8_933),
+        ("windows.txt", 120),
+        ("services.txt", 1_804),
+        ("virtual-machine-platform.txt", 1_120),
+        ("hyper-v-events.txt", 6_412),
+        ("wsl.txt", 96),
+        ("machines.txt", 138),
+        ("machine.json", 214),
+        ("machine.guesthouse.json", 133),
+        ("snapshots/index.json", 402),
+        ("events.log", 18_550),
+        ("app.txt", 33),
+        ("description.txt", 56),
+        ("summary.json", 340),
+        ("manifest.txt", 1_030),
+    ];
+    let reports = r"C:\Users\you\AppData\Local\Temp\guesthouse-app\reports";
+    Prepared {
+        archive: std::path::PathBuf::from(format!(r"{reports}\guesthouse-report-20261123-141500.tar.gz")),
+        files: files.iter().map(|(name, bytes)| ((*name).to_owned(), *bytes)).collect(),
+        missing: vec![
+            ("crashes.txt".to_owned(), "wevtutil.exe failed (exit code: 5): Access is denied.".to_owned()),
+            ("events.1.log".to_owned(), "The machine has no older events.".to_owned()),
+            ("panic.txt".to_owned(), "There is none.".to_owned()),
+        ],
+        summary,
+        bytes: 23_419,
     }
 }
 

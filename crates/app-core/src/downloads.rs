@@ -25,6 +25,14 @@ const UBUNTU_PREFIX: &str = "ubuntu-26.04";
 const UBUNTU_SUFFIX: &str = "-live-server-amd64.iso";
 const UBUNTU_FOLDER: &str = "ubuntu";
 
+/// Guesthouse's Android image (LineageOS for VMs with its setup app, microG and ARM64 translation, built
+/// from `android/` in Guesthouse's source), as a compressed qcow2 of its system disk. A new one gets a new
+/// name, so one fetched before is never taken for it.
+pub const ANDROID_IMAGE_NAME: &str = "guesthouse-android-17-2026-11-23.qcow2";
+const ANDROID_IMAGE_SHA256: &str = "d547bda57a11624e201bd6c4ea50f3e8da3f63997d5a2ffb575220050ec10917";
+const ANDROID_IMAGE_HOST: &str = "https://files.ruxn.com/p/guesthouse/";
+const ANDROID_FOLDER: &str = "android";
+
 fn said(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_owned()
 }
@@ -185,6 +193,25 @@ pub fn ubuntu_disc_here(paths: &Paths) -> Option<PathBuf> {
         .collect();
     found.sort();
     found.pop()
+}
+
+/// Where Guesthouse's Android image is kept here.
+pub fn android_image_file(paths: &Paths) -> PathBuf {
+    paths.parts.join(ANDROID_FOLDER).join(ANDROID_IMAGE_NAME)
+}
+
+/// Guesthouse's Android image, if it was downloaded and checked already.
+pub fn android_image_here(paths: &Paths) -> Option<PathBuf> {
+    let file = android_image_file(paths);
+    already_checked(&file, ANDROID_IMAGE_SHA256).then_some(file)
+}
+
+/// Fetches Guesthouse's Android image unless it's here, and says where it is.
+pub fn fetch_android_image(paths: &Paths, step: &dyn Fn(&str)) -> Result<PathBuf> {
+    let file = android_image_file(paths);
+    let url = format!("{ANDROID_IMAGE_HOST}{ANDROID_IMAGE_NAME}");
+    fetch_checked(&url, ANDROID_IMAGE_SHA256, &file, "Downloading Android", step)?;
+    Ok(file)
 }
 
 #[cfg(test)]

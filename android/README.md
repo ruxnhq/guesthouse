@@ -34,6 +34,17 @@ The system disk is `out/target/product/virtio_x86_64/disk-vda.img`. A machine is
 it as `vda.qcow2`: `qemu-img convert -O qcow2 disk-vda.img vda.qcow2`. The source of each project it was
 built from is pinned in `pinned-manifest.xml` at the top of the tree.
 
+## Where machines get it
+
+The app and `guesthouse-vm new --kind android` download the published image from files.ruxn.com, a
+compressed qcow2 of `disk-vda.img`, and keep it only if its SHA-256 is the one in
+`crates/app-core/src/downloads.rs`. A new build is published under a new name, with its checksum there.
+Each published image has its pinned manifest beside it, `…-manifest.xml`.
+
+A machine's system disk holds `/metadata`, where Android keeps the key to its data disk. A machine
+can't be moved to a newer image by swapping its system disk: its data disk wouldn't open, and Android
+would start in recovery.
+
 ## Sources
 
 LineageOS's sources are at https://github.com/LineageOS, at the revisions in the image's pinned manifest.

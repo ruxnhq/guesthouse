@@ -233,7 +233,8 @@ fn new_mac(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Wr
     Ok(writeln!(out, "Run: guesthouse-vm install {}", machine.id)?)
 }
 
-/// An Android machine is made from an image of Android for VMs, given as --iso, and starts set up.
+/// An Android machine is made from an image of Android for VMs, given as --iso or else Guesthouse's own,
+/// downloaded, and starts set up.
 fn new_android(context: &Context, name: &str, options: &NewOptions, out: &mut dyn Write) -> Result<()> {
     let others = [
         options.user,
@@ -251,7 +252,16 @@ fn new_android(context: &Context, name: &str, options: &NewOptions, out: &mut dy
             "An Android machine takes --iso, --play, --disk, --cores and --ram, and nothing else.",
         ));
     }
-    let image = options.iso.ok_or_else(|| Failure::new("An Android machine needs --iso PATH, its image."))?;
+    // With no image given, Guesthouse's own is downloaded, or the one downloaded before is used.
+    let image = match options.iso {
+        Some(image) => image.into(),
+        None => {
+            let image =
+                crate::downloads::fetch_android_image(&context.paths, &|step| eprint!("\r{step}   "))?;
+            eprintln!();
+            image
+        }
+    };
     let number = |option: &str, text: Option<&str>, usual: u32| match text {
         Some(text) => whole_number(option, text),
         None => Ok(usual),
@@ -263,7 +273,7 @@ fn new_android(context: &Context, name: &str, options: &NewOptions, out: &mut dy
         ram_gib: number("--ram", options.ram, ram)?,
         data_gib: number("--disk", options.disk, ANDROID_SIZES.disk)?,
         play: options.play.map(|word| on_or_off("--play", word)).transpose()?.unwrap_or(false),
-        image: image.into(),
+        image,
     };
     let machine = create_android(context, &new)?;
     writeln!(out, "Made {} for Android in {}.", machine.name, machine.folder(context).display())?;

@@ -18,7 +18,9 @@ use guesthouse_app_core::android_setup::{
 use guesthouse_app_core::card_choice::{CardChoice, default_choice, windows_card_choices};
 use guesthouse_app_core::defaults::{NO_GPU, account_name, sizes_for_disc, suggested_name};
 use guesthouse_app_core::display::DriverPackage;
-use guesthouse_app_core::downloads::{fetch_checked, ubuntu_disc, ubuntu_disc_here};
+use guesthouse_app_core::downloads::{
+    android_image_here, fetch_android_image, fetch_checked, ubuntu_disc, ubuntu_disc_here,
+};
 use guesthouse_app_core::gpu_maker::GpuMaker;
 use guesthouse_app_core::gpu_support::{kind_offered, plain_reason, read_disc, ubuntu_note};
 use guesthouse_app_core::host::{RamField, physical_cores};
@@ -72,7 +74,7 @@ const NOTE_MARGIN: i32 = 12;
 const CARD_TITLE: &str = "Card";
 const PREVIEW: &str = "Preview";
 const MACOS_NAME: &str = "macOS";
-const ANDROID_ROW_NOTE: &str = "Choose the folder of an image of Android for VMs.";
+const ANDROID_ROW_NOTE: &str = "Download Guesthouse's Android, about 1.4 GB, or choose an image of your own.";
 const NO_DISC_YET: &str = "None chosen yet.";
 const UBUNTU_DOWNLOAD: &str = "Download Ubuntu Server 26.04 from Ubuntu, about 3 GB, or choose your own.";
 /// What a draft's files are called, so its settings show what a machine of its kind has.
@@ -105,6 +107,7 @@ struct Parts {
     download: gtk::Button,
     /// The Android image, in the disc's place for an Android machine.
     image_row: adw::ActionRow,
+    android_download: gtk::Button,
     /// Play services through microG, for Android.
     play: adw::SwitchRow,
     /// What was changed there, applied to the machine once it's made.
@@ -365,6 +368,8 @@ impl NewMachineDialog {
         disc.add(&iso_row);
         let image_row =
             adw::ActionRow::builder().title("Image").subtitle(ANDROID_ROW_NOTE).visible(false).build();
+        let android_download = row_button("Download");
+        image_row.add_suffix(&android_download);
         let choose_android = row_button("Choose");
         image_row.add_suffix(&choose_android);
         disc.add(&image_row);
@@ -505,6 +510,7 @@ impl NewMachineDialog {
             iso_row,
             download: download.clone(),
             image_row,
+            android_download: android_download.clone(),
             play,
             settings_changes: RefCell::default(),
             disc,
@@ -560,6 +566,8 @@ impl NewMachineDialog {
         });
         let handle = this.clone();
         choose_android.connect_clicked(move |_| handle.on_choose_android());
+        let handle = this.clone();
+        android_download.connect_clicked(move |_| handle.download_android());
         let handle = this.clone();
         open_settings.connect_clicked(move |_| handle.open_all_settings());
         let handle = this.clone();
@@ -696,9 +704,13 @@ impl NewMachineDialog {
         *parts.iso_path.borrow_mut() = Some(String::new());
         parts.iso_row.set_subtitle("Choose the disc to install from.");
         let probe = guesthouse_app_core::machine::Machine::new("", "", "", "");
+        let shown = std::path::Path::new(&image)
+            .file_name()
+            .map_or(image.clone(), |name| name.to_string_lossy().into_owned());
+        parts.image_row.set_subtitle(&shown);
         let verdict = match android_card_of(&context, &probe) {
             Ok(card) => format!(
-                "{image}. Starts at Android's setup, drawing on the {} card through the virtio GPU.",
+                "Starts at Android's setup, drawing on the {} card through the virtio GPU.",
                 card.maker.name()
             ),
             Err(failure) => failure.0,
@@ -897,6 +909,42 @@ impl NewMachineDialog {
         );
     }
 
+    /// Fetches Guesthouse's Android image from files.ruxn.com, checked against the SHA-256 the app knows,
+    /// and takes it as if it had been chosen. One fetched before is used as it is.
+    fn download_android(&self) {
+        let parts = &self.0;
+        parts.android_download.set_sensitive(false);
+        parts.create_button.set_sensitive(false);
+        let (progress, steps) = async_channel::unbounded::<String>();
+        let row = parts.image_row.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(step) = steps.recv().await {
+                row.set_subtitle(&step);
+            }
+        });
+        let context = parts.window.context();
+        let working = context.clone();
+        let this = self.clone();
+        in_background(
+            &context,
+            move || {
+                fetch_android_image(&working.paths, &|step| {
+                    let _ = progress.try_send(step.to_owned());
+                })
+            },
+            move |result| {
+                this.0.android_download.set_sensitive(true);
+                match result {
+                    Ok(image) => this.choose_android(image.to_string_lossy().into_owned()),
+                    Err(text) => {
+                        this.0.image_row.set_subtitle(ANDROID_ROW_NOTE);
+                        this.0.window.problem(&text);
+                    }
+                }
+            },
+        );
+    }
+
     /// Every setting of the machine to be, on the settings' own pages. What changes there is kept and
     /// applied once the machine is made; the sizes and the switches on this page follow it.
     fn open_all_settings(&self) {
@@ -951,6 +999,11 @@ impl NewMachineDialog {
             Pick::Macos => self.choose_macos(),
             Pick::Android => {
                 self.show_verdict(ANDROID_TITLE, ANDROID_ROW_NOTE);
+                let context = parts.window.context();
+                match android_image_here(&context.paths) {
+                    Some(image) => self.choose_android(image.to_string_lossy().into_owned()),
+                    None => parts.image_row.set_subtitle(ANDROID_ROW_NOTE),
+                }
             }
             Pick::Import => {}
             Pick::Ubuntu => {

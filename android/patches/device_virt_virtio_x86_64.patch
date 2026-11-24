@@ -1,8 +1,8 @@
 diff --git a/BoardConfig.mk b/BoardConfig.mk
-index 8f056a4..4f97c5d 100644
+index 8f056a4..46f7c07 100644
 --- a/BoardConfig.mk
 +++ b/BoardConfig.mk
-@@ -48,3 +48,14 @@ BOARD_VENDOR_SEPOLICY_DIRS += \
+@@ -48,3 +48,17 @@ BOARD_VENDOR_SEPOLICY_DIRS += \
  
  # Virtual Machine template
  TARGET_VM_UTM_TEMPLATE_DIR := $(DEVICE_PATH)/vm_templates/utm
@@ -17,6 +17,9 @@ index 8f056a4..4f97c5d 100644
 +TARGET_NATIVE_BRIDGE_ARCH_VARIANT := armv8-a
 +TARGET_NATIVE_BRIDGE_CPU_VARIANT := generic
 +TARGET_NATIVE_BRIDGE_ABI := arm64-v8a
++
++# Guesthouse's SELinux rules: binfmt_misc for ARM64 programs.
++BOARD_VENDOR_SEPOLICY_DIRS += vendor/guesthouse/sepolicy/vendor
 diff --git a/lineage_virtio_x86_64.mk b/lineage_virtio_x86_64.mk
 index c29d747..d3041e5 100644
 --- a/lineage_virtio_x86_64.mk

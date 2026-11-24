@@ -1,0 +1,4 @@
+# Berberis runs ARM64 programs, not only apps: init mounts binfmt_misc and registers Digitalis's ARM64
+# formats there (berberis.rc). Cuttlefish and the emulator allow the same.
+allow init proc:dir mounton;
+allow init binfmt_miscfs:file w_file_perms;

@@ -8,7 +8,9 @@
 # sees the number Guesthouse gave the device. From the AddReg sections those name come the lines
 # under MediaFoundation\Transforms, the class entries of the transforms named there, and the switch
 # for hardware transforms. A line this can't read is said and left out. A value the registry already
-# has as the INF writes it stays, so a second run writes nothing, and nothing is ever removed.
+# has as the INF writes it stays, so a second run writes nothing. One that is there with other data
+# is written over with the INF's, so a transform's entries follow a changed driver. Nothing is ever
+# removed.
 $store = Join-Path $env:windir 'System32\HostDriverStore\FileRepository\nv_dispi.inf_amd64_gpupv'
 $infName = 'nv_dispi.inf'
 # NVIDIA's PCI vendor number, as the INF's lines for its cards have it.

@@ -19,6 +19,7 @@ mod frames;
 mod guest_cursor;
 mod import;
 mod input;
+pub mod lab_crop;
 mod monitors;
 mod overlay;
 mod own_screen;

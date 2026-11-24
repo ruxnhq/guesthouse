@@ -13,6 +13,7 @@
 //! What it does and why it falls back goes in the app's log, a line for each change and none for
 //! each frame, so a report from a desktop or card nobody here has can say what happened.
 
+use super::crop::Crop;
 use super::dmabuf_feedback::fourcc_name;
 use super::frames::{FrameRoute, SlotFrame};
 use super::import::texture;
@@ -144,8 +145,18 @@ impl Screen {
             self.follow_direct_frames();
             return;
         };
+        own.set_crop(self.0.aspect.crop());
         self.pass_on_notes(&mut own);
         *self.0.own.borrow_mut() = Some(own);
+    }
+
+    /// Lab only: shows just this rectangle of the guest's frame, on the own surface and in GTK alike,
+    /// or the whole frame again with `None`.
+    pub fn set_crop(&self, crop: Option<Crop>) {
+        self.0.aspect.set_crop(crop);
+        if let Some(own) = self.0.own.borrow_mut().as_mut() {
+            own.set_crop(crop);
+        }
     }
 
     /// The page has stopped moving, so the own surface can go where the picture is. It's placed on
@@ -385,7 +396,10 @@ impl Screen {
             (frame.width() - bounds.width()).abs() <= FILL_WITHIN
                 && (frame.height() - bounds.height()).abs() <= FILL_WITHIN
         };
-        let bounds = frame.filter(fills).unwrap_or(bounds);
+        // A rectangle of the frame fills the frame's room, and the picture reaches well past it. A
+        // subsurface isn't clipped by its parent, so it goes only where the rectangle is in view.
+        let cropped = self.0.aspect.crop().is_some();
+        let bounds = frame.filter(|frame| cropped || fills(frame)).unwrap_or(bounds);
         let (shift_x, shift_y) = native.surface_transform();
         let corner = graphene::Point::new(bounds.x() + shift_x as f32, bounds.y() + shift_y as f32);
         let moved = own.place(

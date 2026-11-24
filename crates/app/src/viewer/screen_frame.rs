@@ -297,6 +297,11 @@ impl ScreenFrame {
         }
     }
 
+    /// The rectangle as it was asked for.
+    pub fn crop(&self) -> Option<Crop> {
+        self.imp().crop.get()
+    }
+
     /// The rectangle in view, as it is on the frame now shown.
     pub fn shown_crop(&self) -> Option<Crop> {
         self.imp().shown_crop()

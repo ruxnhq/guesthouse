@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run by Ubuntu's installer once it has installed: puts Guesthouse's files in the new system,
-# makes its administrator, and turns on the service that gives it the host's GPU at every start.
+# makes its administrator, and turns on the service that gives it the host's GPU at every start, and the one that shuts it
+# down when the host asks.
 # Usage: install.sh FILES_DISK TARGET
 set -eu
 files=$1
@@ -18,3 +19,4 @@ printf '%s:%s\n' "$user" "$password" | chroot "$target" chpasswd
 rm -f "$files/guesthouse/account" "$files/user-data"
 
 chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-gpu.service
+chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-shutdown.service

@@ -12,6 +12,21 @@ say_each() {
     while IFS= read -r line; do say "$1: $line"; done
 }
 
+# The listener for the host's request to shut down is a service of its own, so it outlives this
+# script. A guest installed before it existed has none, and this script comes from the files disk at
+# every start, so it puts the listener in place and starts it here, before anything slow. A guest
+# that has it gets its files refreshed, and the service is started only if it isn't running.
+for file in shutdown.sh guesthouse-shutdown.service; do
+    if [ -f "$here/$file" ] && ! cmp -s "$here/$file" "/usr/lib/guesthouse/$file"; then
+        mkdir -p /usr/lib/guesthouse
+        cp "$here/$file" "/usr/lib/guesthouse/$file"
+    fi
+done
+if [ -f /usr/lib/guesthouse/guesthouse-shutdown.service ]; then
+    systemctl enable /usr/lib/guesthouse/guesthouse-shutdown.service 2>&1 | say_each shutdown
+    systemctl is-active -q guesthouse-shutdown.service || systemctl start guesthouse-shutdown.service 2>&1 | say_each shutdown
+fi
+
 # The serial port is the host's window on this guest, and dxgkrnl logs each driver request the host
 # refuses as a kernel error, a handful per nvidia-smi, which is normal over GPU-PV. Only the kernel's
 # critical messages and worse go to the console now. The rest are still in dmesg and the journal,

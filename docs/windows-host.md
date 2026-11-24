@@ -88,6 +88,8 @@ With a Pro guest, Remote Desktop to the address it prints shows its screen.
 
 The first `boot` installs Ubuntu. That takes a while, and the machine turns itself off when it's done. `boot` sees the guest say so, and stops attaching the installer. The next `boot` starts the installed system. The installer speaks on the serial port only when the files disk's menu started it, so an install boot that's silent for five minutes started something else, and `boot` stops it and says so.
 
+Stop and Ctrl+C ask an Ubuntu guest to shut down by writing `guesthouse: shutdown` on its serial port, as a Windows guest does. HCS's own request needs Hyper-V's integration services, which this guest doesn't have. `guesthouse-shutdown.service` reads the port at every start, for as long as the guest runs, and powers the guest off when the line comes. It masks the serial getty on that port, so nothing else reads it. A guest installed before the service existed gets it from the files disk at its next start, with no reinstall.
+
 At every start a service in the guest mounts the GPU files and loads `dxgkrnl`, the guest's half of GPU-PV. Then it reports on the serial port. A distro's kernel has no `dxgkrnl`, as it's only in Microsoft's WSL kernel. So on its first start, and after a kernel update, the guest builds it. It downloads the build tools from Ubuntu and `dxgkrnl`'s source from Microsoft's WSL kernel on GitHub, which Guesthouse never keeps a copy of. The guest's Secure Boot is off, as that module isn't signed. Lines like these are what to look for:
 
 ```

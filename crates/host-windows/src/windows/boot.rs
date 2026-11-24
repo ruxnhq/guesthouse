@@ -8,7 +8,7 @@ use super::{
 };
 use crate::events::{Event, Sink, State};
 use crate::guest::linux::install_finished;
-use crate::guest::report_done;
+use crate::guest::{SHUTDOWN_LINE, report_done};
 use crate::machine::Guest;
 use crate::printable::printable;
 use crate::record::{Record, files_disk};
@@ -46,10 +46,6 @@ const RELAY_PROFILE: &str = "guesthouse.serial-relay";
 const UNREADABLE_REPEAT: u32 = 60;
 /// How long a guest asked to shut down at the end of its time has before it's stopped.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(180);
-/// What the host writes on a guest's serial port to ask it to shut down. HCS's own request needs
-/// Hyper-V's integration services in the guest, which a machine HCS makes doesn't have, so the guest
-/// listens for this and shuts itself down, as App Sandbox's guest agent does when asked.
-pub const SHUTDOWN_LINE: &str = "guesthouse: shutdown";
 /// Ubuntu's installer speaks on the serial port soon after it starts, but only when the files
 /// disk's own menu started it. An install boot this quiet for this long started something else.
 const INSTALL_SILENCE: Duration = Duration::from_secs(300);

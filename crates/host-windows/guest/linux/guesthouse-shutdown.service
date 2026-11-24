@@ -1,0 +1,14 @@
+[Unit]
+Description=Guesthouse: shut down when the host asks on the serial port
+
+[Service]
+# A getty on the port would take the host's line for a user name, and the guest has no use for a
+# login there, as the host only reads the port. Masking it, and not just stopping it, keeps it from
+# starting again, which Conflicts= would turn into this service stopping instead.
+ExecStartPre=-/bin/systemctl mask --now serial-getty@ttyS0.service
+ExecStart=/bin/sh /usr/lib/guesthouse/shutdown.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

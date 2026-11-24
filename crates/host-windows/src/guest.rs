@@ -10,6 +10,12 @@ pub const REPORT_FILE: &str = r"Guesthouse\report.txt";
 /// The report's last line, on either system's serial port.
 pub const REPORT_DONE: &str = "guesthouse: report done";
 
+/// What the host writes on a guest's serial port to ask it to shut down. HCS's own request needs
+/// Hyper-V's integration services in the guest, which a machine HCS makes doesn't have, so the guest
+/// listens for this and shuts itself down, as App Sandbox's guest agent does when asked.
+/// `report.ps1` listens for it in Windows and `shutdown.sh` in Ubuntu.
+pub const SHUTDOWN_LINE: &str = "guesthouse: shutdown";
+
 /// Whether a line from the guest is its report's last.
 pub fn report_done(line: &str) -> bool {
     line.starts_with(REPORT_DONE)
@@ -128,7 +134,7 @@ pub mod linux {
 
     /// Files written to the files disk, by their path on it. The boot menu is in each place
     /// Ubuntu's GRUB may look for it, by the folder it started from or by its own search.
-    pub const FILES: [(&str, &str); 13] = [
+    pub const FILES: [(&str, &str); 15] = [
         (r"EFI\BOOT\grub.cfg", GRUB),
         (r"EFI\ubuntu\grub.cfg", GRUB),
         (r"boot\grub\grub.cfg", GRUB),
@@ -139,6 +145,11 @@ pub mod linux {
         (r"guesthouse\start.sh", include_str!("../guest/linux/start.sh")),
         (r"guesthouse\gpu.sh", include_str!("../guest/linux/gpu.sh")),
         (r"guesthouse\guesthouse-gpu.service", include_str!("../guest/linux/guesthouse-gpu.service")),
+        (r"guesthouse\shutdown.sh", include_str!("../guest/linux/shutdown.sh")),
+        (
+            r"guesthouse\guesthouse-shutdown.service",
+            include_str!("../guest/linux/guesthouse-shutdown.service"),
+        ),
         (r"guesthouse\dxgkrnl\build.sh", include_str!("../guest/linux/dxgkrnl/build.sh")),
         (r"guesthouse\dxgkrnl\Kbuild", include_str!("../guest/linux/dxgkrnl/Kbuild")),
         (
@@ -178,6 +189,7 @@ pub mod linux {
 
 #[cfg(test)]
 mod linux_tests {
+    use super::SHUTDOWN_LINE;
     use super::linux::*;
 
     #[test]
@@ -206,6 +218,28 @@ mod linux_tests {
     fn only_a_line_of_its_own_says_the_install_is_done() {
         assert!(install_finished("guesthouse-install-finished"));
         assert!(!install_finished("running 'echo guesthouse-install-finished > /dev/ttyS0'"));
+    }
+
+    #[test]
+    fn both_guests_wait_for_the_line_the_host_writes() {
+        let ubuntu = FILES.iter().find(|(path, _)| path.ends_with("shutdown.sh")).unwrap().1;
+        assert!(ubuntu.contains(&format!("ask=\"{SHUTDOWN_LINE}\"")));
+        assert!(ubuntu.contains("/dev/ttyS0"));
+        assert!(ubuntu.contains("systemctl poweroff"));
+        assert!(crate::guest::REPORT.contains(&format!("-eq '{SHUTDOWN_LINE}'")));
+    }
+
+    #[test]
+    fn the_shutdown_listener_is_a_service_the_guest_scripts_enable() {
+        let find = |name: &str| FILES.iter().find(|(path, _)| path.ends_with(name)).unwrap().1;
+        let service = find("guesthouse-shutdown.service");
+        assert!(service.contains("ExecStart=/bin/sh /usr/lib/guesthouse/shutdown.sh"));
+        assert!(service.contains("Restart=always"));
+        for script in ["install.sh", "gpu.sh"] {
+            assert!(
+                find(script).contains("systemctl enable /usr/lib/guesthouse/guesthouse-shutdown.service")
+            );
+        }
     }
 
     #[test]

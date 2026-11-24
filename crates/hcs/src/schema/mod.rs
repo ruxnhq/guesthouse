@@ -124,6 +124,10 @@ pub struct Memory {
 #[serde(rename_all = "PascalCase")]
 pub struct Processor {
     pub count: u32,
+    /// Lets the guest run its own hypervisor, and so its own virtual machines. Set only when asked
+    /// for, as a host that can't nest refuses a document that has it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expose_virtualization_extensions: Option<bool>,
 }
 
 /// The machine's share of a GPU, by paravirtualisation: the host's driver does the work, and the

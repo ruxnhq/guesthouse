@@ -420,6 +420,9 @@ mod tests {
         fn network(&self) -> &dyn guesthouse_host_windows::network::Network {
             &NoNetwork
         }
+        fn port_free(&self, _: u16) -> bool {
+            false
+        }
     }
 
     /// The pipe as the service makes it, under a name of the test's own, asked as the app asks, by

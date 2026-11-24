@@ -40,6 +40,13 @@ pub struct Settings {
     /// The ports of this PC passed on to the guest's while it runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub forwards: Vec<Forward>,
+    /// Whether the guest may run virtual machines of its own. A machine from before this has it off.
+    #[serde(default)]
+    pub nested_virtualization: bool,
+    /// The port on this PC's loopback that reaches an Ubuntu guest's SSH. It's chosen once, kept, and
+    /// never shared with another machine, and chosen again only if it's busy at a start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
     /// The largest its disk may grow to. A machine from before this has it read from its disk when
     /// the service starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +75,8 @@ impl Settings {
             share: None,
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
+            nested_virtualization: false,
+            ssh_port: None,
             size_gb: None,
         }
     }

@@ -1,0 +1,11 @@
+[Unit]
+Description=Guesthouse: SSH over a Hyper-V socket, to this guest's own sshd
+Requires=guesthouse-ssh.socket
+After=guesthouse-ssh.socket
+
+[Service]
+# Started by a connection on the socket, which it takes over and relays to sshd on the loopback.
+# It's at /usr/lib/systemd on Ubuntu 24.04 and 26.04, and /lib is a link to /usr/lib there.
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:22
+# It's no use to this proxy to see the guest's other files.
+PrivateTmp=yes

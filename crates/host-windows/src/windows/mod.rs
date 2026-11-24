@@ -4,6 +4,7 @@ pub mod boot;
 pub mod linux;
 pub mod network;
 pub mod prepare;
+pub mod ssh;
 
 use crate::events::{Event, Sink};
 use crate::machine::{Guest, Machine};
@@ -38,6 +39,7 @@ pub fn machine(
         memory_mb: settings.memory_mb,
         processors: settings.processors,
         tpm: settings.tpm,
+        nested_virtualization: settings.nested_virtualization,
         network,
         guest: record.guest,
         console_access: settings.console_access.clone(),

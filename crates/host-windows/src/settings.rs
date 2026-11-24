@@ -51,6 +51,10 @@ pub struct BootSettings {
     pub memory_mb: u64,
     pub processors: u32,
     pub tpm: bool,
+    /// Whether the guest may run virtual machines of its own: the processor's
+    /// `ExposeVirtualizationExtensions`.
+    #[serde(default)]
+    pub nested_virtualization: bool,
     pub network: bool,
     /// Whether the guest's serial port is read in the jail, as it always should be.
     pub jail: bool,
@@ -74,6 +78,10 @@ pub struct BootSettings {
     /// network and doesn't take Guesthouse's shared one.
     #[serde(default)]
     pub bridge: Option<String>,
+    /// The port on the host's loopback that reaches an Ubuntu guest's SSH over a Hyper-V socket
+    /// while it runs. None has no such port.
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
 }
 
 fn on() -> bool {
@@ -101,6 +109,7 @@ impl BootSettings {
             memory_mb: 8192,
             processors: 4,
             tpm: true,
+            nested_virtualization: false,
             network: true,
             jail: true,
             gpu: GpuChoice::Default,
@@ -110,6 +119,7 @@ impl BootSettings {
             nvapi_wrapper: true,
             share: None,
             bridge: None,
+            ssh_port: None,
         }
     }
 }

@@ -307,6 +307,7 @@ pub fn settings_of(machine: &Machine) -> MachineSettings {
         share: machine.share.clone(),
         network_mode: machine.network_mode.clone(),
         forwards: machine.forwards.clone(),
+        nested_virtualization: machine.nested_virtualization,
     }
 }
 
@@ -321,6 +322,7 @@ pub struct Draft {
     pub card: Card,
     pub nvapi_wrapper: bool,
     pub tpm: bool,
+    pub nested_virtualization: bool,
     pub network: bool,
     /// The folder to share, as typed or picked. Empty shares none.
     pub share_folder: String,
@@ -372,6 +374,7 @@ impl Draft {
             card: machine.chosen_card.clone(),
             nvapi_wrapper: machine.nvapi_wrapper,
             tpm: machine.tpm,
+            nested_virtualization: machine.nested_virtualization,
             network: machine.network,
             share_folder: machine
                 .share
@@ -400,6 +403,7 @@ impl Draft {
             share: share_of(&self.share_folder, self.share_read_only),
             network_mode: self.network_mode.clone(),
             forwards: self.forwards.iter().map(ForwardRow::forward).collect::<Option<Vec<_>>>()?,
+            nested_virtualization: self.nested_virtualization,
         })
     }
 
@@ -615,6 +619,7 @@ pub enum Message {
     SetForwardHost(usize, Option<f64>),
     SetForwardGuest(usize, Option<f64>),
     SetTpm(bool),
+    SetNested(bool),
     SetNetwork(bool),
     SetShareFolder(String),
     SetShareReadOnly(Option<bool>),
@@ -774,6 +779,7 @@ impl Main {
                 machine.share = settings.share;
                 machine.network_mode = settings.network_mode;
                 machine.forwards = settings.forwards;
+                machine.nested_virtualization = settings.nested_virtualization;
             }
             self.follow_draft();
             return;
@@ -1149,6 +1155,20 @@ pub fn address(machine: &Machine) -> Option<IpAddr> {
     machine.address.as_deref()?.trim().parse().ok()
 }
 
+/// The `ssh` lines that reach an Ubuntu guest for `user`, each with what it goes through: the port on
+/// this PC's loopback first, which needs no network, then its address on the network, if it has one
+/// and is up.
+pub fn ssh_lines(machine: &Machine, user: &str) -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    if let Some(port) = machine.ssh_port {
+        lines.push(("SSH, no network needed", guesthouse_control::ssh_line(port, user)));
+    }
+    if let Some(address) = address(machine) {
+        lines.push(("SSH on the network", format!("ssh {user}@{address}")));
+    }
+    lines
+}
+
 impl Component for Main {
     type Input = Start;
     type Message = Message;
@@ -1408,6 +1428,7 @@ impl Component for Main {
                 self.follow_draft();
             }
             Message::SetTpm(on) => self.edit(|draft| draft.tpm = on),
+            Message::SetNested(on) => self.edit(|draft| draft.nested_virtualization = on),
             Message::SetNetwork(on) => self.edit(|draft| draft.network = on),
             Message::SetShareFolder(folder) => self.edit(|draft| draft.share_folder = folder),
             Message::SetShareReadOnly(checked) => {
@@ -1486,6 +1507,8 @@ mod tests {
             share: None,
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
+            nested_virtualization: false,
+            ssh_port: None,
             size_gb: Some(128),
             snapshots: Vec::new(),
             working: None,
@@ -1553,6 +1576,33 @@ mod tests {
             draft.settings().unwrap().network_mode,
             NetworkMode::Bridged { adapter: "Ethernet".to_owned() }
         );
+    }
+
+    #[test]
+    fn an_ubuntu_guest_is_reached_by_its_port_and_by_its_address_when_it_has_one() {
+        let mut machine = Machine { system: System::Linux, ..machine() };
+        assert!(ssh_lines(&machine, "me").is_empty());
+        machine.ssh_port = Some(2203);
+        assert_eq!(
+            ssh_lines(&machine, "me"),
+            [("SSH, no network needed", "ssh -p 2203 me@127.0.0.1".to_owned())]
+        );
+        machine.address = Some("172.24.80.12".to_owned());
+        let lines = ssh_lines(&machine, "me");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].1, "ssh me@172.24.80.12");
+        machine.address = Some("not an address".to_owned());
+        assert_eq!(ssh_lines(&machine, "me").len(), 1);
+    }
+
+    #[test]
+    fn nested_virtualization_starts_off_and_turning_it_on_is_a_change() {
+        let machine = machine();
+        let mut draft = Draft::of(&machine);
+        assert!(!draft.settings().unwrap().nested_virtualization);
+        draft.nested_virtualization = true;
+        assert!(draft.changed(&machine));
+        assert!(draft.settings().unwrap().nested_virtualization);
     }
 
     #[test]

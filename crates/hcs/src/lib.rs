@@ -13,12 +13,14 @@
 //! - `disk`: virtdisk.dll, which makes, attaches and detaches a VHDX or an ISO, and the volumes on them.
 //! - `gpu`: the host's cards that can be shared with a guest, and their drivers' folders.
 //! - `drivers`: the copy of a card's driver a guest needs, put on its disk while the machine is off.
+//! - `hvsock`: Hyper-V sockets, which reach a guest with no network. Its IDs build everywhere.
 //! - `host`: whether this process is elevated, which HCS needs, and Ctrl+C.
 //!
 //! The JSON shapes, the order a machine gets its GPU in, and where a guest looks for its host's
 //! driver were first worked out in App Sandbox, as `THIRD-PARTY.md` says.
 
 pub mod adapters;
+pub mod hvsock;
 pub mod schema;
 
 #[cfg(windows)]

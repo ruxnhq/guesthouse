@@ -114,6 +114,14 @@ impl Work for HostWork {
         &self.network
     }
 
+    fn port_free(&self, port: u16) -> bool {
+        guesthouse_host_windows::ssh::port_free(port)
+    }
+
+    fn log(&self, text: &str) {
+        log(text);
+    }
+
     fn end(&self, id: &str) {
         if let Some(machine) = ComputeSystem::open(id) {
             log(&format!("{id} was still running, with nothing watching it, so it's stopped."));

@@ -21,7 +21,7 @@ fn machine() -> ComputeSystem {
                     allow_overcommit: Some(true),
                     enable_deferred_commit: None,
                 },
-                processor: Processor { count: 4 },
+                processor: Processor { count: 4, expose_virtualization_extensions: None },
                 gpu: None,
             },
             devices: Devices {

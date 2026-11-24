@@ -132,6 +132,8 @@ impl Options {
             memory_mb: self.memory_mb,
             processors: self.processors,
             tpm: self.tpm,
+            // Nesting is a setting of the app's, through the service.
+            nested_virtualization: false,
             network: self.network,
             jail: self.jail,
             gpu: self.gpu_choice(),
@@ -144,6 +146,8 @@ impl Options {
             // Sharing a folder, and bridging, are the app's, through the service.
             share: None,
             bridge: None,
+            // The loopback's port for SSH is the service's, as it keeps each machine's.
+            ssh_port: None,
         }
     }
 }

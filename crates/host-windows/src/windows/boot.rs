@@ -147,6 +147,13 @@ fn run(settings: &BootSettings, sink: &Arc<dyn Sink>, stop: Arc<AtomicBool>) -> 
     }
     sink.state(State::Running);
 
+    // SSH with no network, for an Ubuntu guest that's installed, as only it has the unit that
+    // answers on its side. It's kept until the machine has stopped, and then it lets go of its port.
+    let _ssh = settings
+        .ssh_port
+        .filter(|_| record.guest == Guest::Linux && record.installed)
+        .and_then(|port| super::ssh::listen(port, &running, sink));
+
     // A guest still setting itself up gets no card: the host's card reset twice while a guest with
     // GPU-PV was in setup or shutting down, and setup doesn't need it. The guest's first boot
     // finishes setup, and every boot after has the card.

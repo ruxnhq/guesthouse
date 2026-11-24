@@ -185,6 +185,8 @@ fn status() -> Status {
         } else {
             Vec::new()
         },
+        nested_virtualization: false,
+        ssh_port: (system == System::Linux).then_some(2201),
         size_gb: Some(256),
         // The stopped Windows machine has two, so the section has rows to look at.
         snapshots: if name == "win11" {

@@ -496,14 +496,17 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
                 Some(open.into()),
             ));
         }
-        System::Linux => match (account, address) {
-            (Some(account), Some(address)) => rows.push(copy_row(
-                glyph::TERMINAL,
-                "SSH",
-                &format!("ssh {}@{address}", account.user),
-                context,
-            )),
-            _ => rows.push(row(glyph::TERMINAL, "SSH", &[&where_words], None)),
+        System::Linux => match account {
+            Some(account) => {
+                let lines = app::ssh_lines(machine, &account.user);
+                for (heading, line) in &lines {
+                    rows.push(copy_row(glyph::TERMINAL, heading, line, context));
+                }
+                if lines.is_empty() {
+                    rows.push(row(glyph::TERMINAL, "SSH", &[&where_words], None));
+                }
+            }
+            None => rows.push(row(glyph::TERMINAL, "SSH", &[SSH_NOTE, &where_words], None)),
         },
     }
     rows.push(console_row(main, machine, context));
@@ -524,6 +527,11 @@ fn connect_rows(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
     }
     rows
 }
+
+/// What an Ubuntu guest's two ways of SSH are, shown where its user isn't yet.
+const SSH_NOTE: &str = "While it runs, its SSH is also on a port of this PC's own loopback, which needs no network. \
+                        Show the user and password to see the lines. The port is open to any user of this PC, and \
+                        the guest still asks for its own password.";
 
 /// The machine's console: its own screen, which shows from the firmware on, needing nothing of
 /// the guest, so it's there for setup and a boot that's stuck.
@@ -623,6 +631,17 @@ fn settings_section(main: &Main, machine: &Machine, draft: &Draft, context: &Vie
         "TPM",
         &[tpm_words(Some(machine.system))],
         Some(toggle("TPM", draft.tpm, open, context.callback(Message::SetTpm))),
+    ));
+    rows.push(row(
+        glyph::PROCESSOR,
+        "Nested virtualization",
+        &[nested_words(machine.system)],
+        Some(toggle(
+            "Nested virtualization",
+            draft.nested_virtualization,
+            open,
+            context.callback(Message::SetNested),
+        )),
     ));
     rows.push(row(
         glyph::NETWORK,
@@ -905,6 +924,21 @@ fn tpm_words(system: Option<System>) -> &'static str {
         Some(System::Linux) => "Only a Windows guest is given one, so this changes nothing for Ubuntu.",
         _ => {
             "Windows 11 asks for one to set up. Without it, BitLocker and Windows Hello in the guest have none."
+        }
+    }
+}
+
+/// What nested virtualization lets a guest do, and what of it hasn't been tried.
+fn nested_words(system: System) -> &'static str {
+    match system {
+        System::Windows => {
+            "Lets the guest run virtual machines of its own: WSL, Docker, Windows Sandbox. With it on, a guest \
+             with Secure Boot and a TPM may turn on memory integrity, which runs Windows' hypervisor inside the \
+             guest. How that sits with GPU-PV hasn't been tried yet. Takes effect when the machine starts."
+        }
+        System::Linux => {
+            "Lets the guest run virtual machines of its own, such as KVM and Docker's. Takes effect when the \
+             machine starts."
         }
     }
 }

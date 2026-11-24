@@ -17,6 +17,7 @@ use guesthouse_host_windows::network::Network;
 use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::settings::{self as host_settings, BootSettings, GpuChoice, PrepareSettings};
 use guesthouse_host_windows::snapshots::{self, Disks};
+use guesthouse_host_windows::ssh;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -63,6 +64,10 @@ pub trait Work: Send + Sync + 'static {
 
     /// The host's side of machines' networks: port forwards, and bridging.
     fn network(&self) -> &dyn Network;
+    /// Whether `port` on this PC's loopback can be listened on now.
+    fn port_free(&self, port: u16) -> bool;
+    /// Writes a line to the service's own log, for what no window may be watching.
+    fn log(&self, _text: &str) {}
 }
 
 /// The app window a request came from.
@@ -115,13 +120,19 @@ impl<W: Work> Service<W> {
                 eprintln!("{name}'s snapshots couldn't be put right: {error}");
             }
             // A machine from before its disk's size was kept has it read once.
-            let mut entries = machines.lock();
-            let entry = entries.get_mut(&name).expect("listed just now");
-            if entry.settings.size_gb.is_none()
-                && let Some(size_gb) = work.disk_size_gb(&machines.store.disk(&name))
             {
-                entry.settings.size_gb = Some(size_gb);
-                let _ = machines.store.save(&name, &entry.settings);
+                let mut entries = machines.lock();
+                let entry = entries.get_mut(&name).expect("listed just now");
+                if entry.settings.size_gb.is_none()
+                    && let Some(size_gb) = work.disk_size_gb(&machines.store.disk(&name))
+                {
+                    entry.settings.size_gb = Some(size_gb);
+                    let _ = machines.store.save(&name, &entry.settings);
+                }
+            }
+            // An Ubuntu guest from before the SSH port has one given now, so the app can say it.
+            if let Some(said) = keep_port(&machines, &work, &name).1 {
+                work.log(&format!("{name}: {said}"));
             }
         }
         let service = Arc::new(Service {
@@ -257,6 +268,8 @@ impl<W: Work> Service<W> {
                     share: entry.settings.share.clone(),
                     network_mode: entry.settings.network_mode.clone(),
                     forwards: entry.settings.forwards.clone(),
+                    nested_virtualization: entry.settings.nested_virtualization,
+                    ssh_port: entry.settings.ssh_port,
                     size_gb: entry.settings.size_gb,
                     snapshots: snapshots::list(&self.machines.store.disk(name))
                         .unwrap_or_default()
@@ -362,6 +375,8 @@ impl<W: Work> Service<W> {
             share: machine.share.clone(),
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
+            nested_virtualization: false,
+            ssh_port: None,
             size_gb: Some(machine.size_gb),
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Preparing));
@@ -411,6 +426,12 @@ impl<W: Work> Service<W> {
             .work
             .prepare(&settings, sink.as_ref())
             .and_then(|()| keep_installer(store, &name, sink.as_ref()));
+        // An Ubuntu guest's SSH port is chosen as it's made, so the app can say it from the start.
+        let made = made.inspect(|()| {
+            if let Some(said) = keep_port(&self.machines, &*self.work, &name).1 {
+                self.work.log(&format!("{name}: {said}"));
+            }
+        });
         let made = made.and_then(|()| {
             let settings = self.machines.lock().get(&name).map(|entry| entry.settings.clone());
             settings.map_or(Ok(()), |settings| store.save(&name, &settings))
@@ -462,13 +483,21 @@ impl<W: Work> Service<W> {
                 None
             }
         });
+        // An Ubuntu guest's SSH port, chosen again if another program has taken it since.
+        let (ssh_port, said) = keep_port(&self.machines, &*self.work, &name);
+        if let Some(said) = said {
+            self.work.log(&format!("{name}: {said}"));
+            self.machines.tell(&name, Event::Note(said));
+        }
         let settings = BootSettings {
+            ssh_port,
             memory_mb: entry_settings.memory_mb,
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
             console_access: self.work.console_access(),
             nvapi_wrapper: entry_settings.nvapi_wrapper,
             tpm: entry_settings.tpm,
+            nested_virtualization: entry_settings.nested_virtualization,
             network: entry_settings.network,
             share,
             bridge: match &entry_settings.network_mode {
@@ -680,6 +709,7 @@ impl<W: Work> Service<W> {
                     .filter(|_| wanted.network && wanted.network_mode == mode_before),
                 network_mode: wanted.network_mode,
                 forwards: wanted.forwards,
+                nested_virtualization: wanted.nested_virtualization,
                 ..entry.settings.clone()
             };
             if changed == entry.settings {
@@ -720,6 +750,9 @@ impl<W: Work> Service<W> {
                 .map(|forward| format!("{} to {}", forward.host_port, forward.guest_port))
                 .collect();
             words.push_str(&format!(", ports forwarded ({})", ports.join(", ")));
+        }
+        if saved.nested_virtualization {
+            words.push_str(", nested virtualization");
         }
         match &saved.share {
             Some(share) => {
@@ -985,6 +1018,48 @@ fn report_machine_files(store: &Store, name: &str) -> Vec<(String, PathBuf)> {
         ("events.log".to_owned(), store.events(name)),
         ("events.1.log".to_owned(), store.events_before(name)),
     ]
+}
+
+/// The port on this PC's loopback an Ubuntu guest's SSH is reached on, and what to say if it's
+/// new. A machine keeps the one it has while it's free to listen on, and is given another when it
+/// isn't, which no other machine keeps either: the lowest from `ssh::PORTS` up. It's kept in the
+/// machine's settings. A Windows guest has none.
+fn keep_port<W: Work>(machines: &Machines, work: &W, name: &str) -> (Option<u16>, Option<String>) {
+    let linux = Record::load(&machines.store.disk(name)).unwrap_or_default().guest == Guest::Linux;
+    if !linux {
+        return (None, None);
+    }
+    let mut entries = machines.lock();
+    let Some(before) = entries.get(name).map(|entry| entry.settings.ssh_port) else { return (None, None) };
+    let others: Vec<u16> = entries
+        .iter()
+        .filter(|(other, _)| other.as_str() != name)
+        .filter_map(|(_, entry)| entry.settings.ssh_port)
+        .collect();
+    let usable = |port: u16| !others.contains(&port) && work.port_free(port);
+    let Some(port) = before.filter(|port| usable(*port)).or_else(|| ssh::ports().find(|port| usable(*port)))
+    else {
+        return (
+            None,
+            Some(
+                "There is no free port on this PC's loopback for its SSH, so there's none this boot.".into(),
+            ),
+        );
+    };
+    if before == Some(port) {
+        return (before, None);
+    }
+    let entry = entries.get_mut(name).expect("found just now");
+    entry.settings.ssh_port = Some(port);
+    let kept = machines.store.save(name, &entry.settings);
+    let mut said = match before {
+        Some(busy) => format!("Port {busy} on this PC's loopback was busy, so its SSH is on {port} now."),
+        None => format!("Its SSH is on port {port} of this PC's loopback."),
+    };
+    if let Err(error) = kept {
+        said.push_str(&format!(" The port couldn't be kept: {error}"));
+    }
+    (Some(port), Some(said))
 }
 
 fn gpu_choice(card: &Card) -> GpuChoice {

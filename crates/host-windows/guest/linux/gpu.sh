@@ -70,6 +70,37 @@ ldconfig 2> /dev/null
 # shellcheck disable=SC2016
 printf 'PATH="$PATH:/usr/lib/wsl/lib"\n' > /etc/profile.d/guesthouse-wsl.sh
 
+# SSH over a Hyper-V socket, so the host reaches this guest's sshd with no network: a socket unit on
+# vsock port 22 that hands each connection to sshd on the loopback. install.sh puts the units in
+# a new guest, and this puts them in one installed before they existed, or updates them, as the
+# files disk holds the host's own copies and the host writes them afresh at every start.
+units=/etc/systemd/system
+changed=no
+for unit in guesthouse-ssh.socket guesthouse-ssh.service; do
+    if [ -f "$files/guesthouse/$unit" ] && ! cmp -s "$files/guesthouse/$unit" "$units/$unit"; then
+        install -m 644 "$files/guesthouse/$unit" "$units/$unit" && changed=yes
+    fi
+done
+if [ -f "$files/guesthouse/guesthouse-hv_sock.conf" ] &&
+    ! cmp -s "$files/guesthouse/guesthouse-hv_sock.conf" /etc/modules-load.d/guesthouse-hv_sock.conf; then
+    install -m 644 "$files/guesthouse/guesthouse-hv_sock.conf" /etc/modules-load.d/guesthouse-hv_sock.conf
+fi
+if [ -f "$units/guesthouse-ssh.socket" ]; then
+    modprobe hv_sock 2> /dev/null
+    if [ "$changed" = yes ]; then
+        systemctl daemon-reload
+    fi
+    if ! systemctl is-enabled --quiet guesthouse-ssh.socket 2> /dev/null; then
+        systemctl enable guesthouse-ssh.socket 2>&1 | say_each ssh
+    fi
+    systemctl start guesthouse-ssh.socket 2>&1 | say_each ssh
+    if systemctl is-active --quiet guesthouse-ssh.socket; then
+        say "ssh: listening on vsock port 22"
+    else
+        say "ssh: the socket isn't listening, so the host's SSH port reaches nothing"
+    fi
+fi
+
 if ! modprobe dxgkrnl 2> /dev/null; then
     say "dxgkrnl: building it for $(uname -r)"
     log=/var/log/guesthouse-dxgkrnl.log

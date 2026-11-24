@@ -39,6 +39,8 @@ pub struct Machine {
     pub memory_mb: u64,
     pub processors: u32,
     pub tpm: bool,
+    /// Whether the guest may run virtual machines of its own.
+    pub nested_virtualization: bool,
     pub network: Option<NetworkAdapter>,
     pub guest: Guest,
     /// Disks after the boot disk, in the slots after it, such as a Linux guest's files disk and,
@@ -101,7 +103,10 @@ impl Machine {
                         allow_overcommit: Some(true),
                         enable_deferred_commit: Some(true),
                     },
-                    processor: Processor { count: self.processors },
+                    processor: Processor {
+                        count: self.processors,
+                        expose_virtualization_extensions: self.nested_virtualization.then_some(true),
+                    },
                     // GPU-PV is given once the machine runs, as HCS takes it then.
                     gpu: None,
                 },
@@ -173,6 +178,7 @@ mod tests {
             memory_mb: 8192,
             processors: 4,
             tpm: true,
+            nested_virtualization: false,
             network: None,
             guest: Guest::Windows,
             more_disks: Vec::new(),
@@ -261,6 +267,20 @@ mod tests {
         );
         assert_eq!(vm["Devices"]["ComPorts"]["0"]["NamedPipe"], json!(r"\\.\pipe\guesthouse-test-com1"));
         assert_eq!(vm["SecuritySettings"]["EnableTpm"], json!(true));
+    }
+
+    #[test]
+    fn nested_virtualization_is_off_unless_asked_for() {
+        let off = serde_json::to_value(machine().document()).unwrap();
+        assert_eq!(off["VirtualMachine"]["ComputeTopology"]["Processor"], json!({"Count": 4}));
+        for guest in [machine(), linux()] {
+            let on = Machine { nested_virtualization: true, ..guest };
+            let document = serde_json::to_value(on.document()).unwrap();
+            assert_eq!(
+                document["VirtualMachine"]["ComputeTopology"]["Processor"],
+                json!({"Count": 4, "ExposeVirtualizationExtensions": true})
+            );
+        }
     }
 
     #[test]

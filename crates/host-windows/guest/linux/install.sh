@@ -20,3 +20,11 @@ rm -f "$files/guesthouse/account" "$files/user-data"
 
 chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-gpu.service
 chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-shutdown.service
+
+# SSH over a Hyper-V socket, for the host to reach this guest with no network. The units go where
+# systemd looks for them, as the socket finds its service by name, and gpu.sh puts them there again
+# at every start, so a guest installed before them has them too.
+cp "$files/guesthouse/guesthouse-ssh.socket" "$files/guesthouse/guesthouse-ssh.service" \
+    "$target/etc/systemd/system/"
+cp "$files/guesthouse/guesthouse-hv_sock.conf" "$target/etc/modules-load.d/"
+chroot "$target" systemctl enable guesthouse-ssh.socket

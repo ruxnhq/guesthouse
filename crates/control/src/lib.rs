@@ -96,6 +96,10 @@ pub struct MachineSettings {
     /// The ports of this PC that lead to the machine's. An older app sends none.
     #[serde(default)]
     pub forwards: Vec<Forward>,
+    /// Whether the guest may run virtual machines of its own. An app from before this sends none,
+    /// which reads as off.
+    #[serde(default)]
+    pub nested_virtualization: bool,
 }
 
 /// What a new machine is made from and given.
@@ -213,6 +217,12 @@ pub fn valid_user(name: &str) -> bool {
         && !WINDOWS_OWN.contains(&name)
 }
 
+/// The `ssh` line that reaches an Ubuntu guest through the port the service listens on, on this PC's
+/// loopback, which needs no network in the guest.
+pub fn ssh_line(port: u16, user: &str) -> String {
+    format!("ssh -p {port} {user}@127.0.0.1")
+}
+
 /// Whether `edition` can name an edition: Windows' editions are letters, digits and spaces.
 pub fn valid_edition(edition: &str) -> bool {
     const LONGEST: usize = 64;
@@ -311,6 +321,13 @@ pub struct Machine {
     pub network_mode: NetworkMode,
     #[serde(default)]
     pub forwards: Vec<Forward>,
+    /// Whether the guest may run virtual machines of its own, which is off unless turned on.
+    #[serde(default)]
+    pub nested_virtualization: bool,
+    /// The port on this PC's loopback that reaches an Ubuntu guest's SSH over a Hyper-V socket
+    /// while it runs, with no network. Only an Ubuntu guest has one.
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
     /// The largest its disk may grow to, if the service knows.
     #[serde(default)]
     pub size_gb: Option<u64>,
@@ -449,6 +466,7 @@ mod tests {
             share: None,
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
+            nested_virtualization: false,
         };
         assert_eq!(
             older,
@@ -485,14 +503,23 @@ mod tests {
             share: None,
             network_mode: NetworkMode::Shared,
             forwards: Vec::new(),
+            nested_virtualization: true,
         };
         let value = serde_json::to_value(Request::Change { name: "win".into(), settings }).unwrap();
         assert_eq!(value["ask"], json!("change"));
         assert_eq!(value["settings"]["nvapi_wrapper"], json!(false));
+        assert_eq!(value["settings"]["nested_virtualization"], json!(true));
         let older = json!({"name": "win", "system": "windows", "state": "stopped", "set_up": true,
             "memory_mb": 8192, "processors": 4, "card": null, "address": null});
         let machine: Machine = serde_json::from_value(older).unwrap();
         assert_eq!((machine.chosen_card, machine.nvapi_wrapper), (Card::Default, true));
+        assert!(!machine.nested_virtualization, "a service from before nesting says none, which is off");
+        assert_eq!(machine.ssh_port, None, "and one from before the SSH port says none");
+    }
+
+    #[test]
+    fn the_ssh_line_names_the_port_and_the_loopback() {
+        assert_eq!(ssh_line(2201, "guesthouse"), "ssh -p 2201 guesthouse@127.0.0.1");
     }
 
     #[test]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Guesthouse: SSH over a Hyper-V socket, for the host to reach this guest with no network
+
+[Socket]
+# vsock port 22, from any CID. The host's Hyper-V socket to this guest's service ID
+# 00000016-facb-11e6-bd58-64006a7986d3 arrives here through the hv_sock module.
+ListenStream=vsock::22
+Accept=no
+
+[Install]
+WantedBy=sockets.target

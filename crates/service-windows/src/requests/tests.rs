@@ -14,6 +14,8 @@ struct Pretend {
     net: FakeNet,
     /// A guest that says nothing of its address.
     silent: AtomicBool,
+    /// Ports another program has.
+    busy_ports: Mutex<Vec<u16>>,
 }
 
 impl Work for Pretend {
@@ -91,6 +93,10 @@ impl Work for Pretend {
 
     fn network(&self) -> &dyn Network {
         &self.net
+    }
+
+    fn port_free(&self, port: u16) -> bool {
+        !self.busy_ports.lock().unwrap().contains(&port)
     }
 }
 
@@ -387,6 +393,7 @@ fn settings_change_while_off_are_kept_and_reach_the_next_boot() {
         share: None,
         network_mode: NetworkMode::Shared,
         forwards: Vec::new(),
+        nested_virtualization: false,
     };
     assert_eq!(change(service, wanted.clone()), [Answer::Ok]);
     let machine = &status(service)[0];
@@ -417,6 +424,7 @@ fn hardware(memory_mb: u64, card: Card) -> MachineSettings {
         share: None,
         network_mode: NetworkMode::Shared,
         forwards: Vec::new(),
+        nested_virtualization: false,
     }
 }
 
@@ -931,3 +939,120 @@ fn a_file_that_is_a_link_is_not_followed() {
 
 mod network;
 use network::FakeNet;
+#[test]
+fn nested_virtualization_is_off_until_asked_for_and_reaches_the_next_boot() {
+    let setup = setup("nested", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    assert!(!status(service)[0].nested_virtualization);
+    let on = MachineSettings { nested_virtualization: true, ..hardware(8192, Card::Default) };
+    assert_eq!(change(service, on), [Answer::Ok]);
+    assert!(status(service)[0].nested_virtualization);
+    assert!(service.machines().store.load()[0].1.nested_virtualization, "kept on disk");
+    assert_eq!(ask(service, Request::Start { name: "win".into() }), [Answer::Ok]);
+    wait_for(service, "win", State::Running);
+    assert!(service.work.booted.lock().unwrap()[0].nested_virtualization);
+    ask(service, Request::Stop { name: "win".into() });
+    wait_for(service, "win", State::Stopped);
+}
+
+/// A setup whose machines are all Ubuntu guests, with ports in `busy` taken by other programs.
+fn linux_setup(test: &str, busy: &[u16]) -> Setup {
+    let root = std::env::temp_dir().join(format!("gh-requests-{test}-{}", std::process::id()));
+    let pretend = Pretend {
+        linux_installer: Some(root.join("ubuntu.iso")),
+        busy_ports: Mutex::new(busy.to_vec()),
+        ..Pretend::default()
+    };
+    let setup = setup(test, pretend);
+    fs::write(root.join("ubuntu.iso"), b"ubuntu").unwrap();
+    setup
+}
+
+fn ports(service: &Arc<Service<Pretend>>) -> Vec<(String, Option<u16>)> {
+    status(service).into_iter().map(|machine| (machine.name, machine.ssh_port)).collect()
+}
+
+#[test]
+fn each_ubuntu_guest_gets_a_port_of_its_own_from_2201_and_a_windows_guest_none() {
+    let linux = linux_setup("ports", &[]);
+    let service = &linux.service;
+    ask(service, Request::Create { machine: new_machine(&linux, "one") });
+    ask(service, Request::Create { machine: new_machine(&linux, "two") });
+    assert_eq!(ports(service), [("one".to_owned(), Some(2201)), ("two".to_owned(), Some(2202))]);
+    let kept = service.machines().store.load();
+    assert_eq!(
+        kept.iter().map(|(_, settings)| settings.ssh_port).collect::<Vec<_>>(),
+        [Some(2201), Some(2202)]
+    );
+
+    let other = setup("ports-windows", Pretend::default());
+    ask(&other.service, Request::Create { machine: new_machine(&other, "win") });
+    assert_eq!(ports(&other.service), [("win".to_owned(), None)]);
+}
+
+#[test]
+fn a_port_is_kept_between_starts_and_booted_with() {
+    let linux = linux_setup("ports-boot", &[]);
+    let service = &linux.service;
+    ask(service, Request::Create { machine: new_machine(&linux, "one") });
+    for _ in 0..2 {
+        assert_eq!(ask(service, Request::Start { name: "one".into() }), [Answer::Ok]);
+        wait_for(service, "one", State::Running);
+        ask(service, Request::Stop { name: "one".into() });
+        wait_for(service, "one", State::Stopped);
+    }
+    let booted = service.work.booted.lock().unwrap();
+    assert_eq!(booted.iter().map(|boot| boot.ssh_port).collect::<Vec<_>>(), [Some(2201), Some(2201)]);
+}
+
+#[test]
+fn a_port_found_busy_at_a_start_is_chosen_again_and_said() {
+    let linux = linux_setup("ports-busy", &[]);
+    let service = &linux.service;
+    ask(service, Request::Create { machine: new_machine(&linux, "one") });
+    ask(service, Request::Create { machine: new_machine(&linux, "two") });
+    // Another program takes the first machine's port, and the next one is the second machine's.
+    service.work.busy_ports.lock().unwrap().push(2201);
+    let (_, events) = service.machines().watch("one").unwrap();
+    assert_eq!(ask(service, Request::Start { name: "one".into() }), [Answer::Ok]);
+    wait_for(service, "one", State::Running);
+    assert_eq!(service.work.booted.lock().unwrap()[0].ssh_port, Some(2203));
+    assert_eq!(ports(service), [("one".to_owned(), Some(2203)), ("two".to_owned(), Some(2202))]);
+    assert_eq!(service.machines().store.load()[0].1.ssh_port, Some(2203), "kept");
+    let said: Vec<Event> = events
+        .try_iter()
+        .filter(|event| matches!(event, Event::Note(text) if text.contains("2201")))
+        .collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    ask(service, Request::Stop { name: "one".into() });
+    wait_for(service, "one", State::Stopped);
+}
+
+#[test]
+fn a_free_port_is_never_taken_from_another_machine() {
+    let linux = linux_setup("ports-shared", &[2201]);
+    let service = &linux.service;
+    ask(service, Request::Create { machine: new_machine(&linux, "one") });
+    ask(service, Request::Create { machine: new_machine(&linux, "two") });
+    assert_eq!(ports(service), [("one".to_owned(), Some(2202)), ("two".to_owned(), Some(2203))]);
+    // With 2201 free again, "two" still has its own, and a machine made now gets the lowest free.
+    service.work.busy_ports.lock().unwrap().clear();
+    ask(service, Request::Create { machine: new_machine(&linux, "three") });
+    assert_eq!(
+        ports(service),
+        [("one".to_owned(), Some(2202)), ("three".to_owned(), Some(2201)), ("two".to_owned(), Some(2203))]
+    );
+}
+
+#[test]
+fn an_ubuntu_guest_from_before_the_port_is_given_one_when_the_service_starts() {
+    let linux = linux_setup("ports-old", &[]);
+    ask(&linux.service, Request::Create { machine: new_machine(&linux, "old") });
+    let store = linux.service.machines().store.clone();
+    let mut settings = store.load().remove(0).1;
+    settings.ssh_port = None;
+    store.save("old", &settings).unwrap();
+    let again = Service::new(store, Pretend::default());
+    assert_eq!(ports(&again), [("old".to_owned(), Some(2201))]);
+}

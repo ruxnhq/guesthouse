@@ -134,7 +134,7 @@ pub mod linux {
 
     /// Files written to the files disk, by their path on it. The boot menu is in each place
     /// Ubuntu's GRUB may look for it, by the folder it started from or by its own search.
-    pub const FILES: [(&str, &str); 15] = [
+    pub const FILES: [(&str, &str); 18] = [
         (r"EFI\BOOT\grub.cfg", GRUB),
         (r"EFI\ubuntu\grub.cfg", GRUB),
         (r"boot\grub\grub.cfg", GRUB),
@@ -150,6 +150,9 @@ pub mod linux {
             r"guesthouse\guesthouse-shutdown.service",
             include_str!("../guest/linux/guesthouse-shutdown.service"),
         ),
+        (r"guesthouse\guesthouse-ssh.socket", include_str!("../guest/linux/guesthouse-ssh.socket")),
+        (r"guesthouse\guesthouse-ssh.service", include_str!("../guest/linux/guesthouse-ssh.service")),
+        (r"guesthouse\guesthouse-hv_sock.conf", include_str!("../guest/linux/guesthouse-hv_sock.conf")),
         (r"guesthouse\dxgkrnl\build.sh", include_str!("../guest/linux/dxgkrnl/build.sh")),
         (r"guesthouse\dxgkrnl\Kbuild", include_str!("../guest/linux/dxgkrnl/Kbuild")),
         (
@@ -212,6 +215,42 @@ mod linux_tests {
     fn the_install_script_reads_the_account_where_it_is_written() {
         let install = FILES.iter().find(|(path, _)| path.ends_with("install.sh")).unwrap().1;
         assert!(install.contains(&format!("$files/{}", ACCOUNT.replace('\\', "/"))));
+    }
+
+    fn file(name: &str) -> &'static str {
+        FILES.iter().find(|(path, _)| path.ends_with(name)).unwrap().1
+    }
+
+    #[test]
+    fn the_ssh_socket_listens_on_vsock_port_22_and_its_service_proxies_to_sshd() {
+        let socket = file("guesthouse-ssh.socket");
+        assert!(socket.contains("ListenStream=vsock::22\n"));
+        assert!(socket.contains("Accept=no"));
+        assert!(socket.contains("WantedBy=sockets.target"));
+        let service = file("guesthouse-ssh.service");
+        assert!(service.contains("ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:22\n"));
+        assert!(service.contains("Requires=guesthouse-ssh.socket"));
+        assert_eq!(file("guesthouse-hv_sock.conf").lines().filter(|line| *line == "hv_sock").count(), 1);
+    }
+
+    #[test]
+    fn the_ssh_port_is_the_one_the_host_dials() {
+        // Port 22 as a Hyper-V service ID, which the host's relay connects to.
+        let id = guesthouse_hcs::hvsock::guid_text(guesthouse_hcs::hvsock::vsock_service_id(22));
+        assert_eq!(id, "{00000016-facb-11e6-bd58-64006a7986d3}");
+        assert_eq!(crate::ssh::GUEST_PORT, 22);
+    }
+
+    #[test]
+    fn a_new_guest_and_an_older_one_both_get_the_ssh_units() {
+        let install = file("install.sh");
+        let gpu = file("gpu.sh");
+        for unit in ["guesthouse-ssh.socket", "guesthouse-ssh.service", "guesthouse-hv_sock.conf"] {
+            assert!(install.contains(unit), "install.sh and {unit}");
+            assert!(gpu.contains(unit), "gpu.sh and {unit}");
+        }
+        assert!(install.contains("systemctl enable guesthouse-ssh.socket"));
+        assert!(gpu.contains("systemctl enable guesthouse-ssh.socket"));
     }
 
     #[test]

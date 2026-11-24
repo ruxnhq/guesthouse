@@ -31,14 +31,13 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
 
 function Get-Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 
+# The curl Windows has. Windows PowerShell's own web requests drop the connection on a large download.
+$curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+
 # Whether a file is published already at the file drop.
 function Test-Published([string]$Name) {
-    try {
-        $answer = Invoke-WebRequest -Method Head -Uri "$base/$Name" -UseBasicParsing
-        return $answer.StatusCode -eq 200
-    } catch {
-        return $false
-    }
+    & $curl --head --fail --silent --proto =https --output NUL "$base/$Name"
+    return $LASTEXITCODE -eq 0
 }
 
 $version = (Get-Content -Raw -LiteralPath 'windows\version.txt').Trim()
@@ -98,7 +97,7 @@ foreach ($file in @($setup, $sums, $latest)) {
     }
 }
 $back = Join-Path $out 'downloaded.exe'
-Invoke-WebRequest -Uri "$base/$installer" -OutFile $back -UseBasicParsing
+Invoke-Native 'downloading the installer back' { & $curl --fail --silent --location --proto =https --output $back "$base/$installer" }
 if ((Get-Sha256 $back) -ne $sha) { throw "The installer downloaded from $base/$installer isn't the one built." }
 Remove-Item -LiteralPath $back
 

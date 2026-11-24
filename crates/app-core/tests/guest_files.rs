@@ -137,7 +137,11 @@ fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
         assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
     }
     let windows = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
-    assert!(windows.contains("try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }"));
+    assert!(
+        windows.contains(
+            "try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }"
+        )
+    );
     assert!(windows.contains("try { client = listener.AcceptTcpClient(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); return; }"));
     for name in ["clipboard", "files", "window-size", "app-windows"] {
         let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();

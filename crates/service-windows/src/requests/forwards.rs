@@ -32,7 +32,11 @@ impl<W: Work> Service<W> {
         let mut refused_address: Option<String> = None;
         loop {
             let finished = over.load(Ordering::SeqCst);
-            let wanted = if finished { None } else { self.wanted_forwards(name, &mut refused_address) };
+            let wanted = if finished || !self.cleaned.load(Ordering::SeqCst) {
+                None
+            } else {
+                self.wanted_forwards(name, &mut refused_address)
+            };
             if made.as_ref().map(|made| &made.wanted) != wanted.as_ref() {
                 if let Some(made) = made.take() {
                     self.unmake_forwards(name, &made);
@@ -241,15 +245,15 @@ impl<W: Work> Service<W> {
                 told(name, format!("A port forward left behind, from this PC's port {port}, is taken away."));
             }
         }
-        // What the stored machines' forwards say is left is looked for by its own names too, in case
-        // the firewall's answer was in a shape this didn't read. Only an entry that leads where the
-        // machine's guest last was is taken, and only when no rule was found at all, as every rule
-        // found was dealt with above.
-        if !named.is_empty() {
-            return;
-        }
+        // The stored machines' forwards are looked for by their own names too, in case the firewall's
+        // list was in a shape this didn't read: an entry on the port that leads where the machine's
+        // guest last was is Guesthouse's, and goes with its rule. Nothing is run for a forward with
+        // no such entry.
         for (name, forward, address) in &stored {
             let port = forward.host_port;
+            if named.iter().any(|(machine, other)| machine == name && *other == port) {
+                continue;
+            }
             let ours = proxies.iter().any(|proxy| {
                 proxy.listen_port == port
                     && proxy.listen_address.is_unspecified()
@@ -257,9 +261,8 @@ impl<W: Work> Service<W> {
             });
             if ours {
                 let _ = network.delete_proxy(port);
-            }
-            if network.delete_rule(&rule_name(name, port)).is_ok() {
-                told(name, format!("A firewall rule left behind, for this PC's port {port}, is deleted."));
+                let _ = network.delete_rule(&rule_name(name, port));
+                told(name, format!("A port forward left behind, from this PC's port {port}, is taken away."));
             }
         }
     }

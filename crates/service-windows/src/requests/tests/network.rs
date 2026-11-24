@@ -302,6 +302,8 @@ fn forwards_left_behind_are_taken_away_when_the_service_starts_and_others_are_no
         ..Pretend::default()
     };
     let setup = setup("forwards-leftover", work);
+    // It's done on a thread of its own, so that the service is running while it is.
+    wait_net(&setup.service, |net| net.rules.len() == 1);
     let net = net(&setup.service);
     assert_eq!(net.proxies, [leftover(9000, 7)], "a forward of someone else's, as WSL's setups make");
     assert_eq!(net.rules, ["Remote Desktop (TCP-In)"]);
@@ -335,10 +337,8 @@ fn a_stored_machines_forwards_are_found_even_when_the_rules_list_names_none() {
         ..Pretend::default()
     };
     let service = Service::new(store, work);
-    let net = service.work.net.state.lock().unwrap();
-    assert_eq!(net.proxies, [other]);
-    assert!(net.rules.is_empty());
-    drop(net);
+    wait_net(&service, |net| net.rules.is_empty());
+    assert_eq!(net(&service).proxies, [other]);
     let _ = fs::remove_dir_all(&setup_dir);
 }
 
@@ -407,6 +407,10 @@ fn bridging_is_offered_in_the_status_and_a_machine_is_bridged_onto_an_adapter_it
         other => panic!("{other:?}"),
     }
     assert_eq!(status(service)[0].network_mode, NetworkMode::Shared);
+    // Run once, so there's an address of the shared network to forget.
+    start_and_run(service, "win");
+    stop(service, "win");
+    assert_eq!(status(service)[0].address.as_deref(), Some("172.29.1.2"));
 
     let refused = ask(service, Request::Change { name: "win".into(), settings: bridged("Ethernet 9") });
     assert!(matches!(refused.as_slice(), [Answer::Refused { reason }] if reason.contains("Ethernet 9")));
@@ -427,9 +431,14 @@ fn bridging_is_offered_in_the_status_and_a_machine_is_bridged_onto_an_adapter_it
     let both = MachineSettings { forwards: vec![forward(8080, 80)], ..bridged("Ethernet") };
     assert_eq!(ask(service, Request::Change { name: "win".into(), settings: both }), [Answer::Ok]);
     start_and_run(service, "win");
-    assert_eq!(service.work.booted.lock().unwrap()[0].bridge.as_deref(), Some("Ethernet"));
+    assert_eq!(service.work.booted.lock().unwrap()[1].bridge.as_deref(), Some("Ethernet"));
     thread::sleep(Duration::from_millis(300));
     assert!(net(service).calls.is_empty(), "{:?}", net(service).calls);
+    assert_eq!(
+        status(service)[0].address.as_deref(),
+        Some("172.29.1.2"),
+        "this run's, on the router's network"
+    );
     assert!(
         log(service, "win").iter().any(
             |event| matches!(event, Event::Note(text) if text.contains("aren't made while it's bridged"))
@@ -440,7 +449,7 @@ fn bridging_is_offered_in_the_status_and_a_machine_is_bridged_onto_an_adapter_it
     // Back on the shared network it boots with no adapter.
     assert_eq!(change(service, hardware(8192, Card::Default)), [Answer::Ok]);
     start_and_run(service, "win");
-    assert_eq!(service.work.booted.lock().unwrap()[1].bridge, None);
+    assert_eq!(service.work.booted.lock().unwrap()[2].bridge, None);
     stop(service, "win");
 }
 

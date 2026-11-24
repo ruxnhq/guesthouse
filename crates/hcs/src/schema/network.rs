@@ -14,6 +14,8 @@ pub mod flags {
     pub const ENABLE_DNS_PROXY: u32 = 1;
     /// The host gives each guest its endpoint's address by DHCP.
     pub const ENABLE_DHCP_SERVER: u32 = 2;
+    /// HCN doesn't keep the network across a restart of the host. hcsshim's `EnableNonPersistent`.
+    pub const ENABLE_NON_PERSISTENT: u32 = 8;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,14 +89,15 @@ impl Network {
     }
 
     /// A switch on the physical adapter `adapter`, which the router's DHCP serves the guests of.
-    /// There are no flags and no address space: the host's network is the guest's, so nothing here
-    /// gives the guest an address.
+    /// There's no address space: the host's network is the guest's, so nothing here gives the guest
+    /// an address. It's non-persistent, so the switch, which takes the adapter's place on the host,
+    /// is gone after a restart and doesn't stay bound with no way to remove it from the app.
     pub fn transparent(name: &str, adapter: &str) -> Self {
         Network {
             schema_version: NETWORK_SCHEMA_VERSION,
             name: name.to_owned(),
             r#type: NetworkType::Transparent,
-            flags: 0,
+            flags: flags::ENABLE_NON_PERSISTENT,
             policies: vec![NetworkPolicy {
                 r#type: NetworkPolicyType::NetAdapterName,
                 settings: NetAdapterName { network_adapter_name: adapter.to_owned() },
@@ -140,6 +143,7 @@ mod tests {
                 "SchemaVersion": {"Major": 2, "Minor": 0},
                 "Name": "guesthouse-bridged-Ethernet",
                 "Type": "Transparent",
+                "Flags": 8,
                 "Policies": [{"Type": "NetAdapterName", "Settings": {"NetworkAdapterName": "Ethernet"}}]
             })
         );

@@ -97,6 +97,9 @@ pub struct Service<W: Work> {
     bridging: Mutex<Option<(Instant, Bridging)>>,
     /// Port forwards are made and taken away one machine at a time, as `netsh` is.
     forwarding: Mutex<()>,
+    /// Whether the forwards a stopped service left behind have been looked for. No machine's are
+    /// made before they have, or they'd be taken away with the rest.
+    cleaned: AtomicBool,
 }
 
 impl<W: Work> Service<W> {
@@ -128,9 +131,16 @@ impl<W: Work> Service<W> {
             cards: Mutex::new(None),
             bridging: Mutex::new(None),
             forwarding: Mutex::new(()),
+            cleaned: AtomicBool::new(false),
         });
         // Port forwards a stopped service left behind are no use to anyone, and hold their ports.
-        service.clear_leftover_forwards();
+        // Listing the firewall's rules takes seconds, and the service manager is waiting for the
+        // service to run, so it's done on a thread of its own.
+        let service_again = Arc::clone(&service);
+        thread::spawn(move || {
+            service_again.clear_leftover_forwards();
+            service_again.cleaned.store(true, Ordering::SeqCst);
+        });
         service
     }
 

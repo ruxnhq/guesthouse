@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Applies the machine's choices from Guesthouse at each boot: Play services (microG) on or off, and a long press of power that shuts down. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.guesthouse.setup"
+    android:sharedUserId="android.uid.system">
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.CHANGE_COMPONENT_ENABLED_STATE" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.GRANT_RUNTIME_PERMISSIONS" />
+    <application android:label="Guesthouse Setup" android:persistent="false" android:directBootAware="true">
+        <receiver android:name=".BootReceiver" android:exported="true" android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

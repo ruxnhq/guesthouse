@@ -1,0 +1,28 @@
+// The parts Guesthouse adds to Android for VMs (LineageOS's virtio target).
+
+android_app {
+    name: "GuesthouseSetup",
+    srcs: ["setup/src/**/*.java"],
+    manifest: "setup/AndroidManifest.xml",
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+}
+
+// microG keeps its own signature: Lineage only spoofs Google's for microG's real key.
+android_app_import {
+    name: "GmsCore",
+    apk: "microg/GmsCore.apk",
+    presigned: true,
+    product_specific: true,
+    dex_preopt: { enabled: false },
+}
+
+android_app_import {
+    name: "GuesthouseMicrogCompanion",
+    apk: "microg/Companion.apk",
+    presigned: true,
+    product_specific: true,
+    dex_preopt: { enabled: false },
+}

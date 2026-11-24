@@ -1,0 +1,30 @@
+diff --git a/BoardConfig.mk b/BoardConfig.mk
+index 8f056a4..4f97c5d 100644
+--- a/BoardConfig.mk
++++ b/BoardConfig.mk
+@@ -48,3 +48,14 @@ BOARD_VENDOR_SEPOLICY_DIRS += \
+ 
+ # Virtual Machine template
+ TARGET_VM_UTM_TEMPLATE_DIR := $(DEVICE_PATH)/vm_templates/utm
++
++# Digitalis installs its ARM64 Berberis libraries over the same paths the tree's own (RISC-V) build defines. Its copies come later and win.
++BUILD_BROKEN_DUP_RULES := true
++# Digitalis ships its translator as files to copy, not as modules.
++BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
++
++# ARM64 apps through Digitalis: Android lists arm64-v8a beside x86_64 and hands its code to the bridge.
++TARGET_NATIVE_BRIDGE_ARCH := arm64
++TARGET_NATIVE_BRIDGE_ARCH_VARIANT := armv8-a
++TARGET_NATIVE_BRIDGE_CPU_VARIANT := generic
++TARGET_NATIVE_BRIDGE_ABI := arm64-v8a
+diff --git a/lineage_virtio_x86_64.mk b/lineage_virtio_x86_64.mk
+index c29d747..d3041e5 100644
+--- a/lineage_virtio_x86_64.mk
++++ b/lineage_virtio_x86_64.mk
+@@ -22,3 +22,6 @@ PRODUCT_MODEL := VirtIO x86_64
+ PRODUCT_VENDOR_PROPERTIES += \
+     ro.soc.manufacturer=$(PRODUCT_MANUFACTURER) \
+     ro.soc.model=$(PRODUCT_DEVICE)
++
++# What Guesthouse adds: its setup app, microG and ARM64 translation.
++$(call inherit-product, vendor/guesthouse/guesthouse.mk)

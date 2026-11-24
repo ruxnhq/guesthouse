@@ -1,0 +1,19 @@
+diff --git a/bootmgr/grub/grub-boot.cfg b/bootmgr/grub/grub-boot.cfg
+index cb7c97b..2d87fcc 100644
+--- a/bootmgr/grub/grub-boot.cfg
++++ b/bootmgr/grub/grub-boot.cfg
+@@ -18,6 +18,14 @@ function set_kernel_cmdline_dynamic_device_specific {
+ 	else
+ 		set kernel_cmdline_dynamic_device_specific="${kernel_cmdline_dynamic_device_specific} androidboot.console=hvc0 androidboot.seriallogging=hvc1 console=@LINUX_SERIAL_DEVICE@"
+ 	fi
++
++	# Guesthouse passes the machine's choices as words in the SMBIOS SKU (offset 0x19 of type 1).
++	insmod smbios
++	insmod regexp
++	smbios --type 1 --get-string 0x19 --set guesthouse_choices
++	if regexp microg "$guesthouse_choices"; then
++		set kernel_cmdline_dynamic_device_specific="${kernel_cmdline_dynamic_device_specific} androidboot.guesthouse.microg=1"
++	fi
+ }
+ 
+ submenu 'Advanced options' --class format-list-bulleted --id advancedoptions-virtio_common {

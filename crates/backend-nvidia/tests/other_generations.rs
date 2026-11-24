@@ -706,9 +706,9 @@ fn a_chip_with_an_sm_version_nobody_has_reported_is_refused() {
 }
 
 #[test]
-fn these_generations_have_not_been_run_with_any_guest_branch() {
+fn of_these_generations_only_ampere_has_been_run_and_with_one_guest_branch() {
     assert!(ADA.run_on_guest_branches.is_empty());
-    assert!(AMPERE.run_on_guest_branches.is_empty());
+    assert_eq!(AMPERE.run_on_guest_branches, ["617"]);
     assert!(TURING.run_on_guest_branches.is_empty());
 }
 

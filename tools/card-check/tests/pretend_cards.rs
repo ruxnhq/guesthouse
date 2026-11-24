@@ -143,11 +143,15 @@ fn the_pretend_cards_are_read_as_the_tables_say() {
 }
 
 #[test]
-fn ada_and_turing_are_experimental_and_have_never_run() {
+fn the_pretend_cards_are_experimental_and_of_their_generations_only_ampere_has_run() {
     for expected in &CARDS {
         let findings = findings_on(expected.card);
-        let wanted = Verdict::Experimental { generation: expected.generation.name, ever_run: false };
+        let ever_run = expected.generation == &AMPERE;
+        let wanted = Verdict::Experimental { generation: expected.generation.name, ever_run };
         assert_eq!(findings.verdict, wanted);
+        let text = card_lines(0, &findings);
+        let said = text.contains(&format!("{} has run a guest, but this card has not.", AMPERE.name));
+        assert_eq!(said, ever_run, "{text}");
     }
 }
 

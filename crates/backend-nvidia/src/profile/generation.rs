@@ -320,7 +320,7 @@ pub const AMPERE: Generation = Generation {
     },
     depth_kinds: DepthKinds::Always,
     page_kinds: PageKinds::InEntries,
-    run_on_guest_branches: &[],
+    run_on_guest_branches: &["617"],
 };
 
 /// Turing, the 20 and 16 series. Experimental. Each SM version needs its own row in `shader_sets`, so

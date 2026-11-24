@@ -777,6 +777,7 @@ fn the_transforms_script_goes_to_the_guest_and_only_a_change_is_logged() {
         "kept 12 values of 2 transforms\r\n",
         "nothing to register: the INF names no transforms\r\n",
         "skipped a line that can't be read: HKCR,one\r\nregistered 11 of 11 values of 2 transforms, failed 0\r\n",
+        "left HKLM\\a\\key Name as it is set\r\nregistered 0 of 12, failed 0, left 1 of the switch's as set\r\n",
     ];
     let agent = Arc::new(ScriptedAgent::answering(&answers));
     context.agent = agent.clone();
@@ -789,9 +790,14 @@ fn the_transforms_script_goes_to_the_guest_and_only_a_change_is_logged() {
     let log = crate::log::read_log(&context);
     assert!(log.contains("media transforms: skipped a line that can't be read: HKCR,one"), "{log}");
     assert!(log.contains("registered 11 of 11 values of 2 transforms"), "{log}");
+    assert!(!log.contains("the switch's"), "{log}");
+    register_media_transforms(&mut task).unwrap();
+    let log = crate::log::read_log(&context);
+    assert!(log.contains("media transforms: left HKLM\\a\\key Name as it is set"), "{log}");
+    assert!(log.contains("failed 0, left 1 of the switch's as set"), "{log}");
     assert_eq!(task.error, "", "a guest without them is as it was");
     let asked = agent.requests.lock().unwrap();
-    assert_eq!(asked.len(), 3);
+    assert_eq!(asked.len(), 4);
     assert_eq!(asked[0].2, "$card = '2B85'\nregister the transforms", "setup's card, as the INF writes it");
 }
 

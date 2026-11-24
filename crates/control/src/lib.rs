@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
+/// The Windows host's version: the service's, the app's and the installer's, from
+/// `windows/version.txt`. It's a line of its own, apart from the Linux host's in the workspace's
+/// `Cargo.toml`, so each host is released when it has something new.
+pub const WINDOWS_VERSION: &str = include_str!("../../../windows/version.txt");
+
 /// The service's pipe, which only the system, administrators and the signed-in user may open.
 pub const PIPE: &str = r"\\.\pipe\guesthouse";
 /// The longest request the service reads. Requests are short, and a longer one isn't from the app.
@@ -253,6 +258,13 @@ mod tests {
             "memory_mb": 8192, "processors": 4, "card": null, "address": null});
         let machine: Machine = serde_json::from_value(older).unwrap();
         assert_eq!((machine.chosen_card, machine.nvapi_wrapper), (Card::Default, true));
+    }
+
+    #[test]
+    fn the_windows_version_is_three_numbers_and_nothing_else() {
+        let parts: Vec<&str> = WINDOWS_VERSION.split('.').collect();
+        assert_eq!(parts.len(), 3, "{WINDOWS_VERSION:?}");
+        assert!(parts.iter().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())));
     }
 
     #[test]

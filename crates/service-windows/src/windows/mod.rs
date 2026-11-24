@@ -180,7 +180,7 @@ pub(crate) fn start(asked: Option<PathBuf>) -> Result<Arc<Service<HostWork>>, St
     let root = std::path::absolute(&root).map_err(|error| format!("{}: {error}", root.display()))?;
     folder::secure(&root, own_parent)?;
     let _ = LOG.set(log_path(&root, own_parent));
-    log(&format!("The service starts, version {}.", env!("CARGO_PKG_VERSION")));
+    log(&format!("The service starts, version {}.", guesthouse_control::WINDOWS_VERSION));
     let service = Service::new(Store::new(root), HostWork);
     pipe::listen(PIPE, Arc::clone(&service))?;
     Ok(service)

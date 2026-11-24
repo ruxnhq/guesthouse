@@ -29,7 +29,7 @@
 # 5. builds the installer (crates\installer-windows) and packs the Windows App Runtime its pages
 #    need and the payload into it (guesthouse-setup --pack): the runtime is the same as the
 #    app's and is carried once. It's the out folder's guesthouse-setup-VERSION.exe (VERSION is
-#    the workspace's, from Cargo.toml, unless -Version says otherwise), with
+#    the Windows host's, from windows\version.txt, unless -Version says otherwise), with
 #    guesthouse-setup-VERSION.exe.sha256 beside it ("<hex>  <file>"): the two files to publish.
 # -Payload FOLDER packs that folder as the payload instead of steps 1 to 4 (it must have setup.ps1).
 # docs/windows-host.md says how to try the result.
@@ -40,8 +40,8 @@ $root = Split-Path $PSScriptRoot
 if (-not $Out) { $Out = Join-Path $root 'target\installer' }
 New-Item -ItemType Directory -Force $Out | Out-Null
 if (-not $Version) {
-    $line = Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
-    $Version = $line.Matches[0].Groups[1].Value
+    # The Windows host's own version line, apart from the Linux host's in Cargo.toml.
+    $Version = (Get-Content -Raw -LiteralPath (Join-Path $root 'windows\version.txt')).Trim()
 }
 $unpinnedWarning = "-RemotemanUnpinned: remoteman's files are NOT checked against windows\remoteman.json. Only for trying a local build of remoteman; never hand this installer to anyone."
 if ($RemotemanUnpinned -and -not $NoScreen) {

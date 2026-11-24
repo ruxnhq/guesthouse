@@ -169,7 +169,7 @@ impl<W: Work> Service<W> {
                 }
             })
             .collect();
-        Answer::Status { version: env!("CARGO_PKG_VERSION").into(), machines, cards }
+        Answer::Status { version: guesthouse_control::WINDOWS_VERSION.into(), machines, cards }
     }
 
     /// Why a machine can't be given `memory_mb` and `processors`, if it can't.

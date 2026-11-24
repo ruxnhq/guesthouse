@@ -1,9 +1,9 @@
 //! Step two: NVIDIA's driver for the guest, from the user's own copy of the installer.
 
 use super::done_page::done_page;
-use super::{Step, Wizard};
+use super::{Step, Wizard, check_row};
 use crate::common::{choose_file, in_background};
-use crate::rows::{row_button, state_row};
+use crate::rows::{info_button, row_button};
 use adw::prelude::*;
 use gtk::glib;
 use guesthouse_app_core::settings::driver_folder;
@@ -37,27 +37,30 @@ pub struct DriverPage(Rc<Parts>);
 
 impl DriverPage {
     pub fn new(wizard: &Rc<Wizard>) -> Self {
-        let step = Step::new("NVIDIA Driver", "driver", 2);
+        let step = Step::new("NVIDIA Driver", "driver", 2, None);
         let setup_folder = wizard.window.context().paths.setup_folder();
         let group = adw::PreferencesGroup::builder()
             .description(format!(
-                "The guest runs NVIDIA's own driver for Windows, version {WINDOWS_DRIVER}. Download that version \
-                 from NVIDIA, then choose its installer. It does not run here: Guesthouse only copies its \
-                 driver files to {}.",
-                setup_folder.display()
+                "Download NVIDIA's Windows driver {WINDOWS_DRIVER}, then choose its installer."
             ))
             .build();
+        group.set_header_suffix(Some(&info_button(&format!(
+            "The guest runs NVIDIA's own driver for Windows, version {WINDOWS_DRIVER}. Download that version \
+             from NVIDIA, then choose its installer. It does not run here: Guesthouse only copies its driver \
+             files to {}.",
+            setup_folder.display()
+        ))));
         step.content.add(&group);
         let file_row = adw::ActionRow::builder()
-            .title("Driver installer")
-            .subtitle("Choose the .exe file.")
+            .title("Driver Installer")
+            .subtitle("The .exe file from NVIDIA")
             .use_markup(false)
             .build();
         let choose = row_button("Choose");
         file_row.add_suffix(&choose);
         group.add(&file_row);
         let progress_row =
-            adw::ActionRow::builder().title("Copying the driver's files").visible(false).build();
+            adw::ActionRow::builder().title("Copying the Driver's Files").visible(false).build();
         let bar = gtk::ProgressBar::builder().valign(gtk::Align::Center).width_request(BAR_WIDTH).build();
         progress_row.add_suffix(&bar);
         let stop = row_button("Stop");
@@ -91,7 +94,7 @@ impl DriverPage {
 
     fn show_verdict(&self, state: CheckState, title: &str, text: &str) {
         self.clear_verdict();
-        let row = state_row(title, state, text, "");
+        let row = check_row(title, state, text, "");
         self.0.group.add(&row);
         *self.0.verdict.borrow_mut() = Some(row);
     }
@@ -147,7 +150,7 @@ impl DriverPage {
         parts.choose.set_sensitive(false);
         parts.step.next.set_sensitive(false);
         self.clear_verdict();
-        parts.progress_row.set_title("Reading the installer");
+        parts.progress_row.set_title("Reading the Installer");
         parts.progress_row.set_visible(true);
         parts.bar.set_fraction(0.0);
         let extraction = Arc::new(Extraction::new(&path));
@@ -157,7 +160,7 @@ impl DriverPage {
         let row = parts.progress_row.clone();
         glib::spawn_future_local(async move {
             while let Ok(percent) = percentages.recv().await {
-                row.set_title("Copying the driver's files");
+                row.set_title("Copying the Driver's Files");
                 bar.set_fraction(f64::from(percent) / 100.0);
             }
         });
@@ -182,7 +185,7 @@ impl DriverPage {
                         let text = format!("The files are in {}.", folder.display());
                         this.use_files(&text);
                     }
-                    Err(text) => this.show_verdict(CheckState::Failed, &text, ""),
+                    Err(text) => this.show_verdict(CheckState::Failed, "Driver Files Not Copied", &text),
                 }
             },
         );

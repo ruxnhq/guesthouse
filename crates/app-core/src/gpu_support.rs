@@ -204,7 +204,9 @@ mod tests {
         let scratch = Scratch::new();
         let mut context = scratch_context(&scratch);
         context.paths.qemu = scratch.path("bin/qemu");
-        assert!(what_machines_are(&context).starts_with("A machine can be Windows with this PC's GPU, Android"));
+        assert!(
+            what_machines_are(&context).starts_with("A machine can be Windows with this PC's GPU, Android")
+        );
         scratch.write("bin/nvfwd-sensord", "");
         fs::create_dir_all(guest_sources(&context).join(SEED_FOLDER)).unwrap();
         assert!(what_machines_are(&context).contains("Windows or Ubuntu with this PC's GPU"));

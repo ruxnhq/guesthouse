@@ -18,7 +18,7 @@ pub fn done_page(wizard: &Rc<Wizard>) -> adw::NavigationPage {
     let status = message_page(
         APP_ID,
         "Guesthouse Is Ready",
-        "All that is left is a Windows 11 ISO, or an Ubuntu server ISO.",
+        "Make your first machine, with Windows, Ubuntu, Android or another system.",
         &button,
     );
     let toolbar = adw::ToolbarView::new();

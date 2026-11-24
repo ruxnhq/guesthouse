@@ -28,6 +28,9 @@ fn plan(context: &Context, machine: &Machine) -> Result<VmPlan> {
              Turn Throwaway off to run it this way."
         )));
     }
+    if machine.android() {
+        return crate::actions::android::plan(context, machine);
+    }
     let boot = match machine.kind {
         Kind::Windows if machine.installing => {
             return Err(Failure(format!(

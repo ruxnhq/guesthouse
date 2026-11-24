@@ -4,7 +4,7 @@
 mod amd_files;
 mod amd_package;
 mod amd_start;
-mod android;
+pub mod android;
 mod api_stage;
 pub(crate) mod copy_identity;
 mod desktop;

@@ -11,7 +11,7 @@ use crate::linux::card::forwarded_card;
 use crate::machine::Machine;
 use crate::render_cards::render_cards;
 use crate::start_checks::start_problems;
-use crate::vm_args::{AndroidBoot, AndroidCard, Boot};
+use crate::vm_args::{AndroidBoot, AndroidCard, Boot, VmPlan};
 use crate::vm_host::sound_on_this_host;
 use std::fs;
 use std::path::PathBuf;
@@ -63,13 +63,18 @@ fn boot_of(context: &Context, machine: &Machine, card: AndroidCard) -> Result<An
     Ok(AndroidBoot { data, card, cache, play: machine.android_play })
 }
 
+/// How an Android machine starts on this PC's card, before the jail and sound are chosen.
+pub fn plan(context: &Context, machine: &Machine) -> Result<VmPlan> {
+    let card = card_of(context, machine)?;
+    let boot = boot_of(context, machine, card)?;
+    Ok(plan_for(context, machine, Boot::Android(boot)))
+}
+
 pub fn start(task: &mut Task) -> Result<()> {
     if let Some(problem) = start_problems(task.context, &task.machine)?.into_iter().next() {
         return Err(Failure(problem));
     }
-    let card = card_of(task.context, &task.machine)?;
-    let boot = boot_of(task.context, &task.machine, card)?;
-    let mut plan = plan_for(task.context, &task.machine, Boot::Android(boot));
+    let mut plan = plan(task.context, &task.machine)?;
     // Before the jail is chosen, which lets a QEMU with sound reach PipeWire's socket.
     plan.sound = if task.machine.sound { sound_on_this_host() } else { None };
     let choice = choose(task.context, &task.machine, &plan, &(task.context.jail_offer)(&plan))?;

@@ -7,6 +7,7 @@
 mod capture;
 mod capture_state;
 mod clipboard;
+mod crop;
 mod cursor_layer;
 mod dbus_frames;
 mod display_attach;

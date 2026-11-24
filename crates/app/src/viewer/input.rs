@@ -12,6 +12,12 @@ const X11_KEY_OFFSET: u32 = 8;
 const BUTTON_BACK: u32 = 8;
 const BUTTON_FORWARD: u32 = 9;
 
+/// A place along the picture, `size` long, as the tablet's value for it. The tablet spans the guest's
+/// whole screen, as the picture does.
+pub(super) fn tablet_axis(value: f64, size: i32) -> i64 {
+    (value * TABLET_RANGE as f64 / f64::from(size.max(1))) as i64
+}
+
 /// QEMU's name for a button, by GDK's number for it.
 pub(super) fn button_name(number: u32) -> Option<&'static str> {
     match number {
@@ -87,8 +93,7 @@ impl Screen {
             return;
         }
         let picture = &self.0.picture;
-        let scaled = |value: f64, size: i32| (value * TABLET_RANGE as f64 / f64::from(size.max(1))) as i64;
-        let position = (scaled(x, picture.width()), scaled(y, picture.height()));
+        let position = (tablet_axis(x, picture.width()), tablet_axis(y, picture.height()));
         // GTK repeats the last position every time it redraws.
         if self.0.pointer.get() != Some(position)
             && let Some(guest) = self.0.guest.borrow_mut().as_mut()

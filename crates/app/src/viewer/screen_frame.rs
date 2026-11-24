@@ -6,6 +6,7 @@
 //! on multiples of q logical pixels: 2 at 1.5, 4 at 1.25, 20 at 1.45. So the picture's size and place
 //! go in steps of q, and at a scale like 1.45 a thin black border is the price.
 
+use super::crop::{Crop, picture_place};
 use gtk::glib;
 use gtk::graphene;
 use gtk::gsk;
@@ -131,6 +132,21 @@ mod imp {
         pub watching: RefCell<Option<(gtk::gdk::FrameClock, glib::SignalHandlerId)>>,
         /// Where the picture was put, for the bars beside it.
         pub picture_at: Cell<Placement>,
+        /// The guest's frame's size, once one has come.
+        pub frame: Cell<Option<(i32, i32)>>,
+        /// Lab only: the rectangle of the frame that is all there is to see.
+        pub crop: Cell<Option<Crop>>,
+    }
+
+    impl ScreenFrame {
+        /// The rectangle as it is on the frame shown now. Until a frame comes it's as it was asked for.
+        pub fn shown_crop(&self) -> Option<Crop> {
+            let crop = self.crop.get()?;
+            match self.frame.get() {
+                Some(frame) => crop.within(frame),
+                None => Some(crop),
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -150,6 +166,11 @@ mod imp {
 
     impl WidgetImpl for ScreenFrame {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            // A rectangle is shown at its own size, and the window is made to fit it.
+            if let Some(crop) = self.shown_crop() {
+                let side = if orientation == gtk::Orientation::Horizontal { crop.width } else { crop.height };
+                return (side, side, -1, -1);
+            }
             // It shrinks to anything, as the picture inside it can.
             match self.child.upgrade() {
                 Some(child) => {
@@ -165,7 +186,11 @@ mod imp {
             let widget = self.obj();
             let (scale, origin) = surface_place(widget.upcast_ref());
             self.laid_out_at.set((scale, origin));
-            let placed = place(width, height, self.ratio.get(), scale, origin);
+            let cropped = self.shown_crop().zip(self.frame.get());
+            let placed = match cropped {
+                Some((crop, frame)) => picture_place(crop, frame, (width, height)),
+                None => place(width, height, self.ratio.get(), scale, origin),
+            };
             let transform = gsk::Transform::new().translate(&graphene::Point::new(placed.x, placed.y));
             child.allocate(placed.width, placed.height, -1, Some(transform));
             self.picture_at.set(placed);
@@ -247,10 +272,34 @@ impl ScreenFrame {
         frame
     }
 
-    pub fn set_ratio(&self, ratio: f64) {
-        if (self.imp().ratio.replace(ratio) - ratio).abs() > f64::EPSILON {
+    /// The size of the guest's frame now shown.
+    pub fn set_frame(&self, width: i32, height: i32) {
+        let imp = self.imp();
+        let size = (width, height);
+        if imp.frame.replace(Some(size)) == Some(size) {
+            return;
+        }
+        imp.ratio.set(f64::from(width) / f64::from(height.max(1)));
+        // A rectangle partly off a frame of the new size takes another size in the window.
+        if imp.crop.get().is_some() {
+            self.queue_resize();
+        } else {
             self.queue_allocate();
         }
+    }
+
+    /// Lab only: shows just this rectangle of the guest's frame, or the whole frame again with `None`.
+    /// What lies outside it is clipped away, drawing and the pointer both.
+    pub fn set_crop(&self, crop: Option<Crop>) {
+        if self.imp().crop.replace(crop) != crop {
+            self.set_overflow(if crop.is_some() { gtk::Overflow::Hidden } else { gtk::Overflow::Visible });
+            self.queue_resize();
+        }
+    }
+
+    /// The rectangle in view, as it is on the frame now shown.
+    pub fn shown_crop(&self) -> Option<Crop> {
+        self.imp().shown_crop()
     }
 }
 

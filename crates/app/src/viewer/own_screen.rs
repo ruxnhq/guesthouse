@@ -229,7 +229,7 @@ impl Screen {
         // A newer frame takes the place of one still waiting to move over.
         self.0.handover.borrow_mut().take();
         let (width, height) = (frame.descriptor.width, frame.descriptor.height);
-        self.0.aspect.set_ratio(f64::from(width) / f64::from(height));
+        self.0.aspect.set_frame(width as i32, height as i32);
         self.0.spinner.set_visible(false);
         self.0.booting.set(false);
         self.0.qemu.borrow_mut().take();

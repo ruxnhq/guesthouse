@@ -452,7 +452,7 @@ impl Screen {
 
     fn show(&self, texture: gdk::Texture) {
         self.0.picture.set_paintable(Some(&texture));
-        self.0.aspect.set_ratio(f64::from(texture.width()) / f64::from(texture.height()));
+        self.0.aspect.set_frame(texture.width(), texture.height());
         self.0.spinner.set_visible(false);
         // One that takes the place of a frame still waiting to be drawn isn't one more on screen.
         if !self.0.waiting.replace(true) {

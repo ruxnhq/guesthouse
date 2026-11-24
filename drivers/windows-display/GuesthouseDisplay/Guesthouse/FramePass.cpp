@@ -15,15 +15,9 @@ namespace Guesthouse
 namespace
 {
 
-constexpr UINT GroupSize = 8; // numthreads in the shader.
 constexpr UINT CursorSide = 256; // The largest cursor the shared export takes.
 constexpr UINT CursorBytesPerPixel = 4;
 constexpr UINT WordBytes = 4;
-
-UINT GroupsFor(UINT pixels)
-{
-	return (pixels + GroupSize - 1) / GroupSize;
-}
 
 }
 
@@ -210,15 +204,6 @@ HRESULT FramePass::Run(ID3D11Texture2D* surface, std::uint32_t slot, const PassC
 		return hr;
 	}
 
-	D3D11_MAPPED_SUBRESOURCE mapped = {};
-	hr = m_Context->Map(m_Constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-	if (FAILED(hr))
-	{
-		return hr;
-	}
-	std::memcpy(mapped.pData, &constants, sizeof(constants));
-	m_Context->Unmap(m_Constants.Get(), 0);
-
 	ID3D11ShaderResourceView* views[] = {source.Get(), m_CursorView.Get(), m_LutView.Get()};
 	ID3D11UnorderedAccessView* target = m_SlotViews[slot].Get();
 	ID3D11Buffer* buffers[] = {m_Constants.Get()};
@@ -227,7 +212,34 @@ HRESULT FramePass::Run(ID3D11Texture2D* surface, std::uint32_t slot, const PassC
 	m_Context->CSSetConstantBuffers(0, 1, buffers);
 	m_Context->CSSetShaderResources(0, 3, views);
 	m_Context->CSSetUnorderedAccessViews(0, 1, &target, nullptr);
-	m_Context->Dispatch(GroupsFor(constants.width), GroupsFor(constants.height), 1);
+
+	PassConstants frame = constants;
+	frame.copyRows = 0;
+	frame.originX = 0;
+	frame.originY = 0;
+	if (constants.unchanged == 0 || m_CopyRows == 0)
+	{
+		hr = Dispatch(frame, NormalGroups(constants.width, constants.height));
+	}
+	else
+	{
+		// A frame with no colour work: the copy layout over the whole frame, then the normal layout over the cursor, which
+		// overwrites its rectangle. D3D11 keeps the two dispatches in order on the slot.
+		frame.copyRows = m_CopyRows;
+		hr = Dispatch(frame, CopyGroups(constants.width, constants.height, m_CopyRows));
+
+		const PassArea area = constants.cursorEnabled
+		                          ? CursorArea(constants.cursorX, constants.cursorY, constants.cursorWidth,
+		                                       constants.cursorHeight, constants.width, constants.height)
+		                          : PassArea{};
+		if (SUCCEEDED(hr) && area.width != 0)
+		{
+			frame.copyRows = 0;
+			frame.originX = area.left;
+			frame.originY = area.top;
+			hr = Dispatch(frame, NormalGroups(area.width, area.height));
+		}
+	}
 
 	// Unbinding keeps Windows' surface free of any hold of ours once it goes back.
 	ID3D11ShaderResourceView* noViews[] = {nullptr, nullptr, nullptr};
@@ -236,6 +248,21 @@ HRESULT FramePass::Run(ID3D11Texture2D* surface, std::uint32_t slot, const PassC
 	m_Context->CSSetUnorderedAccessViews(0, 1, &noTarget, nullptr);
 
 	m_Context->Flush();
+	return hr;
+}
+
+HRESULT FramePass::Dispatch(const PassConstants& constants, PassGroups groups)
+{
+	D3D11_MAPPED_SUBRESOURCE mapped = {};
+	const HRESULT hr = m_Context->Map(m_Constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+	if (FAILED(hr))
+	{
+		return hr;
+	}
+	std::memcpy(mapped.pData, &constants, sizeof(constants));
+	m_Context->Unmap(m_Constants.Get(), 0);
+
+	m_Context->Dispatch(groups.x, groups.y, 1);
 	return S_OK;
 }
 

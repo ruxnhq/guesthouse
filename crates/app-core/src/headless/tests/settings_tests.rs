@@ -223,6 +223,32 @@ fn show_lists_what_the_kind_of_machine_has() {
 }
 
 #[test]
+fn show_says_the_display_driver_and_the_vendor_id_of_a_gpu_machine() {
+    use crate::display::{DisplayState, Driver};
+    use crate::gpu_identity::{IdentityState, Shown};
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    let win = make(&context, "win", "Win", Kind::Windows);
+    let plain = said(&context, "show work").0;
+    assert!(!plain.contains("display-driver") && !plain.contains("vendor-id"), "{plain}");
+    let fresh = said(&context, "show win").0;
+    assert!(fresh.contains("display-driver none in this build\n"), "{fresh}");
+    assert!(fresh.contains("vendor-id 1414:008e, Microsoft's\n"), "{fresh}");
+    let display = DisplayState { driver: Driver::Installed, ..DisplayState::default() };
+    crate::display::write_state(&context, &win, &display).unwrap();
+    let identity = IdentityState { shown: Shown::Maker, restart_due: true, ..IdentityState::default() };
+    crate::gpu_identity::write_state(&context, &win, &identity).unwrap();
+    let moved = said(&context, "show win").0;
+    assert!(moved.contains("display-driver in Windows\n"), "{moved}");
+    assert!(moved.contains("vendor-id 10de:2bfe, NVIDIA's, and Windows restarts once on it\n"), "{moved}");
+    let failed = DisplayState { driver: Driver::Failed, reason: "It sent no picture.".into(), ..display };
+    crate::display::write_state(&context, &win, &failed).unwrap();
+    let said_now = said(&context, "show win").0;
+    assert!(said_now.contains("display-driver taken out, as it failed: It sent no picture.\n"), "{said_now}");
+}
+
+#[test]
 fn a_machine_can_be_let_start_without_a_jail_and_says_so() {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);

@@ -1155,15 +1155,17 @@ mod tests {
     fn a_registry_value_the_backend_gives_is_named_and_one_it_has_not_is_left_to_the_core() {
         use guesthouse_messages::registry::TYPE_STRING;
         let vulkan = RegistryName::Value("vulkandrivername".into());
-        let given = crate::registry_answer(&vulkan, "card");
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&vulkan, "card"), given));
+        let given = crate::registry_answer(&vulkan, "card", TYPE_STRING, true);
+        let lines =
+            lines::logged(|| assert_eq!(crate::registry_answer(&vulkan, "card", TYPE_STRING, true), given));
         let bytes = given.expect("the backend has this value").bytes.len();
         let line = format!("amd registry name=\"vulkandrivername\" type={TYPE_STRING} bytes={bytes}");
         assert_eq!(lines, [(Level::Debug, line)]);
 
         let store = RegistryName::DriverStorePath;
-        let given = crate::registry_answer(&store, "card");
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&store, "card"), given));
+        let given = crate::registry_answer(&store, "card", TYPE_STRING, true);
+        let lines =
+            lines::logged(|| assert_eq!(crate::registry_answer(&store, "card", TYPE_STRING, true), given));
         let bytes = given.expect("the backend has this path").bytes.len();
         assert_eq!(
             lines,
@@ -1171,8 +1173,29 @@ mod tests {
         );
 
         let unknown = RegistryName::Value("opencldrivername".into());
-        let lines = lines::logged(|| assert_eq!(crate::registry_answer(&unknown, "card"), None));
+        let lines =
+            lines::logged(|| assert_eq!(crate::registry_answer(&unknown, "card", TYPE_STRING, true), None));
         assert!(lines.is_empty(), "{lines:?}");
+    }
+
+    #[test]
+    fn the_gl_present_setting_is_named_with_the_type_asked_and_not_given_with_copies_kept() {
+        use guesthouse_messages::registry::{TYPE_BINARY, TYPE_NUMBER, TYPE_STRING};
+        let triple = RegistryName::Value("umd\\enabletriplebuffering".into());
+        for (asked, bytes) in [(TYPE_BINARY, 4), (TYPE_STRING, 4), (TYPE_NUMBER, 4)] {
+            let lines = lines::logged(|| {
+                let value = crate::registry_answer(&triple, "card", asked, true).expect("given");
+                assert_eq!(value.value_type, Some(asked));
+            });
+            let line = format!("amd registry name=\"umd\\enabletriplebuffering\" type={asked} bytes={bytes}");
+            assert_eq!(lines, [(Level::Debug, line)]);
+        }
+        let lines =
+            lines::logged(|| assert_eq!(crate::registry_answer(&triple, "card", TYPE_BINARY, false), None));
+        assert!(lines.is_empty(), "{lines:?}");
+        // The copies kept change nothing else.
+        let vulkan = RegistryName::Value("vulkandrivername".into());
+        assert!(crate::registry_answer(&vulkan, "card", TYPE_STRING, false).is_some());
     }
 
     /// A context's header, with its size, its flags, its session flags and its client id.

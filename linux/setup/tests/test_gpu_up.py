@@ -41,6 +41,19 @@ class Guest:
         self.script("driver-version.py", f"echo {V}")
         for program in ("cudavec", "vkcompute"):
             self.program(program, "echo checked 16 values, 0 wrong")
+        # dpkg as it would be with nothing of NVIDIA's installed. `ours`, `distro` and `extras` in the root
+        # say what it has: the version of our package, the distro's NVIDIA libraries, one a line, and
+        # what came with them.
+        self.fake("dpkg-query", """case "$*" in
+*libnvidia-compute*) [ ! -e "$NVFWD_ROOT/distro" ] || sed 's/^/ii |/' "$NVFWD_ROOT/distro" ;;
+*nvidia-kernel-common*) [ ! -e "$NVFWD_ROOT/extras" ] || sed 's/^/ii |/' "$NVFWD_ROOT/extras" ;;
+*) [ ! -e "$NVFWD_ROOT/ours" ] || echo "ii |$(cat "$NVFWD_ROOT/ours")" ;;
+esac""")
+        self.fake("dpkg-deb", 'cp "$3/DEBIAN/control" "$NVFWD_ROOT/control"; touch "$4"')
+        self.fake("dpkg", """case $1 in
+--print-architecture) echo amd64 ;;
+-i) sed -n 's/^Version: //p' "$NVFWD_ROOT/control" > "$NVFWD_ROOT/ours" ;;
+esac""")
 
     def fake(self, name, body):
         write(os.path.join(self.bin, name), f'#!/bin/bash\necho "{name} $*" >> "$CALLS"\n{body}\n', True)
@@ -64,6 +77,11 @@ touch $d/json/egl_external_platform.d/10_nvidia_wayland.json""")
 
     def add_layers(self):
         write(os.path.join(self.root, "opt/nv/layer/VkLayer_zink_on_nvidia.json"), "{}")
+
+    def run_script(self, name, *arguments):
+        environment = dict(os.environ, NVFWD_ROOT=self.root, CALLS=self.calls, PATH=f"{self.bin}:{os.environ['PATH']}")
+        return subprocess.run(["bash", os.path.join(self.scripts, name), *arguments], env=environment,
+                              capture_output=True, text=True)
 
     def run(self):
         environment = dict(os.environ, NVFWD_ROOT=self.root, CALLS=self.calls, PATH=f"{self.bin}:{os.environ['PATH']}")
@@ -185,6 +203,75 @@ class GpuUp(unittest.TestCase):
             self.assertIn(name, links)
         with open(os.path.join(self.guest.root, "etc/ld.so.conf.d/00-nvfwd.conf")) as f:
             self.assertIn("/opt/nv/driver/lib", f.read())
+
+    def read(self, name):
+        with open(os.path.join(self.guest.root, name)) as f:
+            return f.read()
+
+    def test_apt_is_told_the_hosts_driver_is_installed(self):
+        self.guest.add_device()
+        self.guest.run()
+        self.assertEqual(self.read("ours").strip(), V)
+        control = self.read("control")
+        for provided in (f"libcuda.so.1 (= {V})", f"libnvidia-ml.so.1 (= {V})", "nvidia-opencl-icd"):
+            self.assertIn(provided, control)
+        self.assertIn("Package: nvfwd-host-driver\n", control)
+
+    def test_the_driver_package_changes_only_with_the_driver(self):
+        self.guest.add_device()
+        self.guest.run()
+        self.guest.run()
+        self.assertEqual(self.guest.called("dpkg -i"), 1)
+        self.guest.set_image("620.10")
+        self.guest.script("driver-version.py", "echo 620.10")
+        self.guest.run()
+        self.assertEqual(self.guest.called("dpkg -i"), 2)
+        self.assertEqual(self.read("ours").strip(), "620.10")
+
+    def test_the_driver_package_stays_when_the_gpu_goes_off(self):
+        self.guest.add_device()
+        self.guest.fake("modprobe", "exit 1")
+        self.assert_off("would not load")
+        self.assertEqual(self.read("ours").strip(), V)
+
+    def test_the_distros_own_driver_is_left_alone(self):
+        self.guest.add_device()
+        with open(os.path.join(self.guest.root, "distro"), "w") as f:
+            f.write("libnvidia-compute-595\n")
+        result = self.guest.run()
+        self.assertEqual(self.guest.called("dpkg -i"), 0)
+        self.assertIn("libnvidia-compute-595", result.stdout)
+        self.assertEqual(self.guest.state()["gpu"], "on")
+
+    def test_replace_takes_the_distros_driver_away_in_one_apt_call(self):
+        write(os.path.join(self.guest.root, "run/nvfwd/state"), f"gpu=on\nversion={V}\n")
+        write(os.path.join(self.guest.root, "distro"), "libnvidia-compute-595\nlibnvidia-compute-590\n")
+        write(os.path.join(self.guest.root, "extras"), "nvidia-kernel-common-595\n")
+        self.guest.fake("id", "echo 0")
+        self.guest.fake("apt-get", 'grep -q "^Version: ' + V + '$" "$NVFWD_ROOT/control" && test -e "$3"')
+        result = self.guest.run_script("driver-package.sh", "--replace")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with open(self.guest.calls) as f:
+            apt = [line.split() for line in f if line.startswith("apt-get ")]
+        self.assertEqual(len(apt), 1)
+        self.assertEqual(apt[0][1:3], ["install", "--purge"])
+        self.assertTrue(apt[0][3].endswith("/nvfwd-host-driver.deb"))
+        self.assertEqual(apt[0][4:], ["libnvidia-compute-595-", "libnvidia-compute-590-", "nvidia-kernel-common-595-"])
+
+    def test_replace_needs_a_boot_with_the_gpu(self):
+        write(os.path.join(self.guest.root, "run/nvfwd/state"), "gpu=off\nreason=x\n")
+        self.guest.fake("id", "echo 0")
+        result = self.guest.run_script("driver-package.sh", "--replace")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Run it on a boot with the GPU", result.stderr)
+        self.assertEqual(self.guest.called("apt-get"), 0)
+
+    def test_a_busy_dpkg_leaves_the_gpu_on(self):
+        self.guest.add_device()
+        self.guest.fake("dpkg", '[ "$1" = --print-architecture ] && echo amd64 && exit 0; echo "dpkg: error: dpkg frontend lock was locked by another process"; exit 2')
+        result = self.guest.run()
+        self.assertEqual(self.guest.state()["gpu"], "on")
+        self.assertIn("the next one tries again: dpkg: error", result.stdout)
 
     def test_rebuilds_only_when_something_changed(self):
         self.guest.add_device()

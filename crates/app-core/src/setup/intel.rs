@@ -158,6 +158,13 @@ pub fn intel_driver_folder(context: &Context) -> Option<PathBuf> {
     unpacked_folder(context).filter(|folder| folder_problem(folder).is_none())
 }
 
+/// The version of Intel's Windows driver that was unpacked, if it says.
+pub fn intel_driver_version(context: &Context) -> Option<String> {
+    let text = fs::read_to_string(intel_setup_file(context)).ok()?;
+    let setup: Value = serde_json::from_str(&text).ok()?;
+    Some(setup.get(DRIVER_VERSION_FIELD)?.as_str()?.to_owned())
+}
+
 /// Writes down where Intel's driver was unpacked, and its version, for the daemon.
 pub fn write_intel_setup(context: &Context, folder: &Path, version: &str) -> Result<()> {
     let setup = json!({ DRIVER_FOLDER_FIELD: folder, DRIVER_VERSION_FIELD: version });

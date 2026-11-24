@@ -31,7 +31,8 @@ pub const MIN_RAM_GIB: u32 = 4;
 /// The AHCI controller has six ports. The disk and two discs have the first three, and the rest
 /// are for drives.
 pub const MAX_DRIVES: usize = 3;
-const MACHINE_FILE: &str = "machine.json";
+pub const MACHINE_FILE: &str = "machine.json";
+const NETWORK_BY_NAME_FILE: &str = "network-by-name";
 const OTHER_MAKER: &str =
     "Windows here was installed for the card it has now. For a card from another maker, make a new machine.";
 const THUMBNAIL_FILE: &str = "thumbnail.png";
@@ -273,6 +274,16 @@ pub struct Machine {
     /// reims-vgpu's device. Left out of the file when empty, so an older build can still read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub opencore: String,
+    /// A snapshot before a start that changes Windows: see [`crate::auto_snapshot`]. Nothing here is
+    /// what [`crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON`] says, and the user's choice is written.
+    /// Left out of the file until then, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_snapshot: Option<bool>,
+    /// Every start begins from the disk, firmware settings and TPM as they are now, and what a run
+    /// writes to them is gone once it ends: see [`crate::throwaway`]. Left out of the file when off.
+    /// An app from before this setting refuses a file with it, so it can't write to the clean disk.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub throwaway: bool,
 }
 
 impl Machine {
@@ -324,11 +335,19 @@ impl Machine {
             disk_folder: String::new(),
             nvme: false,
             opencore: String::new(),
+            auto_snapshot: None,
+            throwaway: false,
         }
     }
 
     pub fn folder(&self, context: &Context) -> PathBuf {
         context.paths.machines.join(&self.id)
+    }
+
+    /// Written when an Ubuntu install finishes, which finds the network card by its name. A guest from
+    /// before that has its netplan pinned to QEMU's default address, until its scripts have put that right.
+    pub fn network_by_name_marker(&self, context: &Context) -> PathBuf {
+        self.folder(context).join(NETWORK_BY_NAME_FILE)
     }
 
     pub fn tpm_folder(&self, context: &Context) -> PathBuf {
@@ -388,6 +407,11 @@ impl Machine {
     /// Whether an NVIDIA guest gets the NVAPI wrapper in place of NVIDIA's NVAPI.
     pub fn nvapi_wrapper(&self) -> bool {
         !self.nvapi_wrapper_off
+    }
+
+    /// Whether a start of this machine takes a snapshot first when it has a risky change to make.
+    pub fn auto_snapshot_on(&self) -> bool {
+        self.auto_snapshot.unwrap_or(crate::auto_snapshot::AUTO_SNAPSHOT_DEFAULT_ON)
     }
 
     pub fn has_gpu(&self) -> bool {
@@ -467,6 +491,11 @@ impl Machine {
         self.summary_showing(&self.screen_wanted())
     }
 
+    /// The summary with the screen as known, and a word for a throwaway machine.
+    fn with_throwaway(&self, summary: String) -> String {
+        if self.throwaway { format!("{summary}, throwaway") } else { summary }
+    }
+
     /// What sort of guest it is, such as "Windows with GPU-PV", which says nothing of whose it is.
     pub fn kind_name(&self) -> &'static str {
         self.kind.name()
@@ -475,7 +504,7 @@ impl Machine {
     /// The summary, with what's known of the screen.
     pub fn summary_showing(&self, screen: &str) -> String {
         let (kind, cores, ram) = (self.kind.name(), self.cores, self.ram_gib);
-        match self.kind {
+        let summary = match self.kind {
             Kind::Plain if self.macos() => {
                 format!("macOS, {cores} cores, {ram} GiB, {}, GPU preview", self.screen)
             }
@@ -484,7 +513,8 @@ impl Machine {
             Kind::Linux if self.gpu_preview => format!("{kind}, {cores} cores, {ram} GiB, GPU preview"),
             Kind::Linux => format!("{kind}, {cores} cores, {ram} GiB, no GPU"),
             Kind::Windows => format!("{kind}, {cores} cores, {ram} GiB, {screen}"),
-        }
+        };
+        self.with_throwaway(summary)
     }
 
     /// Says what is wrong with these settings, whatever the host. `max_vram_gib` is what the card allows.
@@ -659,7 +689,8 @@ pub fn load(context: &Context, id: &str) -> Result<Machine> {
 pub fn load_all(context: &Context) -> (Vec<Machine>, Vec<String>) {
     let (mut machines, mut errors) = (Vec::new(), Vec::new());
     for name in sorted_names(&context.paths.machines) {
-        if context.paths.machines.join(&name).is_dir() {
+        // A hidden folder is the app's own work in progress, such as a copy not yet whole.
+        if !name.starts_with('.') && context.paths.machines.join(&name).is_dir() {
             match load(context, &name) {
                 Ok(machine) => machines.push(machine),
                 Err(error) => errors.push(error.0),

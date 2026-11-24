@@ -2,12 +2,14 @@
 //! saving machines. The pages it shows are modules of their own.
 
 mod actions;
+mod go_back;
 mod hero;
 mod keys;
 mod library_page;
 mod machine_card;
 mod refresh;
 mod screen_hdr;
+mod share_panel;
 mod start_over;
 mod updates;
 
@@ -232,6 +234,8 @@ impl Window {
     fn load_machines(&self) {
         let context = &self.0.context;
         let problem = import_existing(context).err();
+        // A copy or an import cut short, as by a power cut, left a hidden folder its size.
+        guesthouse_app_core::duplicate::sweep_abandoned(context);
         let (machines, mut errors) = load_all(context);
         for machine in machines {
             self.add_machine(machine);
@@ -302,6 +306,10 @@ impl Window {
     }
 
     pub fn add_machine(&self, machine: Machine) -> MachineHandle {
+        // A look at the library may have found it first.
+        if let Some(card) = self.card(&machine.id) {
+            return card.machine();
+        }
         let id = machine.id.clone();
         let row = MachineCard::new(self, machine);
         let handle = row.machine();
@@ -334,7 +342,7 @@ impl Window {
         );
     }
 
-    fn on_removed(&self, id: &str) {
+    pub(crate) fn on_removed(&self, id: &str) {
         let removed = self.0.cards.borrow_mut().remove(id);
         if let Some(card) = removed {
             self.0.library.remove(card.widget());

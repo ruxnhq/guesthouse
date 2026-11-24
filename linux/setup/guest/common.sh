@@ -21,6 +21,26 @@ own_done_marker=$root/var/lib/nvfwd/own-setup-done
 # Written by Ubuntu's install: the desktop user's name. A guest from before it has the old name.
 account_file=$root/etc/nvfwd/account.conf
 
+# The package of no files that tells dpkg the host's driver is installed: see driver-package.sh.
+driver_package=nvfwd-host-driver
+
+# A package's version if dpkg has it installed, and nothing if not.
+installed_version() {
+    dpkg-query -W -f '${db:Status-Abbrev}|${Version}' "$1" 2>/dev/null | sed -n 's/^ii *|//p'
+}
+
+# The distro's own NVIDIA libraries that are installed, by package, on one line: Ubuntu's and Debian's.
+distro_driver_packages() {
+    dpkg-query -W -f '${db:Status-Abbrev}|${Package}\n' 'libnvidia-compute-*' libcuda1 2>/dev/null |
+        sed -n 's/^ii *|//p' | tr '\n' ' ' | sed 's/ $//'
+}
+
+# What comes with Ubuntu's: the udev rules, services and firmware for a driver of its own.
+distro_driver_extras() {
+    dpkg-query -W -f '${db:Status-Abbrev}|${Package}\n' 'nvidia-kernel-common-*' 'nvidia-firmware-*' 2>/dev/null |
+        sed -n 's/^ii *|//p' | tr '\n' ' ' | sed 's/ $//'
+}
+
 # Reads one key from a file of key=value lines.
 value_of() {
     sed -n "s/^$2=//p" "$1" | head -n 1

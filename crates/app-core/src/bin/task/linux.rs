@@ -17,7 +17,7 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match run_task(&context, &LocalHost { context: &context }, action, machine, rest) {
+    match run_task(&context, &LocalHost::new(&context), action, machine, rest) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

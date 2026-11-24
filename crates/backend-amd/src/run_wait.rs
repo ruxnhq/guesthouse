@@ -110,7 +110,9 @@ mod tests {
         let waited = wait_for_run(&event, SHORT, 0).unwrap();
         late.join().unwrap();
         let Waited::Retired { slow: Some(took) } = waited else { panic!("{waited:?}") };
-        assert!(took >= Duration::from_millis(100));
+        // The thread's sleep starts before the wait's clock does, so the time taken can be a little
+        // under the sleep. What counts is that it was slow and still came back before the hung time.
+        assert!(took >= SHORT.slow && took < SHORT.hung, "{took:?}");
     }
 
     #[test]

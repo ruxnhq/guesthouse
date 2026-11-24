@@ -74,6 +74,7 @@
     <ClInclude Include="Guesthouse\HostLink.h" />
     <ClInclude Include="Guesthouse\KernelEscapeChannel.h" />
     <ClInclude Include="Guesthouse\MonitorColour.h" />
+    <ClInclude Include="Guesthouse\PassGeometry.h" />
     <ClInclude Include="Guesthouse\WireFormat.h" />
     <ClInclude Include="Rendering\Direct3DDevice.h" />
     <ClInclude Include="Rendering\CursorExporter.h" />

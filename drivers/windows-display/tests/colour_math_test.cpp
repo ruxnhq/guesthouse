@@ -140,6 +140,134 @@ static void Out_of_range_never_wraps()
 	CHECK_NEAR(encoded.y, 1.0, 1e-5);
 }
 
+static GammaTransform IdentityTable()
+{
+	GammaTransform transform;
+	transform.lutEnabled = true;
+	transform.lut.resize(GammaLutEntries);
+	for (std::uint32_t entry = 0; entry < GammaLutEntries; ++entry)
+	{
+		const float value = static_cast<float>(entry) / (GammaLutEntries - 1);
+		transform.lut[entry] = {value, value, value, 0.0f};
+	}
+	return transform;
+}
+
+static GammaTransform IdentityMatrix()
+{
+	GammaTransform transform;
+	transform.matrixEnabled = true;
+	transform.matrix[0][0] = transform.matrix[1][1] = transform.matrix[2][2] = 1.0f;
+	return transform;
+}
+
+static void Only_a_transform_that_changes_nothing_is_skipped()
+{
+	CHECK(LeavesPixelsAlone(GammaTransform{}));
+	CHECK(LeavesPixelsAlone(IdentityTable()));
+	CHECK(LeavesPixelsAlone(IdentityMatrix()));
+
+	GammaTransform darker = IdentityTable();
+	darker.lut[2048][1] *= 0.99f;
+	CHECK(!LeavesPixelsAlone(darker));
+
+	GammaTransform brighter = IdentityMatrix();
+	brighter.scalar = 1.1f;
+	CHECK(!LeavesPixelsAlone(brighter));
+
+	GammaTransform offset = IdentityMatrix();
+	offset.matrix[1][3] = 0.01f;
+	CHECK(!LeavesPixelsAlone(offset));
+
+	GammaTransform shortTable;
+	shortTable.lutEnabled = true;
+	CHECK(!LeavesPixelsAlone(shortTable));
+}
+
+// The table lookup of Shaders/FramePass.hlsl, line for line.
+static float LutChannel(const GammaTransform& transform, float encoded, int channel)
+{
+	const float position = saturate(encoded) * (GammaLutEntries - 1);
+	const uint below = static_cast<uint>(position);
+	const uint above = std::min(below + 1, GammaLutEntries - 1);
+	const float low = transform.lut[below][channel];
+	return low + (transform.lut[above][channel] - low) * (position - below);
+}
+
+// The whole pass for an sRGB surface on an SDR wire, as FramePass.hlsl runs it when it doesn't skip the colour work.
+static uint FullPass(const GammaTransform& transform, float3 texel, float sdrWhite)
+{
+	const Rows rows = ComposeToWire(Primaries::Bt709, WireFormat::Sdr, transform);
+	float3 encoded = EncodeWire(WIRE_SDR, Through(rows, DecodeSource(SOURCE_SRGB, texel, sdrWhite)), sdrWhite);
+	if (transform.lutEnabled)
+	{
+		encoded = float3(LutChannel(transform, encoded.x, 0), LutChannel(transform, encoded.y, 1), LutChannel(transform, encoded.z, 2));
+	}
+	return PackXrgb8888(encoded);
+}
+
+// What the skip stores must be what the colour work would have, for every 8-bit pixel, with transforms at the edge of what
+// LeavesPixelsAlone lets through.
+static void Skipping_the_colour_work_gives_the_same_pixels()
+{
+	GammaTransform both = IdentityMatrix();
+	both.lutEnabled = true;
+	both.lut = IdentityTable().lut;
+
+	// Every element just inside the matrix's margin, the way that adds most light, and the table just inside its own.
+	GammaTransform edgeUp = both;
+	GammaTransform edgeDown = both;
+	for (int row = 0; row < 3; ++row)
+	{
+		for (int column = 0; column < 4; ++column)
+		{
+			edgeUp.matrix[row][column] += 0.95e-5f;
+			edgeDown.matrix[row][column] -= row == column ? 0.95e-5f : 0.0f;
+		}
+	}
+	for (auto& entry : edgeUp.lut)
+	{
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			entry[channel] += 0.45f / 1023.0f;
+		}
+	}
+	for (auto& entry : edgeDown.lut)
+	{
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			entry[channel] -= 0.45f / 1023.0f;
+		}
+	}
+
+	const GammaTransform transforms[] = {GammaTransform{}, IdentityTable(), IdentityMatrix(), both, edgeUp, edgeDown};
+	for (const GammaTransform& transform : transforms)
+	{
+		CHECK(LeavesPixelsAlone(transform));
+		for (float sdrWhite : {1.0f, 2.5f})
+		{
+			int wrong = 0;
+			for (uint red = 0; red < 256; ++red)
+			{
+				for (uint green = 0; green < 256; green += 5)
+				{
+					for (uint blue = 0; blue < 256; blue += 3)
+					{
+						// Each channel takes every value somewhere, with the other two spread over their range.
+						const uint values[3][3] = {{red, green, blue}, {blue, red, green}, {green, blue, red}};
+						for (const auto& value : values)
+						{
+							const float3 texel(value[0] / 255.0f, value[1] / 255.0f, value[2] / 255.0f);
+							wrong += FullPass(transform, texel, sdrWhite) != PackXrgb8888(texel);
+						}
+					}
+				}
+			}
+			CHECK(wrong == 0);
+		}
+	}
+}
+
 int main()
 {
 	Sdr_is_bit_exact_through_the_whole_pipeline();
@@ -153,6 +281,8 @@ int main()
 	The_scalar_multiplies_the_matrix_and_its_offset();
 	Channels_land_where_drm_says();
 	Out_of_range_never_wraps();
+	Only_a_transform_that_changes_nothing_is_skipped();
+	Skipping_the_colour_work_gives_the_same_pixels();
 	std::printf("colour_math_test: %d failures\n", failures);
 	return failures != 0;
 }

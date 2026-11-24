@@ -106,6 +106,10 @@ pub struct StandIn {
     /// Copies into a viewer's slots finish at once, even with `slow_copies`.
     pub quick_slot_copies: bool,
     pub copy_done: bool,
+    /// Takes copies before their frame is done, as a card that holds the copy until then does.
+    pub copies_after_work: bool,
+    /// The fences each copy taken that way was held behind.
+    pub copied_after: Vec<Vec<(u64, u64)>>,
     pub work_per_submission: u32,
     pub unfinished_limit: Option<u64>,
     /// How long work may take before its queue is given up, when the core's own time isn't wanted.
@@ -208,6 +212,8 @@ impl StandIn {
             slow_copies: false,
             quick_slot_copies: false,
             copy_done: false,
+            copies_after_work: false,
+            copied_after: Vec::new(),
             work_per_submission: 1,
             unfinished_limit: None,
             work_patience: None,
@@ -524,7 +530,7 @@ impl Backend for StandIn {
         })
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
+    fn registry_value(&mut self, name: &RegistryName, _asked_type: u32) -> Option<RegistryValue> {
         let utf16 = |text: &str| text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
         match name {
             RegistryName::DriverStorePath | RegistryName::DriverImagePath => {
@@ -597,6 +603,22 @@ impl Backend for StandIn {
         self.note_staging_copy(copy);
         self.copies.push(*copy);
         if self.slow_copies { StagingStart::Running } else { StagingStart::Finished(Status::SUCCESS) }
+    }
+
+    fn copy_staging_after(
+        &mut self,
+        _host: &mut dyn HostServices,
+        copy: &StagingCopy,
+        after: &[(u64, u64)],
+        _wait: Duration,
+    ) -> Option<Status> {
+        if !self.copies_after_work {
+            return None;
+        }
+        self.note_staging_copy(copy);
+        self.copies.push(*copy);
+        self.copied_after.push(after.to_vec());
+        Some(Status::SUCCESS)
     }
 
     fn poll_staging_copy(&mut self, _host: &mut dyn HostServices, _now: Instant) -> Option<Status> {

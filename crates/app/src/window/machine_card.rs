@@ -202,10 +202,19 @@ impl MachineCard {
             &status.error,
             &status.display_problem,
             &status.identity_note,
+            &status.token_note,
             &status.jail_note,
             &status.guest_gpu,
         ];
         lines.extend(notes.into_iter().filter(|note| !note.is_empty()).cloned());
+        if let Some(point) = &status.restore_point {
+            let before = if point.automatic {
+                "A snapshot was taken before the last start"
+            } else {
+                "The last start began from the snapshot it had gone back to"
+            };
+            lines.push(format!("{before}: {}. Settings, Storage, Snapshots goes back to it.", point.name));
+        }
         if blocked {
             lines.push(no_slot_text(&self.window.context()));
         }

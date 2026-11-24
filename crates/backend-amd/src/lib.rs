@@ -19,12 +19,14 @@
 // Linux only: it talks to amdgpu through ioctl. Other systems get an empty crate.
 #![cfg(target_os = "linux")]
 
+mod buffer_list;
 mod card_name;
 mod channel_order;
 mod copy_ib;
 mod device;
 mod fault;
 mod fence_ib;
+mod gl_present;
 mod guest_dma;
 mod ib_dump;
 mod info;
@@ -52,6 +54,7 @@ pub use device::{Device, Mapping};
 pub use fence_ib::{
     Stamp, Writer as FenceWriter, stamp_words, words as fence_words, writer_for as fence_writer_for,
 };
+pub use gl_present::VARIABLE as GL_COPY_VARIABLE;
 pub use ib_dump::VARIABLE as IB_DUMP_VARIABLE;
 pub use info::{
     CardDetails, DeviceInfo, EngineSet, Firmware, HW_IP_DMA, HW_IP_GFX, read_device_info, read_gpu_clock,
@@ -63,7 +66,7 @@ pub use memory::{
 };
 pub use share::VARIABLE as GIVE_WAY_VARIABLE;
 pub use share::{RunTimes, Share};
-pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_all, wait_eventfd};
+pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_after, submit_all, wait_eventfd};
 pub use udmabuf::Udmabuf;
 pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
 pub use video_close::{
@@ -131,10 +134,15 @@ pub struct AmdBackend {
     cpu_views: HashMap<GemHandle, Mapping>,
     /// The DMA engine's commands for copies of tiled surfaces, made at the first.
     copy_ib: Option<CopyIb>,
+    /// A copy to the screen that outlasted the wait for it. It uses `copy_ib`, so the next run of
+    /// the daemon's waits for it, and finishes it then.
+    copy_on_card: Option<CopyOnCard>,
     /// How long the next run is waited for, which is less after one that hung.
     patience: Patience,
     /// Whether the guest gives way to the card's other users, see [`share`]. Off unless asked for.
     gives_way: bool,
+    /// OpenGL in a window keeps the blt present and its copies, see [`gl_present`].
+    gl_copies: bool,
     /// Runs the core has had prepared and not yet let go, by the doorbell that sends each.
     prepared: HashMap<u64, PreparedRun>,
     /// Video runs the core has had prepared and not yet let go, by the doorbell that sends each.
@@ -254,8 +262,10 @@ impl AmdBackend {
             spaces: HashMap::new(),
             cpu_views: HashMap::new(),
             copy_ib: None,
+            copy_on_card: None,
             patience: Patience::RUN,
             gives_way: false,
+            gl_copies: false,
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
@@ -290,6 +300,13 @@ impl AmdBackend {
     pub fn give_way(&mut self) {
         log::info!("{GIVE_WAY_VARIABLE} is on: the guest gives way when it sees others waiting for the card");
         self.gives_way = true;
+    }
+
+    /// Keeps OpenGL in a window on the blt present, which the guest copies twice, see
+    /// [`gl_present`]. The daemon calls this when it was started with [`GL_COPY_VARIABLE`] on.
+    pub fn keep_gl_copies(&mut self) {
+        log::info!("{GL_COPY_VARIABLE} is on: OpenGL in a window is copied, not presented through DXGI");
+        self.gl_copies = true;
     }
 
     /// Offers the guest the card's video engine, where it can be: see [`video`]. The daemon calls
@@ -419,15 +436,68 @@ impl AmdBackend {
 
     /// Copies a tiled frame with the DMA engine, which reads tiles as the CPU can't, and waits for it.
     fn copy_with_dma(&mut self, space: SpaceId, plan: &TiledCopy) -> Result<(), String> {
-        let target_start =
-            (u64::from(plan.to.1) * u64::from(plan.linear_pitch) + u64::from(plan.to.0)) * PIXEL_BYTES;
-        let target_bytes =
-            (u64::from(plan.height - 1) * u64::from(plan.linear_pitch) + u64::from(plan.width)) * PIXEL_BYTES;
-        let reaches = [(plan.tiled_address, PIXEL_BYTES), (plan.linear_address + target_start, target_bytes)];
         if self.dma_form().is_none() {
             return Err(DMA_NOT_WRITTEN.into());
         }
-        self.run_dma(space, &reaches, &plan.commands())
+        self.run_dma(space, &tiled_reaches(plan), &plan.commands())
+    }
+
+    /// Copies a tiled frame with the DMA engine once the guest's runs behind `after` are done, which
+    /// the card waits for, and waits for it at most `wait`. `Ok(false)` if it is still on the card
+    /// then: it lands late, and the next run of the daemon's waits for it first. `None` if nothing
+    /// was sent, as when a run to wait for can't be taken in.
+    fn copy_with_dma_after(
+        &mut self,
+        copy: &StagingCopy,
+        plan: &TiledCopy,
+        after: &[OwnedFd],
+        wait: Duration,
+    ) -> Option<Result<bool, String>> {
+        self.dma_form()?;
+        let space = copy.own_space;
+        let ib = self.copy_commands(space, &tiled_reaches(plan), &plan.commands()).ok()?;
+        let space_vm = &mut self.spaces.get_mut(&space)?.vm;
+        let signal = match space_vm.send_after(HW_IP_DMA, &[ib], after) {
+            Ok(space_vm::Sent::OnCard(signal)) => signal,
+            Ok(space_vm::Sent::Refused) => return None,
+            Ok(space_vm::Sent::Stopped(fault)) => return Some(Err(own_work_failed(Ran::Stopped(fault)))),
+            Err(error) => {
+                handover_failed(&error);
+                return None;
+            }
+        };
+        let retired =
+            space_vm.arm(&signal).and_then(|event| submit::wait_eventfd(&event, whole_millis(wait)));
+        match retired {
+            Ok(true) => Some(match space_vm.end_own(signal, true) {
+                Ran::Retired => Ok(true),
+                ran => Err(own_work_failed(ran)),
+            }),
+            Ok(false) => {
+                self.copy_on_card = Some(CopyOnCard { space, signal, copy: *copy });
+                Some(Ok(false))
+            }
+            Err(error) => {
+                self.copy_on_card = Some(CopyOnCard { space, signal, copy: *copy });
+                Some(Err(error.to_string()))
+            }
+        }
+    }
+
+    /// Waits for a copy that [`Self::copy_with_dma_after`] left on the card, as the next run of the
+    /// daemon's may write the same commands' buffer.
+    fn finish_copy_on_card(&mut self) {
+        let Some(CopyOnCard { space, signal, copy }) = self.copy_on_card.take() else { return };
+        let Some(space_vm) = self.spaces.get_mut(&space).map(|space| &mut space.vm) else { return };
+        let waited =
+            space_vm.arm(&signal).and_then(|event| run_wait::wait_for_run(&event, self.patience, HW_IP_DMA));
+        let retired = matches!(waited, Ok(run_wait::Waited::Retired { .. }));
+        let ran = space_vm.end_own(signal, retired);
+        self.note_how_it_ran(&Ok(ran));
+        match ran {
+            Ran::Retired => self.after_copy(&copy),
+            ran => log::warn!("a late copy to the screen: {}", own_work_failed(ran)),
+        }
     }
 
     /// The form of the DMA engine's packets this card takes, or `None` for a card they aren't
@@ -446,6 +516,27 @@ impl AmdBackend {
     /// Runs commands on the DMA engine in the daemon's space, and waits for them. `reaches` are the
     /// ranges they touch, each of which must be mapped there.
     fn run_dma(&mut self, space: SpaceId, reaches: &[(u64, u64)], commands: &[u32]) -> Result<(), String> {
+        let ib = self.copy_commands(space, reaches, commands)?;
+        let space_vm = &mut self.spaces.get_mut(&space).ok_or("no such space")?.vm;
+        let ran = space_vm.run(HW_IP_DMA, None, &[ib], self.patience);
+        self.note_how_it_ran(&ran);
+        match ran {
+            Ok(Ran::Retired) => Ok(()),
+            Ok(ran) => Err(own_work_failed(ran)),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Writes commands for the DMA engine into the daemon's buffer for them, mapped in `space`, once
+    /// a copy left on the card is done with it. `reaches` are the ranges they touch, each of which
+    /// must be mapped there.
+    fn copy_commands(
+        &mut self,
+        space: SpaceId,
+        reaches: &[(u64, u64)],
+        commands: &[u32],
+    ) -> Result<Ib, String> {
+        self.finish_copy_on_card();
         let alignment = self.device.info().va_alignment;
         if self.copy_ib.is_none() {
             let made = CopyIb::make(&self.device, alignment)
@@ -472,24 +563,7 @@ impl AmdBackend {
             ib.mapped_in = Some(space);
         }
         let bytes = ib.write(commands).map_err(|error| error.to_string())?;
-        let ran = space_vm.run(HW_IP_DMA, None, &[Ib { address: copy_ib::ADDRESS, bytes }], self.patience);
-        self.note_how_it_ran(&ran);
-        match ran {
-            Ok(Ran::Retired) => Ok(()),
-            Ok(Ran::Refused) => Err("amdgpu kept saying try again".into()),
-            Ok(Ran::Hung) => Err("it never finished".into()),
-            Ok(Ran::Faulted(fault)) => Err(format!(
-                "the daemon's own work on the card reached {:#x}, where nothing is mapped (fault status \
-                 {:#x}), so it sends the card no more",
-                fault.address, fault.status
-            )),
-            Ok(Ran::Stopped(fault)) => Err(format!(
-                "the daemon's own work on the card reached {:#x} earlier, where nothing is mapped (fault \
-                 status {:#x}), so it sends the card no more",
-                fault.address, fault.status
-            )),
-            Err(error) => Err(error.to_string()),
-        }
+        Ok(Ib { address: copy_ib::ADDRESS, bytes })
     }
 
     /// Gets a guest's video work ready for the card's video ring, without waiting for anything: its
@@ -798,17 +872,24 @@ impl AmdBackend {
     /// A copy to the screen or a slot: tiled surfaces by the DMA engine, rows by the CPU. Both move
     /// bytes as they are, so a target whose red and blue lie the other way round is put right after.
     fn copy_staging(&mut self, copy: &StagingCopy) -> Result<(), String> {
+        // A late copy to the same surface must not land on top of this one.
+        self.finish_copy_on_card();
         match TiledCopy::of(copy, self.device.info().details.gfx_version) {
             Some(plan) => self.copy_with_dma(copy.own_space, &plan)?,
             None => self.copy_with_cpu(copy)?,
         }
+        self.after_copy(copy);
+        Ok(())
+    }
+
+    /// Puts right what a finished copy wrote to a target whose red and blue lie the other way round.
+    fn after_copy(&mut self, copy: &StagingCopy) {
         if channel_order::differs(&copy.source, &copy.target) {
             // The picture is there either way, so a target the CPU can't reach isn't a failed copy.
             if let Err(reason) = self.swap_red_and_blue(copy) {
                 log::warn!("a copy's red and blue were left changed over: {reason}");
             }
         }
-        Ok(())
     }
 
     /// Changes red and blue over in what a copy wrote. The copy has finished, as each is waited for.
@@ -874,6 +955,63 @@ impl AmdBackend {
         self.next_id += 1;
         id
     }
+}
+
+/// Logs that a copy couldn't be left to the card to start, which then waits for its frame the old
+/// way. Once as a warning, as it means every copy may take that way; after that at debug.
+fn handover_failed(error: &dyn std::fmt::Display) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let level = match WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        false => log::Level::Warn,
+        true => log::Level::Debug,
+    };
+    log::log!(
+        level,
+        "a copy to the screen waits for its frame on the message thread, as the card can't: {error}"
+    );
+}
+
+/// A copy to the screen left on the card when the wait for it ended.
+#[derive(Debug)]
+struct CopyOnCard {
+    space: SpaceId,
+    signal: submit::Syncobj,
+    /// What it copies, for what has to follow it once it's done.
+    copy: StagingCopy,
+}
+
+/// What the daemon's own work on the card that didn't retire comes to, for the log.
+fn own_work_failed(ran: Ran) -> String {
+    match ran {
+        Ran::Retired => "it retired".into(),
+        Ran::Refused => "amdgpu kept saying try again".into(),
+        Ran::Hung => "it never finished".into(),
+        Ran::Faulted(fault) => format!(
+            "the daemon's own work on the card reached {:#x}, where nothing is mapped (fault status \
+             {:#x}), so it sends the card no more",
+            fault.address, fault.status
+        ),
+        Ran::Stopped(fault) => format!(
+            "the daemon's own work on the card reached {:#x} earlier, where nothing is mapped (fault \
+             status {:#x}), so it sends the card no more",
+            fault.address, fault.status
+        ),
+    }
+}
+
+/// The ranges a DMA copy of a tiled frame touches: a pixel of the tiled surface, as the engine takes
+/// any start inside it, and the rows it writes of the linear one.
+fn tiled_reaches(plan: &TiledCopy) -> [(u64, u64); 2] {
+    let target_start =
+        (u64::from(plan.to.1) * u64::from(plan.linear_pitch) + u64::from(plan.to.0)) * PIXEL_BYTES;
+    let target_bytes =
+        (u64::from(plan.height - 1) * u64::from(plan.linear_pitch) + u64::from(plan.width)) * PIXEL_BYTES;
+    [(plan.tiled_address, PIXEL_BYTES), (plan.linear_address + target_start, target_bytes)]
+}
+
+/// A wait in whole milliseconds, rounded up, as `poll` takes it.
+fn whole_millis(wait: Duration) -> i32 {
+    i32::try_from(wait.as_micros().div_ceil(1000)).unwrap_or(i32::MAX)
 }
 
 /// A fresh eventfd that doesn't block, for sync objects to post to.
@@ -1055,8 +1193,18 @@ fn answer_query(info: &DeviceInfo, query: &VendorQuery<'_>, out: &mut Vec<u8>) -
 
 /// The registry value this backend has under a name, logged when it has one. A name it has no value
 /// for is the core's to log.
-fn registry_answer(name: &RegistryName, card_name: &str) -> Option<RegistryValue> {
-    let value = protocol::guest_driver::registry(name, card_name);
+/// `gl_dxgi` says OpenGL in a window is presented through DXGI, see [`gl_present`].
+fn registry_answer(
+    name: &RegistryName,
+    card_name: &str,
+    asked_type: u32,
+    gl_dxgi: bool,
+) -> Option<RegistryValue> {
+    let gl_value = match name {
+        RegistryName::Value(name) if gl_dxgi => gl_present::registry_value(name, asked_type),
+        _ => None,
+    };
+    let value = gl_value.or_else(|| protocol::guest_driver::registry(name, card_name));
     if let Some(value) = &value {
         traffic::registry(name, value);
     }
@@ -1424,8 +1572,8 @@ impl Backend for AmdBackend {
         answer_query(self.device.info(), query, out)
     }
 
-    fn registry_value(&mut self, name: &RegistryName) -> Option<RegistryValue> {
-        registry_answer(name, &self.facts.name)
+    fn registry_value(&mut self, name: &RegistryName, asked_type: u32) -> Option<RegistryValue> {
+        registry_answer(name, &self.facts.name, asked_type, !self.gl_copies)
     }
 
     fn gpu_clock(&mut self) -> Result<u64, BackendError> {
@@ -1667,6 +1815,46 @@ impl Backend for AmdBackend {
         })
     }
 
+    /// A tiled frame goes by the DMA engine, which the card holds until the guest's runs that draw
+    /// it are done. Only runs already sent are waited for this way: one the guest has yet to let go
+    /// of may wait for a later message, which the daemon can't read while it waits here.
+    fn copy_staging_after(
+        &mut self,
+        _host: &mut dyn HostServices,
+        copy: &StagingCopy,
+        after: &[(u64, u64)],
+        wait: Duration,
+    ) -> Option<Status> {
+        let plan = TiledCopy::of(copy, self.device.info().details.gfx_version)?;
+        let mut sync_files = Vec::new();
+        for &(fence, value) in after {
+            let found =
+                self.spaces.values().find_map(|space| match space.vm.sync_files_reaching(fence, value) {
+                    Ok(found) => found,
+                    Err(error) => {
+                        handover_failed(&error);
+                        None
+                    }
+                });
+            sync_files.extend(found?);
+        }
+        let status = match self.copy_with_dma_after(copy, &plan, &sync_files, wait)? {
+            Ok(true) => {
+                self.after_copy(copy);
+                Status::SUCCESS
+            }
+            Ok(false) => {
+                log::debug!("a copy to the screen is still on the card after {wait:?}, and lands late");
+                Status::SUCCESS
+            }
+            Err(reason) => {
+                log::warn!("a copy to the screen failed: {reason}");
+                Status::UNSUCCESSFUL
+            }
+        };
+        Some(status)
+    }
+
     /// Finished when it returns.
     fn start_slot_copy(&mut self, _host: &mut dyn HostServices, copy: &SlotCopy) -> StagingStart {
         let Some(staging) = screen_copy::slot_as_staging(copy) else {
@@ -1737,6 +1925,13 @@ mod tests {
         fn fence_value(&self, fence: u64) -> Result<u64, MemoryError> {
             Ok(self.0.get(&fence).copied().unwrap_or(0))
         }
+    }
+
+    #[test]
+    fn a_wait_for_a_copy_is_never_cut_short_by_rounding() {
+        assert_eq!(whole_millis(Duration::from_micros(300)), 1);
+        assert_eq!(whole_millis(Duration::from_millis(50)), 50);
+        assert_eq!(whole_millis(Duration::ZERO), 0);
     }
 
     #[test]

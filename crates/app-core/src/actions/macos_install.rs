@@ -163,6 +163,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     // From here it starts like any Mac, into its installer until that's taken out in its settings.
     task.machine.installing = false;
     task.machine.save(task.context)?;
+    crate::throwaway::installed(task.context, &task.machine)?;
     start(task)
 }
 

@@ -1,6 +1,8 @@
 use super::desktop::{BOOTS_FILE, SERIAL_FILE};
 use super::gpu_check::gpu_found;
-use super::guest_files::{place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store};
+use super::guest_files::{
+    name_display, place_amd_runtime, place_driver_files, place_nvapi_wrapper, place_profile_store,
+};
 use super::guest_upload::stand_in::FilesGuest;
 use super::window_speed::apply_window_speed;
 use super::*;
@@ -708,11 +710,44 @@ fn the_profile_store_script_goes_to_the_guest_and_a_failure_is_said() {
     let mut task = placing_task(&context, &host);
     place_profile_store(&mut task).unwrap();
     assert_eq!(task.error, "");
+    task.machine.window_speed_off = true;
     place_profile_store(&mut task).unwrap();
     assert!(task.error.contains("settings store"));
     let asked = agent.requests.lock().unwrap();
     assert_eq!(asked.len(), 2);
-    assert_eq!(asked[0].2, "make the store");
+    // The present method follows "Faster programs in a window".
+    assert_eq!(asked[0].2, "$on = $true\nmake the store");
+    assert_eq!(asked[1].2, "$on = $false\nmake the store");
+}
+
+#[test]
+fn the_display_is_named_by_the_vendor_number_windows_sees() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/display-name.ps1", "name it");
+    scratch.write("program/guest/setmode.ps1", "set the mode");
+    let agent = Arc::new(ScriptedAgent::answering(&[
+        "kept RDPUDD Chained DD\r\n",
+        "script placed\r\n",
+        "named Guesthouse Display from the next start (was RDPUDD Chained DD)\r\n",
+        "script placed\r\n",
+        "FAILED display name: denied\r\n",
+    ]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    let mut task = placing_task(&context, &host);
+    name_display(&mut task).unwrap();
+    let maker = IdentityState { shown: Shown::Maker, ..Default::default() };
+    write_state(&context, &task.machine, &maker).unwrap();
+    name_display(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    name_display(&mut task).unwrap();
+    assert!(task.error.contains("display's name"), "{}", task.error);
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked[0].2, "$name = 'RDPUDD Chained DD'\nname it");
+    // The renamed display needs the logon task's script that knows the new name.
+    assert!(asked[1].2.contains("C:\\gpupv\\setmode.ps1"), "{}", asked[1].2);
+    assert_eq!(asked[2].2, "$name = 'Guesthouse Display'\nname it");
 }
 
 #[test]
@@ -993,4 +1028,58 @@ fn a_vm_still_running_at_the_end_of_its_start_is_given_its_device_key() {
     finish_on_desktop(&mut task).unwrap();
     let asked = agent.requests.lock().unwrap();
     assert!(asked.iter().any(|(_, _, script)| script.contains("OpenCLDriverName")), "{asked:?}");
+}
+
+/// A start of a machine with a real disk, in a PC that offers the card, as far as the guest.
+fn start_ready_machine(scratch: &Scratch) -> (Context, Machine) {
+    let mut context = plain_task_context(scratch);
+    context.pci_names = scratch.write("pci.ids", crate::setup::cards::stand_in::NAMES);
+    crate::setup::cards::stand_in::fake_pci(scratch, "0000:01:00.0", 0x2704, "0x10de", "0x030000");
+    fs::create_dir_all(crate::settings::driver_folder(&context)).unwrap();
+    let card = serde_json::json!({"card": {"device": 1}});
+    crate::settings::write_setup(&context, card.as_object().cloned().unwrap()).unwrap();
+    context.agent = Arc::new(ScriptedAgent::answering(&[]));
+    let mut vm = machine(&context);
+    assert!(
+        Command::new("qemu-img")
+            .args(["create", "-q", "-f", "qcow2", &vm.disk, "1G"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    vm.vars = scratch.write("vars.fd", "firmware").display().to_string();
+    vm.save(&context).unwrap();
+    crate::agent::make_token(&context, &vm).unwrap();
+    (context, vm)
+}
+
+#[test]
+fn a_start_that_fails_after_its_snapshot_offers_going_back_to_it() {
+    let scratch = Scratch::new();
+    let (context, vm) = start_ready_machine(&scratch);
+    let vm = Machine { auto_snapshot: Some(true), ..vm };
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    let failed = start(&mut task).unwrap_err();
+    assert!(!failed.0.is_empty());
+    assert_eq!(host.said()[0], "start gpu", "the snapshot is before the VM");
+    let offered = status(&context, &vm).restore_point.expect("offered");
+    assert!(offered.name.starts_with("Automatic: before "), "{}", offered.name);
+    assert_eq!(crate::snapshots::list_snapshots(&context, &vm).len(), 1);
+    let mut second = Task::new(&context, &host, "start", vm.clone());
+    let _ = start(&mut second);
+    assert_eq!(crate::snapshots::list_snapshots(&context, &vm).len(), 1, "a retry takes no other");
+    assert_eq!(status(&context, &vm).restore_point, Some(offered));
+}
+
+#[test]
+fn a_start_with_the_switch_off_takes_no_snapshot() {
+    let scratch = Scratch::new();
+    let (context, vm) = start_ready_machine(&scratch);
+    let vm = Machine { auto_snapshot: Some(false), ..vm };
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm.clone());
+    let _ = start(&mut task);
+    assert!(crate::snapshots::list_snapshots(&context, &vm).is_empty());
+    assert_eq!(status(&context, &vm).restore_point, None);
 }

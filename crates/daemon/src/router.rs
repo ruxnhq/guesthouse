@@ -80,14 +80,20 @@ impl<B: Backend, M: GuestMemory> Router<B, M> {
         let wants_reply = header.flags.wants_completion();
         let ticket = ReplyTicket { channel: channel as u8, transaction: header.transaction };
         let ticket = wants_reply.then_some(ticket);
-        let answer = self.session.handle_message(strip_extended_header(message), ticket, &mut self.reply);
+        let answer =
+            self.session.handle_message_reply_first(strip_extended_header(message), ticket, &mut self.reply);
         // A handler's notices go out before its reply, the order the guest has always seen.
-        self.send_waiting(sink)?;
-        if wants_reply && answer == Answer::Now {
-            self.limit_reply();
-            let completion = FrameHeader::completion(header.transaction, self.reply.len());
-            sink.send(channel, completion, &self.reply)?;
-        }
+        let sent = self.send_waiting(sink).and_then(|()| {
+            if wants_reply && answer == Answer::Now {
+                self.limit_reply();
+                let completion = FrameHeader::completion(header.transaction, self.reply.len());
+                sink.send(channel, completion, &self.reply)?;
+            }
+            Ok(())
+        });
+        // Rung whether or not the reply could be written, as the work was taken.
+        self.session.ring_after_reply();
+        sent?;
         self.session.timings_mut().mark(Stage::Replied);
         Ok(())
     }

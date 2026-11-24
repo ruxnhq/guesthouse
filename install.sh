@@ -14,9 +14,9 @@
 set -eu
 
 # A release sets these three, last of all, once its files are up. Until the first one they're empty.
-RELEASE_VERSION="0.7.7"
-PAYLOAD_SHA256="8e815ef00fbdfc8d66ac3011154211003d6343c6ae69a4f187586920b0badfdf"
-SOURCE_SHA256="570f05a019a61a6515ed97f3a6e3dda97b2b91bde0c24bc029d02eaba85bc3cb"
+RELEASE_VERSION="0.8.0"
+PAYLOAD_SHA256="6ca16ae5ac787e5e91f86e73d18928d500b74bbbcf05263a87cba302b78a7aaa"
+SOURCE_SHA256="0c835e9e95de47abaaf8e2d2700668f88fa7012ea784a202a7c0ee4a1636cf19"
 
 REPO_URL=https://github.com/ruxnhq/guesthouse
 DISCORD_URL=https://discord.gg/rN3VARayZV

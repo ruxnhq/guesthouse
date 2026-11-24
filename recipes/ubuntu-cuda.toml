@@ -1,0 +1,13 @@
+name = "CUDA"
+description = "Ubuntu with a compiler, Python and the CUDA toolkit from Ubuntu's archive."
+guest = "ubuntu"
+
+[settings]
+cores = 8
+ram_gib = 16
+disk_gib = 120
+
+[steps]
+# All from Ubuntu's own archive. The GPU driver is the host's, which the guest gets by itself, so it is
+# not in this list.
+packages = ["build-essential", "cmake", "git", "python3-pip", "python3-venv", "nvidia-cuda-toolkit"]

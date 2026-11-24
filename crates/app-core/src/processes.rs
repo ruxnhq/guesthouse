@@ -128,7 +128,13 @@ pub fn still_running(context: &Context, qemu: Seen) -> bool {
 fn opens_disk(word: &[u8], machine: &Machine) -> bool {
     let wanted = format!("file={},", qemu_value(&machine.disk)).into_bytes();
     let found = word.windows(wanted.len()).position(|part| part == wanted);
-    found.is_some_and(|at| word.get(at + wanted.len()) != Some(&b','))
+    found.is_some_and(|at| word.get(at + wanted.len()) != Some(&b',')) || runs_throwaway_of(word, machine)
+}
+
+/// Whether this word is the note on a throwaway run's overlay, which names the machine's disk last.
+fn runs_throwaway_of(word: &[u8], machine: &Machine) -> bool {
+    let wanted = format!(",opaque={}{}", crate::vm_args::THROWAWAY_MARK, qemu_value(&machine.disk));
+    word.ends_with(wanted.as_bytes())
 }
 
 /// Whether another VM on this PC has a slot's memory. See [`crate::held_memory`]. A daemon of ours

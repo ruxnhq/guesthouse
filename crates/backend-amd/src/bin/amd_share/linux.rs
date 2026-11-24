@@ -168,7 +168,7 @@ fn client(name: String, settings: Settings, run_for: Duration, start: Arc<Barrie
             next_slot = (next_slot + 1) % SLOTS;
             let done = Syncobj::create(&device).unwrap();
             let ib = Ib { address: ib_va + slot as u64 * IB_SLOT_BYTES, bytes: lengths[slot] };
-            submit_all(&device, &context, HW_IP_DMA, &[ib], &handles, &done).unwrap();
+            submit_all(&device, &context, HW_IP_DMA, &[ib], &handles, None, &done).unwrap();
             let submitted_ns = device.gpu_clock().unwrap();
             on_card.push_back(OnCard { slot, done, submitted_ns });
         }

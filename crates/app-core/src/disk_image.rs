@@ -1,6 +1,7 @@
 //! What qemu-img says about a disk.
 
 pub mod backing;
+pub mod header;
 
 use crate::failure::{Failure, Result};
 use serde_json::Value;

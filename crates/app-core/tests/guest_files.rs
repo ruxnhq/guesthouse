@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 32] = [
+const SENT_TO_THE_GUEST: [&str; 35] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "api-check.ps1",
@@ -38,6 +38,9 @@ const SENT_TO_THE_GUEST: [&str; 32] = [
     "window-size-start.ps1",
     "window-size.ps1",
     "window-speed.ps1",
+    "windows-ask.ps1",
+    "windows-start.ps1",
+    "windows.ps1",
 ];
 
 fn guest_file(name: &str) -> PathBuf {
@@ -111,12 +114,12 @@ fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
     let stop = fs::read_to_string(guest_file("helper-stop.ps1")).unwrap();
     assert!(stop.contains("Stop-ScheduledTask -TaskName \"gpupv-$helperName\""), "{stop}");
     assert!(stop.contains("C:\\gpupv\\$helperName.ps1") && stop.contains("Stop-Process"), "{stop}");
-    for helper in ["clipboard.ps1", "window-size.ps1"] {
+    for helper in ["clipboard.ps1", "window-size.ps1", "windows.ps1"] {
         let text = fs::read_to_string(guest_file(helper)).unwrap();
         assert!(text.contains("try { $listener.Start() } catch { exit 1 }"), "{helper}");
         assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
     }
-    for name in ["clipboard", "files", "window-size"] {
+    for name in ["clipboard", "files", "window-size", "windows"] {
         let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();
         assert!(start.contains(&format!("-File C:\\gpupv\\{name}.ps1")), "the stop finds it by this: {name}");
     }

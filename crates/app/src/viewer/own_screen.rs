@@ -396,10 +396,20 @@ impl Screen {
             (frame.width() - bounds.width()).abs() <= FILL_WITHIN
                 && (frame.height() - bounds.height()).abs() <= FILL_WITHIN
         };
-        // A rectangle of the frame fills the frame's room, and the picture reaches well past it. A
-        // subsurface isn't clipped by its parent, so it goes only where the rectangle is in view.
-        let cropped = self.0.aspect.crop().is_some();
-        let bounds = frame.filter(|frame| cropped || fills(frame)).unwrap_or(bounds);
+        // With a rectangle of the frame, the picture reaches well past the room. A subsurface isn't
+        // clipped by its parent, so it goes only where the rectangle is in view.
+        let bounds = if self.0.aspect.shown_crop().is_some() {
+            let Some(frame) = frame else { return };
+            let in_view = self.0.aspect.in_view();
+            graphene::Rect::new(
+                frame.x() + in_view.x(),
+                frame.y() + in_view.y(),
+                in_view.width(),
+                in_view.height(),
+            )
+        } else {
+            frame.filter(fills).unwrap_or(bounds)
+        };
         let (shift_x, shift_y) = native.surface_transform();
         let corner = graphene::Point::new(bounds.x() + shift_x as f32, bounds.y() + shift_y as f32);
         let moved = own.place(

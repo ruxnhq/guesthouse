@@ -40,18 +40,26 @@ impl Crop {
     }
 }
 
-/// Where the guest's whole frame goes so that `crop` fills `room`, in the room's logical pixels. The
-/// room is normally the rectangle's own size, and then the frame is at its own size too.
-pub fn picture_place(
-    crop: Crop,
-    (frame_width, frame_height): (i32, i32),
-    (room_width, room_height): (i32, i32),
-) -> Placement {
-    let across = f64::from(room_width) / f64::from(crop.width);
-    let down = f64::from(room_height) / f64::from(crop.height);
+/// Where the rectangle goes in `room`, in the room's logical pixels: as large as fits at its own shape,
+/// centred. The room is normally the rectangle's own size. It is wider when the title bar can't be as
+/// narrow as a small program's window, and the rest is a black bar on each side.
+pub fn rectangle_place(crop: Crop, (room_width, room_height): (i32, i32)) -> Placement {
+    let scale =
+        (f64::from(room_width) / f64::from(crop.width)).min(f64::from(room_height) / f64::from(crop.height));
+    let width = (f64::from(crop.width) * scale).round() as i32;
+    let height = (f64::from(crop.height) * scale).round() as i32;
+    Placement { x: ((room_width - width) / 2) as f32, y: ((room_height - height) / 2) as f32, width, height }
+}
+
+/// Where the guest's whole frame goes so that `crop` fills its place in `room`, in the room's logical
+/// pixels. With the room at the rectangle's size, the frame is at its own size too.
+pub fn picture_place(crop: Crop, (frame_width, frame_height): (i32, i32), room: (i32, i32)) -> Placement {
+    let shown = rectangle_place(crop, room);
+    let across = f64::from(shown.width) / f64::from(crop.width);
+    let down = f64::from(shown.height) / f64::from(crop.height);
     Placement {
-        x: (-f64::from(crop.x) * across) as f32,
-        y: (-f64::from(crop.y) * down) as f32,
+        x: shown.x - (f64::from(crop.x) * across) as f32,
+        y: shown.y - (f64::from(crop.y) * down) as f32,
         width: (f64::from(frame_width) * across).round() as i32,
         height: (f64::from(frame_height) * down).round() as i32,
     }
@@ -129,7 +137,20 @@ mod tests {
     }
 
     #[test]
-    fn a_window_of_another_size_stretches_the_rectangle_to_fill_it() {
+    fn a_room_wider_than_the_rectangle_keeps_it_at_its_size_in_the_middle() {
+        // A title bar that can't be narrower than 252 over a program 200 wide.
+        let crop = Crop { x: 700, y: 300, width: 200, height: 120 };
+        assert_eq!(rectangle_place(crop, (252, 120)), Placement { x: 26.0, y: 0.0, width: 200, height: 120 });
+        let placed = picture_place(crop, FRAME, (252, 120));
+        assert_eq!(placed, Placement { x: -674.0, y: -300.0, width: 1920, height: 1080 });
+        assert_eq!(
+            tablet_at(crop, (252, 120), (26.0, 0.0)),
+            (tablet_of(700.0, 1920), tablet_of(300.0, 1080))
+        );
+    }
+
+    #[test]
+    fn a_larger_room_of_the_rectangles_shape_scales_it_to_fill_the_room() {
         // Twice the rectangle's size, as on a screen at a scale of 2 if the window were in pixels.
         let crop = Crop { x: 700, y: 300, width: 320, height: 500 };
         let placed = picture_place(crop, FRAME, (640, 1000));

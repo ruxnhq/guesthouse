@@ -81,7 +81,7 @@ impl Screen {
     }
 
     pub(super) fn on_motion(&self, x: f64, y: f64) {
-        if self.captured() {
+        if self.captured() || !self.in_view(x, y) {
             return;
         }
         if self.0.pointer_held.get() {
@@ -103,6 +103,19 @@ impl Screen {
         }
     }
 
+    /// Whether a point on the picture is in view. Only a rectangle of the frame leaves some of it out,
+    /// under the black bars beside it.
+    fn in_view(&self, x: f64, y: f64) -> bool {
+        if self.0.aspect.shown_crop().is_none() {
+            return true;
+        }
+        let point = gtk::graphene::Point::new(x as f32, y as f32);
+        match self.0.picture.compute_point(&self.0.aspect, &point) {
+            Some(point) => self.0.aspect.in_view().contains_point(&point),
+            None => true,
+        }
+    }
+
     fn frame_width(&self) -> (i32, i32) {
         let size = self.frame_size().map_or(0, |(width, _)| width);
         (size, self.0.picture.width())
@@ -121,6 +134,11 @@ impl Screen {
     pub(super) fn on_button(&self, gesture: &gtk::GestureClick, x: f64, y: f64, down: bool) {
         if down {
             self.0.picture.grab_focus();
+        }
+        // A press beside a rectangle would land on whatever the guest has outside it. Letting go
+        // still goes, so nothing stays held.
+        if down && !self.in_view(x, y) {
+            return;
         }
         let button = gesture.current_button();
         if let Some(name) = button_name(button) {

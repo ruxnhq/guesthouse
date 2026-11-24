@@ -36,6 +36,8 @@ use std::time::{Duration, SystemTime};
 /// The first argument that asks for this window. Nothing a user or the desktop passes looks like it.
 pub const ARGUMENT: &str = "--lab-crop-window";
 const USAGE: &str = "guesthouse --lab-crop-window NAME X Y W H TITLE [FILE]";
+/// Any size at all: the rectangle and the title bar say how small the window can be.
+const SMALLEST_WINDOW: i32 = 1;
 /// How often the rectangle's file is looked at. A program moved in the guest can wait that long.
 const FOLLOW_EVERY: Duration = Duration::from_millis(500);
 /// Another id than the app's, or a running app would be asked to activate and this process would end.
@@ -122,13 +124,14 @@ pub fn run(request: Request) -> glib::ExitCode {
     application.run_with_args::<&str>(&[])
 }
 
-fn open_window(
+/// The window, on its way to the screen. Public for the page checks, which open one beside the app's.
+pub fn open_window(
     application: &adw::Application,
     context: &Arc<Context>,
     machine: &Machine,
     run_folder: PathBuf,
     request: &Request,
-) {
+) -> adw::ApplicationWindow {
     let overlay = OverlayChoice { shown: false, sensors: sensors_file(context, machine) };
     let in_memory = machine.has_gpu() && memory_frames(context, machine);
     let logging = context.clone();
@@ -158,6 +161,10 @@ fn open_window(
         .application(application)
         .title(&request.title)
         .resizable(false)
+        // libadwaita's windows are at least 360 by 200 unless told otherwise, and a program's window
+        // in the guest is often smaller.
+        .width_request(SMALLEST_WINDOW)
+        .height_request(SMALLEST_WINDOW)
         .content(&toolbar)
         .build();
     window.present();
@@ -170,6 +177,7 @@ fn open_window(
         context,
         &format!("lab crop window: {} at {:?}, titled {}", machine.name, request.crop, request.title),
     );
+    window
 }
 
 /// Takes the rectangle from `file` each time it changes, for as long as the window is open. A file

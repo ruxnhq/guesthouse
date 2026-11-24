@@ -1,19 +1,35 @@
 //! Where the service keeps its machines: a folder each, named after the machine, under one folder
-//! only the system and administrators may open. A machine's folder holds its disks, the record and
-//! the account `prepare` leaves beside them, and its settings, which say what it was made with.
+//! only the system and administrators may open. A machine's folder holds its settings, which say what
+//! it was made with, and its events. Its disks, the record and the account `prepare` leaves beside
+//! them are in that folder too, unless the machine was given another place: then they're in a folder
+//! of the machine's name there, and a small file in the machine's own folder says where.
+//!
+//! The place is somewhere a user chose, so the service holds it open while it runs, which stops it
+//! being renamed away and replaced, and trusts it only if the service's own check of it passes. A
+//! place that fails the check, or isn't there, is a problem the machine is listed with.
 
 use guesthouse_control::{Card, Forward, NetworkMode, Share, valid_name};
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A machine's settings, in its folder.
 const SETTINGS: &str = "machine.json";
+/// Where a machine's disks are, in its folder, if it isn't where it's kept.
+const LOCATION: &str = "location.json";
 /// The copy of a Linux guest's installer, kept until it has installed.
 const INSTALLER: &str = "installer.iso";
 /// A machine's events, a line each, and the log before it when this one grew too long.
 pub const EVENTS: &str = "events.log";
 pub const EVENTS_BEFORE: &str = "events.1.log";
+/// What stays in a machine's own folder when its disks are somewhere else.
+pub const OWN_FILES: [&str; 4] = [SETTINGS, LOCATION, EVENTS, EVENTS_BEFORE];
+
+/// Something kept for as long as it's held, such as a folder opened so it can't be moved.
+pub type Held = Box<dyn Any + Send>;
 
 /// What a machine was made with and is given at each boot, and what its guest last said.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,30 +98,91 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Opens a folder a user chose to keep a machine in, if it's fit to: a folder of its own that the
+/// system and administrators made, not a link and not reached through one. What it returns keeps it
+/// from being renamed or deleted.
+pub type Hold = Arc<dyn Fn(&Path) -> Result<Held, String> + Send + Sync>;
+
+/// Where a machine's disks are, and what holds the place.
+struct Place {
+    folder: PathBuf,
+    /// Why the place can't be used, if it can't.
+    held: Result<Held, String>,
+}
+
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    hold: Hold,
+    /// The machines that have a place other than their own folder, by name.
+    places: Arc<Mutex<BTreeMap<String, Place>>>,
+    /// Held while a place is read, held again or changed, so those don't run over each other.
+    changing: Arc<Mutex<()>>,
+}
+
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Store").field("root", &self.root).finish_non_exhaustive()
+    }
+}
+
+/// What a machine's own folder says of where its disks are.
+#[derive(Debug, Serialize, Deserialize)]
+struct Location {
+    folder: PathBuf,
 }
 
 impl Store {
     pub fn new(root: PathBuf) -> Self {
-        Store { root }
+        Store { root, hold: Arc::new(|_| Ok(Box::new(()))), places: Arc::default(), changing: Arc::default() }
+    }
+
+    /// The same, with `hold` to say whether a place is fit to keep a machine in.
+    pub fn with_hold(mut self, hold: Hold) -> Self {
+        self.hold = hold;
+        self
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    fn places(&self) -> MutexGuard<'_, BTreeMap<String, Place>> {
+        self.places.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A machine's own folder, where its settings and events are. It's always under the root.
     pub fn folder(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
 
+    /// The folder a machine's disks are in: its own, or the place it was given. A place that can't be
+    /// trusted now is nowhere, so what's read or written there is a path nothing is at, and the
+    /// service never touches a folder it isn't holding.
+    pub fn place(&self, name: &str) -> PathBuf {
+        match self.places().get(name) {
+            None => self.folder(name),
+            Some(place) if place.held.is_ok() => place.folder.clone(),
+            Some(_) => self.folder(name).join("(unusable)"),
+        }
+    }
+
+    /// The folder a machine's own folder says its disks are in, whether it can be trusted or not.
+    pub fn recorded(&self, name: &str) -> PathBuf {
+        self.places().get(name).map_or_else(|| self.folder(name), |place| place.folder.clone())
+    }
+
+    /// Why a machine's place can't be used now, if it can't.
+    pub fn problem(&self, name: &str) -> Option<String> {
+        self.places().get(name).and_then(|place| place.held.as_ref().err().cloned())
+    }
+
     pub fn disk(&self, name: &str) -> PathBuf {
-        self.folder(name).join(format!("{name}.vhdx"))
+        self.place(name).join(format!("{name}.vhdx"))
     }
 
     pub fn installer(&self, name: &str) -> PathBuf {
-        self.folder(name).join(INSTALLER)
+        self.place(name).join(INSTALLER)
     }
 
     /// The file a machine's events are kept in, which is begun afresh when it grows long.
@@ -116,6 +193,101 @@ impl Store {
     /// The events before the current file's, which it is renamed to when it's full.
     pub fn events_before(&self, name: &str) -> PathBuf {
         self.folder(name).join(EVENTS_BEFORE)
+    }
+
+    /// Opens `folder` as a place for a machine's disks, as the service's check of it says it may be.
+    pub fn hold(&self, folder: &Path) -> Result<Held, String> {
+        if !folder.is_dir() {
+            return Err(format!(
+                "{} isn't there. If it's on a drive that's off or gone, the machine is back when the drive is.",
+                folder.display()
+            ));
+        }
+        (self.hold)(folder)
+    }
+
+    /// Reads where a machine's own folder says its disks are, and holds the place, if it has one.
+    /// A place that can't be held is kept as the machine's problem, which `retry` tries again.
+    fn attach(&self, name: &str) {
+        let _one = self.changing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = self.folder(name).join(LOCATION);
+        let broken = |why: String| Place { folder: self.folder(name), held: Err(why) };
+        let place = match fs::read_to_string(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(broken(format!("{}: {error}", path.display()))),
+            Ok(text) => Some(match serde_json::from_str::<Location>(&text) {
+                Ok(location) => Place { held: self.hold(&location.folder), folder: location.folder },
+                Err(error) => broken(format!("{}: {error}", path.display())),
+            }),
+        };
+        match place {
+            Some(place) => self.places().insert(name.to_owned(), place),
+            None => self.places().remove(name),
+        };
+    }
+
+    /// Reads and holds again the place of a machine that has one, as it stands now. A place that was
+    /// fine may be gone, as a drive is, or be another drive's at the same letter, and one that
+    /// couldn't be held may be back. The new hold is taken before the old is let go.
+    pub fn refresh(&self, name: &str) {
+        if self.places().contains_key(name) {
+            self.attach(name);
+        }
+    }
+
+    /// Makes `folder` the place of the machine `name`, whose own folder is made. The folder is held
+    /// first, and the record written before the place is used, so a machine whose record isn't kept
+    /// is where it was.
+    pub fn locate(&self, name: &str, folder: &Path) -> Result<(), String> {
+        let _one = self.changing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = self.hold(folder)?;
+        self.write_location(name, Some(folder))?;
+        self.places().insert(name.to_owned(), Place { folder: folder.to_owned(), held: Ok(held) });
+        Ok(())
+    }
+
+    /// Makes `folder`, held as `held`, the place of the machine `name` from now on, and gives back
+    /// the place it had and what held it, and takes `held` only if it does. A folder that is the machine's own folder is the default,
+    /// which has no record. The record is replaced in one step, so a machine is always in one place.
+    pub fn switch(
+        &self,
+        name: &str,
+        folder: &Path,
+        held: &mut Option<Held>,
+    ) -> Result<(PathBuf, Result<Held, String>), String> {
+        let _one = self.changing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let own = folder == self.folder(name);
+        self.write_location(name, if own { None } else { Some(folder) })?;
+        // Only now is the hold taken from the caller, who keeps it if the record couldn't be written.
+        let held = held.take().expect("a hold is given to switch");
+        let before = self.recorded(name);
+        let old = if own {
+            self.places().remove(name).map(|place| place.held)
+        } else {
+            self.places()
+                .insert(name.to_owned(), Place { folder: folder.to_owned(), held: Ok(held) })
+                .map(|place| place.held)
+        };
+        Ok((before, old.unwrap_or_else(|| Ok(Box::new(())))))
+    }
+
+    /// Writes where a machine's disks are, through a file of its own renamed over the record, or
+    /// takes the record away for the machine's own folder.
+    fn write_location(&self, name: &str, folder: Option<&Path>) -> Result<(), String> {
+        let path = self.folder(name).join(LOCATION);
+        let Some(folder) = folder else {
+            return match fs::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    Err(format!("{}: {error}", path.display()))
+                }
+                _ => Ok(()),
+            };
+        };
+        let new = self.folder(name).join("location.new.json");
+        let text = serde_json::to_string_pretty(&Location { folder: folder.to_owned() })
+            .expect("a location always serialises");
+        fs::write(&new, text + "\n").map_err(|error| format!("{}: {error}", new.display()))?;
+        fs::rename(&new, &path).map_err(|error| format!("{}: {error}", path.display()))
     }
 
     /// Every machine with settings, by name. A folder that isn't a machine's, such as one left by
@@ -129,7 +301,10 @@ impl Store {
             .filter(|name| usable_name(name))
             .filter_map(|name| {
                 let text = fs::read_to_string(self.folder(&name).join(SETTINGS)).ok()?;
-                Some((name, serde_json::from_str(&text).ok()?))
+                let settings = serde_json::from_str(&text).ok()?;
+                // Its place is found for every machine that's listed, a missing one included.
+                self.attach(&name);
+                Some((name, settings))
             })
             .collect();
         machines.sort_by(|a, b| a.0.cmp(&b.0));
@@ -155,15 +330,44 @@ impl Store {
         parse_account(&text).ok_or_else(|| format!("{} doesn't say a user and a password.", path.display()))
     }
 
-    /// Deletes a machine's folder and everything in it. A link in its place is refused, not followed.
+    /// Deletes a machine's folder and everything in it, and its disks where they are. A link in
+    /// place of either is refused, not followed. Disks in a place that can't be held are left, as the
+    /// service can't tell what's there now.
     pub fn remove(&self, name: &str) -> Result<(), String> {
+        let _one = self.changing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let folder = self.folder(name);
         let kind = fs::symlink_metadata(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
         if !kind.is_dir() || kind.file_type().is_symlink() {
             return Err(format!("{} isn't a folder of the service's own, so it's left.", folder.display()));
         }
-        fs::remove_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))
+        if let Some(place) = self.places().get_mut(name)
+            && place.held.is_ok()
+        {
+            // Emptied while it's held, and only then let go and taken away itself, so what's removed
+            // is what was checked.
+            empty(&place.folder)?;
+            place.held = Err("It's being deleted.".into());
+            fs::remove_dir(&place.folder).map_err(|error| format!("{}: {error}", place.folder.display()))?;
+        }
+        fs::remove_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+        self.places().remove(name);
+        Ok(())
     }
+}
+
+/// Deletes what's in `folder`, and not the folder.
+pub fn empty(folder: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        // A folder that is a link is removed as the link, not followed.
+        let gone = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => fs::remove_dir_all(&path),
+            _ => fs::remove_file(&path),
+        };
+        gone.map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Whether `name` can name a machine: `guesthouse-control`'s rule, and not a name Windows keeps for

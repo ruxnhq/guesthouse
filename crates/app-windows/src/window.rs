@@ -314,7 +314,7 @@ fn update_card(main: &Main, context: &ViewContext<Main>) -> Option<View> {
 fn machine_page(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> View {
     let mut sections: Vec<View> = update_card(main, context).into_iter().collect();
     sections.push(header(machine, context));
-    sections.push(group("Status", status_rows(machine)));
+    sections.push(group("Status", status_rows(machine, context)));
     sections.push(group("Connect", connect_rows(main, machine, context)));
     if let Some(draft) = main.draft.as_ref().filter(|draft| draft.machine == machine.name) {
         sections.push(settings_section(main, machine, draft, context));
@@ -379,7 +379,7 @@ fn header(machine: &Machine, context: &ViewContext<Main>) -> View {
         .into()
 }
 
-fn status_rows(machine: &Machine) -> Vec<View> {
+fn status_rows(machine: &Machine, context: &ViewContext<Main>) -> Vec<View> {
     let state = machine.state;
     let line = match state {
         State::Stopping => {
@@ -405,7 +405,47 @@ fn status_rows(machine: &Machine) -> Vec<View> {
         ));
     }
     rows.push(row(glyph::SETUP, "Setup", &[&setup_words(machine)], None));
+    rows.push(location_row(machine, context));
     rows
+}
+
+/// Where the machine's disks are, and moving them, which a stopped machine's can be.
+fn location_row(machine: &Machine, context: &ViewContext<Main>) -> View {
+    let free = machine.state == State::Stopped && machine.working.is_none() && machine.problem.is_none();
+    let shown = if machine.folder.as_os_str().is_empty() {
+        "Where the service keeps its machines.".to_owned()
+    } else {
+        machine.folder.display().to_string()
+    };
+    let mut lines: Vec<View> = vec![
+        TextBlock::new()
+            .text(shown)
+            .text_wrapping(TextWrapping::Wrap)
+            .foreground(ThemeBrush::SecondaryText)
+            .is_text_selection_enabled(true)
+            .into(),
+    ];
+    match &machine.problem {
+        Some(problem) => lines.push(
+            caption(problem).foreground(ThemeBrush::SystemCritical).text_wrapping(TextWrapping::Wrap).into(),
+        ),
+        None => lines.push(
+            caption(if free {
+                "Move… asks for a folder, and copies its disks to a folder of its name there, then deletes the old copy."
+            } else {
+                "Its disks move while it's off."
+            })
+            .into(),
+        ),
+    }
+    let to = button("Move…", glyph::FOLDER, context.message(Message::BrowseFolder(FolderFor::Move)), false)
+        .is_enabled(free)
+        .automation_name("Move its disks");
+    let back = button("Default place", glyph::BACK, context.message(Message::MoveDefault), false)
+        .is_enabled(free)
+        .automation_name("Move its disks back to where the service keeps machines");
+    let right = StackPanel::new().orientation(Orientation::Horizontal).spacing(8.0).children((to, back));
+    row_with(glyph::FOLDER, "Location", StackPanel::new().children(lines), Some(right.into()))
 }
 
 /// The machine's snapshots, and taking another. Each is of a stopped machine that has been set up.
@@ -1099,7 +1139,24 @@ fn new_page(main: &Main, context: &ViewContext<Main>) -> View {
         &["Which of a Windows image's editions to install. An Ubuntu image has one."],
         Some(edition.into()),
     );
-    sections.push(group("Machine", vec![name_row, image_row, user_row, edition_row]));
+    let location = Grid::new().columns([GridLength::STAR, GridLength::Auto]).column_spacing(8.0).children((
+        TextBox::new()
+            .placeholder_text("Empty keeps it where the service keeps machines")
+            .text(form.location.as_str())
+            .is_enabled(!busy)
+            .automation_name("Location")
+            .on_text_changed(context.callback(|text: Rc<str>| Message::Location(text.to_string()))),
+        button("Browse…", glyph::FOLDER, context.message(Message::BrowseFolder(FolderFor::Location)), false)
+            .is_enabled(!busy)
+            .grid_column(1),
+    ));
+    let location_row = row_under(
+        glyph::DISK,
+        "Location",
+        "A folder on one of this PC's own drives. Its disks go in a folder of the machine's name there, and can be moved later.",
+        location.into(),
+    );
+    sections.push(group("Machine", vec![name_row, image_row, location_row, user_row, edition_row]));
 
     let number = |name: &str, value: Option<f64>, step: f64, changed: Callback<Option<f64>>| -> View {
         number_box(name, value, step, !busy, changed)

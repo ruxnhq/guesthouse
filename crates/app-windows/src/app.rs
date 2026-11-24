@@ -53,6 +53,10 @@ pub enum FolderFor {
     Form,
     /// The shown machine's page.
     Machine,
+    /// The new machine's form, for where its disks are kept.
+    Location,
+    /// The shown machine's page, for where to move its disks.
+    Move,
 }
 
 /// The share a folder field and its read-only box say, once the field holds a path.
@@ -248,6 +252,8 @@ pub struct Form {
     /// The folder to share, as typed or picked. Empty shares none.
     pub share_folder: String,
     pub share_read_only: bool,
+    /// The folder the machine's disks are kept in, as typed or picked. Empty is the service's own.
+    pub location: String,
 }
 
 impl Default for Form {
@@ -265,6 +271,7 @@ impl Default for Form {
             network: true,
             share_folder: String::new(),
             share_read_only: false,
+            location: String::new(),
         }
     }
 }
@@ -288,6 +295,9 @@ impl Form {
             card: self.card.clone(),
             edition: EDITIONS.get(self.edition).copied().unwrap_or_default().to_owned(),
             user: user.to_owned(),
+            folder: Some(self.location.trim().trim_matches('"'))
+                .filter(|folder| !folder.is_empty())
+                .map(PathBuf::from),
             tpm: self.tpm,
             network: self.network,
             share: share_of(&self.share_folder, self.share_read_only),
@@ -598,6 +608,10 @@ pub enum Message {
     Network(bool),
     ShareFolder(String),
     ShareReadOnly(Option<bool>),
+    /// Where the new machine's disks are kept, as typed.
+    Location(String),
+    /// Move the machine's disks back to where the service keeps machines.
+    MoveDefault,
     /// Open the folder picker, for the form or the machine's page.
     BrowseFolder(FolderFor),
     PickedFolder(FolderFor, Option<PathBuf>),
@@ -1006,6 +1020,14 @@ impl Main {
                     false,
                 );
             }
+            (Job::Move(name, folder), Ok(Answer::Ok)) => {
+                let to = if folder.as_os_str().is_empty() {
+                    "where the service keeps its machines".to_owned()
+                } else {
+                    folder.display().to_string()
+                };
+                self.tell(format!("Moving {name}'s disks to {to}. Its log says how it goes."), false);
+            }
             (Job::Grow(name, size_gb), Ok(Answer::Ok)) => {
                 if let Ok(status) = &mut self.seen
                     && let Some(machine) = status.machines.iter_mut().find(|machine| machine.name == name)
@@ -1380,6 +1402,13 @@ impl Component for Main {
             Message::PickedFolder(FolderFor::Machine, Some(path)) => {
                 self.edit(|draft| draft.share_folder = path.display().to_string());
             }
+            Message::PickedFolder(FolderFor::Location, Some(path)) => {
+                self.form.location = path.display().to_string();
+            }
+            // Picking the folder is asking for the move, as the picker was opened to say where to.
+            Message::PickedFolder(FolderFor::Move, Some(path)) => self.ask(|name| Job::Move(name, path)),
+            Message::Location(folder) => self.form.location = folder,
+            Message::MoveDefault => self.ask(|name| Job::Move(name, PathBuf::new())),
             Message::Create => self.create(),
             Message::SetMemory(value) => self.edit(|draft| draft.memory_mb = value),
             Message::SetProcessors(value) => self.edit(|draft| draft.processors = value),
@@ -1510,6 +1539,8 @@ mod tests {
             nested_virtualization: false,
             ssh_port: None,
             size_gb: Some(128),
+            folder: PathBuf::new(),
+            problem: None,
             snapshots: Vec::new(),
             working: None,
             address: None,
@@ -1625,5 +1656,15 @@ mod tests {
         assert!(!offers_dlss(System::Linux, &Card::Default, &cards));
         // With no card the default, the default is no one's.
         assert!(!offers_dlss(System::Windows, &Card::Default, &cards[1..]));
+    }
+
+    #[test]
+    fn a_location_is_asked_for_only_when_one_is_typed() {
+        let mut form = Form { name: "win".into(), image: "win.iso".into(), ..Form::default() };
+        assert_eq!(form.machine().unwrap().folder, None, "empty is the service's own folder");
+        form.location = "  \"D:\\vms\"  ".into();
+        assert_eq!(form.machine().unwrap().folder, Some(PathBuf::from("D:\\vms")));
+        form.location = "   ".into();
+        assert_eq!(form.machine().unwrap().folder, None);
     }
 }

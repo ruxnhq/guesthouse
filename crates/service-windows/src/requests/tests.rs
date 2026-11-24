@@ -16,6 +16,9 @@ struct Pretend {
     silent: AtomicBool,
     /// Ports another program has.
     busy_ports: Mutex<Vec<u16>>,
+    /// The bytes free wherever a machine is moved to. Plenty, unless it says.
+    free_space: Option<u64>,
+    disks: FileDisks,
 }
 
 impl Work for Pretend {
@@ -79,7 +82,7 @@ impl Work for Pretend {
     }
 
     fn disks(&self) -> &dyn Disks {
-        &FileDisks
+        &self.disks
     }
 
     fn report_parts(&self) -> Vec<(String, Result<String, String>)> {
@@ -98,11 +101,19 @@ impl Work for Pretend {
     fn port_free(&self, port: u16) -> bool {
         !self.busy_ports.lock().unwrap().contains(&port)
     }
+
+    fn free_space(&self, _: &Path) -> Result<u64, String> {
+        Ok(self.free_space.unwrap_or(u64::MAX))
+    }
 }
 
 /// Disks as small files that name their parent, which is enough for the service's part. The disk
 /// work itself is tested in host-windows' snapshots.
-struct FileDisks;
+#[derive(Default)]
+struct FileDisks {
+    /// Telling a disk where its parent is fails, as it can with a disk that can't be opened.
+    fail_set_parent: AtomicBool,
+}
 
 impl Disks for FileDisks {
     fn differencing(&self, child: &Path, parent: &Path) -> Result<(), String> {
@@ -112,6 +123,18 @@ impl Disks for FileDisks {
 
     fn merge_into_parent(&self, _: &Path) -> Result<(), String> {
         Ok(())
+    }
+
+    fn set_parent(&self, child: &Path, parent: &Path) -> Result<(), String> {
+        if self.fail_set_parent.load(Ordering::SeqCst) {
+            return Err(format!("{} can't be opened to be told its parent.", child.display()));
+        }
+        fs::write(child, format!("on {}", parent.display())).map_err(|error| error.to_string())
+    }
+
+    fn parent_of(&self, child: &Path) -> Result<PathBuf, String> {
+        let text = fs::read_to_string(child).map_err(|error| error.to_string())?;
+        text.strip_prefix("on ").map(PathBuf::from).ok_or_else(|| "it has no parent".into())
     }
 }
 
@@ -136,6 +159,14 @@ impl Connection for Window {
     }
 
     fn may_share(&mut self, path: &Path, _: bool) -> Result<Held, String> {
+        self.may_read(path).map(|()| Box::new(()) as Held)
+    }
+
+    /// A folder is kept in unless the user may not read it, or it's named `link`, as a link is.
+    fn may_place(&mut self, path: &Path) -> Result<Held, String> {
+        if path.file_name().is_some_and(|name| name == "link") {
+            return Err(format!("{} is a link to another folder.", path.display()));
+        }
         self.may_read(path).map(|()| Box::new(()) as Held)
     }
 }
@@ -175,6 +206,7 @@ fn new_machine(setup: &Setup, name: &str) -> NewMachine {
         card: Card::Default,
         edition: String::new(),
         user: String::new(),
+        folder: None,
         tpm: true,
         network: true,
         share: None,
@@ -938,6 +970,7 @@ fn a_file_that_is_a_link_is_not_followed() {
 }
 
 mod network;
+mod places;
 use network::FakeNet;
 #[test]
 fn nested_virtualization_is_off_until_asked_for_and_reaches_the_next_boot() {

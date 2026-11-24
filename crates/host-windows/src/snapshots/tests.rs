@@ -63,6 +63,31 @@ impl Disks for Fake {
         parent_disk["gen"] = json!(parent_disk["gen"].as_u64().unwrap() + 1);
         fs::write(&parent, parent_disk.to_string()).map_err(|error| error.to_string())
     }
+
+    fn set_parent(&self, child: &Path, parent: &Path) -> Result<(), String> {
+        let mut disk = read_file(child)?;
+        disk["parent"] = json!(parent.to_str().unwrap());
+        fs::write(child, disk.to_string()).map_err(|error| error.to_string())
+    }
+
+    fn parent_of(&self, child: &Path) -> Result<PathBuf, String> {
+        let disk = read_file(child)?;
+        disk["parent"].as_str().map(PathBuf::from).ok_or_else(|| "it has no parent".into())
+    }
+}
+
+/// Copies a folder and everything in it, as moving a machine does.
+fn copy_all(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_all(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
 }
 
 struct Machine {
@@ -251,4 +276,94 @@ fn real_disks_take_go_back_and_delete() {
     opens(&disk).expect("the disk, merged into the first, opens alone");
     assert!(!made_on_another(&disk).unwrap());
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_copied_machines_disks_are_told_where_their_parents_are_and_read_without_the_old_copy() {
+    let m = machine("relocate");
+    let fake = Fake::default();
+    let first = take(&m.disk, "one", 1, &fake).unwrap();
+    write(&m.disk, "b");
+    let second = take(&m.disk, "two", 2, &fake).unwrap();
+    write(&m.disk, "c");
+    // A deleted snapshot that two disks are made on is a parent too, and its disk is there.
+    revert(&m.disk, first, &fake).unwrap();
+    write(&m.disk, "d");
+    delete(&m.disk, first, &fake).unwrap();
+    let installer = m.root.join("installer.iso");
+    fs::write(&installer, "iso").unwrap();
+    Record { installer: Some(installer), installed: true, ..Record::default() }.save(&m.disk).unwrap();
+    assert_eq!(links(&m.disk).unwrap().len(), 2, "the second's on the first, and the machine's on the first");
+    let before = read(&m.disk).unwrap();
+    assert!(snapshot_disk(&m.disk, second).exists());
+
+    let new_root = m.root.with_file_name(format!("{}-moved", m.root.file_name().unwrap().to_string_lossy()));
+    let _ = fs::remove_dir_all(&new_root);
+    copy_all(&m.root, &new_root);
+    let new_disk = new_root.join("win.vhdx");
+    assert_eq!(
+        read(&new_disk).unwrap(),
+        before,
+        "before it's told, the copy reads through the old one, as a real copy does"
+    );
+    relocate(&m.disk, &new_disk, &fake).unwrap();
+    fs::remove_dir_all(&m.root).unwrap();
+    assert_eq!(read(&new_disk).unwrap(), before, "the copy reads on its own");
+    assert_eq!(
+        read(&snapshot_disk(&new_disk, second)).unwrap().first().map(String::as_str),
+        Some("installed")
+    );
+    assert_eq!(Record::load(&new_disk).unwrap().installer, Some(new_root.join("installer.iso")));
+    let _ = fs::remove_dir_all(&new_root);
+}
+
+#[test]
+fn a_disk_still_reading_the_old_copy_fails_the_relocation() {
+    struct Stubborn(Fake);
+    impl Disks for Stubborn {
+        fn differencing(&self, child: &Path, parent: &Path) -> Result<(), String> {
+            self.0.differencing(child, parent)
+        }
+        fn merge_into_parent(&self, child: &Path) -> Result<(), String> {
+            self.0.merge_into_parent(child)
+        }
+        fn set_parent(&self, _: &Path, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn parent_of(&self, child: &Path) -> Result<PathBuf, String> {
+            self.0.parent_of(child)
+        }
+    }
+    let m = machine("stubborn");
+    take(&m.disk, "one", 1, &Fake::default()).unwrap();
+    let new_root = m.root.with_file_name(format!("{}-copy", m.root.file_name().unwrap().to_string_lossy()));
+    let _ = fs::remove_dir_all(&new_root);
+    copy_all(&m.root, &new_root);
+    let error = relocate(&m.disk, &new_root.join("win.vhdx"), &Stubborn(Fake::default())).unwrap_err();
+    assert!(error.contains("reads from"), "{error}");
+    let _ = fs::remove_dir_all(&new_root);
+}
+
+/// A snapshot chain copied to another folder and told where its parents are, on real disk files
+/// through virtdisk: the copy opens, and reads from the new place once the old is gone.
+#[cfg(windows)]
+#[test]
+fn real_disks_follow_a_copied_chain() {
+    use crate::windows::RealDisks;
+    use guesthouse_hcs::disk::{Kind, VirtualDisk, create_vhdx};
+    let root = std::env::temp_dir().join(format!("gh-real-relocate-{}", std::process::id()));
+    let moved = std::env::temp_dir().join(format!("gh-real-relocate-{}-moved", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&moved);
+    fs::create_dir_all(&root).unwrap();
+    let disk = root.join("win.vhdx");
+    create_vhdx(&disk, 1 << 30).unwrap();
+    take(&disk, "one", 1, &RealDisks).unwrap();
+    take(&disk, "two", 2, &RealDisks).unwrap();
+    copy_all(&root, &moved);
+    let new = moved.join("win.vhdx");
+    relocate(&disk, &new, &RealDisks).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    VirtualDisk::open(&new, Kind::Vhdx).expect("the copy opens with the old one gone");
+    fs::remove_dir_all(&moved).unwrap();
 }

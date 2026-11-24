@@ -35,6 +35,13 @@ pub trait Disks {
     fn differencing(&self, child: &Path, parent: &Path) -> Result<(), String>;
     /// Writes what `child` holds into its parent.
     fn merge_into_parent(&self, child: &Path) -> Result<(), String>;
+    /// Makes `child`, a differencing disk, read the rest from `parent` in place of the disk it was
+    /// made on. A disk stores where its parent is as a path, so one that's been copied still reads
+    /// from the original until it's told.
+    fn set_parent(&self, child: &Path, parent: &Path) -> Result<(), String>;
+    /// Where `child`, a differencing disk, reads its parent from, as it finds it now. It's an error
+    /// if it can't.
+    fn parent_of(&self, child: &Path) -> Result<PathBuf, String>;
 }
 
 /// A snapshot as the app is told of it.
@@ -160,6 +167,71 @@ pub fn chain(disk: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(disks)
+}
+
+/// Every disk of the machine that's made on another, each with the one it's made on: the machine's
+/// own disk, and each snapshot's that has a parent. Deleted snapshots count, as their disks are
+/// there while another is made on them, and those of another line of snapshots do too, which the
+/// machine's chain doesn't pass through.
+pub fn links(disk: &Path) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let index = load(disk)?;
+    let mut links: Vec<(PathBuf, PathBuf)> = index
+        .snapshots
+        .iter()
+        .filter_map(|entry| Some((snapshot_disk(disk, entry.id), snapshot_disk(disk, entry.parent?))))
+        .collect();
+    if let Some(current) = index.current {
+        links.push((disk.to_owned(), snapshot_disk(disk, current)));
+    }
+    Ok(links)
+}
+
+/// Puts right what a machine's folder holds that says where the folder is, after the whole folder
+/// has been copied from `old` to `new`, which are the machine's disks. The installer a record names
+/// is the copy in the folder, and each differencing disk is told its parent's new place, then asked
+/// where it reads its parent from, as one still reading the old copy would read as the new until the
+/// old one is deleted. Nothing else may be using either.
+pub fn relocate(old: &Path, new: &Path, disks: &dyn Disks) -> Result<(), String> {
+    let old_folder = old.parent().unwrap_or(Path::new("."));
+    let new_folder = new.parent().unwrap_or(Path::new("."));
+    let index = load(new)?;
+    let mut disk_files = vec![new.to_owned()];
+    disk_files.extend(index.snapshots.iter().map(|entry| snapshot_disk(new, entry.id)));
+    for file in disk_files.iter().filter(|file| Record::path(file).exists()) {
+        let mut record = Record::load(file)?;
+        if let Some(installer) = &record.installer
+            && let Ok(inside) = installer.strip_prefix(old_folder)
+        {
+            record.installer = Some(new_folder.join(inside));
+            record.save(file)?;
+        }
+    }
+    let links = links(new)?;
+    for (child, parent) in &links {
+        disks.set_parent(child, parent)?;
+    }
+    for (child, parent) in &links {
+        let reads = disks.parent_of(child)?;
+        if !same_path(&reads, parent) {
+            return Err(format!(
+                "{} reads from {}, not {} where it was copied.",
+                child.display(),
+                reads.display(),
+                parent.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether two paths are the same file as Windows names them: the same whatever their case, and with
+/// or without the `\\?\` Windows puts before a path it has resolved.
+fn same_path(a: &Path, b: &Path) -> bool {
+    let plain = |path: &Path| {
+        let text = path.to_string_lossy().to_lowercase().replace('/', "\\");
+        text.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(text)
+    };
+    plain(a) == plain(b)
 }
 
 /// Whether the machine's disk is made on another, deleted snapshots' included. Such a disk can't grow.

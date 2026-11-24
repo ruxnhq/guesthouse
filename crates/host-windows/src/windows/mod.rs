@@ -96,6 +96,16 @@ impl crate::snapshots::Disks for RealDisks {
         let opened = VirtualDisk::open(child, Kind::Vhdx).map_err(|error| error.to_string())?;
         opened.merge_into_parent().map_err(|error| error.to_string())
     }
+
+    fn set_parent(&self, child: &Path, parent: &Path) -> Result<(), String> {
+        let opened = VirtualDisk::open_alone(child).map_err(|error| error.to_string())?;
+        opened.set_parent(parent).map_err(|error| error.to_string())
+    }
+
+    fn parent_of(&self, child: &Path) -> Result<PathBuf, String> {
+        let opened = VirtualDisk::open(child, Kind::Vhdx).map_err(|error| error.to_string())?;
+        opened.parent().map_err(|error| error.to_string())
+    }
 }
 
 /// The largest a machine's disk may grow to now, in whole GB.

@@ -5,7 +5,9 @@ use crate::error::{Error, Result, check_win32};
 use crate::text::{from_wide, wide};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     BusTypeFileBackedVirtual, CreateFileW, FILE_DEVICE_CD_ROM, FILE_DEVICE_DISK, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetLogicalDrives,
@@ -17,14 +19,16 @@ use windows_sys::Win32::Storage::Vhd::{
     ATTACH_VIRTUAL_DISK_PARAMETERS_0_0, ATTACH_VIRTUAL_DISK_VERSION_1, AttachVirtualDisk,
     CREATE_VIRTUAL_DISK_FLAG_NONE, CREATE_VIRTUAL_DISK_PARAMETERS, CREATE_VIRTUAL_DISK_VERSION_2,
     CreateVirtualDisk, DETACH_VIRTUAL_DISK_FLAG_NONE, DetachVirtualDisk, GET_VIRTUAL_DISK_INFO,
-    GET_VIRTUAL_DISK_INFO_SIZE, GetVirtualDiskInformation, GetVirtualDiskPhysicalPath,
-    MERGE_VIRTUAL_DISK_FLAG_NONE, MERGE_VIRTUAL_DISK_PARAMETERS, MERGE_VIRTUAL_DISK_VERSION_2,
-    MergeVirtualDisk, OPEN_VIRTUAL_DISK_FLAG_NONE, OPEN_VIRTUAL_DISK_PARAMETERS,
-    OPEN_VIRTUAL_DISK_RW_DEPTH_DEFAULT, OPEN_VIRTUAL_DISK_VERSION_1, OPEN_VIRTUAL_DISK_VERSION_2,
-    OpenVirtualDisk, RESIZE_VIRTUAL_DISK_FLAG_NONE, RESIZE_VIRTUAL_DISK_PARAMETERS,
-    RESIZE_VIRTUAL_DISK_VERSION_1, ResizeVirtualDisk, VIRTUAL_DISK_ACCESS_NONE, VIRTUAL_DISK_ACCESS_READ,
-    VIRTUAL_STORAGE_TYPE, VIRTUAL_STORAGE_TYPE_DEVICE_ISO, VIRTUAL_STORAGE_TYPE_DEVICE_VHDX,
-    VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
+    GET_VIRTUAL_DISK_INFO_PARENT_LOCATION, GET_VIRTUAL_DISK_INFO_SIZE, GetVirtualDiskInformation,
+    GetVirtualDiskPhysicalPath, MERGE_VIRTUAL_DISK_FLAG_NONE, MERGE_VIRTUAL_DISK_PARAMETERS,
+    MERGE_VIRTUAL_DISK_VERSION_2, MergeVirtualDisk, OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS,
+    OPEN_VIRTUAL_DISK_FLAG_NONE, OPEN_VIRTUAL_DISK_PARAMETERS, OPEN_VIRTUAL_DISK_RW_DEPTH_DEFAULT,
+    OPEN_VIRTUAL_DISK_VERSION_1, OPEN_VIRTUAL_DISK_VERSION_2, OpenVirtualDisk, RESIZE_VIRTUAL_DISK_FLAG_NONE,
+    RESIZE_VIRTUAL_DISK_PARAMETERS, RESIZE_VIRTUAL_DISK_VERSION_1, ResizeVirtualDisk, SET_VIRTUAL_DISK_INFO,
+    SET_VIRTUAL_DISK_INFO_0_0, SET_VIRTUAL_DISK_INFO_PARENT_PATH,
+    SET_VIRTUAL_DISK_INFO_PARENT_PATH_WITH_DEPTH, SetVirtualDiskInformation, VIRTUAL_DISK_ACCESS_NONE,
+    VIRTUAL_DISK_ACCESS_READ, VIRTUAL_STORAGE_TYPE, VIRTUAL_STORAGE_TYPE_DEVICE_ISO,
+    VIRTUAL_STORAGE_TYPE_DEVICE_VHDX, VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
@@ -143,6 +147,16 @@ pub struct VirtualDisk {
 
 impl VirtualDisk {
     pub fn open(path: &Path, kind: Kind) -> Result<Self> {
+        Self::open_with(path, kind, OPEN_VIRTUAL_DISK_FLAG_NONE)
+    }
+
+    /// Opens a VHDX without the disks it's made on, as one whose parent isn't where it says can be
+    /// opened to be told where its parent is.
+    pub fn open_alone(path: &Path) -> Result<Self> {
+        Self::open_with(path, Kind::Vhdx, OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS)
+    }
+
+    fn open_with(path: &Path, kind: Kind, flags: i32) -> Result<Self> {
         let storage = kind.storage_type();
         // SAFETY: an all-zero parameter block is valid, and the fields this needs are set below.
         let mut parameters: OPEN_VIRTUAL_DISK_PARAMETERS = unsafe { std::mem::zeroed() };
@@ -161,16 +175,8 @@ impl VirtualDisk {
         let text = wide(path);
         let mut handle: HANDLE = null_mut();
         // SAFETY: every pointer is to a value that outlives the call, and the path ends in a zero.
-        let error = unsafe {
-            OpenVirtualDisk(
-                &storage,
-                text.as_ptr(),
-                access,
-                OPEN_VIRTUAL_DISK_FLAG_NONE,
-                &parameters,
-                &mut handle,
-            )
-        };
+        let error =
+            unsafe { OpenVirtualDisk(&storage, text.as_ptr(), access, flags, &parameters, &mut handle) };
         check_win32(error, &format!("Opening the disk {}", path.display()))?;
         Ok(VirtualDisk { handle, kind, path: path.to_owned(), attached: false })
     }
@@ -246,6 +252,65 @@ impl VirtualDisk {
         let error =
             unsafe { MergeVirtualDisk(self.handle, MERGE_VIRTUAL_DISK_FLAG_NONE, &parameters, null()) };
         check_win32(error, &format!("Merging {} into its parent", self.path.display()))
+    }
+
+    /// Says where this differencing disk's parent is now, in place of where it was made on. It's
+    /// opened with `open_alone`, as it's opened to be told this.
+    pub fn set_parent(&self, parent: &Path) -> Result<()> {
+        let text = wide(parent);
+        let mut info = SET_VIRTUAL_DISK_INFO {
+            Version: SET_VIRTUAL_DISK_INFO_PARENT_PATH_WITH_DEPTH,
+            ..Default::default()
+        };
+        info.Anonymous.ParentPathWithDepthInfo =
+            SET_VIRTUAL_DISK_INFO_0_0 { ChildDepth: 1, ParentFilePath: text.as_ptr() };
+        // SAFETY: the handle is open, and the information and the path in it outlive the call.
+        let mut error = unsafe { SetVirtualDiskInformation(self.handle, &info) };
+        if error != 0 {
+            // A disk that is alone in what it opened has no depth to name, which some versions of
+            // Windows ask for in its place.
+            let mut plain =
+                SET_VIRTUAL_DISK_INFO { Version: SET_VIRTUAL_DISK_INFO_PARENT_PATH, ..Default::default() };
+            plain.Anonymous.ParentFilePath = text.as_ptr();
+            // SAFETY: as above.
+            error = unsafe { SetVirtualDiskInformation(self.handle, &plain) };
+        }
+        check_win32(error, &format!("Making {} read from {}", self.path.display(), parent.display()))
+    }
+
+    /// Where this differencing disk's parent is, as Windows found it. A disk opened with its
+    /// parents that can't find one is an error.
+    pub fn parent(&self) -> Result<PathBuf> {
+        // Room for the information and a path after it: the path is a string at the end of it.
+        let mut buffer = vec![0u64; 1024];
+        let info = buffer.as_mut_ptr().cast::<GET_VIRTUAL_DISK_INFO>();
+        // SAFETY: the buffer is large enough for the structure and is aligned for it.
+        unsafe { (*info).Version = GET_VIRTUAL_DISK_INFO_PARENT_LOCATION };
+        let mut bytes = (buffer.len() * size_of::<u64>()) as u32;
+        // SAFETY: the buffer is as large as `bytes` says.
+        let error = unsafe { GetVirtualDiskInformation(self.handle, &mut bytes, info, null_mut()) };
+        check_win32(error, &format!("Reading where {} reads its parent from", self.path.display()))?;
+        // SAFETY: asked for its parent's place, Windows filled in that part of the union.
+        let (resolved, start) = unsafe {
+            let location = std::ptr::addr_of!((*info).Anonymous.ParentLocation);
+            (
+                (*location).ParentResolved != 0,
+                std::ptr::addr_of!((*location).ParentLocationBuffer).cast::<u16>(),
+            )
+        };
+        let reach = (buffer.as_ptr() as usize + buffer.len() * size_of::<u64>() - start as usize) / 2;
+        // SAFETY: the string is in the buffer, after the fields before it, and `reach` units of the
+        // buffer are left from where it starts.
+        let units = unsafe { std::slice::from_raw_parts(start, reach) };
+        let path = from_wide(units);
+        if !resolved || path.is_empty() {
+            return Err(Error::new(
+                format!("Reading where {} reads its parent from", self.path.display()),
+                crate::error::hresult_from_win32(ERROR_FILE_NOT_FOUND),
+                Some("It can't find the disk it's made on.".into()),
+            ));
+        }
+        Ok(PathBuf::from(path))
     }
 
     /// Lets the disk grow to `size_bytes`. A disk is only made larger here: the guest's partitions

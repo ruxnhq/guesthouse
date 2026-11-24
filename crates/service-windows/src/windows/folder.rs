@@ -2,21 +2,33 @@
 //! administrators, and opened by nobody but the system and administrators. The service writes and
 //! deletes in it as the system, for a user who isn't an administrator, so no such user may put
 //! anything in it, least of all a link that leads the service somewhere else.
+//!
+//! A machine can also be kept in a folder a user chose, whose own folder the user may be able to
+//! rename away and put a link in the place of. So the folder a machine is made in is made the way
+//! the root is, and held open while the service runs, which no one can rename or delete it under, and
+//! it's only held if it still is what the service made.
 
+use super::pipe::the_folder_itself;
 use super::security::{ADMINISTRATORS, Descriptor, SYSTEM, TRUSTED_INSTALLER, last_error, sid_text, wide};
-use std::fs;
+use crate::store::Held;
+use std::fs::{self, OpenOptions};
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr::null_mut;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT, SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
     OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SECURITY_ATTRIBUTES,
 };
-use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateDirectoryW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW, READ_CONTROL,
+};
 
 /// Owned by the administrators; the system and administrators may do anything in it and in
 /// everything made in it, and nobody else anything. Protected, so a parent folder's rules aren't
@@ -52,6 +64,47 @@ pub fn secure(root: &Path, parent_too: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Makes `folder`, which must not be there yet, with the root's owner and rules, which a folder made
+/// in the root has by inheriting them. Only this one folder is made, never its parents.
+pub fn private_folder(folder: &Path) -> Result<(), String> {
+    make(folder, &Descriptor::new(PRIVATE)?)
+}
+
+/// Opens a machine's folder that isn't in the root, and keeps it open, if it's a folder by its own
+/// path, not a link and not reached through one, and owned by the system or administrators, as the
+/// service makes it. While it's open, it can't be renamed or deleted, and neither can a folder it's in.
+pub fn hold(folder: &Path) -> Result<Held, String> {
+    let file = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL)
+        // Shared for reading and writing, and not for deleting, which is what holds it.
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        // Opened as itself, not followed if it's a link, and with the backup semantics a folder needs.
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(folder)
+        .map_err(|error| format!("{} can't be opened: {error}", folder.display()))?;
+    the_folder_itself(&file, folder)?;
+    let owner = owner_of(file.as_raw_handle(), folder)?;
+    if ![SYSTEM, ADMINISTRATORS, TRUSTED_INSTALLER].contains(&owner.as_str()) {
+        return Err(format!(
+            "{} is owned by {owner}, not by the service, so it isn't the folder the service made. \
+             Someone may have put another in its place.",
+            folder.display()
+        ));
+    }
+    Ok(Box::new(file))
+}
+
+/// How many bytes are free on the drive `folder` is on, for the service.
+pub fn free_space(folder: &Path) -> Result<u64, String> {
+    let path = wide(folder);
+    let mut free = 0u64;
+    // SAFETY: the path ends in a zero, and the one number asked for has a place to go.
+    if unsafe { GetDiskFreeSpaceExW(path.as_ptr(), &mut free, null_mut(), null_mut()) } == 0 {
+        return Err(last_error(&format!("Reading the free space where {} is", folder.display())));
+    }
+    Ok(free)
 }
 
 fn make(folder: &Path, private: &Descriptor) -> Result<(), String> {
@@ -95,6 +148,38 @@ fn protect(folder: &Path, private: &Descriptor) -> Result<(), String> {
     Ok(())
 }
 
+/// Who owns an open folder, as a SID's text.
+fn owner_of(handle: HANDLE, folder: &Path) -> Result<String, String> {
+    let mut owner: PSID = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: the handle is open; the owner points into the descriptor, which comes back allocated
+    // for us to free.
+    let code = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if code != ERROR_SUCCESS {
+        return Err(format!(
+            "Reading who owns {}: {}",
+            folder.display(),
+            std::io::Error::from_raw_os_error(code as i32)
+        ));
+    }
+    // SAFETY: Windows gave a valid SID inside the descriptor, freed only after this.
+    let text = unsafe { sid_text(owner) };
+    // SAFETY: allocated by Windows for us, and not used after this.
+    unsafe { LocalFree(descriptor) };
+    text.ok_or_else(|| format!("Reading who owns {}: the owner can't be read.", folder.display()))
+}
+
 /// Who owns a folder, as a SID's text.
 fn owner(folder: &Path) -> Result<String, String> {
     let path = wide(folder);
@@ -127,3 +212,6 @@ fn owner(folder: &Path) -> Result<String, String> {
     unsafe { LocalFree(descriptor) };
     text.ok_or_else(|| format!("Reading who owns {}: the owner can't be read.", folder.display()))
 }
+
+#[cfg(test)]
+mod tests;

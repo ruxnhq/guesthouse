@@ -5,7 +5,7 @@
 
 use crate::machines::{Entry, Machines};
 use crate::report_parts::tail_file;
-use crate::store::{Settings, Store, usable_name};
+use crate::store::{OWN_FILES, Settings, Store, empty, usable_name};
 use guesthouse_control::report::pieces;
 use guesthouse_control::{
     Answer, Bridging, Card, CardInfo, DEFAULT_USER, Event, Machine, MachineSettings, NetworkMode, NewMachine,
@@ -18,6 +18,7 @@ use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::settings::{self as host_settings, BootSettings, GpuChoice, PrepareSettings};
 use guesthouse_host_windows::snapshots::{self, Disks};
 use guesthouse_host_windows::ssh;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -66,6 +67,14 @@ pub trait Work: Send + Sync + 'static {
     fn network(&self) -> &dyn Network;
     /// Whether `port` on this PC's loopback can be listened on now.
     fn port_free(&self, port: u16) -> bool;
+    /// Makes `folder`, which must not be there yet, for one machine's disks, so that only the system
+    /// and administrators may open it or anything made in it. Its parent is the user's, so nothing
+    /// is made but this one folder.
+    fn private_folder(&self, folder: &Path) -> Result<(), String> {
+        fs::create_dir(folder).map_err(|error| format!("{}: {error}", folder.display()))
+    }
+    /// How many bytes are free on the drive `folder` is on.
+    fn free_space(&self, folder: &Path) -> Result<u64, String>;
     /// Writes a line to the service's own log, for what no window may be watching.
     fn log(&self, _text: &str) {}
 }
@@ -84,14 +93,23 @@ pub trait Connection {
     /// It must be the folder itself, by its own path, and not a link to another. What comes back
     /// holds the folder open, so nothing can put another in its place while it's held.
     fn may_share(&mut self, path: &Path, read_only: bool) -> Result<Held, String>;
+    /// Whether the user asking may keep a machine in the folder at `path`: make a folder in it. It
+    /// must be the folder itself, by its own path, not a link and not reached through one, on one
+    /// of this PC's fixed drives. What comes back holds it open while the machine's folder is made.
+    fn may_place(&mut self, path: &Path) -> Result<Held, String>;
 }
 
 /// The folder a check holds open, for as long as it's kept.
-pub type Held = Box<dyn std::any::Any + Send>;
+pub use crate::store::Held;
 
 /// HCS's ID for a machine, which also names its pipes. `boot` stops any machine with its ID that's
 /// still there, so it's never another program's.
 pub use guesthouse_control::vm_id;
+
+/// What a machine's place is given beyond the files being moved to it, in bytes, to be free.
+const SPARE: u64 = 64 << 20;
+/// A file at least this large is said to be copied, as its copy takes a while.
+const LARGE_FILE: u64 = 64 << 20;
 
 pub struct Service<W: Work> {
     machines: Arc<Machines>,
@@ -115,6 +133,11 @@ impl<W: Work> Service<W> {
         let names: Vec<String> = machines.lock().keys().cloned().collect();
         for name in names {
             work.end(&vm_id(&name));
+            // The disks of a machine whose place can't be used aren't touched.
+            if let Some(problem) = machines.store.problem(&name) {
+                work.log(&format!("{name}'s disks can't be used: {problem}"));
+                continue;
+            }
             // A snapshot a crash cut short is finished or undone before anything uses the disk.
             if let Err(error) = snapshots::repair(&machines.store.disk(&name)) {
                 eprintln!("{name}'s snapshots couldn't be put right: {error}");
@@ -172,6 +195,7 @@ impl<W: Work> Service<W> {
             Request::Delete { name } => self.delete(&name),
             Request::Change { name, settings } => self.change(&name, settings, connection),
             Request::Grow { name, size_gb } => self.grow(&name, size_gb),
+            Request::Move { name, folder } => self.move_machine(&name, folder, connection),
             Request::Snapshot { name, label } => self.take_snapshot(&name, label),
             Request::Revert { name, id } => self.revert(&name, id),
             Request::DeleteSnapshot { name, id } => self.delete_snapshot(&name, id),
@@ -237,6 +261,12 @@ impl<W: Work> Service<W> {
     }
 
     fn status(&self) -> Answer {
+        // Each place is held again as it stands: one that's gone is a problem, and one that's back
+        // isn't.
+        let names: Vec<String> = self.machines.lock().keys().cloned().collect();
+        for name in &names {
+            self.refresh(name);
+        }
         let cards = self.cards();
         let bridging = self.bridging();
         let default_card = cards.iter().find(|card| card.default).map(|card| card.name.clone());
@@ -271,6 +301,8 @@ impl<W: Work> Service<W> {
                     nested_virtualization: entry.settings.nested_virtualization,
                     ssh_port: entry.settings.ssh_port,
                     size_gb: entry.settings.size_gb,
+                    folder: self.machines.store.recorded(name),
+                    problem: self.machines.store.problem(name),
                     snapshots: snapshots::list(&self.machines.store.disk(name))
                         .unwrap_or_default()
                         .into_iter()
@@ -351,6 +383,18 @@ impl<W: Work> Service<W> {
             return;
         }
         let name = machine.name.clone();
+        // The folder it's to be kept in is checked as the user, and held until the machine's own
+        // folder is made in it.
+        let placement = match machine.folder.as_deref().filter(|folder| !folder.as_os_str().is_empty()) {
+            Some(folder) => match self.placement(&name, folder, connection) {
+                Ok(placement) => Some(placement),
+                Err(reason) => {
+                    let _ = connection.send(&Answer::Refused { reason });
+                    return;
+                }
+            },
+            None => None,
+        };
         {
             let mut making = self.making.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(other) = &*making {
@@ -359,6 +403,13 @@ impl<W: Work> Service<W> {
                 return;
             }
             if let Err(reason) = self.machines.store.make(&name) {
+                let _ = connection.send(&Answer::Refused { reason });
+                return;
+            }
+            if let Some((place, _)) = &placement
+                && let Err(reason) = self.make_place(&name, place)
+            {
+                let _ = self.machines.store.remove(&name);
                 let _ = connection.send(&Answer::Refused { reason });
                 return;
             }
@@ -407,6 +458,45 @@ impl<W: Work> Service<W> {
         let _ = connection.send(&Answer::Done { reason });
     }
 
+    /// Why `folder` can't be where `name`'s disks go, if it can't, or the machine's folder in it, which
+    /// doesn't exist yet, and the folder held open.
+    fn placement(
+        &self,
+        name: &str,
+        folder: &Path,
+        connection: &mut dyn Connection,
+    ) -> Result<(PathBuf, Held), String> {
+        if !folder.is_absolute() || folder.to_string_lossy().starts_with(r"\\") {
+            return Err(format!("{} isn't a folder on this PC's own drives.", folder.display()));
+        }
+        if inside(folder, self.machines.store.root()) {
+            return Err(format!(
+                "{} is the service's own folder, or in it. Leave the place empty to keep a machine there.",
+                folder.display()
+            ));
+        }
+        // Asked as the user first, as for a share.
+        let held = connection.may_place(folder)?;
+        if !folder.is_dir() {
+            return Err(format!("{} isn't a folder.", folder.display()));
+        }
+        // The folder as Windows has it, with its slashes the right way and its dots resolved.
+        let place = std::path::absolute(folder).unwrap_or_else(|_| folder.to_owned()).join(name);
+        if place.exists() {
+            return Err(format!("{} is there already, so {name} isn't made in it.", place.display()));
+        }
+        Ok((place, held))
+    }
+
+    /// Makes `place`, the folder for the disks of the machine `name`, whose own folder is made,
+    /// and gives the machine it.
+    fn make_place(&self, name: &str, place: &Path) -> Result<(), String> {
+        self.work.private_folder(place)?;
+        self.machines.store.locate(name, place).inspect_err(|_| {
+            let _ = fs::remove_dir(place);
+        })
+    }
+
     /// Makes a new machine's disks, on a thread of its own, as it goes on if the window that asked
     /// closes. A machine that couldn't be made is deleted, folder and all, so its name is free again.
     fn make(&self, machine: NewMachine) -> Result<(), String> {
@@ -451,8 +541,29 @@ impl<W: Work> Service<W> {
         made
     }
 
+    /// Holds a machine's place again, if the machine is doing nothing, as what's done to a machine
+    /// that is, such as moving it, has its own hold of it.
+    fn refresh(&self, name: &str) {
+        if self.machines.lock().get(name).is_some_and(Entry::idle) {
+            self.machines.store.refresh(name);
+        }
+    }
+
+    /// Why a machine's disks can't be used, as an answer, if they can't: their place is gone, or isn't
+    /// the service's own any more.
+    fn unusable(&self, name: &str) -> Option<Answer> {
+        self.refresh(name);
+        self.machines
+            .store
+            .problem(name)
+            .map(|problem| Answer::Refused { reason: format!("{name}'s disks can't be used now. {problem}") })
+    }
+
     fn start(self: &Arc<Self>, asked: &str, connection: &mut dyn Connection) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         let stop = Arc::new(AtomicBool::new(false));
         {
             let mut entries = self.machines.lock();
@@ -565,6 +676,9 @@ impl<W: Work> Service<W> {
 
     fn screen(&self, asked: &str) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         let disk = self.machines.store.disk(&name);
         let record = Record::load(&disk).unwrap_or_default();
         let Some(host_fingerprint) = record.screen else {
@@ -769,6 +883,9 @@ impl<W: Work> Service<W> {
     /// the machine meanwhile; growing a disk that grows as it's written only changes its header.
     fn grow(&self, asked: &str, size_gb: u64) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         if !(SIZE_GB.0..=SIZE_GB.1).contains(&size_gb) {
             return Answer::Refused {
                 reason: format!("A machine's disk is {} to {} GB.", SIZE_GB.0, SIZE_GB.1),
@@ -821,6 +938,9 @@ impl<W: Work> Service<W> {
 
     fn take_snapshot(self: &Arc<Self>, asked: &str, label: String) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         let label = label.trim().to_owned();
         if label.is_empty()
             || label.chars().count() > snapshots::LONGEST_LABEL
@@ -861,6 +981,9 @@ impl<W: Work> Service<W> {
 
     fn revert(self: &Arc<Self>, asked: &str, id: u64) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         let Some(label) = self.snapshot_label(&name, id) else { return no_snapshot(&name, id) };
         self.in_background(&name, format!("Going back to the snapshot {label}"), move |service, disk| {
             snapshots::revert(disk, id, service.work.disks())
@@ -870,6 +993,9 @@ impl<W: Work> Service<W> {
 
     fn delete_snapshot(self: &Arc<Self>, asked: &str, id: u64) -> Answer {
         let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
         let Some(label) = self.snapshot_label(&name, id) else { return no_snapshot(&name, id) };
         self.in_background(&name, format!("Deleting the snapshot {label}"), move |service, disk| {
             snapshots::delete(disk, id, service.work.disks())
@@ -918,6 +1044,191 @@ impl<W: Work> Service<W> {
             }
         });
         Answer::Ok
+    }
+
+    /// Moves a stopped machine's disks to a folder of its name in `folder`, or back to the service's
+    /// own folder if `folder` is empty. The user asking is checked as for a new machine's place, and
+    /// there must be room. What's left is done on a thread of its own, as the copy takes a while, with
+    /// the machine marked busy: see [`Service::move_disks`].
+    fn move_machine(
+        self: &Arc<Self>,
+        asked: &str,
+        folder: PathBuf,
+        connection: &mut dyn Connection,
+    ) -> Answer {
+        let Some(name) = self.machines.find(asked) else { return no_machine(asked) };
+        if let Some(refused) = self.unusable(&name) {
+            return refused;
+        }
+        {
+            let entries = self.machines.lock();
+            let entry = &entries[&name];
+            if !entry.idle() {
+                return Answer::Refused {
+                    reason: format!(
+                        "{name} is {}. Stop it first: its disks are moved while it's off.",
+                        busy_words(entry)
+                    ),
+                };
+            }
+        }
+        let store = &self.machines.store;
+        let source = store.place(&name);
+        let own = folder.as_os_str().is_empty();
+        let target = if own { store.folder(&name) } else { folder.join(&name) };
+        let refused = |reason: String| Answer::Refused { reason };
+        if same_place(&target, &source) {
+            return refused(format!("{name}'s disks are in {} already.", source.display()));
+        }
+        if inside(&target, &source) {
+            return refused(format!(
+                "{} is inside the folder the disks are in now, so they can't be moved there.",
+                target.display()
+            ));
+        }
+        let (target, held) = if own {
+            match tree(&target) {
+                Ok(left) if left.is_empty() => (target, Box::new(()) as Held),
+                Ok(_) => {
+                    return refused(format!(
+                        "{} has files in it that aren't the machine's own, so the disks aren't moved there.",
+                        target.display()
+                    ));
+                }
+                Err(reason) => return refused(reason),
+            }
+        } else {
+            match self.placement(&name, &folder, connection) {
+                Ok(placed) => placed,
+                Err(reason) => return refused(reason),
+            }
+        };
+        let needed = match tree(&source) {
+            Ok(files) => files.values().sum::<u64>(),
+            Err(reason) => return refused(reason),
+        };
+        let on = if own { target.clone() } else { target.parent().map_or(folder, Path::to_owned) };
+        match self.work.free_space(&on) {
+            Ok(free) if free >= needed.saturating_add(SPARE) => {}
+            Ok(free) => {
+                return refused(format!(
+                    "{} has {} free, and the disks take {}, so there isn't room.",
+                    on.display(),
+                    size_words(free),
+                    size_words(needed)
+                ));
+            }
+            Err(reason) => return refused(reason),
+        }
+        let doing = format!("Moving its disks to {}", target.display());
+        self.in_background(&name.clone(), doing, move |service, _| {
+            service.move_disks(&name, &source, &target, own, held)
+        })
+    }
+
+    /// Copies a machine's disks, and everything beside them, to `target`, then checks the copy, then
+    /// makes it the machine's place, and only then deletes the old. The machine is where it was until
+    /// the copy has been checked and its disks have been told where they are, and a copy that fails
+    /// any step is deleted. A `target` that isn't the machine's own folder is made here, as the
+    /// system's and administrators'. `parent` holds the folder it's made in until it's made.
+    fn move_disks(
+        &self,
+        name: &str,
+        source: &Path,
+        target: &Path,
+        own: bool,
+        parent: Held,
+    ) -> Result<String, String> {
+        let store = &self.machines.store;
+        let sink = self.machines.sink(name);
+        let old_disk = store.disk(name);
+        if !own {
+            self.work.private_folder(target)?;
+        }
+        let held = if own { Ok(Box::new(()) as Held) } else { store.hold(target) };
+        drop(parent);
+        // The copy is emptied while it's held and then let go, as a machine is deleted. One that isn't
+        // held, as it couldn't be, may not be the folder that was made, so only an empty one goes.
+        let discard = |held: Option<Held>, why: String| {
+            let remove = || fs::remove_dir(target).map_err(|error| format!("{}: {error}", target.display()));
+            let left = match (own, held) {
+                (true, held) => {
+                    drop(held);
+                    remove_disks(target)
+                }
+                (false, Some(held)) => {
+                    let emptied = empty(target);
+                    drop(held);
+                    emptied.and_then(|()| remove())
+                }
+                (false, None) => remove(),
+            };
+            match left {
+                Ok(()) => format!("{why} {name} is where it was."),
+                Err(error) => format!(
+                    "{why} {name} is where it was, but the partial copy in {} couldn't be deleted: {error}",
+                    target.display()
+                ),
+            }
+        };
+        let held = held.map_err(|why| discard(None, why))?;
+        if let Err(error) = self.copy_disks(name, source, target, &old_disk, &*sink) {
+            return Err(discard(Some(held), error));
+        }
+        // The record is written, and the place changed, in one step.
+        let mut held = Some(held);
+        let (was, old_held) = match store.switch(name, target, &mut held) {
+            Ok(before) => before,
+            Err(error) => return Err(discard(held, format!("The new place couldn't be kept: {error}"))),
+        };
+        let deleted = if own_folder(store, name, &was) {
+            remove_disks(&was)
+        } else {
+            let emptied = empty(&was);
+            drop(old_held);
+            emptied.and_then(|()| fs::remove_dir(&was).map_err(|error| format!("{}: {error}", was.display())))
+        };
+        if let Err(error) = deleted {
+            sink.problem(format!(
+                "The disks are moved, but the old copy in {} couldn't be deleted, and is left: {error}",
+                was.display()
+            ));
+        }
+        Ok(format!("Moved its disks to {}.", target.display()))
+    }
+
+    /// Copies what's in `source` to `target`, checks every file is there at its size, and has the
+    /// copy's disks read from each other where it is now.
+    fn copy_disks(
+        &self,
+        name: &str,
+        source: &Path,
+        target: &Path,
+        old_disk: &Path,
+        sink: &dyn Sink,
+    ) -> Result<(), String> {
+        let before = tree(source)?;
+        let total: u64 = before.values().sum();
+        sink.note(format!("Copying {} files, {}, to {}.", before.len(), size_words(total), target.display()));
+        let mut done = 0;
+        copy_tree(source, target, true, &mut |file: &str, bytes: u64| {
+            done += bytes;
+            if bytes >= LARGE_FILE {
+                sink.note(format!("Copied {file}: {} of {}.", size_words(done), size_words(total)));
+            }
+        })?;
+        let after = tree(target)?;
+        if let Some((file, size)) = before.iter().find(|(file, size)| after.get(*file) != Some(size)) {
+            return Err(match after.get(file) {
+                Some(copied) => format!("The copy of {file} is {copied} bytes, not the {size} it is."),
+                None => format!("The copy of {file} is missing."),
+            });
+        }
+        if after.len() != before.len() {
+            return Err("The copy has files the original doesn't.".into());
+        }
+        sink.note("Checked the copy: every file is there, at the size it is.");
+        snapshots::relocate(old_disk, &target.join(format!("{}.vhdx", name)), self.work.disks())
     }
 
     fn account(&self, asked: &str) -> Answer {
@@ -1009,12 +1320,13 @@ impl<W: Work> Service<W> {
 /// named in the report as it's shown here.
 fn report_machine_files(store: &Store, name: &str) -> Vec<(String, PathBuf)> {
     let folder = store.folder(name);
+    let place = store.place(name);
     let record = Record::path(&store.disk(name));
     let record_name = record.file_name().map(|file| file.to_string_lossy().into_owned()).unwrap_or_default();
     vec![
         ("machine.json".to_owned(), folder.join("machine.json")),
         (record_name, record),
-        ("snapshots/index.json".to_owned(), folder.join("snapshots").join("index.json")),
+        ("snapshots/index.json".to_owned(), place.join("snapshots").join("index.json")),
         ("events.log".to_owned(), store.events(name)),
         ("events.1.log".to_owned(), store.events_before(name)),
     ]
@@ -1161,6 +1473,111 @@ fn drop_installer(store: &Store, name: &str, disk: &Path) {
         record.installer = None;
         let _ = record.save(disk);
     }
+}
+
+/// Whether `folder` is a machine's own folder, where its settings are.
+fn own_folder(store: &Store, name: &str, folder: &Path) -> bool {
+    same_place(folder, &store.folder(name))
+}
+
+/// A path as it's compared: the same whatever its case or its slashes, and without one at its end.
+fn plain(path: &Path) -> String {
+    path.to_string_lossy().to_lowercase().replace('/', "\\").trim_end_matches('\\').to_owned()
+}
+
+fn same_place(a: &Path, b: &Path) -> bool {
+    plain(a) == plain(b)
+}
+
+/// Whether `path` is `folder` or in it.
+fn inside(path: &Path, folder: &Path) -> bool {
+    let (path, folder) = (plain(path), plain(folder));
+    path == folder || path.starts_with(&format!("{folder}\\"))
+}
+
+/// Every file under `folder` and its size, and every folder with a size of nothing, by path from it
+/// in lowercase and with `/`, except what's a machine's own at the top. A link is an error, not
+/// followed: a machine's folder holds none, so one is something else's.
+fn tree(folder: &Path) -> Result<BTreeMap<String, u64>, String> {
+    fn walk(folder: &Path, prefix: &str, top: bool, found: &mut BTreeMap<String, u64>) -> Result<(), String> {
+        let said = |error: io::Error| format!("{}: {error}", folder.display());
+        for entry in fs::read_dir(folder).map_err(said)? {
+            let entry = entry.map_err(|error| format!("{}: {error}", folder.display()))?;
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if top && OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            let kind = entry.file_type().map_err(|error| format!("{}: {error}", entry.path().display()))?;
+            if kind.is_symlink() {
+                return Err(format!(
+                    "{} is a link, and the service doesn't move links.",
+                    entry.path().display()
+                ));
+            }
+            if kind.is_dir() {
+                found.insert(format!("{prefix}{name}/"), 0);
+                walk(&entry.path(), &format!("{prefix}{name}/"), false, found)?;
+            } else {
+                let size =
+                    entry.metadata().map_err(|error| format!("{}: {error}", entry.path().display()))?.len();
+                found.insert(format!("{prefix}{name}"), size);
+            }
+        }
+        Ok(())
+    }
+    let mut found = BTreeMap::new();
+    walk(folder, "", true, &mut found)?;
+    Ok(found)
+}
+
+/// Copies what's in `from` into `to`, which is there, but a machine's own files at the top. Each file
+/// that's copied is told to `done` by its place and its size.
+fn copy_tree(from: &Path, to: &Path, top: bool, done: &mut dyn FnMut(&str, u64)) -> Result<(), String> {
+    let entries = fs::read_dir(from).map_err(|error| format!("{}: {error}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("{}: {error}", from.display()))?;
+        let name = entry.file_name();
+        if top && OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&name.to_string_lossy())) {
+            continue;
+        }
+        let (source, copy) = (entry.path(), to.join(&name));
+        let kind = entry.file_type().map_err(|error| format!("{}: {error}", source.display()))?;
+        if kind.is_symlink() {
+            return Err(format!("{} is a link, and the service doesn't move links.", source.display()));
+        }
+        if kind.is_dir() {
+            fs::create_dir(&copy).map_err(|error| format!("{}: {error}", copy.display()))?;
+            copy_tree(&source, &copy, false, done)?;
+        } else {
+            let bytes = fs::copy(&source, &copy)
+                .map_err(|error| format!("Copying {} to {}: {error}", source.display(), copy.display()))?;
+            done(&name.to_string_lossy(), bytes);
+        }
+    }
+    Ok(())
+}
+
+/// Deletes what's in a machine's own folder that isn't its own: its disks and what's beside them.
+fn remove_disks(folder: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    for entry in entries.filter_map(Result::ok) {
+        if OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&entry.file_name().to_string_lossy())) {
+            continue;
+        }
+        let path = entry.path();
+        let gone = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => fs::remove_dir_all(&path),
+            _ => fs::remove_file(&path),
+        };
+        gone.map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// A size in words, in GB when it's large and MB when it isn't.
+fn size_words(bytes: u64) -> String {
+    const GB: f64 = (1u64 << 30) as f64;
+    if bytes >= 1 << 30 { format!("{:.1} GB", bytes as f64 / GB) } else { format!("{} MB", bytes >> 20) }
 }
 
 mod forwards;

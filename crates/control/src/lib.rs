@@ -66,6 +66,12 @@ pub enum Request {
     Watch { name: String },
     /// Changes what a machine that isn't running is given at each boot.
     Change { name: String, settings: MachineSettings },
+    /// Moves a stopped machine's disks to `folder`, where they go in a folder named for the machine.
+    /// An empty `folder` moves them back to the service's own folder, where machines are kept unless
+    /// they're given another place. It's begun as `Snapshot` is: the answer comes once it's begun,
+    /// `Machine::working` says it's going on, and `Watch` has its progress and how it ended. The
+    /// machine stays where it was until the copy has been checked.
+    Move { name: String, folder: PathBuf },
     /// The files a bug report is made from that only the service can read: its own log, facts about
     /// this PC and, for `machine` if one is named, that machine's record and events. Each comes as
     /// `ReportPart` lines, or `ReportMissing` if it couldn't be read, then `Done`. The service only
@@ -121,6 +127,10 @@ pub struct NewMachine {
     /// The guest's administrator. Empty is `DEFAULT_USER`.
     #[serde(default)]
     pub user: String,
+    /// The folder the machine's disks are kept under, in a folder of their own named for the machine.
+    /// An older app sends none, which keeps them in the service's own folder, as does an empty one.
+    #[serde(default)]
+    pub folder: Option<PathBuf>,
     #[serde(default = "on")]
     pub tpm: bool,
     #[serde(default = "on")]
@@ -331,6 +341,13 @@ pub struct Machine {
     /// The largest its disk may grow to, if the service knows.
     #[serde(default)]
     pub size_gb: Option<u64>,
+    /// The folder its disks are in. A service from before machines could be kept elsewhere says none.
+    #[serde(default)]
+    pub folder: PathBuf,
+    /// Why its disks can't be used now, if they can't: their drive is gone, or the folder isn't the
+    /// service's own any more. It can't be started, snapshotted or moved until it's put right.
+    #[serde(default)]
+    pub problem: Option<String>,
     /// Its snapshots, oldest first.
     #[serde(default)]
     pub snapshots: Vec<SnapshotInfo>,
@@ -446,6 +463,7 @@ mod tests {
             card: Card::Named("NVIDIA GeForce RTX 5090".into()),
             edition: String::new(),
             user: String::new(),
+            folder: None,
             tpm: true,
             network: true,
             share: None,
@@ -479,6 +497,29 @@ mod tests {
         }))
         .unwrap();
         assert!(made.tpm && made.network && made.share.is_none() && made.user.is_empty());
+        assert_eq!(made.folder, None, "an older app's machine is kept where machines always were");
+    }
+
+    #[test]
+    fn a_machines_place_is_asked_for_and_moved_to_and_an_older_service_says_none() {
+        let placed: NewMachine = serde_json::from_value(json!({
+            "name": "u", "image": "u.iso", "memory_mb": 8192, "processors": 4, "size_gb": 128,
+            "card": {"card": "default"}, "folder": "D:\\vms"
+        }))
+        .unwrap();
+        assert_eq!(placed.folder, Some(PathBuf::from("D:\\vms")));
+        let moved = Request::Move { name: "u".into(), folder: PathBuf::from("E:\\vms") };
+        assert_eq!(
+            serde_json::to_value(&moved).unwrap(),
+            json!({"ask": "move", "name": "u", "folder": "E:\\vms"})
+        );
+        assert_eq!(serde_json::from_value::<Request>(serde_json::to_value(&moved).unwrap()).unwrap(), moved);
+        let older: Machine = serde_json::from_value(json!({
+            "name": "u", "system": "windows", "state": "stopped", "set_up": true, "memory_mb": 8192,
+            "processors": 4, "card": null, "address": null
+        }))
+        .unwrap();
+        assert!(older.folder.as_os_str().is_empty() && older.problem.is_none());
     }
 
     #[test]

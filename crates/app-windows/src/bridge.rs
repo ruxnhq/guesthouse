@@ -4,6 +4,7 @@
 //! answer. `Create` and `Watch` answer for as long as their work lasts, so each has a thread too, and
 //! the asking goes on meanwhile.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -53,6 +54,8 @@ pub enum Job {
     /// Go back to the snapshot with this ID.
     Revert(String, u64),
     DeleteSnapshot(String, u64),
+    /// Move a stopped machine's disks to a folder, or with an empty one back to the service's own.
+    Move(String, PathBuf),
 }
 
 impl Job {
@@ -68,6 +71,7 @@ impl Job {
             Job::Snapshot(name, label) => Request::Snapshot { name, label },
             Job::Revert(name, id) => Request::Revert { name, id },
             Job::DeleteSnapshot(name, id) => Request::DeleteSnapshot { name, id },
+            Job::Move(name, folder) => Request::Move { name, folder },
         }
     }
 }

@@ -118,6 +118,14 @@ impl Work for HostWork {
         guesthouse_host_windows::ssh::port_free(port)
     }
 
+    fn private_folder(&self, folder: &Path) -> Result<(), String> {
+        folder::private_folder(folder)
+    }
+
+    fn free_space(&self, folder: &Path) -> Result<u64, String> {
+        folder::free_space(folder)
+    }
+
     fn log(&self, text: &str) {
         log(text);
     }
@@ -234,7 +242,8 @@ pub(crate) fn start(asked: Option<PathBuf>) -> Result<Arc<Service<HostWork>>, St
     folder::secure(&root, own_parent)?;
     let _ = LOG.set(log_path(&root, own_parent));
     log(&format!("The service starts, version {}.", guesthouse_control::WINDOWS_VERSION));
-    let service = Service::new(Store::new(root), HostWork::default());
+    let store = Store::new(root).with_hold(Arc::new(folder::hold));
+    let service = Service::new(store, HostWork::default());
     pipe::listen(PIPE, Arc::clone(&service))?;
     Ok(service)
 }

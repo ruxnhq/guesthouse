@@ -30,8 +30,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
-    FlushFileBuffers, GetFinalPathNameByHandleW, PIPE_ACCESS_DUPLEX, READ_CONTROL, VOLUME_NAME_DOS,
-    WRITE_DAC,
+    FlushFileBuffers, GetDriveTypeW, GetFinalPathNameByHandleW, PIPE_ACCESS_DUPLEX, READ_CONTROL,
+    VOLUME_NAME_DOS, WRITE_DAC,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
@@ -45,6 +45,8 @@ use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 /// (`FILE_GENERIC_READ | FILE_WRITE_DATA`), and not append to it, which for a pipe is making an
 /// instance of it. The protection stops a parent folder's rules being added.
 const PIPE_SECURITY: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x12008b;;;IU)";
+/// What `GetDriveTypeW` says of a drive that is a disk the PC keeps.
+const DRIVE_FIXED: u32 = 3;
 /// Room in the pipe each way, enough for any request and most answers.
 const BUFFER: u32 = REQUEST_LIMIT as u32;
 /// How long to wait before trying again when an instance couldn't be made.
@@ -232,6 +234,21 @@ impl Connection for Pipe<'_> {
         the_folder_itself(&folder, path)?;
         Ok(Box::new(folder))
     }
+
+    fn may_place(&mut self, path: &Path) -> Result<Held, String> {
+        let opened = as_client(self.file, || {
+            open_folder(path, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY)
+        })?;
+        let folder = opened.map_err(|error| {
+            format!(
+                "You can't make a folder in {}, so the service won't keep a machine there: {error}",
+                path.display()
+            )
+        })?;
+        the_folder_itself(&folder, path)?;
+        on_a_fixed_drive(&folder, path)?;
+        Ok(Box::new(folder))
+    }
 }
 
 /// Opens a folder to share, as whoever is asking. Changing who may open it is asked for too:
@@ -243,6 +260,12 @@ fn open_shared_folder(path: &Path, read_only: bool) -> io::Result<File> {
     if !read_only {
         access |= FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
     }
+    open_folder(path, access)
+}
+
+/// Opens a folder as whoever is asking, for `access`, as `open_shared_folder` does, which is also how
+/// a folder to keep a machine in is opened, and held while the machine's folder is made in it.
+fn open_folder(path: &Path, access: u32) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(access)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
@@ -256,12 +279,12 @@ fn open_shared_folder(path: &Path, read_only: bool) -> io::Result<File> {
 /// Whether `folder`, opened from `path`, is a folder by that very path: not a link of any kind,
 /// and not reached through one, as a junction anywhere along the path would hand the machine some
 /// other folder than the one the user was checked for.
-fn the_folder_itself(folder: &File, path: &Path) -> Result<(), String> {
+pub(super) fn the_folder_itself(folder: &File, path: &Path) -> Result<(), String> {
     let attributes =
         folder.metadata().map_err(|error| format!("{}: {error}", path.display()))?.file_attributes();
     if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(format!(
-            "{} is a link to another folder, which isn't shared. Share the folder itself.",
+            "{} is a link to another folder, which isn't used. Name the folder itself.",
             path.display()
         ));
     }
@@ -273,7 +296,27 @@ fn the_folder_itself(folder: &File, path: &Path) -> Result<(), String> {
     let plain = |text: &str| text.trim_end_matches('\\').to_lowercase();
     if plain(&real) != plain(&asked.to_string_lossy()) {
         return Err(format!(
-            "{} leads to {real}, as a link on the way there does. Share the folder by its own path.",
+            "{} leads to {real}, as a link on the way there does. Name the folder by its own path.",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the open folder is on one of this PC's fixed drives, not a removable or a network one, as
+/// a machine's disks are on a disk the PC doesn't take away.
+fn on_a_fixed_drive(folder: &File, path: &Path) -> Result<(), String> {
+    let real = final_path(folder).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut drive = real.chars();
+    let letter = drive.next().filter(char::is_ascii_alphabetic);
+    if letter.is_none() || drive.next() != Some(':') {
+        return Err(format!("{} isn't on a drive of this PC's own.", path.display()));
+    }
+    let root = wide(format!("{}:\\", letter.unwrap_or('C')));
+    // SAFETY: the path ends in a zero.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
+        return Err(format!(
+            "{} is on a removable, network or other drive. Machines are kept on this PC's fixed drives.",
             path.display()
         ));
     }
@@ -334,6 +377,16 @@ mod folder_tests {
         assert!(link.contains("is a link"), "{link}");
         let through = check(&root.join("link").join("inner")).unwrap_err();
         assert!(through.contains("leads to"), "{through}");
+
+        // A folder to keep a machine in is the same, and on one of this PC's fixed drives.
+        let place = |path: &Path| {
+            let folder = open_folder(path, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY)
+                .map_err(|error| error.to_string())?;
+            the_folder_itself(&folder, path)?;
+            on_a_fixed_drive(&folder, path)
+        };
+        assert_eq!(place(&real), Ok(()));
+        assert!(place(&root.join("link")).is_err());
 
         // Held, the folder can't be moved out of the way for a link to take its place.
         let held = open_shared_folder(&real, false).unwrap();
@@ -422,6 +475,9 @@ mod tests {
         }
         fn port_free(&self, _: u16) -> bool {
             false
+        }
+        fn free_space(&self, _: &Path) -> Result<u64, String> {
+            Err("not here".into())
         }
     }
 

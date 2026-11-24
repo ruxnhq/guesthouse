@@ -613,7 +613,20 @@ async fn crop_window(
     fake_frames::serve(&context.run_folder(None), Arc::default());
     let follow = folder.join("crop-rectangle");
     let follow_text = follow.to_string_lossy().into_owned();
-    let arguments = ["--lab-crop-window", "x", "100", "50", "200", "120", "Cropped", &follow_text];
+    let arguments = [
+        "--lab-crop-window",
+        "x",
+        "100",
+        "50",
+        "200",
+        "120",
+        "Cropped",
+        "--drag",
+        "20",
+        "60",
+        "--follow",
+        &follow_text,
+    ];
     let request = lab_crop::request(&arguments.map(str::to_owned)).unwrap().unwrap();
     let application = window.widget().application().and_downcast::<adw::Application>().unwrap();
     // Frames in rows from the start. This display can't have the own surface, and a viewer that
@@ -622,19 +635,19 @@ async fn crop_window(
     in_rows.direct_frames_off = true;
     let cropped = lab_crop::open_window(&application, &context, &in_rows, context.run_folder(None), &request);
     glib::timeout_future(LONG).await;
-    let screen = cropped.content().and_downcast::<adw::ToolbarView>().and_then(|bar| bar.content()).unwrap();
-    let size = (screen.width(), screen.height());
-    // The title bar may want more width than the rectangle, which then has a bar on each side.
-    let fits = |(width, height): (i32, i32)| width >= 200 && height == 120;
-    check(&failures, fits(size), &format!("the crop window is its rectangle's height: {size:?}"));
+    let size = (cropped.width(), cropped.height());
+    check(&failures, size == (200, 120), &format!("the crop window is its rectangle and no more: {size:?}"));
     shot_after_paint_of(cropped.upcast_ref(), &folder, "18b-crop-window").await;
     fs::write(&follow, "300 200 160 100").unwrap();
     glib::timeout_future(LONG).await;
-    let size = (screen.width(), screen.height());
-    let fits = |(width, height): (i32, i32)| width >= 160 && height == 100;
-    check(&failures, fits(size), &format!("the crop window follows its file: {size:?}"));
+    let size = (cropped.width(), cropped.height());
+    check(&failures, size == (160, 100), &format!("the crop window follows its file: {size:?}"));
     shot_after_paint_of(cropped.upcast_ref(), &folder, "18c-crop-window-moved").await;
-    cropped.close();
+    fs::write(&follow, "closed").unwrap();
+    glib::timeout_future(LONG).await;
+    check(&failures, !cropped.is_visible(), "the crop window closes with the guest's window");
+    let told = folder.join("crop-rectangle.host");
+    check(&failures, !told.exists(), "a window the guest closed tells the caller nothing");
     glib::timeout_future(SETTLE).await;
 }
 

@@ -1635,4 +1635,277 @@ mod tests {
             assert_eq!(host.writes, [(at(6), 0), (at(7), 0), (at(0), 0), (at(1), 0)]);
         }
     }
+
+    mod context_groups {
+        use super::*;
+        use crate::fake_guest::fake_backend;
+        use crate::pushbuffer::{increasing, ring_entry};
+        use crate::rm::classes::{CHANNEL_GROUP, CONTROL_SET_TIMESLICE};
+        use crate::rm::fake::{Call, FakeRm};
+        use guesthouse_backend::{Backend, GpuRange, SharedSpan};
+        use std::collections::HashMap;
+
+        const GPU_RANGE: GpuRange = GpuRange { start: 0x1_0000_0000, end: 0x2_0000_0000 };
+        const GRAPHICS_NODE: u32 = 0;
+        const RINGS: u64 = 0x1_0010_0000;
+        const RING_BYTES: u64 = 0x40;
+        const AREAS: u64 = 0x1_0040_0000;
+        const COMMANDS: u64 = 0x1_0080_0000;
+        const CONTEXT: u32 = 0x4000_0100;
+        const DRAWS: u32 = 0x100;
+        const COMPUTES: u32 = 0x601;
+
+        /// Plays a guest with a ring for each queue, in shared pages, and commands it can read.
+        #[derive(Default)]
+        struct Guest {
+            rings: HashMap<u64, [u64; 8]>,
+            commands: HashMap<u64, Vec<u32>>,
+            areas: u64,
+        }
+
+        impl HostServices for Guest {
+            fn take_gpu_addresses(
+                &mut self,
+                _: u64,
+                _: u64,
+            ) -> Result<u64, guesthouse_backend::BackendError> {
+                self.areas += 1;
+                Ok(AREAS + self.areas * 0x100_0000)
+            }
+            fn read_at_gpu_address(&self, _: SpaceId, _: u64, _: &mut [u8]) -> Option<usize> {
+                None
+            }
+            fn shared_span(&self, _: SpaceId, address: u64) -> Option<SharedSpan> {
+                self.rings.contains_key(&address).then_some(SharedSpan {
+                    guest_address: address,
+                    offset_in_mapping: 0,
+                    mapping_length: RING_BYTES,
+                })
+            }
+            fn guest_span(&self, _: SpaceId, _: u64) -> Option<guesthouse_backend::GuestSpan> {
+                None
+            }
+            fn read_guest_span(&self, _: SpaceId, address: u64, out: &mut [u8]) -> Option<usize> {
+                let words = self.commands.get(&address)?;
+                let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+                let read = out.len().min(bytes.len());
+                out[..read].copy_from_slice(&bytes[..read]);
+                Some(read)
+            }
+            fn write_guest_span(&mut self, _: SpaceId, _: u64, _: u32) -> bool {
+                true
+            }
+            fn write_u32(&mut self, _: u64, _: u32) -> Result<(), MemoryError> {
+                Ok(())
+            }
+            fn write_u64(&mut self, address: u64, value: u64) -> Result<(), MemoryError> {
+                let ring = address & !(RING_BYTES - 1);
+                let entries = self.rings.get_mut(&ring).ok_or(MemoryError::Outside(address))?;
+                entries[((address - ring) / ENTRY_SIZE as u64) as usize] = value;
+                Ok(())
+            }
+            fn read_guest(&self, address: u64, out: &mut [u8]) -> usize {
+                let ring = address & !(RING_BYTES - 1);
+                let Some(entries) = self.rings.get(&ring) else { return 0 };
+                out.copy_from_slice(&entries[((address - ring) / ENTRY_SIZE as u64) as usize].to_le_bytes());
+                out.len()
+            }
+            fn fence_value(&self, _: u64) -> Result<u64, MemoryError> {
+                Ok(0)
+            }
+        }
+
+        struct Lab {
+            backend: NvidiaBackend<FakeRm>,
+            guest: Guest,
+            space: SpaceId,
+        }
+
+        impl Lab {
+            fn new(grouped: bool) -> Self {
+                let mut backend = fake_backend(FakeRm::new());
+                backend.set_context_groups(grouped);
+                backend.set_shared_context_timeslice(250);
+                let space = backend.create_address_space(&[GPU_RANGE]).unwrap();
+                Self { backend, guest: Guest::default(), space }
+            }
+
+            /// A hardware queue whose private data carries this placing word.
+            fn queue(&mut self, queue: u32, place: Option<u32>) {
+                let mut data = vec![0; 0xB4];
+                if let Some(place) = place {
+                    data[..4].copy_from_slice(&0x4E56_4441u32.to_le_bytes());
+                    data[6] = 1;
+                    data[8] = 0xB4;
+                    data[0xC..0x10].copy_from_slice(&0x4E56_4458u32.to_le_bytes());
+                    data[0x10..0x14].copy_from_slice(&place.to_le_bytes());
+                }
+                self.backend.finish_queue_data(queue, &mut data, queue).unwrap();
+            }
+
+            /// The queue's next submission: one entry running `words`, at the ring's next place.
+            fn submit(&mut self, queue: u32, context: u32, context_queues: u32, words: &[u32]) -> WorkStart {
+                let ring = RINGS + u64::from(queue) * 0x1000;
+                let commands = COMMANDS + u64::from(queue) * 0x1000;
+                self.guest.commands.insert(commands, words.to_vec());
+                let entries = self.guest.rings.entry(ring).or_default();
+                let at = entries.iter().skip(1).position(|entry| *entry == 0).unwrap() + 1;
+                entries[at] = ring_entry(commands, words.len() as u32);
+                let mut private = vec![0; SMALLEST_PRIVATE_DATA];
+                private[ENTRIES..ENTRIES + 4].copy_from_slice(&1u32.to_le_bytes());
+                private[RING_END..RING_END + 4].copy_from_slice(&(at as u32 + 1).to_le_bytes());
+                private[RING_ADDRESS..RING_ADDRESS + 8].copy_from_slice(&ring.to_le_bytes());
+                let work = Work {
+                    queue,
+                    space: self.space,
+                    node: GRAPHICS_NODE,
+                    context,
+                    context_queues,
+                    ..work(&private)
+                };
+                self.backend.start_work(&mut self.guest, &work)
+            }
+
+            fn channel(&self, queue: u32) -> &Channel {
+                self.backend.queues[&queue].channel.channel().expect("the queue has a channel")
+            }
+
+            fn groups_made(&self) -> usize {
+                let calls = self.backend.device.rm.calls.iter();
+                calls.filter(|call| matches!(call, Call::Alloc { class: CHANNEL_GROUP, .. })).count()
+            }
+
+            fn slices(&self) -> usize {
+                let calls = self.backend.device.rm.calls.iter();
+                calls
+                    .filter(|call| matches!(call, Call::Control { command: CONTROL_SET_TIMESLICE, .. }))
+                    .count()
+            }
+        }
+
+        fn compute_work() -> [u32; 2] {
+            [increasing(1, 0x2B4, 1), 0]
+        }
+
+        fn drawing_work() -> [u32; 2] {
+            [increasing(0, 0x200, 1), 0]
+        }
+
+        fn copy_work() -> [u32; 2] {
+            [increasing(4, 0x300, 1), 0]
+        }
+
+        #[test]
+        fn the_queues_of_a_context_share_one_group_on_the_seats_their_data_names() {
+            let mut lab = Lab::new(true);
+            let before = lab.groups_made();
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(COMPUTES));
+            lab.queue(3, Some(COMPUTES + 1));
+            assert!(matches!(lab.submit(1, CONTEXT, 3, &drawing_work()), WorkStart::Started { .. }));
+            assert!(matches!(lab.submit(2, CONTEXT, 3, &compute_work()), WorkStart::Started { .. }));
+            assert!(matches!(lab.submit(3, CONTEXT, 3, &compute_work()), WorkStart::Started { .. }));
+            assert_eq!(lab.groups_made() - before, 1);
+            assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 3);
+            assert_eq!(lab.channel(1).only_bound(), None);
+            assert!(lab.channel(2).only_bound().is_some() && lab.channel(3).only_bound().is_some());
+            assert_eq!(lab.slices(), 0, "they wait inside the group, on the RM's own slice");
+        }
+
+        #[test]
+        fn another_contexts_queue_gets_another_group() {
+            let mut lab = Lab::new(true);
+            let before = lab.groups_made();
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(DRAWS));
+            lab.submit(1, CONTEXT, 1, &drawing_work());
+            lab.submit(2, CONTEXT + 0x40, 1, &drawing_work());
+            assert_eq!(lab.groups_made() - before, 2);
+            assert_eq!(lab.backend.device.context_groups.len(), 2);
+        }
+
+        #[test]
+        fn with_the_setting_off_every_queue_has_a_group_of_its_own_and_the_shared_slice() {
+            let mut lab = Lab::new(false);
+            let before = lab.groups_made();
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(COMPUTES));
+            assert!(matches!(lab.submit(1, CONTEXT, 2, &drawing_work()), WorkStart::Started { .. }));
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
+            assert_eq!(lab.groups_made() - before, 2);
+            assert!(lab.backend.device.context_groups.is_empty());
+            assert!(!lab.channel(1).in_context_group() && lab.channel(2).only_bound().is_none());
+            assert_eq!(lab.slices(), 2);
+        }
+
+        #[test]
+        fn a_queue_whose_data_names_no_seat_keeps_a_group_of_its_own() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, None);
+            lab.queue(3, Some(0x200));
+            lab.queue(4, Some(0x101));
+            for queue in 1..=4 {
+                let started = lab.submit(queue, CONTEXT, 4, &compute_work());
+                assert!(matches!(started, WorkStart::Started { .. }), "queue {queue}");
+            }
+            assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
+            assert!((2..=4).all(|queue| !lab.channel(queue).in_context_group()));
+            assert_eq!(lab.slices(), 3, "the ones alone still get the shared slice");
+        }
+
+        #[test]
+        fn a_queue_with_no_context_is_not_seated() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.submit(1, 0, 1, &drawing_work());
+            assert!(lab.backend.device.context_groups.is_empty());
+        }
+
+        #[test]
+        fn a_seat_the_rm_refuses_falls_back_to_a_group_of_its_own() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(COMPUTES));
+            lab.submit(1, CONTEXT, 2, &drawing_work());
+            let before = lab.groups_made();
+            // As GSP on a branch that takes no compute beside a group's drawing: the class is
+            // refused on the seat, once.
+            lab.backend.device.rm.refuse_class_once = Some(lab.backend.generation.compute_class);
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
+            assert_eq!(lab.groups_made() - before, 1, "a group of its own");
+            assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
+            assert!(!lab.channel(2).in_context_group());
+            assert_eq!(lab.channel(2).only_bound(), None, "with every class, as before");
+            assert_eq!(lab.slices(), 1, "and the shared slice");
+        }
+
+        #[test]
+        fn a_compute_seat_never_gets_commands_for_an_object_it_has_not_got() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(COMPUTES));
+            lab.submit(1, CONTEXT, 2, &drawing_work());
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
+            let doorbells = lab.backend.device.rm.doorbells().len();
+            assert_eq!(lab.submit(2, CONTEXT, 2, &copy_work()), WorkStart::QueueFailed);
+            assert_eq!(lab.submit(2, CONTEXT, 2, &drawing_work()), WorkStart::QueueFailed);
+            assert_eq!(lab.backend.device.rm.doorbells().len(), doorbells);
+            // The drawing seat takes anything, as a channel alone does.
+            assert!(matches!(lab.submit(1, CONTEXT, 2, &copy_work()), WorkStart::Started { .. }));
+        }
+
+        #[test]
+        fn closing_the_queues_empties_the_group() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, Some(COMPUTES));
+            lab.submit(1, CONTEXT, 2, &drawing_work());
+            lab.submit(2, CONTEXT, 2, &compute_work());
+            lab.backend.close(1);
+            assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
+            lab.backend.close(2);
+            assert!(lab.backend.device.context_groups.is_empty());
+        }
+    }
 }

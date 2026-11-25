@@ -61,6 +61,8 @@ pub struct FakeRm {
     /// Sizes of video memory round up to this, as a real one rounds to its pages.
     pub round_memory_to: u64,
     pub refuse_class: Option<u32>,
+    /// The same for the next allocation of the class only.
+    pub refuse_class_once: Option<u32>,
     pub refuse_control: Option<u32>,
     pub refuse_exports: bool,
     /// A GPU address no mapping may start at.
@@ -105,6 +107,7 @@ impl FakeRm {
             calls: Vec::new(),
             round_memory_to: 1,
             refuse_class: None,
+            refuse_class_once: None,
             refuse_control: None,
             refuse_exports: false,
             refuse_map_at: None,
@@ -292,7 +295,8 @@ impl Rm for FakeRm {
         class: u32,
         params: &mut [u8],
     ) -> Result<u32, RmError> {
-        if self.refuse_class == Some(class) {
+        if self.refuse_class == Some(class) || self.refuse_class_once.take_if(|once| *once == class).is_some()
+        {
             return Ok(STATUS_NOT_SUPPORTED);
         }
         self.calls.push(Call::Alloc { parent, handle, class, params: params.to_vec() });

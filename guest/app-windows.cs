@@ -1302,6 +1302,14 @@ public class AppWindows : Form
     {
         List<Cell> list = new List<Cell>();
         foreach (Cell c in cells.Values) if (c.Active && c.InDone && c.IdSettled) list.Add(c);   // a popup waits until its margins are known
+        // A popup goes only with the window it belongs to, directly or through other popups: one of a program with no
+        // app window here (the shell's own tips and menus) would be a host popup with no window to hang on.
+        for (bool dropped = true; dropped; )
+        {
+            Dictionary<IntPtr, bool> ids = new Dictionary<IntPtr, bool>();
+            foreach (Cell c in list) ids[c.Src] = true;
+            dropped = list.RemoveAll(delegate(Cell c) { return c.Popup && (c.Parent == IntPtr.Zero || !ids.ContainsKey(c.Parent)); }) > 0;
+        }
         list.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
         StringBuilder core = new StringBuilder();
         core.Append("\"screen\":").Append(ScreenJson()).Append(",\"cells\":[");

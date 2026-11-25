@@ -73,6 +73,14 @@ pub struct View {
     /// them was given what it asked for when it asked (its size when it opened, before the compositor
     /// said its scale), not a size the compositor chose.
     wanted_lately: RefCell<Vec<(i32, i32)>>,
+    /// Whether the window was free to be sized at the last look, and its size then: a window that is
+    /// no longer maximized, full screen or tiled goes back to it, and the guest's with it.
+    free_size: Slot<Option<(i32, i32)>>,
+    was_free: Slot<bool>,
+    /// The size the window was last asked to be, and when: one the compositor did not give (a
+    /// window larger than the work area) is not asked for again, and the guest's is asked for the
+    /// window's size instead.
+    set_size: Slot<Option<((i32, i32), Instant)>>,
 }
 
 pub fn add_style(display: &gdk::Display) {
@@ -123,6 +131,9 @@ impl View {
             host_size: Slot::new(None),
             asked: Slot::new(None),
             wanted_lately: RefCell::default(),
+            free_size: Slot::new(None),
+            was_free: Slot::new(true),
+            set_size: Slot::new(None),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -212,6 +223,31 @@ impl View {
         let Host::Window(window) = &self.host else { return };
         let Some(allocated) = self.frame.allocated() else { return };
         let wanted = self.frame.wanted_size();
+        let free = self.free(window);
+        if self.was_free.get() != free {
+            hub.trace(&format!("view {}: free to be sized {free}, at {allocated:?}", self.id));
+        }
+        if self.was_free.replace(free) != free && free {
+            // Back from a maximize, full screen or tiling: the size the compositor gave back (most put
+            // the window back as it was), else the size it had before, for both windows.
+            let back = if allocated != wanted {
+                Some(allocated)
+            } else {
+                self.free_size.get().filter(|size| *size != allocated)
+            };
+            if let Some(size) = back {
+                hub.trace(&format!("view {}: free again, at {size:?}", self.id));
+                if size != allocated {
+                    window.set_default_size(size.0, size.1);
+                }
+                self.host_size.set(Some((size, Instant::now())));
+                self.ask_size(hub, size);
+                return;
+            }
+        }
+        if free && self.host_size.get().is_none() && allocated == wanted {
+            self.free_size.set(Some(allocated));
+        }
         {
             let mut lately = self.wanted_lately.borrow_mut();
             if lately.last() != Some(&wanted) {
@@ -241,12 +277,27 @@ impl View {
             // guest would go, is the window's size from here on.
             self.host_size.set(None);
         }
-        if allocated != wanted && self.free(window) {
-            hub.trace(&format!(
-                "view {}: the window is made its cell's size {wanted:?}, from {allocated:?}",
-                self.id
-            ));
-            window.set_default_size(wanted.0, wanted.1);
+        if allocated != wanted && free {
+            match self.set_size.get() {
+                Some((size, at)) if size == wanted => {
+                    if at.elapsed() >= HOST_SIZE_HOLD {
+                        // The compositor kept the window at its own size: the guest follows that.
+                        hub.trace(&format!(
+                            "view {}: the compositor kept {allocated:?}, not {wanted:?}",
+                            self.id
+                        ));
+                        self.host_size.set(Some((allocated, Instant::now())));
+                    }
+                }
+                _ => {
+                    hub.trace(&format!(
+                        "view {}: the window is made its cell's size {wanted:?}, from {allocated:?}",
+                        self.id
+                    ));
+                    self.set_size.set(Some((wanted, Instant::now())));
+                    window.set_default_size(wanted.0, wanted.1);
+                }
+            }
         }
     }
 

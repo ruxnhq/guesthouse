@@ -20,7 +20,7 @@ RUNTIME=$(mktemp -d)
 # The session's services can leave mount points here, and those aren't the walk's result.
 trap 'rm -rf "$RUNTIME" 2>/dev/null || true' EXIT
 env -i HOME="$FOLDER/home" PATH=/usr/bin XDG_RUNTIME_DIR="$RUNTIME" \
-  GUESTHOUSE_SHARED_MEMORY="$FOLDER/shm" GUESTHOUSE_PROGRAM="$FOLDER/program" QEMU="$FOLDER/bin/qemu" \
+  PAGE_SHOTS_WALK="$PAGE_SHOTS_WALK" GUESTHOUSE_SHARED_MEMORY="$FOLDER/shm" GUESTHOUSE_PROGRAM="$FOLDER/program" QEMU="$FOLDER/bin/qemu" \
   GDK_BACKEND=broadway BROADWAY_DISPLAY=$BROADWAY_DISPLAY GSK_RENDERER=cairo GTK_A11Y=none \
   dbus-run-session -- bash -c "
     gtk4-broadwayd --address 127.0.0.1 --port $BROADWAY_PORT $BROADWAY_DISPLAY >'$FOLDER/broadway.log' 2>&1 &

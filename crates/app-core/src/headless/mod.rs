@@ -2,12 +2,15 @@
 //! the same calls, so a machine started here is the app's to stop and the other way round.
 
 mod app;
+mod apps_page;
 mod args;
 mod change;
 mod copies;
 mod idle;
 mod make;
+mod open;
 mod pick;
+mod programs;
 mod recipes;
 mod setup;
 mod share;
@@ -34,6 +37,9 @@ use std::io::{self, Write};
 use std::time::Duration;
 use steps::Steps;
 
+pub use apps_page::look;
+pub use open::{Opening, StartViewer, ViewerProcess, open_program};
+
 /// How often a running task is looked at.
 const POLL: Duration = Duration::from_millis(300);
 const LOG_LINES: usize = 40;
@@ -59,9 +65,20 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   windows MACHINE [--json]   the app windows of a running Windows guest that has app-windows on, a
                              line each, or with --json the helper's own layout. If the helper in the
                              guest is not running, it is started for the look and ended after
-  app MACHINE PROGRAM        start a program in a running Windows guest that has app-windows on, by
-                             its path in the guest, such as C:\\Windows\\notepad.exe. The helper is
-                             started if it is not running, and left running
+  app MACHINE PROGRAM [--start-menu]
+                             start a program in a running Windows guest that has app-windows on, by
+                             its path or name in the guest, such as C:\\Windows\\notepad.exe, or with
+                             --start-menu by the id of a Start menu program from apps. The helper is
+                             started if it is not running, and left running. guesthouse --app
+                             MACHINE PROGRAM does this and the rest in one step: it starts the
+                             machine if it is off and opens the window viewer
+  apps MACHINE               the Start menu programs of a running Windows guest that has app-windows
+                             on. Store apps such as Notepad and Calculator are not in it, and are
+                             started by name or path
+  launcher MACHINE list|add PROGRAM|remove PROGRAM
+                             the machine's programs in this desktop's menu, one entry each, which
+                             start with guesthouse --app. add takes a Start menu id or name, or a
+                             program's path or name. The entries go when the machine is removed
   share                      how each card with a running machine is shared, as the library
                              page shows it. It changes nothing
 
@@ -151,7 +168,13 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
         Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,
         Command::Windows { name, json } => windows::run(context, &find(context, name)?, json, out)?,
-        Command::App { name, program } => app::run(context, &find(context, name)?, program, out)?,
+        Command::App { name, program, start_menu } => {
+            app::run(context, &find(context, name)?, program, start_menu, out)?
+        }
+        Command::Apps(name) => programs::apps(context, &find(context, name)?, out)?,
+        Command::Launcher { name, action, program } => {
+            programs::launcher(context, &find(context, name)?, action, program, out)?
+        }
         Command::Standalone(name) => standalone::command(context, &find(context, name)?, out)?,
         Command::New { name, options } => make::new_machine(context, name, &options, out)?,
         Command::Set { name, key, value } => change::set(context, find(context, name)?, key, value, out)?,

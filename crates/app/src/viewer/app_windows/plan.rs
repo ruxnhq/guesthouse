@@ -332,6 +332,8 @@ mod tests {
             id: id.into(),
             pid: 1,
             exe: "x.exe".into(),
+            app: String::new(),
+            name: String::new(),
             cls: "X".into(),
             title: id.into(),
             cell: at,
@@ -344,6 +346,7 @@ mod tests {
             focus: false,
             caption: Caption { h: 32, buttons_w: 138 },
             resizable: true,
+            corner: 0,
         }
     }
 

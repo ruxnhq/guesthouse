@@ -6,6 +6,8 @@ fn cell(cell: Rect, frame: Rect) -> Cell {
         id: "1".into(),
         pid: 1,
         exe: String::new(),
+        app: String::new(),
+        name: String::new(),
         cls: String::new(),
         title: String::new(),
         cell,
@@ -18,6 +20,7 @@ fn cell(cell: Rect, frame: Rect) -> Cell {
         focus: false,
         caption: Caption { h: 32, buttons_w: 138 },
         resizable: true,
+        corner: 0,
     }
 }
 

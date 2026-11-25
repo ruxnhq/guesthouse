@@ -10,6 +10,8 @@ fn window(id: &str, title: &str) -> Cell {
         id: id.into(),
         pid: 10,
         exe: "app.exe".into(),
+        app: String::new(),
+        name: String::new(),
         cls: "Frame".into(),
         title: title.into(),
         cell: rect(0, 0, 400, 300),
@@ -22,6 +24,7 @@ fn window(id: &str, title: &str) -> Cell {
         focus: false,
         caption: Caption { h: 32, buttons_w: 138 },
         resizable: true,
+        corner: 0,
     }
 }
 

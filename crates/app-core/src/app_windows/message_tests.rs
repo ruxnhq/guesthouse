@@ -124,7 +124,10 @@ fn what_is_not_a_message_is_told_apart() {
 #[test]
 fn answers_have_their_error_and_their_apps_only_when_there_are_any() {
     let ok = parse_guest_line(r#"{"t":"answer","re":4,"ok":true}"#, MOST_LINE_BYTES).unwrap();
-    assert_eq!(ok, GuestMessage::Answer(Answer { re: 4, ok: true, error: String::new(), apps: None }));
+    assert_eq!(
+        ok,
+        GuestMessage::Answer(Answer { re: 4, ok: true, error: String::new(), apps: None, icon: None })
+    );
     let failed = parse_guest_line(r#"{"t":"answer","re":5,"ok":false,"error":"no such window"}"#, 99999);
     let GuestMessage::Answer(failed) = failed.unwrap() else { panic!() };
     assert_eq!((failed.ok, failed.error.as_str()), (false, "no such window"));
@@ -211,4 +214,28 @@ fn a_display_line_is_read_and_written_and_need_may_be_missing() {
 #[test]
 fn a_scale_request_names_the_percentage() {
     assert_eq!(Request::Scale { percent: 125 }.line(4), r#"{"n":4,"percent":125,"t":"scale"}"#);
+}
+
+#[test]
+fn a_cell_says_which_program_it_is_of_and_an_old_helpers_cell_without_that_is_still_read() {
+    let line = r#"{"t":"layout","seq":1,"screen":{"w":10,"h":10},"cells":[{"id":"1","pid":2,"exe":"ApplicationFrameHost.exe","app":"aumid:A_b!App","name":"Calc","cls":"c","title":"t","cell":{"x":0,"y":0,"w":1,"h":1},"frame":{"x":0,"y":0,"w":1,"h":1},"popup":false,"parent":"","rel":{"x":0,"y":0},"state":"shown","overflow":false,"focus":false,"caption":{"h":0,"buttons_w":0},"resizable":true}]}"#;
+    let GuestMessage::Layout(layout) = parse_guest_line(line, MOST_LINE_BYTES).unwrap() else { panic!() };
+    assert_eq!((layout.cells[0].app.as_str(), layout.cells[0].name.as_str()), ("aumid:A_b!App", "Calc"));
+    let old = line.replace(r#""app":"aumid:A_b!App","name":"Calc","#, "");
+    let GuestMessage::Layout(layout) = parse_guest_line(&old, MOST_LINE_BYTES).unwrap() else { panic!() };
+    assert!(layout.cells[0].app.is_empty() && layout.cells[0].name.is_empty());
+}
+
+#[test]
+fn the_icon_request_names_a_cell_and_a_size_and_its_answer_carries_the_picture() {
+    let request = Request::Icon { id: "5".into(), size: 96 };
+    assert_eq!(
+        serde_json::from_str::<Value>(&request.line(3)).unwrap(),
+        json!({"t":"icon","n":3,"id":"5","size":96})
+    );
+    let line = r#"{"t":"answer","re":3,"ok":true,"icon":"iVBORw0KGgo="}"#;
+    let GuestMessage::Answer(answer) = parse_guest_line(line, MOST_APPS_LINE_BYTES).unwrap() else {
+        panic!()
+    };
+    assert_eq!(answer.icon.as_deref(), Some("iVBORw0KGgo="));
 }

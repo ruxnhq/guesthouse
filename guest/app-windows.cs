@@ -128,6 +128,15 @@ public class AppWindows : Form
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetApplicationUserModelId(IntPtr process, ref uint length, StringBuilder id);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetPackageFullName(IntPtr process, ref uint length, StringBuilder name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetPackagePathByFullName(string fullName, ref uint length, StringBuilder path);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint PrivateExtractIcons(string file, int index, int cx, int cy, IntPtr[] icons, int[] ids, uint count, uint flags);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")] static extern IntPtr GetClassLongPtr(IntPtr h, int i);
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)] static extern int SHLoadIndirectString(string source, StringBuilder output, uint size, IntPtr reserved);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref int size);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool MoveFileEx(string existing, string replacement, uint flags);
 
@@ -205,6 +214,9 @@ public class AppWindows : Form
         public int Stamp;                       // starts as Order; a focus raises it, so of two overflow cells the one asked for last is on top
         public uint Pid;
         public string Exe = "?", Cls = "", Title = "";
+        public string App = "", Name = "", ExePath = "";   // which program the window is of (see Identify)
+        public uint AppPid;                     // the process that is the program: the frame host's CoreWindow's for a Store app
+        public int IdTries; public bool IdSettled;
         public long Style, ExStyle;
         public IntPtr Owner;                    // direct owner window (0 = none)
         public bool Popup;
@@ -692,6 +704,7 @@ public class AppWindows : Form
             ReadState(c, now);
             c.LocDirty = false;
             if (now - c.TitleAt >= TitleMs) { c.Title = TextOf(h); c.TitleAt = now; c.NameDirty = false; }
+            if (!c.IdSettled) Identify(c);
             if (!c.Popup && cureOn) KeepCured(c);
         }
         // Cells whose window did not qualify this time.
@@ -714,7 +727,7 @@ public class AppWindows : Form
         if (sw <= 0 || sh <= 0) { DwmUnregisterThumbnail(t); return null; }
         Cell c = new Cell();
         c.Src = p.H; c.Thumb = t; c.Order = ++orderCounter; c.Stamp = c.Order; c.Pid = p.Pid;
-        c.Exe = ExeOf(p.Pid); c.Cls = p.Cls; c.Title = TextOf(p.H); c.TitleAt = now;
+        c.Exe = ExeOf(p.Pid); Identify(c); c.Cls = p.Cls; c.Title = TextOf(p.H); c.TitleAt = now;
         c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup;
         c.Frame = p.Frame; c.Win = p.Frame;
         c.Active = true; c.ThumbDirty = true;
@@ -732,6 +745,7 @@ public class AppWindows : Form
         IntPtr t;
         if (DwmRegisterThumbnail(Handle, c.Src, out t) != 0) return false;
         c.Thumb = t; c.Active = true; c.ThumbDirty = true; c.ThumbApplied = false;
+        if (c.Popup && c.Placed && Collides(c, c.X, c.Y - Label, c.CellW, c.CellH + Label)) c.Placed = false;   // its place was given to another meanwhile: it is placed again
         return true;
     }
 
@@ -813,7 +827,7 @@ public class AppWindows : Form
     {
         foreach (Cell o in cells.Values)
         {
-            if (o == self || !o.Placed || o.Overflow) continue;
+            if (o == self || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;   // a menu that closed keeps its place only so it can come back, not against other windows
             if (Hit(x, y, bw, bh, o.X, o.Y - Label, o.CellW, o.CellH + Label)) return true;
         }
         return false;
@@ -869,7 +883,7 @@ public class AppWindows : Form
         xs.Add(packL); ys.Add(packT);
         foreach (Cell o in cells.Values)
         {
-            if (o == c || !o.Placed || o.Overflow) continue;
+            if (o == c || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;
             xs.Add(o.X + o.CellW);
             ys.Add(o.Y + o.CellH);
         }
@@ -1238,6 +1252,8 @@ public class AppWindows : Form
         sb.Append("{\"id\":\"").Append(L(c.Src.ToInt64())).Append('"');
         sb.Append(",\"pid\":").Append(L(c.Pid));
         sb.Append(",\"exe\":"); Js(sb, c.Exe);
+        sb.Append(",\"app\":"); Js(sb, c.App);
+        sb.Append(",\"name\":"); Js(sb, c.Name);
         sb.Append(",\"cls\":"); Js(sb, c.Cls);
         sb.Append(",\"title\":"); Js(sb, c.Title);
         // cell: screen coordinates of the picture's top-left; w,h = size shown, 0 when not placed
@@ -1251,7 +1267,26 @@ public class AppWindows : Form
         sb.Append(",\"overflow\":").Append(B(c.Overflow));
         sb.Append(",\"focus\":").Append(B(c.Fg));
         sb.Append(",\"caption\":{\"h\":").Append(I(c.CaptionH)).Append(",\"buttons_w\":").Append(I(c.ButtonsW)).Append('}');
-        sb.Append(",\"resizable\":").Append(B(!c.Popup && (c.Style & WS_THICKFRAME) != 0)).Append('}');
+        sb.Append(",\"resizable\":").Append(B(!c.Popup && (c.Style & WS_THICKFRAME) != 0));
+        sb.Append(",\"corner\":").Append(I(CornerOf(c))).Append('}');
+    }
+
+    // The radius of the rounded corners Windows 11 draws on a window, in pixels: 8 at 100 %, scaled with the window's dpi,
+    // 4 for the small preference, none when maximized, when the program opts out, for a popup, or on a system that does not round.
+    int CornerOf(Cell c)
+    {
+        if (c.Popup || c.Iconic) return c.Popup ? 0 : 8;
+        try
+        {
+            if (IsZoomed(c.Src)) return 0;
+            int preference;
+            if (DwmGetWindowAttribute(c.Src, 33, out preference, 4) != 0) return 0;     // DWMWA_WINDOW_CORNER_PREFERENCE: absent before Windows 11
+            if (preference == 1) return 0;                                                // DONOTROUND
+            uint dpi = GetDpiForWindow(c.Src);
+            if (dpi == 0) dpi = 96;
+            return (int)Math.Round((preference == 3 ? 4.0 : 8.0) * dpi / 96.0);
+        }
+        catch { return 0; }
     }
 
     string ScreenJson() { return "{\"w\":" + I(ovW) + ",\"h\":" + I(ovH) + "}"; }
@@ -1266,7 +1301,7 @@ public class AppWindows : Form
     void LayoutStep()
     {
         List<Cell> list = new List<Cell>();
-        foreach (Cell c in cells.Values) if (c.Active && c.InDone) list.Add(c);   // a popup waits until its margins are known
+        foreach (Cell c in cells.Values) if (c.Active && c.InDone && c.IdSettled) list.Add(c);   // a popup waits until its margins are known
         list.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
         StringBuilder core = new StringBuilder();
         core.Append("\"screen\":").Append(ScreenJson()).Append(",\"cells\":[");
@@ -1684,6 +1719,7 @@ public class AppWindows : Form
                 case "close": CloseWindow(link, n, r); break;
                 case "launch": Launch(link, n, r); break;
                 case "apps": Apps(link, n, Str(r, "icons") != "False"); break;
+                case "icon": IconOf(link, n, r); break;
                 case "scale": OnScaleRequest(link, n, r); break;
                 case "screen": OnScreenRequest(link, n, r); break;
                 default: Answer(link, n, false, "this helper does not know the request " + Str(r, "t")); break;
@@ -1814,7 +1850,7 @@ public class AppWindows : Form
                 start.UseShellExecute = true;
                 string folder = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder)) start.WorkingDirectory = folder;
-                Process.Start(start).Dispose();
+                using (Process started = Process.Start(start)) { }   // the shell starts a packaged app (shell:AppsFolder\ID) and gives no process back
                 Answer(link, n, true, null);
             }
             catch (Exception ex) { Answer(link, n, false, ex.Message); }
@@ -1916,6 +1952,291 @@ public class AppWindows : Form
             }
             catch (Exception ex) { Answer(link, n, false, ex.Message); }
         });
+    }
+
+
+    // ================================================================ Which program a window is of
+    // `app` is the same for every window of a program and for every run of it: the program's full path, or
+    // "aumid:" and the Application User Model ID of a packaged (Store) app. A Store app's window belongs to
+    // ApplicationFrameHost.exe, the same process for all of them, so the program is the process of the
+    // CoreWindow inside the frame. `name` is what the program calls itself, not the window's title.
+    const uint PROCESS_QUERY_LIMITED_INFORMATION_ID = 0x1000;
+    const int IdTriesMost = 3;                 // scans a frame host's window waits for its CoreWindow before it counts as the host's own
+    Dictionary<string, string> programNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    static string FullPathOf(uint pid)
+    {
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION_ID, false, pid);
+        if (process == IntPtr.Zero) return "";
+        try
+        {
+            StringBuilder path = new StringBuilder(1024);
+            int size = path.Capacity;
+            return QueryFullProcessImageNameW(process, 0, path, ref size) ? path.ToString() : "";
+        }
+        finally { CloseHandle(process); }
+    }
+
+    // The ID of the package app the process belongs to, "" for an ordinary program.
+    static string AumidOf(uint pid)
+    {
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION_ID, false, pid);
+        if (process == IntPtr.Zero) return "";
+        try
+        {
+            uint length = 512;
+            StringBuilder id = new StringBuilder((int)length);
+            return GetApplicationUserModelId(process, ref length, id) == 0 ? id.ToString() : "";
+        }
+        catch { return ""; }
+        finally { CloseHandle(process); }
+    }
+
+    static string PackageFullNameOf(uint pid)
+    {
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION_ID, false, pid);
+        if (process == IntPtr.Zero) return "";
+        try
+        {
+            uint length = 256;
+            StringBuilder name = new StringBuilder((int)length);
+            return GetPackageFullName(process, ref length, name) == 0 ? name.ToString() : "";
+        }
+        catch { return ""; }
+        finally { CloseHandle(process); }
+    }
+
+    static string PackageFolder(string fullName)
+    {
+        if (fullName.Length == 0) return "";
+        try
+        {
+            uint length = 520;
+            StringBuilder path = new StringBuilder((int)length);
+            return GetPackagePathByFullName(fullName, ref length, path) == 0 ? path.ToString() : "";
+        }
+        catch { return ""; }
+    }
+
+    // The process of the CoreWindow inside a frame host's window, 0 while there is none.
+    uint CoreWindowPid(IntPtr frame)
+    {
+        uint found = 0;
+        EnumChildWindows(frame, delegate(IntPtr child, IntPtr l)
+        {
+            if (ClassOf(child) != "Windows.UI.Core.CoreWindow") return true;
+            uint pid;
+            GetWindowThreadProcessId(child, out pid);
+            if (pid != 0) { found = pid; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    void Identify(Cell c)
+    {
+        c.IdTries++;
+        uint pid = c.Pid;
+        bool host = string.Equals(c.Exe, "ApplicationFrameHost.exe", StringComparison.OrdinalIgnoreCase);
+        if (host)
+        {
+            uint real = CoreWindowPid(c.Src);
+            if (real != 0 && real != pid) pid = real;
+            else if (c.IdTries <= IdTriesMost) return;      // the CoreWindow comes a moment after its frame: ask again at the next scan
+        }
+        string path = FullPathOf(pid);
+        string aumid = AumidOf(pid);
+        c.AppPid = pid; c.ExePath = path;
+        c.App = aumid.Length > 0 ? "aumid:" + aumid : path;
+        c.Name = NameOfProgram(c.App, path, pid);
+        c.IdSettled = true;
+    }
+
+    string NameOfProgram(string app, string path, uint pid)
+    {
+        if (app.Length == 0) return "";
+        string name;
+        if (programNames.TryGetValue(app, out name)) return name;
+        name = "";
+        try
+        {
+            if (app.StartsWith("aumid:", StringComparison.OrdinalIgnoreCase)) name = PackageDisplayName(app.Substring(6), pid);
+            if (name.Length == 0 && path.Length > 0)
+            {
+                FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
+                name = (info.FileDescription ?? "").Trim();
+                if (name.Length == 0) name = (info.ProductName ?? "").Trim();
+                if (name.Length == 0) name = Path.GetFileNameWithoutExtension(path);
+            }
+        }
+        catch { }
+        if (name.Length > 100) name = name.Substring(0, 100);
+        programNames[app] = name;
+        return name;
+    }
+
+    // A package's own name for the app: its manifest's DisplayName, which is often "ms-resource:Name", read through the resource loader.
+    string PackageDisplayName(string aumid, uint pid)
+    {
+        string fullName = PackageFullNameOf(pid);
+        string folder = PackageFolder(fullName);
+        if (folder.Length == 0) return "";
+        string manifest = Path.Combine(folder, "AppxManifest.xml");
+        if (!File.Exists(manifest)) return "";
+        System.Xml.XmlDocument xml = new System.Xml.XmlDocument();
+        xml.XmlResolver = null;
+        xml.Load(manifest);
+        string appId = aumid.IndexOf('!') >= 0 ? aumid.Substring(aumid.IndexOf('!') + 1) : "";
+        string display = "", packageName = fullName.Split('_')[0];
+        foreach (System.Xml.XmlNode node in xml.GetElementsByTagName("Application"))
+        {
+            System.Xml.XmlAttribute id = node.Attributes["Id"];
+            if (appId.Length > 0 && (id == null || id.Value != appId)) continue;
+            foreach (System.Xml.XmlNode child in node.ChildNodes)
+                if (child.LocalName == "VisualElements" && child.Attributes["DisplayName"] != null) display = child.Attributes["DisplayName"].Value;
+            break;
+        }
+        if (display.Length == 0)
+            foreach (System.Xml.XmlNode node in xml.GetElementsByTagName("DisplayName"))
+                if (node.ParentNode != null && node.ParentNode.LocalName == "Properties") display = node.InnerText;
+        return ResolveResource(fullName, packageName, display);
+    }
+
+    static string ResolveResource(string fullName, string packageName, string text)
+    {
+        if (!text.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase)) return text.Trim();
+        string key = text.Substring(12);
+        string[] tries = key.StartsWith("//") ? new string[] { "ms-resource:" + key }
+            : new string[] { "ms-resource:" + key, "ms-resource://" + packageName + "/resources/" + key.TrimStart('/'), "ms-resource://" + packageName + "/" + key.TrimStart('/') };
+        foreach (string candidate in tries)
+        {
+            StringBuilder output = new StringBuilder(256);
+            try { if (SHLoadIndirectString("@{" + fullName + "? " + candidate + "}", output, 256, IntPtr.Zero) == 0 && output.Length > 0 && !output.ToString().StartsWith("ms-resource:")) return output.ToString().Trim(); }
+            catch { }
+        }
+        return "";
+    }
+
+    // ================================================================ The icon of a window's program
+    // Packaged app: the package's own logo. Else the program file's icon resource at the size wanted. Else
+    // the window's own icon (the class icon or what it answers WM_GETICON with).
+    void IconOf(Link link, long n, Dictionary<string, object> r)
+    {
+        Cell c = CellOf(Str(r, "id"));
+        if (c == null) { Answer(link, n, false, "no window has that id"); return; }
+        int side = (int)Math.Max(16, Math.Min(256, Num(r, "size", 64)));
+        IntPtr window = c.Src; string path = c.ExePath; uint pid = c.AppPid != 0 ? c.AppPid : c.Pid;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                string b64 = null;
+                string folder = PackageFolder(PackageFullNameOf(pid));
+                using (Bitmap logo = folder.Length > 0 ? PackageLogo(folder, side) : null) { if (logo != null) b64 = PngBase64(logo, side); }
+                if (b64 == null && path.Length > 0) b64 = IconFromFile(path, side);
+                if (b64 == null) b64 = IconFromWindow(window, side);
+                if (b64 == null) { Answer(link, n, false, "the program has no icon"); return; }
+                StringBuilder sb = new StringBuilder("{\"t\":\"answer\",\"re\":" + L(n) + ",\"ok\":true,\"icon\":");
+                Js(sb, b64);
+                link.Send(sb.Append('}').ToString());
+            }
+            catch (Exception ex) { Answer(link, n, false, ex.Message); }
+        });
+    }
+
+    // The logo files of the package's app in the manifest, the one nearest the size wanted at or above it.
+    static Bitmap PackageLogo(string folder, int side)
+    {
+        string manifest = Path.Combine(folder, "AppxManifest.xml");
+        if (!File.Exists(manifest)) return null;
+        System.Xml.XmlDocument xml = new System.Xml.XmlDocument();
+        xml.XmlResolver = null;
+        xml.Load(manifest);
+        List<string> logos = new List<string>();
+        foreach (System.Xml.XmlNode node in xml.GetElementsByTagName("*"))
+        {
+            if (node.LocalName != "VisualElements" || node.Attributes == null) continue;
+            foreach (string key in new string[] { "Square44x44Logo", "Square150x150Logo", "Logo" })
+                if (node.Attributes[key] != null) logos.Add(node.Attributes[key].Value);
+            break;
+        }
+        if (logos.Count == 0)
+            foreach (System.Xml.XmlNode node in xml.GetElementsByTagName("Logo"))
+                if (node.ParentNode != null && node.ParentNode.LocalName == "Properties") logos.Add(node.InnerText);
+        foreach (string logo in logos)
+        {
+            string relative = logo.Replace('/', '\\');
+            if (relative.Contains("..") || Path.IsPathRooted(relative)) continue;
+            string full = Path.Combine(folder, relative);
+            string dir = Path.GetDirectoryName(full), stem = Path.GetFileNameWithoutExtension(full);
+            if (!Directory.Exists(dir)) continue;
+            Bitmap best = null; int bestScore = int.MaxValue;
+            foreach (string file in Directory.GetFiles(dir, stem + "*.png"))
+            {
+                string name = Path.GetFileName(file);
+                string rest = name.Substring(stem.Length);
+                if (rest.Length > 0 && rest[0] != '.' && rest[0] != '_') continue;
+                try
+                {
+                    Bitmap candidate;
+                    using (Bitmap raw = new Bitmap(file)) candidate = new Bitmap(raw);
+                    int w = candidate.Width;
+                    // nearest at or above the wanted size; unplated (no coloured square behind it) wins a tie
+                    int score = (w >= side ? w - side : (side - w) * 4 + 1000) * 2 + (name.IndexOf("unplated", StringComparison.OrdinalIgnoreCase) >= 0 ? 0 : 1);
+                    if (score < bestScore) { if (best != null) best.Dispose(); best = candidate; bestScore = score; }
+                    else candidate.Dispose();
+                }
+                catch { }
+            }
+            if (best != null) return best;
+        }
+        return null;
+    }
+
+    static string IconFromFile(string path, int side)
+    {
+        IntPtr[] icons = new IntPtr[1]; int[] ids = new int[1];
+        uint got;
+        try { got = PrivateExtractIcons(path, 0, side, side, icons, ids, 1, 0); } catch { return null; }
+        if (got == 0 || got == 0xFFFFFFFF || icons[0] == IntPtr.Zero) return null;
+        try { return PngOfIcon(icons[0], side); }
+        finally { DestroyIcon(icons[0]); }
+    }
+
+    static string IconFromWindow(IntPtr window, int side)
+    {
+        IntPtr icon;
+        // ICON_BIG, then the class's, then ICON_SMALL2
+        if (SendMessageTimeout(window, 0x7F, new IntPtr(1), IntPtr.Zero, 2, 150, out icon) == IntPtr.Zero) icon = IntPtr.Zero;
+        if (icon == IntPtr.Zero) icon = GetClassLongPtr(window, -14);
+        if (icon == IntPtr.Zero && SendMessageTimeout(window, 0x7F, new IntPtr(2), IntPtr.Zero, 2, 150, out icon) == IntPtr.Zero) icon = IntPtr.Zero;
+        return icon == IntPtr.Zero ? null : PngOfIcon(icon, side);
+    }
+
+    // The icon is copied, so the handle stays whoever's it was.
+    static string PngOfIcon(IntPtr handle, int side)
+    {
+        using (Icon icon = Icon.FromHandle(handle))
+        using (Bitmap bitmap = icon.ToBitmap())
+            return PngBase64(bitmap, side);
+    }
+
+    // The picture on a transparent square of the wanted side, kept in proportion.
+    static string PngBase64(Bitmap source, int side)
+    {
+        using (Bitmap square = new Bitmap(side, side, PixelFormat.Format32bppArgb))
+        using (Graphics g = Graphics.FromImage(square))
+        using (MemoryStream png = new MemoryStream())
+        {
+            g.Clear(Color.Transparent);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            double k = Math.Min((double)side / source.Width, (double)side / source.Height);
+            int w = Math.Max(1, (int)Math.Round(source.Width * k)), h = Math.Max(1, (int)Math.Round(source.Height * k));
+            g.DrawImage(source, (side - w) / 2, (side - h) / 2, w, h);
+            square.Save(png, ImageFormat.Png);
+            return Convert.ToBase64String(png.ToArray());
+        }
     }
 
     // ================================================================ Debug painting (debug=1 only)

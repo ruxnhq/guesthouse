@@ -3,6 +3,7 @@
 //!
 //! Usage: `page_shots FOLDER`, with the store and the XDG folders already pointing somewhere harmless.
 
+mod apps_pages;
 mod fake_display;
 mod fake_forwarded;
 mod fake_frames;
@@ -818,6 +819,10 @@ fn main() -> glib::ExitCode {
     // This program lives in `examples`, one folder below the app's own.
     let examples = env::current_exe().unwrap().parent().unwrap().to_owned();
     context.paths.binaries = examples.parent().unwrap().to_owned();
+    let apps_only = env::var("PAGE_SHOTS_WALK").is_ok_and(|walk| walk == "apps");
+    if apps_only {
+        apps_pages::prepare(&mut context, &folder);
+    }
     let context = Arc::new(context);
     let walking = context.clone();
     application(context, None, move |window| {
@@ -826,7 +831,11 @@ fn main() -> glib::ExitCode {
         if let Some(settings) = gtk::Settings::default() {
             settings.set_gtk_enable_animations(false);
         }
-        glib::spawn_future_local(walk_pages(window.clone(), walking.clone(), folder.clone()));
+        if apps_only {
+            glib::spawn_future_local(apps_pages::walk(window.clone(), walking.clone(), folder.clone()));
+        } else {
+            glib::spawn_future_local(walk_pages(window.clone(), walking.clone(), folder.clone()));
+        }
     })
     .run_with_args::<&str>(&[])
 }

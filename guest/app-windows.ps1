@@ -3,6 +3,6 @@
 # port 8769 and answers only a caller that sends the agent's token first. It ends, with the port
 # unheard, if it cannot listen, so the next start can try again.
 $source = [IO.File]::ReadAllText('C:\gpupv\app-windows.cs', [Text.Encoding]::UTF8)
-$references = 'System.Windows.Forms', 'System.Drawing', 'System.Web.Extensions.dll'
+$references = 'System.Windows.Forms', 'System.Drawing', 'System.Web.Extensions.dll', 'System.Xml'
 Add-Type -ReferencedAssemblies $references -TypeDefinition $source
 [Guesthouse.AppWindows]::Run((Get-Content C:\gpupv\token.txt -Raw).Trim())

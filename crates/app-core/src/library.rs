@@ -415,6 +415,7 @@ pub fn delete(context: &Context, machine: &Machine) -> Result<()> {
     remove_disk_folder(machine)?;
     fs::remove_dir_all(folder)?;
     kept_logs::forget(context, &machine.id);
+    crate::app_windows::launcher::remove_all(context, machine);
     Ok(())
 }
 
@@ -443,9 +444,12 @@ pub fn remove_entry(context: &Context, machine: &Machine) -> Result<()> {
     if !machine.disk_folder.is_empty() {
         // Its disk was on another drive that's gone or was emptied. What's left here is all the
         // app's own, and useless without the disk.
-        return Ok(fs::remove_dir_all(folder)?);
+        fs::remove_dir_all(folder)?;
+        crate::app_windows::launcher::remove_all(context, machine);
+        return Ok(());
     }
     fs::remove_file(folder.join("machine.json"))?;
+    crate::app_windows::launcher::remove_all(context, machine);
     // Anything else in there isn't for here to remove, and then the folder stays.
     let _ = fs::remove_dir(&folder);
     if machine.id == EXISTING_ID {
@@ -875,6 +879,26 @@ mod tests {
         let moved = Machine::new("moved", "Moved", &disk.to_string_lossy(), &firmware.to_string_lossy());
         assert!(delete(&context, &moved).unwrap_err().0.contains("left alone"));
         assert_eq!(sorted_names(&outside), ["disk.qcow2", "vars.fd"]);
+    }
+
+    #[test]
+    fn deleting_a_machine_takes_its_launcher_entries_and_no_other_machines() {
+        use crate::app_windows::launcher::{self, Program};
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let made = create(&context, &plain(&scratch, "Gone", None)).unwrap();
+        let kept = create(&context, &plain(&scratch, "Kept", None)).unwrap();
+        let program = Program {
+            name: "Notepad".into(),
+            exe: "notepad.exe".into(),
+            launch: crate::app_windows::Launch::Path { path: "notepad.exe".into(), args: String::new() },
+            icon: None,
+        };
+        launcher::add(&context, &made, &program).unwrap();
+        launcher::add(&context, &kept, &program).unwrap();
+        delete(&context, &made).unwrap();
+        assert!(launcher::list_all(&context, &made).is_empty());
+        assert_eq!(launcher::list_all(&context, &kept).len(), 1);
     }
 
     #[test]

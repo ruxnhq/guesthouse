@@ -109,7 +109,12 @@ impl View {
         view.add_input(hub);
         view.watch_scale(hub);
         match &view.host {
-            Host::Window(window) => view.watch_window(hub, window),
+            Host::Window(window) => {
+                view.watch_window(hub, window);
+                if let Some(id) = super::identity::app_id_for(cell) {
+                    super::identity::set_when_mapped(window, &id);
+                }
+            }
             Host::Popup(popover) => {
                 if let Some(parent) = parent {
                     popover.set_parent(&parent.frame);
@@ -127,7 +132,22 @@ impl View {
                     window.minimize();
                 }
             }
-            Host::Popup(popover) => popover.popup(),
+            Host::Popup(popover) => match parent {
+                // A menu that is open when the viewer starts comes in the same layout as its window,
+                // which is not on the screen yet: its place against the window is not known until it
+                // is, so it is shown then (measured: it landed at 0,50 instead).
+                Some(parent) if !parent.frame.is_mapped() => {
+                    let (popover, weak) = (popover.clone(), Rc::downgrade(&view));
+                    let weak_parent = Rc::downgrade(parent);
+                    parent.frame.connect_map(move |_| {
+                        if let (Some(view), Some(parent)) = (weak.upgrade(), weak_parent.upgrade()) {
+                            view.place_popup(&parent);
+                            popover.popup();
+                        }
+                    });
+                }
+                _ => popover.popup(),
+            },
         }
         view
     }
@@ -279,6 +299,11 @@ impl View {
         if let Host::Window(window) = &self.host {
             if what.title {
                 window.set_title(Some(&now.title));
+            }
+            if what.other
+                && let Some(id) = super::identity::app_id_for(now)
+            {
+                super::identity::set_now(window, &id);
             }
             if what.state {
                 let (presence, order) = follow_guest_state(self.presence.get(), now.state);

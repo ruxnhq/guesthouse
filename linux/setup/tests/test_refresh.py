@@ -183,6 +183,9 @@ class OwnRefresh(unittest.TestCase):
         self.assertNotIn("systemctl enable nvfwd-gpu.service nvfwd-desktop-watch.service",
                          self.guest.lines("systemctl"))
         self.assertFalse(os.path.exists(self.guest.path("etc/modprobe.d/nvfwd.conf")))
+        # The power button's are not: the app shuts an AMD guest down with it too.
+        self.assertIn("PowerKeyIgnoreInhibited=yes", self.guest.read("etc/systemd/logind.conf.d/90-nvfwd.conf"))
+        self.assertIn("PowerButtonAction=8", self.guest.read("etc/xdg/powerdevilrc"))
 
 
 class GpuUpHandsOver(unittest.TestCase):

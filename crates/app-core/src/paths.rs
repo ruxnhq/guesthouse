@@ -115,6 +115,8 @@ pub struct Paths {
     /// The recipes that come with the app. See [`shipped_folder`].
     recipes: PathBuf,
     pub home: PathBuf,
+    /// `$XDG_DATA_HOME`, where the desktop's launcher entries and icons go. It is not the app's own folder.
+    pub data_home: PathBuf,
     /// The program folder: QEMU and the guest's files. It isn't in this repo, and the app runs plain
     /// VMs without it.
     pub program: PathBuf,
@@ -140,7 +142,8 @@ impl Paths {
     /// `running_from` is the folder of the running program, which an unpacked release runs from.
     pub fn new(variables: &Variables, running_from: Option<&Path>) -> Self {
         let config = variables.xdg("XDG_CONFIG_HOME", ".config").join(APP_FOLDER);
-        let data = variables.xdg("XDG_DATA_HOME", ".local/share").join(APP_FOLDER);
+        let data_home = variables.xdg("XDG_DATA_HOME", ".local/share");
+        let data = data_home.join(APP_FOLDER);
         let state = variables.xdg("XDG_STATE_HOME", ".local/state").join(APP_FOLDER);
         let parts = data.join(PARTS_FOLDER);
         let store = variables
@@ -157,6 +160,7 @@ impl Paths {
             linux: shipped_folder(&program, running_from, SOURCES_FOLDER, SOURCES_MARK),
             recipes: shipped_folder(&program, running_from, RECIPES_FOLDER, RECIPES_MARK),
             home: variables.home(),
+            data_home,
             qemu: variables.folder(QEMU_VARIABLE).unwrap_or_else(|| qemu_program(variables, &program)),
             binaries: running_from.map_or_else(|| program.clone(), Path::to_owned),
             store,
@@ -180,6 +184,16 @@ impl Paths {
     /// by program, not by run folder, so it never takes them: they would stop the other VM.
     pub fn second_instance(&self) -> bool {
         self.own_run.is_some()
+    }
+
+    /// Where the desktop looks for launcher entries of this user.
+    pub fn applications(&self) -> PathBuf {
+        self.data_home.join("applications")
+    }
+
+    /// Where this user's icons are, in the size the helper gives.
+    pub fn icons(&self) -> PathBuf {
+        self.data_home.join("icons/hicolor/48x48/apps")
     }
 
     pub fn run_folder(&self, slot: Slot) -> PathBuf {

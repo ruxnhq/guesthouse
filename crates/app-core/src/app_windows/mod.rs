@@ -35,6 +35,7 @@ mod forward;
 mod geometry;
 #[cfg(test)]
 mod geometry_tests;
+pub mod launcher;
 mod link;
 mod message;
 #[cfg(test)]
@@ -49,6 +50,7 @@ mod start_tests;
 mod switch;
 #[cfg(test)]
 mod switch_tests;
+pub mod viewer_lock;
 
 pub use client::*;
 pub use describe::describe;
@@ -58,4 +60,5 @@ pub use link::{HelperStarter, LinkConfig, LinkSettings, RequestFailure, Status, 
 pub use message::*;
 pub use model::*;
 pub use start::*;
+
 pub use switch::*;

@@ -14,6 +14,8 @@
 
 mod feed;
 mod hub;
+pub mod identity;
+pub mod launch;
 pub mod plan;
 mod view;
 
@@ -24,7 +26,7 @@ use super::screen::Screen;
 use crate::application::{APP_ID, use_built_in_icons};
 use adw::prelude::*;
 use gtk::{gio, glib};
-use guesthouse_app_core::app_windows::connect;
+use guesthouse_app_core::app_windows::{connect, viewer_lock};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::host_sensors::sensors_file;
 use guesthouse_app_core::log::{log_panics, write_log};
@@ -89,6 +91,18 @@ pub fn run(request: Request) -> glib::ExitCode {
         eprintln!("{} isn't running", machine.name);
         return glib::ExitCode::FAILURE;
     };
+    // One viewer per machine: a second, however it came to be started, ends here.
+    let _lock = match viewer_lock::take(&context, slot) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            println!("The app windows of {} are already shown by another viewer.", machine.name);
+            return glib::ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("The app windows viewer could not take its lock: {error}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
     let run_folder = context.run_folder(Some(slot));
     let running = {
         let (context, machine) = (context.clone(), machine.clone());
@@ -113,6 +127,7 @@ pub fn run_with(
             return glib::ExitCode::FAILURE;
         }
     };
+    identity::init(context.clone(), machine.clone(), slot);
     let application = adw::Application::builder()
         .application_id(format!("{APP_ID}{APP_ID_SUFFIX}"))
         .flags(gio::ApplicationFlags::NON_UNIQUE)

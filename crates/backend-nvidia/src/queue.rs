@@ -672,10 +672,9 @@ impl<R: Rm> NvidiaBackend<R> {
         let found = SubchannelUse::of_listing(host, work.space, &listing);
         if found.needs(missing) {
             log::warn!(
-                "queue {:#x} stops: its channel only computes, and its commands use subchannels {:#04b}{}",
+                "queue {:#x} stops: its channel only computes, and its commands use subchannels {:#04b}",
                 work.queue,
-                found.used,
-                if found.unread { " and some can't be read" } else { "" }
+                found.used
             );
             return Err(WorkStart::QueueFailed);
         }

@@ -146,9 +146,11 @@ impl SubchannelUse {
         found
     }
 
-    /// Whether the commands may use an object on one of the `missing` subchannels.
+    /// Whether the commands that could be read use an object on one of the `missing` subchannels.
+    /// Commands that can't be read say nothing: games keep some where the host has no view, on
+    /// drawing and compute queues alike.
     pub(crate) fn needs(self, missing: u8) -> bool {
-        self.unread || self.used & missing != 0
+        self.used & missing != 0
     }
 }
 
@@ -285,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn only_commands_for_a_missing_object_or_unread_ones_need_it() {
+    fn only_commands_for_a_missing_object_need_it() {
         let missing = 0b01_1101;
         assert!(!SubchannelUse { used: 1 << 1 | 1 << 5, unread: false }.needs(missing));
         assert!(
@@ -294,6 +296,6 @@ mod tests {
         );
         assert!(!SubchannelUse::default().needs(missing));
         assert!(SubchannelUse { used: 1 << 1 | 1 << 4, unread: false }.needs(missing));
-        assert!(SubchannelUse { used: 0, unread: true }.needs(missing), "unread may be anything");
+        assert!(!SubchannelUse { used: 0, unread: true }.needs(missing), "unread says nothing");
     }
 }

@@ -369,4 +369,40 @@ mod tests {
             assert!(value <= TABLET_RANGE);
         }
     }
+
+    #[test]
+    fn a_layout_from_the_fake_helper_opens_windows_and_a_request_reaches_it() {
+        use guesthouse_app_core::app_windows::stand_in::FakeHelper;
+        use guesthouse_app_core::app_windows::{Client, LinkConfig, Timing, Update};
+        use std::time::{Duration, Instant};
+        let helper = FakeHelper::start("tok");
+        helper.with(|inner| {
+            inner.layout.cells = vec![window("w", rect(0, 0, 200, 100)), popup("p", "w", rect(5, 5, 50, 50))];
+        });
+        let mut client = Client::start(LinkConfig {
+            port: helper.port,
+            token: "tok".into(),
+            starter: None,
+            timing: Timing::default(),
+        });
+        let mut hosted = BTreeMap::new();
+        let mut found = Vec::new();
+        let until = Instant::now() + Duration::from_secs(3);
+        while found.len() < 2 && Instant::now() < until {
+            for update in client.poll() {
+                if let Update::Changes(changes) = update {
+                    found.extend(steps(&changes, client.model(), &mut hosted));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let opened: Vec<_> = found.iter().filter(|step| matches!(step, Step::Open(_))).cloned().collect();
+        assert_eq!(opened, vec![open("w"), open("p")]);
+        let cell = client.model().get("w").unwrap().clone();
+        let request = focus_request(None, &cell).unwrap();
+        client.request(request);
+        assert!(
+            helper.wait_until(|inner| inner.requests.iter().any(|r| r["t"] == "focus" && r["id"] == "w"))
+        );
+    }
 }

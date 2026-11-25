@@ -182,7 +182,10 @@ impl Hub {
     /// Every view shows the new frame, so none holds an old one back from the producer.
     fn on_texture(&self, texture: &gdk::Texture) {
         let screen = self.screen_size();
-        if (texture.width(), texture.height()) != (screen.w, screen.h) && !self.mismatch_said.replace(true) {
+        if screen.w > 0
+            && (texture.width(), texture.height()) != (screen.w, screen.h)
+            && !self.mismatch_said.replace(true)
+        {
             self.note(&format!(
                 "the frames are {}x{} and the helper says the screen is {}x{}",
                 texture.width(),

@@ -201,6 +201,8 @@ impl View {
         // The popup's top left corner is at `place`: its top edge is the bottom of an empty rectangle
         // there, and its width is the rectangle's, so the centres agree.
         popover.set_position(gtk::PositionType::Bottom);
+        // Measured in a nested KWin: GTK puts the surface one pixel below the rectangle's edge.
+        popover.set_offset(0, -1);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(place.x, place.y, place.w.max(1), 0)));
     }
 

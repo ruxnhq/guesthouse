@@ -37,6 +37,7 @@ fn cell(id: &str, exe: &str, popup: bool) -> Cell {
         focus: false,
         caption: Caption::default(),
         resizable: true,
+        corner: 0,
     }
 }
 

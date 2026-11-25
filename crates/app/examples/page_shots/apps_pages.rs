@@ -92,6 +92,7 @@ fn cell(id: &str, exe: &str, popup: bool) -> WindowCell {
         focus: false,
         caption: Caption::default(),
         resizable: true,
+        corner: 0,
     }
 }
 

@@ -60,6 +60,7 @@ fn cell(id: &str, title: &str, popup_of: Option<&str>) -> Cell {
         focus: popup_of.is_none(),
         caption: Caption { h: 32, buttons_w: 138 },
         resizable: true,
+        corner: 0,
     }
 }
 

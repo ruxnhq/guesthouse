@@ -82,6 +82,7 @@ fn cell(id: &str, popup_of: Option<&str>) -> Cell {
         focus: false,
         caption: Caption { h: 32, buttons_w: 138 },
         resizable: true,
+        corner: 0,
     }
 }
 

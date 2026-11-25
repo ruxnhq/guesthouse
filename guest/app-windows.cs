@@ -1267,7 +1267,26 @@ public class AppWindows : Form
         sb.Append(",\"overflow\":").Append(B(c.Overflow));
         sb.Append(",\"focus\":").Append(B(c.Fg));
         sb.Append(",\"caption\":{\"h\":").Append(I(c.CaptionH)).Append(",\"buttons_w\":").Append(I(c.ButtonsW)).Append('}');
-        sb.Append(",\"resizable\":").Append(B(!c.Popup && (c.Style & WS_THICKFRAME) != 0)).Append('}');
+        sb.Append(",\"resizable\":").Append(B(!c.Popup && (c.Style & WS_THICKFRAME) != 0));
+        sb.Append(",\"corner\":").Append(I(CornerOf(c))).Append('}');
+    }
+
+    // The radius of the rounded corners Windows 11 draws on a window, in pixels: 8 at 100 %, scaled with the window's dpi,
+    // 4 for the small preference, none when maximized, when the program opts out, for a popup, or on a system that does not round.
+    int CornerOf(Cell c)
+    {
+        if (c.Popup || c.Iconic) return c.Popup ? 0 : 8;
+        try
+        {
+            if (IsZoomed(c.Src)) return 0;
+            int preference;
+            if (DwmGetWindowAttribute(c.Src, 33, out preference, 4) != 0) return 0;     // DWMWA_WINDOW_CORNER_PREFERENCE: absent before Windows 11
+            if (preference == 1) return 0;                                                // DONOTROUND
+            uint dpi = GetDpiForWindow(c.Src);
+            if (dpi == 0) dpi = 96;
+            return (int)Math.Round((preference == 3 ? 4.0 : 8.0) * dpi / 96.0);
+        }
+        catch { return 0; }
     }
 
     string ScreenJson() { return "{\"w\":" + I(ovW) + ",\"h\":" + I(ovH) + "}"; }
@@ -1831,7 +1850,7 @@ public class AppWindows : Form
                 start.UseShellExecute = true;
                 string folder = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder)) start.WorkingDirectory = folder;
-                Process.Start(start).Dispose();
+                using (Process started = Process.Start(start)) { }   // the shell starts a packaged app (shell:AppsFolder\ID) and gives no process back
                 Answer(link, n, true, null);
             }
             catch (Exception ex) { Answer(link, n, false, ex.Message); }

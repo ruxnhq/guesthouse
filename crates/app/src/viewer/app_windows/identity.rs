@@ -269,7 +269,7 @@ pub fn program_of(key: &str, name: &str, apps: &[App]) -> Program {
             Program {
                 name,
                 exe: key.to_owned(),
-                launch: Launch::Path { path: key.to_owned(), args: String::new() },
+                launch: Launch::Path { path: launcher::launch_path(key), args: String::new() },
                 icon: None,
             }
         }

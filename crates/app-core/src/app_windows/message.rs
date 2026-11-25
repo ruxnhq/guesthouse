@@ -85,6 +85,10 @@ pub struct Cell {
     pub focus: bool,
     pub caption: Caption,
     pub resizable: bool,
+    /// The radius in guest pixels of the rounded corners Windows draws on the window, 0 for square
+    /// corners (a maximized window, a popup, a system that does not round).
+    #[serde(default)]
+    pub corner: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

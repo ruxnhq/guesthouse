@@ -96,6 +96,12 @@ pub fn aumid_key(aumid: &str) -> String {
     format!("{AUMID_PREFIX}{aumid}")
 }
 
+/// What the guest is asked to start for a program key: a packaged app is started through the shell's
+/// apps folder by its ID, anything else by its path.
+pub fn launch_path(key: &str) -> String {
+    if is_aumid(key) { format!("shell:AppsFolder\\{}", &key[AUMID_PREFIX.len()..]) } else { key.to_owned() }
+}
+
 /// Six hex digits of a stable hash (FNV-1a), so a copy of a program in another folder is another
 /// program with an id of its own, and the same path gives the same id in every run and every version.
 fn short_hash(text: &str) -> String {

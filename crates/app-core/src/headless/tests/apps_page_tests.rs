@@ -44,6 +44,7 @@ fn a_look_gets_the_programs_with_their_icons_and_the_windows_that_are_open() {
         focus: false,
         caption: crate::app_windows::Caption::default(),
         resizable: true,
+        corner: 0,
     };
     rig.helper.with(|inner| inner.layout.cells = vec![open("1", false), open("2", false), open("3", true)]);
     let found = look(&rig.context, &rig.machine);

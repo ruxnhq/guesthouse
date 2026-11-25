@@ -43,6 +43,9 @@ mod message_tests;
 mod model;
 #[cfg(test)]
 mod model_tests;
+pub mod page;
+#[cfg(test)]
+mod page_tests;
 pub mod stand_in;
 mod start;
 #[cfg(test)]
@@ -59,6 +62,7 @@ pub use geometry::*;
 pub use link::{HelperStarter, LinkConfig, LinkSettings, RequestFailure, Status, Timing};
 pub use message::*;
 pub use model::*;
+pub use page::{Body, Found, Look, Row, Situation, program_of};
 pub use start::*;
 
 pub use switch::*;

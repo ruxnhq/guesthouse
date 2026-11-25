@@ -2,6 +2,7 @@
 //! the same calls, so a machine started here is the app's to stop and the other way round.
 
 mod app;
+mod apps_page;
 mod args;
 mod change;
 mod copies;
@@ -36,6 +37,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 use steps::Steps;
 
+pub use apps_page::look;
 pub use open::{Opening, StartViewer, ViewerProcess, open_program};
 
 /// How often a running task is looked at.

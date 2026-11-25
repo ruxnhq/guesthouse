@@ -78,6 +78,11 @@ pub fn app_id(machine: &Machine, exe: &str) -> String {
     format!("{PREFIX}{}-{}", machine.id, slug_of(exe))
 }
 
+/// The slug part of one of the machine's app ids: `guesthouse-work-mspaint` is `mspaint`.
+pub fn slug_in_app_id<'a>(machine: &Machine, app_id: &'a str) -> Option<&'a str> {
+    app_id.strip_prefix(&format!("{PREFIX}{}-", machine.id))
+}
+
 fn entry_file(context: &Context, app_id: &str) -> PathBuf {
     context.paths.applications().join(format!("{app_id}{EXTENSION}"))
 }
@@ -196,6 +201,14 @@ pub fn desktop_text(
         text.push_str(&format!("{KEY_START_MENU}=true\n"));
     }
     text
+}
+
+/// The PNG of an entry's icon, if it has one. The app id is one of this machine's own entries, and
+/// the path is made from it here.
+pub fn icon_of(context: &Context, app_id: &str) -> Option<Vec<u8>> {
+    let safe = app_id.starts_with(PREFIX)
+        && app_id.chars().all(|character| character.is_ascii_alphanumeric() || character == '-');
+    safe.then(|| fs::read(icon_file(context, app_id)).ok()).flatten().filter(|png| !png.is_empty())
 }
 
 /// Writes a file whole or not at all, in the folder it is for.

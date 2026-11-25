@@ -5,7 +5,7 @@
 
 use super::windows::running_slot;
 use crate::app_windows::launcher::{self, Program};
-use crate::app_windows::{App, Launch, Request, connect_side, is_on, off_text};
+use crate::app_windows::{App, Launch, Request, connect_side, is_on, off_text, program_of};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::machine::{Kind, Machine};
@@ -63,15 +63,7 @@ fn program_for(word: &str, found: &[App]) -> Result<Program> {
     }
     match chosen[..] {
         [] => Ok(by_path(word)),
-        [app] => {
-            let target = if app.target.is_empty() { &app.id } else { &app.target };
-            Ok(Program {
-                name: app.name.clone(),
-                exe: target.clone(),
-                launch: Launch::App(app.id.clone()),
-                icon: base64_decode(&app.icon).filter(|png| !png.is_empty()),
-            })
-        }
+        [app] => Ok(program_of(app, base64_decode(&app.icon).filter(|png| !png.is_empty()))),
         _ => {
             let each: Vec<&str> = chosen.iter().map(|app| app.id.as_str()).collect();
             Err(Failure(format!("{word} fits more than one program: {}. Use an id.", each.join(", "))))

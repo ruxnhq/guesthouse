@@ -3,7 +3,7 @@
 //! are the hub's, shared by every view.
 
 use super::hub::Hub;
-use super::plan::{Order, Presence, follow_guest_state, follow_host_state, point_for};
+use super::plan::{HostChange, Order, Presence, follow_guest_state, follow_host_state, point_for};
 use crate::viewer::crop::Crop;
 use crate::viewer::input::button_name;
 use crate::viewer::screen_frame::ScreenFrame;
@@ -382,14 +382,16 @@ impl View {
             move |window: &gtk::Window| {
                 let Some((view, hub)) = both(&weak) else { return };
                 let (active, suspended) = (window.is_active(), window.is_suspended());
-                let (presence, restored) = follow_host_state(view.presence.get(), active, suspended);
+                let (presence, change) = follow_host_state(view.presence.get(), active, suspended);
                 view.presence.set(presence);
                 hub.trace(&format!(
                     "host window {}: active {active}, out of sight {suspended}, {presence:?}",
                     view.id
                 ));
-                if restored {
-                    hub.request(Request::Restore { id: view.id.clone() });
+                match change {
+                    HostChange::Restore => hub.request(Request::Restore { id: view.id.clone() }),
+                    HostChange::Minimize => hub.request(Request::Minimize { id: view.id.clone() }),
+                    HostChange::Nothing => {}
                 }
                 if active && !suspended {
                     hub.focus(&view.cell.borrow());

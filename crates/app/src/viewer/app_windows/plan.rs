@@ -136,13 +136,25 @@ pub fn follow_guest_state(presence: Presence, state: State) -> (Presence, Order)
     }
 }
 
-/// What the host window's activity and visibility mean. The second says whether the user brought a
-/// minimized window back, which the guest's has to follow.
-pub fn follow_host_state(presence: Presence, active: bool, suspended: bool) -> (Presence, bool) {
+/// What the guest is to be told of a change of the host window's visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostChange {
+    Nothing,
+    /// The user brought a minimized window back.
+    Restore,
+    /// The user minimized the window: the compositor took it out of sight with nothing asked of it.
+    Minimize,
+}
+
+/// What the host window's activity and visibility mean. A window that goes out of sight without the
+/// guest having asked is the user's minimize, and the guest's window follows it. One the guest asked to
+/// minimize (`Minimizing`) is not told back, which keeps the two from answering each other for ever.
+pub fn follow_host_state(presence: Presence, active: bool, suspended: bool) -> (Presence, HostChange) {
     match presence {
-        Presence::Minimizing if !active || suspended => (Presence::Minimized, false),
-        Presence::Minimized if active && !suspended => (Presence::Up, true),
-        presence => (presence, false),
+        Presence::Minimizing if !active || suspended => (Presence::Minimized, HostChange::Nothing),
+        Presence::Minimized if active && !suspended => (Presence::Up, HostChange::Restore),
+        Presence::Up if suspended && !active => (Presence::Minimized, HostChange::Minimize),
+        presence => (presence, HostChange::Nothing),
     }
 }
 
@@ -319,10 +331,10 @@ mod tests {
         let (presence, order) = follow_guest_state(Presence::Up, State::Minimized);
         assert_eq!((presence, order), (Presence::Minimizing, Order::Minimize));
         // The host window goes out of sight, then the user brings it back.
-        let (presence, restored) = follow_host_state(presence, false, true);
-        assert_eq!((presence, restored), (Presence::Minimized, false));
-        let (presence, restored) = follow_host_state(presence, true, false);
-        assert_eq!((presence, restored), (Presence::Up, true));
+        let (presence, change) = follow_host_state(presence, false, true);
+        assert_eq!((presence, change), (Presence::Minimized, HostChange::Nothing));
+        let (presence, change) = follow_host_state(presence, true, false);
+        assert_eq!((presence, change), (Presence::Up, HostChange::Restore));
         // The guest's state says shown after the restore: nothing more to do.
         assert_eq!(follow_guest_state(presence, State::Shown), (Presence::Up, Order::Nothing));
         // The guest's window came back by itself while the host's was minimized.
@@ -332,9 +344,27 @@ mod tests {
 
     #[test]
     fn a_window_asked_to_minimize_that_is_not_active_still_counts_once_it_is_out_of_sight() {
-        assert_eq!(follow_host_state(Presence::Minimizing, true, false), (Presence::Minimizing, false));
-        assert_eq!(follow_host_state(Presence::Minimizing, false, true), (Presence::Minimized, false));
-        assert_eq!(follow_host_state(Presence::Up, false, false), (Presence::Up, false));
+        assert_eq!(
+            follow_host_state(Presence::Minimizing, true, false),
+            (Presence::Minimizing, HostChange::Nothing)
+        );
+        assert_eq!(
+            follow_host_state(Presence::Minimizing, false, true),
+            (Presence::Minimized, HostChange::Nothing)
+        );
+        assert_eq!(follow_host_state(Presence::Up, false, false), (Presence::Up, HostChange::Nothing));
+    }
+
+    #[test]
+    fn the_users_minimize_is_sent_to_the_guest_once_and_does_not_come_back() {
+        let (presence, change) = follow_host_state(Presence::Up, false, true);
+        assert_eq!((presence, change), (Presence::Minimized, HostChange::Minimize));
+        // The guest's state says minimized now: the host window is already where it is told to be.
+        assert_eq!(follow_guest_state(presence, State::Minimized), (Presence::Minimized, Order::Nothing));
+        // Still out of sight, still nothing to send.
+        assert_eq!(follow_host_state(presence, false, true), (Presence::Minimized, HostChange::Nothing));
+        let (presence, change) = follow_host_state(presence, true, false);
+        assert_eq!((presence, change), (Presence::Up, HostChange::Restore));
     }
 
     #[test]
@@ -382,6 +412,7 @@ mod tests {
         let mut client = Client::start(LinkConfig {
             port: helper.port,
             token: "tok".into(),
+            side: false,
             starter: None,
             timing: Timing::default(),
         });
@@ -406,4 +437,3 @@ mod tests {
         );
     }
 }
-            side: false,

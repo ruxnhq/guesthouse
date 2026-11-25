@@ -52,6 +52,9 @@ fn cell_of(region: Rect) -> Cell {
         focus: true,
         caption: Caption::default(),
         resizable: false,
+        app: String::new(),
+        name: String::new(),
+        corner: 0,
     }
 }
 

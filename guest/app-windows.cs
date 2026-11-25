@@ -47,6 +47,13 @@ public class AppWindows : Form
         [MarshalAs(UnmanagedType.Bool)] public bool fSourceClientAreaOnly;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct BITMAPINFOHEADER
+    {
+        public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
+        public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+    }
+
     // rgstate[0] is the title bar itself, then five buttons.
     [StructLayout(LayoutKind.Sequential)]
     struct TITLEBARINFO
@@ -109,6 +116,15 @@ public class AppWindows : Form
     [DllImport("dwmapi.dll")] static extern int DwmQueryThumbnailSourceSize(IntPtr thumb, out SIZE s);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int cb);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT v, int cb);
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int w, int h);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+    [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc, IntPtr bmp, uint start, uint lines, int[] bits, ref BITMAPINFOHEADER info, uint usage);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
     [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
@@ -163,6 +179,9 @@ public class AppWindows : Form
     const int DebugLabelH = 16;                 // only used when debug=1
     const int MinCellSide = 8;                  // the smallest window picture that gets a cell
     const int AlphaForCure = 254;
+    const uint SRCCOPY = 0x00CC0020, CAPTUREBLT = 0x40000000;
+    const int ShadowMaxLum = 90, StepLum = 12, InsetMax = 40;
+    const int InsetFirstMs = 60, InsetRetryMs = 100, InsetTriesMax = 10;
     const int DebounceMs = 30, TitleMs = 500, ScanMs = 1000, GraceMs = 2000, PopupGraceMs = 300, SettleMs = 400;
     const int PendingStepMs = 40, RestoreRetryMs = 60, FocusRetryMs = 100;
     const int MinimizeWaitMs = 1500, RestoreWaitMs = 3000, FocusWaitMs = 800, ResizeWaitMs = 1000;
@@ -208,6 +227,10 @@ public class AppWindows : Form
         public long TitleAt;
         public int CaptionH, ButtonsW;          // what Windows says of the title bar; 0 when it cannot be known
         public int ParkTries; public long ParkAfter;
+        // A popup's window has an invisible margin around the menu for its shadow, which DWM thumbnails as a dark band.
+        // The insets say how much of each side is shadow; the cell and the frame we report are the menu alone.
+        public int InL, InT, InR, InB; public bool InDone; public long InAt; public int InTries;
+        public bool HaveCand; public int CandL, CandT, CandR, CandB;   // the margins read last time, to be read again before they count
     }
 
     class Probe
@@ -520,7 +543,7 @@ public class AppWindows : Form
     }
 
     // ================================================================ Lab switches
-    // debug=1 draws a label and a border at each cell, layered=0 turns the layered cure off, feed=1 also writes each layout line to a file,
+    // insets=0 shows popups whole, shadow margin and all; debug=1 draws a label and a border at each cell, layered=0 turns the layered cure off, feed=1 also writes each layout line to a file,
     // workarea=0 packs cells over the taskbar as well. Anything else in the file is ignored.
     void ReadConfig()
     {
@@ -531,7 +554,7 @@ public class AppWindows : Form
             if (stamp == cfgTime) return;
             cfgTime = stamp;
             bool wasCure = cureOn;
-            cureOn = true; debugOn = false; feedToFile = false; workAreaOn = true;
+            cureOn = true; debugOn = false; feedToFile = false; workAreaOn = true; insetsOn = true;
             if (fi.Exists)
             {
                 foreach (string line in File.ReadAllLines(fi.FullName))
@@ -544,6 +567,7 @@ public class AppWindows : Form
                     else if (key == "debug") debugOn = on;
                     else if (key == "feed") feedToFile = on;
                     else if (key == "workarea") workAreaOn = on;
+                    else if (key == "insets") insetsOn = on;
                 }
             }
             FitPackArea();
@@ -682,6 +706,7 @@ public class AppWindows : Form
         c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup;
         c.Frame = p.Frame; c.Win = p.Frame;
         c.Active = true; c.ThumbDirty = true;
+        c.InDone = !c.Popup || !insetsOn; c.InAt = now + InsetFirstMs;
         c.SrcW = sw; c.SrcH = sh;
         c.CellW = Math.Min(sw, ovW); c.CellH = Math.Min(sh, ovH);
         cells[p.H] = c;
@@ -788,7 +813,8 @@ public class AppWindows : Form
     {
         c.SrcW = sw; c.SrcH = sh;
         if (!c.Popup) ReadCaption(c);
-        int wantW = Math.Min(sw, ovW), wantH = Math.Min(sh, ovH);
+        else if (c.InDone) { c.InDone = false; c.InTries = 0; c.HaveCand = false; c.InAt = now + InsetFirstMs; c.InL = c.InT = c.InR = c.InB = 0; }   // a new size has new margins
+        int wantW = Math.Min(sw - c.InL - c.InR, ovW), wantH = Math.Min(sh - c.InT - c.InB, ovH);
         c.ThumbDirty = true;
         if (!c.Placed) { c.CellW = wantW; c.CellH = wantH; return; }
         if (wantW == c.CellW && wantH == c.CellH && c.MoveAt == 0) return;
@@ -892,14 +918,14 @@ public class AppWindows : Form
         {
             if (!c.Active || c.Thumb == IntPtr.Zero || !c.ThumbDirty) continue;
             if (c.Iconic && c.ThumbApplied) { c.ThumbDirty = false; continue; }   // keep what a minimized window last showed
-            int w = Math.Min(c.CellW, c.SrcW), h = Math.Min(c.CellH, c.SrcH);
+            int w = Math.Min(c.CellW, c.SrcW - c.InL - c.InR), h = Math.Min(c.CellH, c.SrcH - c.InT - c.InB);
             DWM_THUMBNAIL_PROPERTIES p = new DWM_THUMBNAIL_PROPERTIES();
             p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_RECTSOURCE | DWM_TNP_OPACITY | DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY;
             p.rcDestination = new RECT { L = c.X, T = c.Y, R = c.X + w, B = c.Y + h };
             // The source rectangle is measured from the window rectangle's corner, which on Windows 10 and 11 lies in the
             // invisible resize border, about 7 px left of what DWM calls the frame. Start at the frame, or the picture
             // sits that much to the right with the border's emptiness on its left (seen on a GPU guest, 2026-11-24).
-            int ox = Math.Max(0, c.Frame.L - c.Win.L), oy = Math.Max(0, c.Frame.T - c.Win.T);
+            int ox = Math.Max(0, c.Frame.L - c.Win.L) + c.InL, oy = Math.Max(0, c.Frame.T - c.Win.T) + c.InT;
             p.rcSource = new RECT { L = ox, T = oy, R = ox + w, B = oy + h };
             p.opacity = 255;
             p.fVisible = c.Placed && !c.Hidden;
@@ -907,6 +933,95 @@ public class AppWindows : Form
             if (DwmUpdateThumbnailProperties(c.Thumb, ref p) == 0) { c.ThumbDirty = false; c.ThumbApplied = true; }
         }
         if (debugOn) Invalidate();
+    }
+
+    // ================================================================ Popup margins
+    // A menu of a WinUI program lives in a window that is larger than the menu: around it is room for its shadow, which the
+    // window leaves clear and DWM's thumbnail shows as a dark band. Windows reports no rectangle for the menu alone, so the
+    // picture the overlay shows of the popup is read from the screen, and the margin is where its edge is: the shadow is
+    // dark and smooth, the menu begins at a step. A window whose outer pixels are not dark has no margin.
+    bool insetsOn = true;                     // the lab switch insets=0 turns it off
+    static int Lum(int px) { return ((px >> 16) & 255) * 3 / 10 + ((px >> 8) & 255) * 6 / 10 + (px & 255) / 10; }
+
+    // The distance from one end of a line of pixels to where the menu starts, or -1 if the line says nothing.
+    static int EdgeMargin(int[] line)
+    {
+        int first = Lum(line[0]);
+        if (first > ShadowMaxLum) return 0;
+        int limit = Math.Min(line.Length / 2, InsetMax + 1);
+        for (int i = 1; i < limit; i++)
+            if (Math.Abs(Lum(line[i]) - first) > StepLum) return i;
+        return -1;
+    }
+
+    // Finds the margins of the popups whose picture is up. A picture that is not there yet (all black) is tried again shortly.
+    void MeasureInsets(long now)
+    {
+        foreach (Cell c in cells.Values)
+        {
+            if (c.InDone || !c.Active || !c.Popup || !c.Placed || c.Thumb == IntPtr.Zero || c.ThumbDirty || now < c.InAt) continue;
+            int w = c.SrcW, h = c.SrcH;
+            int[] px = (w >= 8 && h >= 8 && w <= 4096 && h <= 4096) ? CaptureOverlay(vx + c.X, vy + c.Y, w, h) : null;
+            bool blank = px == null;
+            if (!blank)
+            {
+                blank = true;
+                for (int i = 0; i < px.Length && blank; i += 37) if ((px[i] & 0xFFFFFF) != 0) blank = false;
+            }
+            if (blank && ++c.InTries < InsetTriesMax) { c.InAt = now + InsetRetryMs; continue; }
+            int l = 0, t = 0, r = 0, b = 0;
+            if (!blank)
+            {
+                int[] row = new int[w], col = new int[h];
+                int mid = h / 2, cmid = w / 2;
+                for (int x = 0; x < w; x++) row[x] = px[mid * w + x];
+                int[] rrow = new int[w]; for (int x = 0; x < w; x++) rrow[x] = row[w - 1 - x];
+                for (int y = 0; y < h; y++) col[y] = px[y * w + cmid];
+                int[] rcol = new int[h]; for (int y = 0; y < h; y++) rcol[y] = col[h - 1 - y];
+                int ml = EdgeMargin(row), mr = EdgeMargin(rrow), mt = EdgeMargin(col), mb = EdgeMargin(rcol);
+                bool all = ml >= 0 && mr >= 0 && mt >= 0 && mb >= 0;
+                // A WinUI menu opens with an animation, and its picture is not the final one until that is over. Two readings
+                // of the same margins, a beat apart, are taken as the real ones; a menu that never settles is shown whole.
+                bool same = all && c.HaveCand && c.CandL == ml && c.CandT == mt && c.CandR == mr && c.CandB == mb;
+                if (!same && ++c.InTries < InsetTriesMax)
+                {
+                    if (all) { c.HaveCand = true; c.CandL = ml; c.CandT = mt; c.CandR = mr; c.CandB = mb; } else c.HaveCand = false;
+                    c.InAt = now + InsetRetryMs;
+                    continue;
+                }
+                if (same) { l = ml; r = mr; t = mt; b = mb; }
+            }
+            if (l + r >= w - MinCellSide || t + b >= h - MinCellSide) { l = t = r = b = 0; }
+            c.InL = l; c.InT = t; c.InR = r; c.InB = b;
+            c.CellW = Math.Min(w - l - r, ovW); c.CellH = Math.Min(h - t - b, ovH);
+            c.InDone = true; c.ThumbDirty = true;
+            ApplyThumbs();
+        }
+    }
+
+    static int[] CaptureOverlay(int x, int y, int w, int h)
+    {
+        IntPtr screen = GetDC(IntPtr.Zero);
+        if (screen == IntPtr.Zero) return null;
+        IntPtr dc = CreateCompatibleDC(screen), bmp = CreateCompatibleBitmap(screen, w, h);
+        int[] bits = null;
+        if (dc != IntPtr.Zero && bmp != IntPtr.Zero)
+        {
+            IntPtr old = SelectObject(dc, bmp);
+            bool copied = BitBlt(dc, 0, 0, w, h, screen, x, y, SRCCOPY | CAPTUREBLT);
+            SelectObject(dc, old);                      // GetDIBits wants a bitmap that no device context holds
+            if (copied)
+            {
+                BITMAPINFOHEADER info = new BITMAPINFOHEADER();
+                info.biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER)); info.biWidth = w; info.biHeight = -h; info.biPlanes = 1; info.biBitCount = 32;
+                bits = new int[w * h];
+                if (GetDIBits(dc, bmp, 0, (uint)h, bits, ref info, 0) == 0) bits = null;
+            }
+        }
+        if (bmp != IntPtr.Zero) DeleteObject(bmp);
+        if (dc != IntPtr.Zero) DeleteDC(dc);
+        ReleaseDC(IntPtr.Zero, screen);
+        return bits;
     }
 
     // ================================================================ Parking
@@ -999,6 +1114,7 @@ public class AppWindows : Form
         PlaceAll();
         UpdateHidden();
         ApplyThumbs();
+        MeasureInsets(now);
         ComputeParents();
         ParkAll(now);
         LayoutStep();
@@ -1006,6 +1122,7 @@ public class AppWindows : Form
         {
             if (c.MoveAt != 0) { long r = c.MoveAt - now; if (r < 1) r = 1; if (r < next) next = (int)r; }
             if (c.ParkAfter > now) { long r = c.ParkAfter - now; if (r < next) next = (int)r; }
+            if (!c.InDone && c.Active && c.Popup && c.Placed && c.Thumb != IntPtr.Zero) { long r = c.InAt - now; if (r < 10) r = 10; if (r < next) next = (int)r; }   // never a timer of 1 ms for a popup that has no place
         }
         if (next != int.MaxValue) ArmWork(next);
     }
@@ -1063,7 +1180,7 @@ public class AppWindows : Form
                 Cell pc;
                 if (cells.TryGetValue(c.Parent, out pc) && !pc.Iconic) pf = pc.Frame;
                 else if (DwmGetWindowAttribute(c.Parent, DWMWA_EXTENDED_FRAME_BOUNDS, out pf, 16) != 0 && !GetWindowRect(c.Parent, out pf)) continue;
-                c.HasRel = true; c.RelX = c.Frame.L - pf.L; c.RelY = c.Frame.T - pf.T;
+                c.HasRel = true; c.RelX = c.Frame.L + c.InL - pf.L; c.RelY = c.Frame.T + c.InT - pf.T;
             }
         }
     }
@@ -1112,9 +1229,9 @@ public class AppWindows : Form
         sb.Append(",\"cls\":"); Js(sb, c.Cls);
         sb.Append(",\"title\":"); Js(sb, c.Title);
         // cell: screen coordinates of the picture's top-left; w,h = size shown, 0 when not placed
-        int w = c.Placed ? Math.Min(c.CellW, c.SrcW) : 0, h = c.Placed ? Math.Min(c.CellH, c.SrcH) : 0;
+        int w = c.Placed ? Math.Min(c.CellW, c.SrcW - c.InL - c.InR) : 0, h = c.Placed ? Math.Min(c.CellH, c.SrcH - c.InT - c.InB) : 0;
         Rc(sb, "cell", c.Placed ? vx + c.X : 0, c.Placed ? vy + c.Y : 0, w, h);
-        Rc(sb, "frame", c.Frame.L, c.Frame.T, c.Frame.R - c.Frame.L, c.Frame.B - c.Frame.T);   // where the window really is: where input goes
+        Rc(sb, "frame", c.Frame.L + c.InL, c.Frame.T + c.InT, c.Frame.R - c.Frame.L - c.InL - c.InR, c.Frame.B - c.Frame.T - c.InT - c.InB);   // where the window really is: where input goes
         sb.Append(",\"popup\":").Append(B(c.Popup));
         sb.Append(",\"parent\":\"").Append(c.Parent == IntPtr.Zero ? "" : L(c.Parent.ToInt64())).Append('"');
         sb.Append(",\"rel\":{\"x\":").Append(I(c.HasRel ? c.RelX : 0)).Append(",\"y\":").Append(I(c.HasRel ? c.RelY : 0)).Append('}');
@@ -1137,7 +1254,7 @@ public class AppWindows : Form
     void LayoutStep()
     {
         List<Cell> list = new List<Cell>();
-        foreach (Cell c in cells.Values) if (c.Active) list.Add(c);
+        foreach (Cell c in cells.Values) if (c.Active && c.InDone) list.Add(c);   // a popup waits until its margins are known
         list.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
         StringBuilder core = new StringBuilder();
         core.Append("\"screen\":").Append(ScreenJson()).Append(",\"cells\":[");

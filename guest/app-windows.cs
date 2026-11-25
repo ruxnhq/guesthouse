@@ -170,8 +170,9 @@ public class AppWindows : Form
 
     // ================================================================ Wire, files and timings
     const int Port = 8769;
-    // The host's end of QEMU's private network. The loopback address is for a program in the guest, which the token still has to let in.
+    // The host's end of QEMU's private network. Only it is let in, as with the agent's and the files helper's ports: a program in the guest is not.
     const string HostAddress = "10.0.2.2";
+    const int UnauthenticatedMax = 8;           // connections still sending their token line; a new one over this is closed
     const int TokenWaitMs = 5000, TokenMaxBytes = 256, LineMaxBytes = 1 << 20, WriteTimeoutMs = 5000;
     const string Dir = @"C:\gpupv\";
     const string ErrorFile = Dir + "app-windows-error.txt";
@@ -1322,13 +1323,23 @@ public class AppWindows : Form
         }
     }
 
-    // One line, up to a limit, without waiting for more than the stream's read timeout. Null when the other end closed or the line is too long.
-    static string ReadLine(Stream stream, int limit)
+    // One line, up to a limit. Null when the other end closed, the line is too long, or the line is not whole within deadlineMs
+    // altogether (a stream's read timeout is per read, and a byte now and then would keep a thread for ever). With a deadline of 0
+    // there is none, and the stream's own read timeout applies.
+    static string ReadLine(Stream stream, int limit, int deadlineMs)
     {
         MemoryStream line = new MemoryStream();
         byte[] one = new byte[1];
+        NetworkStream network = stream as NetworkStream;
+        Stopwatch since = Stopwatch.StartNew();
         while (true)
         {
+            if (deadlineMs > 0 && network != null)
+            {
+                long left = deadlineMs - since.ElapsedMilliseconds;
+                if (left <= 0) return null;
+                network.ReadTimeout = (int)left;
+            }
             if (stream.Read(one, 0, 1) != 1) return null;
             if (one[0] == (byte)'\n') break;
             if (line.Length >= limit) return null;
@@ -1337,25 +1348,30 @@ public class AppWindows : Form
         return Encoding.UTF8.GetString(line.ToArray()).TrimEnd('\r');
     }
 
+    int unauthenticated;
+
     void Serve(TcpClient client)
     {
         Link link = null;
-        bool counted = false;
+        bool counted = false, waiting = false;
         try
         {
             IPAddress from = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
-            if (!IPAddress.IsLoopback(from) && from.ToString() != HostAddress) return;
+            if (from.ToString() != HostAddress) return;
+            if (Interlocked.Increment(ref unauthenticated) > UnauthenticatedMax) { Interlocked.Decrement(ref unauthenticated); return; }
+            waiting = true;
             client.NoDelay = true;
             NetworkStream stream = client.GetStream();
             stream.ReadTimeout = TokenWaitMs;
             stream.WriteTimeout = WriteTimeoutMs;
-            string first = ReadLine(stream, TokenMaxBytes);
+            string first = ReadLine(stream, TokenMaxBytes, TokenWaitMs);
             if (first == null) return;
             // "TOKEN side": a command's connection, which does not take the viewer's.
             bool side = false;
             int space = first.IndexOf(' ');
             if (space > 0 && first.Substring(space + 1) == "side") { side = true; first = first.Substring(0, space); }
             if (first != token) return;
+            waiting = false; Interlocked.Decrement(ref unauthenticated);
             stream.ReadTimeout = Timeout.Infinite;
             link = new Link(client, stream);
             link.Side = side;
@@ -1375,7 +1391,7 @@ public class AppWindows : Form
             Link mine = link;
             BeginInvoke(new MethodInvoker(delegate { Greet(mine); }));
             string line;
-            while ((line = ReadLine(stream, LineMaxBytes)) != null)
+            while ((line = ReadLine(stream, LineMaxBytes, 0)) != null)
             {
                 string text = line;
                 BeginInvoke(new MethodInvoker(delegate { OnRequest(mine, text); }));
@@ -1387,6 +1403,7 @@ public class AppWindows : Form
         }
         finally
         {
+            if (waiting) Interlocked.Decrement(ref unauthenticated);
             if (link != null)
             {
                 lock (linkGate) { if (current == link) current = null; if (counted) sideLinks--; }

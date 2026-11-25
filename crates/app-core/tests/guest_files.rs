@@ -109,7 +109,8 @@ fn the_files_helper_only_answers_the_host() {
 
 /// The helper for app windows listens on the guest's network too, so the firewall rule and the helper
 /// keep it to the host's end of QEMU's private link, and only a caller that sends the token gets in.
-/// The one other caller it lets through is a program on the guest itself, which still needs the token.
+/// Nothing else gets in, not a program on the guest itself, whatever token it has read. A caller that is
+/// not the host is closed before it is read from, and only a few that have not sent their token wait at once.
 #[test]
 fn the_app_windows_helper_only_answers_the_host() {
     let start = fs::read_to_string(guest_file("app-windows-start.ps1")).unwrap();
@@ -118,7 +119,10 @@ fn the_app_windows_helper_only_answers_the_host() {
     assert!(rules[0].contains("-LocalPort 8769 -RemoteAddress 10.0.2.2"), "{}", rules[0]);
     let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
     assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
-    assert!(helper.contains("if (!IPAddress.IsLoopback(from) && from.ToString() != HostAddress) return;"));
+    assert!(helper.contains("if (from.ToString() != HostAddress) return;"));
+    assert!(!helper.contains("IsLoopback"), "a program in the guest is not let in");
+    assert!(helper.contains("ReadLine(stream, TokenMaxBytes, TokenWaitMs)"), "the token line has one deadline");
+    assert!(helper.contains("> UnauthenticatedMax"), "connections that have not sent the token are capped");
     assert!(helper.contains("if (first != token) return;"));
     let runner = fs::read_to_string(guest_file("app-windows.ps1")).unwrap();
     assert!(runner.contains("Get-Content C:\\gpupv\\token.txt"));

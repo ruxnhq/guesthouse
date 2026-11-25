@@ -138,7 +138,6 @@ public class AppWindows : Form
     [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")] static extern IntPtr GetClassLongPtr(IntPtr h, int i);
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)] static extern int SHLoadIndirectString(string source, StringBuilder output, uint size, IntPtr reserved);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref int size);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool MoveFileEx(string existing, string replacement, uint flags);
 
     const int DWMWA_CAPTION_BUTTON_BOUNDS = 5, DWMWA_EXTENDED_FRAME_BOUNDS = 9, DWMWA_CLOAKED = 14;
     const uint DWM_TNP_RECTDESTINATION = 1, DWM_TNP_RECTSOURCE = 2, DWM_TNP_OPACITY = 4, DWM_TNP_VISIBLE = 8, DWM_TNP_SOURCECLIENTAREAONLY = 0x10;
@@ -146,7 +145,6 @@ public class AppWindows : Form
     const uint GW_OWNER = 4, GA_PARENT = 1;
     const uint LWA_ALPHA = 2;
     const uint SWP_NOSIZE = 1, SWP_NOMOVE = 2, SWP_NOZORDER = 4, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_ASYNCWINDOWPOS = 0x4000;
-    const uint MOVEFILE_REPLACE_EXISTING = 1;
     const int SM_CXSCREEN = 0, SM_CYSCREEN = 1, SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77, SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
     const uint SPI_GETWORKAREA = 0x30;
     const int WM_DISPLAYCHANGE = 0x7E, WM_SETTINGCHANGE = 0x1A, WM_WTSSESSION_CHANGE = 0x2B1;
@@ -176,15 +174,11 @@ public class AppWindows : Form
     const string HostAddress = "10.0.2.2";
     const int TokenWaitMs = 5000, TokenMaxBytes = 256, LineMaxBytes = 1 << 20, WriteTimeoutMs = 5000;
     const string Dir = @"C:\gpupv\";
-    const string ConfigFile = Dir + "app-windows.cfg";    // lab switches only
-    const string FeedFile = Dir + "app-windows-feed.json";   // the layout lines as a file, with feed=1
-    const string FeedTmp = Dir + "app-windows-feed.json.tmp";
     const string ErrorFile = Dir + "app-windows-error.txt";
     const string QuitFile = Dir + "app-windows.quit";    // written by the stop script, so the layered style is undone first
     const int ProtocolVersion = 1;
 
-    const int HeartbeatMs = 250;                // config, quit file, input desktop, pending-feed retry, dormant expiry; not a layout poll
-    const int DebugLabelH = 16;                 // only used when debug=1
+    const int HeartbeatMs = 250;                // quit file, input desktop, dormant expiry; not a layout poll
     const int MinCellSide = 8;                  // the smallest window picture that gets a cell
     const int AlphaForCure = 254;
     const uint SRCCOPY = 0x00CC0020, CAPTUREBLT = 0x40000000;
@@ -311,7 +305,6 @@ public class AppWindows : Form
     System.Windows.Forms.Timer heartbeat = new System.Windows.Forms.Timer();
     System.Windows.Forms.Timer pendingTimer = new System.Windows.Forms.Timer();
     static readonly Stopwatch Clock = Stopwatch.StartNew();
-    Font font = new Font("Segoe UI", 8f);
     uint myPid = GetCurrentProcessId();
     Dictionary<uint, string> exeNames = new Dictionary<uint, string>();
     long exeNamesAt;
@@ -328,12 +321,8 @@ public class AppWindows : Form
     int orderCounter, seq;
     long workDue, lastTop, lastScan;
     bool scanDue = true, shutDown, quitting;
-    bool feedPending; string lastCore = "", lastLayout = "";
+    string lastCore = "", lastLayout = "";
     string desktopKind = "normal"; bool sessionLocked;
-
-    // ---- lab switches, read from the config file, one key=value a line
-    bool cureOn = true, debugOn, feedToFile, workAreaOn = true;
-    DateTime cfgTime = DateTime.MinValue;
 
     // ================================================================ Form plumbing
     protected override CreateParams CreateParams
@@ -378,7 +367,7 @@ public class AppWindows : Form
     {
         packL = 0; packT = 0; packR = ovW; packB = ovH;
         RECT wa;
-        if (workAreaOn && SystemParametersInfo(SPI_GETWORKAREA, 0, out wa, 0))
+        if (SystemParametersInfo(SPI_GETWORKAREA, 0, out wa, 0))
         {
             packL = Math.Max(0, wa.L - vx); packT = Math.Max(0, wa.T - vy);
             packR = Math.Min(ovW, wa.R - vx); packB = Math.Min(ovH, wa.B - vy);
@@ -391,7 +380,6 @@ public class AppWindows : Form
         // Fully opaque; only here so that WS_EX_LAYERED + WS_EX_TRANSPARENT makes the overlay click-through.
         SetLayeredWindowAttributes(Handle, 0, 255, LWA_ALPHA);
         WTSRegisterSessionNotification(Handle, 0);
-        ReadConfig();
         try { File.Delete(QuitFile); } catch { }
         InstallHooks();
         heartbeat.Start();
@@ -543,14 +531,13 @@ public class AppWindows : Form
         try
         {
             long now = Now();
-            ReadConfig();
             if (File.Exists(QuitFile)) quitting = true;
             if (quitting) { Close(); return; }
             CheckDesktop();
             if (now - lastTop >= 1000) { lastTop = now; RaiseOverlay(); }
             if (now - lastScan >= ScanMs) scanDue = true;
             foreach (Cell c in cells.Values) if (!c.Active) { scanDue = true; break; }   // lets dormant cells expire
-            if (scanDue || feedPending) Kick();
+            if (scanDue) Kick();
         }
         catch (Exception ex) { LogError(ex); }
     }
@@ -564,43 +551,6 @@ public class AppWindows : Form
     static void LogError(Exception ex)
     {
         try { File.WriteAllText(ErrorFile, DateTime.Now.ToString("s") + "\r\n" + ex.ToString()); } catch { }
-    }
-
-    // ================================================================ Lab switches
-    // insets=0 shows popups whole, shadow margin and all; debug=1 draws a label and a border at each cell, layered=0 turns the layered cure off, feed=1 also writes each layout line to a file,
-    // workarea=0 packs cells over the taskbar as well. Anything else in the file is ignored.
-    void ReadConfig()
-    {
-        try
-        {
-            FileInfo fi = new FileInfo(ConfigFile);
-            DateTime stamp = fi.Exists ? fi.LastWriteTimeUtc : DateTime.MinValue;
-            if (stamp == cfgTime) return;
-            cfgTime = stamp;
-            bool wasCure = cureOn;
-            cureOn = true; debugOn = false; feedToFile = false; workAreaOn = true; insetsOn = true;
-            if (fi.Exists)
-            {
-                foreach (string line in File.ReadAllLines(fi.FullName))
-                {
-                    string[] kv = line.Split(new char[] { '=' }, 2);
-                    if (kv.Length != 2) continue;
-                    string key = kv[0].Trim().ToLowerInvariant();
-                    bool on = kv[1].Trim() == "1";
-                    if (key == "layered") cureOn = on;
-                    else if (key == "debug") debugOn = on;
-                    else if (key == "feed") feedToFile = on;
-                    else if (key == "workarea") workAreaOn = on;
-                    else if (key == "insets") insetsOn = on;
-                }
-            }
-            FitPackArea();
-            if (wasCure && !cureOn) foreach (Cell c in cells.Values) Uncure(c);
-            foreach (Cell c in cells.Values) c.ThumbDirty = true;
-            Invalidate();
-            scanDue = true; Kick();
-        }
-        catch { }                                      // file being written: try again next beat
     }
 
     // ================================================================ Reading windows
@@ -705,7 +655,7 @@ public class AppWindows : Form
             c.LocDirty = false;
             if (now - c.TitleAt >= TitleMs) { c.Title = TextOf(h); c.TitleAt = now; c.NameDirty = false; }
             if (!c.IdSettled) Identify(c);
-            if (!c.Popup && cureOn) KeepCured(c);
+            if (!c.Popup) KeepCured(c);
         }
         // Cells whose window did not qualify this time.
         foreach (Cell c in new List<Cell>(cells.Values))
@@ -731,12 +681,12 @@ public class AppWindows : Form
         c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup;
         c.Frame = p.Frame; c.Win = p.Frame;
         c.Active = true; c.ThumbDirty = true;
-        c.InDone = !c.Popup || !insetsOn; c.InAt = now + InsetFirstMs;
+        c.InDone = !c.Popup; c.InAt = now + InsetFirstMs;
         c.SrcW = sw; c.SrcH = sh;
         c.CellW = Math.Min(sw, ovW); c.CellH = Math.Min(sh, ovH);
         cells[p.H] = c;
         if (!c.Popup) ReadCaption(c);
-        if (!c.Popup && cureOn) Cure(c);              // "when it first appears": before it can be covered
+        if (!c.Popup) Cure(c);              // "when it first appears": before it can be covered
         return c;
     }
 
@@ -745,7 +695,7 @@ public class AppWindows : Form
         IntPtr t;
         if (DwmRegisterThumbnail(Handle, c.Src, out t) != 0) return false;
         c.Thumb = t; c.Active = true; c.ThumbDirty = true; c.ThumbApplied = false;
-        if (c.Popup && c.Placed && Collides(c, c.X, c.Y - Label, c.CellW, c.CellH + Label)) c.Placed = false;   // its place was given to another meanwhile: it is placed again
+        if (c.Popup && c.Placed && Collides(c, c.X, c.Y, c.CellW, c.CellH)) c.Placed = false;   // its place was given to another meanwhile: it is placed again
         return true;
     }
 
@@ -820,15 +770,13 @@ public class AppWindows : Form
         return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
     }
 
-    int Label { get { return debugOn ? DebugLabelH : 0; } }
-
     // Does a box of the given size at (x, y) collide with another cell's box? Overflow cells take no space of their own.
     bool Collides(Cell self, int x, int y, int bw, int bh)
     {
         foreach (Cell o in cells.Values)
         {
             if (o == self || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;   // a menu that closed keeps its place only so it can come back, not against other windows
-            if (Hit(x, y, bw, bh, o.X, o.Y - Label, o.CellW, o.CellH + Label)) return true;
+            if (Hit(x, y, bw, bh, o.X, o.Y, o.CellW, o.CellH)) return true;
         }
         return false;
     }
@@ -857,7 +805,7 @@ public class AppWindows : Form
     bool FitsInPlace(Cell c, int w, int h)
     {
         if (c.X + w > packR || c.Y + h > packB) return false;
-        return !Collides(c, c.X, c.Y - Label, w, h + Label);
+        return !Collides(c, c.X, c.Y, w, h);
     }
 
     // Moves cells whose resize settled. This is the only time a cell moves because of its own size.
@@ -878,7 +826,7 @@ public class AppWindows : Form
     // Candidates are the corners next to existing boxes, so cells pack against each other and the edge of the work area.
     bool TrySpot(Cell c)
     {
-        int bw = c.CellW, bh = c.CellH + Label;
+        int bw = c.CellW, bh = c.CellH;
         List<int> xs = new List<int>(); List<int> ys = new List<int>();
         xs.Add(packL); ys.Add(packT);
         foreach (Cell o in cells.Values)
@@ -894,7 +842,7 @@ public class AppWindows : Form
             foreach (int x in xs)
             {
                 if (x + bw > packR) break;
-                if (!Collides(c, x, y, bw, bh)) { c.X = x; c.Y = y + Label; c.Placed = true; c.Overflow = false; return true; }
+                if (!Collides(c, x, y, bw, bh)) { c.X = x; c.Y = y; c.Placed = true; c.Overflow = false; return true; }
             }
         }
         return false;
@@ -905,7 +853,7 @@ public class AppWindows : Form
     void PlaceCell(Cell c)
     {
         if (TrySpot(c)) return;
-        if (!c.Popup) { c.X = packL; c.Y = packT + Label; c.Placed = true; c.Overflow = true; }
+        if (!c.Popup) { c.X = packL; c.Y = packT; c.Placed = true; c.Overflow = true; }
         else { c.Placed = false; c.Overflow = false; }
     }
 
@@ -950,7 +898,7 @@ public class AppWindows : Form
             p.rcDestination = new RECT { L = c.X, T = c.Y, R = c.X + w, B = c.Y + h };
             // The source rectangle is measured from the window rectangle's corner, which on Windows 10 and 11 lies in the
             // invisible resize border, about 7 px left of what DWM calls the frame. Start at the frame, or the picture
-            // sits that much to the right with the border's emptiness on its left (seen on a GPU guest, 2026-11-24).
+            // sits that much to the right with the border's emptiness on its left (seen on a GPU guest).
             int ox = Math.Max(0, c.Frame.L - c.Win.L) + c.InL, oy = Math.Max(0, c.Frame.T - c.Win.T) + c.InT;
             p.rcSource = new RECT { L = ox, T = oy, R = ox + w, B = oy + h };
             p.opacity = 255;
@@ -958,7 +906,6 @@ public class AppWindows : Form
             p.fSourceClientAreaOnly = false;
             if (DwmUpdateThumbnailProperties(c.Thumb, ref p) == 0) { c.ThumbDirty = false; c.ThumbApplied = true; }
         }
-        if (debugOn) Invalidate();
     }
 
     // ================================================================ Popup margins
@@ -966,7 +913,6 @@ public class AppWindows : Form
     // window leaves clear and DWM's thumbnail shows as a dark band. Windows reports no rectangle for the menu alone, so the
     // picture the overlay shows of the popup is read from the screen, and the margin is where its edge is: the shadow is
     // dark and smooth, the menu begins at a step. A window whose outer pixels are not dark has no margin.
-    bool insetsOn = true;                     // the lab switch insets=0 turns it off
     static int Lum(int px) { return ((px >> 16) & 255) * 3 / 10 + ((px >> 8) & 255) * 6 / 10 + (px & 255) / 10; }
 
     // The distance from one end of a line of pixels to where the menu starts, or -1 if the line says nothing.
@@ -1095,7 +1041,7 @@ public class AppWindows : Form
     // window is layered. So each app window is given WS_EX_LAYERED with alpha 254 once. Only styles set here are undone.
     void Cure(Cell c)
     {
-        if (!cureOn || c.Popup || c.Cured || c.CureTries >= 3) return;
+        if (c.Popup || c.Cured || c.CureTries >= 3) return;
         IntPtr h = c.Src;
         if (IsHungAppWindow(h)) return;                 // SetWindowLongPtr would wait for a stuck window
         long ex = GetWindowLongPtr(h, GWL_EXSTYLE).ToInt64();
@@ -1327,24 +1273,11 @@ public class AppWindows : Form
             lastLayout = "{\"t\":\"layout\",\"seq\":" + I(seq) + "," + cs + "}";
             Link link = Current();
             if (link != null) link.SendLayout(lastLayout);
-            if (feedToFile) feedPending = true;
         }
-        if (feedPending) WriteFeed();
         DisplayStep(false);
     }
 
     Link Current() { lock (linkGate) { return current; } }
-
-    // Temp file, then rename over the feed, so a reader sees the old file or the new one, never half of one.
-    void WriteFeed()
-    {
-        try
-        {
-            File.WriteAllBytes(FeedTmp, new UTF8Encoding(false).GetBytes(lastLayout + "\n"));
-            if (MoveFileEx(FeedTmp, FeedFile, MOVEFILE_REPLACE_EXISTING)) feedPending = false;
-        }
-        catch { }
-    }
 
     // ================================================================ The input desktop
     // While the secure desktop (UAC) or the lock screen has the input, no window of this session can be seen or moved.
@@ -1610,7 +1543,7 @@ public class AppWindows : Form
         int tallest = 0, widest = 0;
         foreach (Cell c in order)
         {
-            int w = c.SrcW - c.InL - c.InR, h = c.SrcH - c.InT - c.InB + Label;
+            int w = c.SrcW - c.InL - c.InR, h = c.SrcH - c.InT - c.InB;
             sizes.Add(new int[] { w, h });
             tallest = Math.Max(tallest, h); widest = Math.Max(widest, w);
         }
@@ -2247,19 +2180,6 @@ public class AppWindows : Form
             g.DrawImage(source, (side - w) / 2, (side - h) / 2, w, h);
             square.Save(png, ImageFormat.Png);
             return Convert.ToBase64String(png.ToArray());
-        }
-    }
-
-    // ================================================================ Debug painting (debug=1 only)
-    protected override void OnPaint(PaintEventArgs e)
-    {
-        base.OnPaint(e);
-        if (!debugOn) return;
-        foreach (Cell c in cells.Values)
-        {
-            if (!c.Active || !c.Placed) continue;
-            e.Graphics.DrawString(c.Cls + " | " + c.Title, font, Brushes.White, c.X, c.Y - DebugLabelH);
-            e.Graphics.DrawRectangle(Pens.Magenta, c.X - 1, c.Y - 1, c.CellW + 1, c.CellH + 1);
         }
     }
 

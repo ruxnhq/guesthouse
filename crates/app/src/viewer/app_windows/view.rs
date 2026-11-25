@@ -23,7 +23,7 @@ const FORWARD: u32 = 9;
 /// what the window has past the picture (under a logical unit at the right and bottom) is clear.
 const STYLE: &str = "window.app-window-view { background: #000000; }
 popover.app-window-popup, popover.app-window-popup > contents {
-  padding: 0; margin: 0; border: none; border-radius: 0; box-shadow: none; background: transparent; min-width: 0; min-height: 0; }
+  padding: 0; margin: 0; border: none; border-radius: 0; box-shadow: none; background: #000000; min-width: 0; min-height: 0; }
 popover.app-window-popup > arrow { min-width: 0; min-height: 0; }";
 
 /// A press on the title bar that the guest has not been told of: let go where it was, it is a click.

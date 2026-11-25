@@ -381,6 +381,10 @@ impl Hub {
         self.follow_guest();
         self.follow_scale();
         self.follow_screen();
+        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
+        for view in views {
+            view.keep_size(self);
+        }
         for update in updates {
             if matches!(update, Update::Status(_)) {
                 self.screen_said.replace(None);

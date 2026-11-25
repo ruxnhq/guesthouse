@@ -16,6 +16,18 @@ use guesthouse_app_core::app_windows::{
 };
 use std::cell::{Cell as Slot, RefCell};
 use std::rc::{Rc, Weak};
+use std::time::{Duration, Instant};
+
+/// How long the window's size must stay before the guest is asked for it: a drag or a layout gives many.
+const SIZE_STILL: Duration = Duration::from_millis(250);
+/// How long after the compositor last gave the window a size of its own choosing the window is left at
+/// it, rather than made the cell's size again: a drag of the window's edge goes on for a while.
+const HOST_SIZE_HOLD: Duration = Duration::from_millis(800);
+/// How long the guest has to answer a size before the window goes back to its cell's.
+const GUEST_ANSWER: Duration = Duration::from_millis(3000);
+
+/// A size asked of the guest, the cell's size then, and when.
+type Asked = ((i32, i32), (i32, i32), Instant);
 
 const BACK: u32 = 8;
 const FORWARD: u32 = 9;
@@ -51,6 +63,16 @@ pub struct View {
     pub children: RefCell<Vec<String>>,
     /// The picture, on a surface of the view's own.
     framed: Framed,
+    /// The window's size the compositor last chose (not the cell's), and when, which the guest is
+    /// asked for once it has stayed `SIZE_STILL`.
+    host_size: Slot<Option<((i32, i32), Instant)>>,
+    /// The guest size last asked for, the cell's size then, and when: a size the guest would not
+    /// take is not asked for again while the cell stays, and the window waits for the answer.
+    asked: Slot<Option<Asked>>,
+    /// The sizes the cell lately had at the ratio of the moment, newest last. A window given one of
+    /// them was given what it asked for when it asked (its size when it opened, before the compositor
+    /// said its scale), not a size the compositor chose.
+    wanted_lately: RefCell<Vec<(i32, i32)>>,
 }
 
 pub fn add_style(display: &gdk::Display) {
@@ -71,7 +93,7 @@ impl View {
                     .application(hub.application())
                     .title(&cell.title)
                     .decorated(false)
-                    .resizable(false)
+                    .resizable(cell.resizable)
                     .child(&frame)
                     .css_classes(["app-window-view"])
                     .build(),
@@ -98,10 +120,14 @@ impl View {
             moved_window: Slot::new(false),
             children: RefCell::default(),
             framed,
+            host_size: Slot::new(None),
+            asked: Slot::new(None),
+            wanted_lately: RefCell::default(),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
         view.watch_scale(hub);
+        view.watch_size();
         match &view.host {
             Host::Window(window) => {
                 view.watch_window(hub, window);
@@ -175,6 +201,102 @@ impl View {
 
     fn out_of_sight(&self) -> bool {
         matches!(&self.host, Host::Window(window) if window.is_suspended())
+    }
+
+    /// The window's size against its cell's. A size the compositor chose (a tiling layout, a maximize,
+    /// the user's drag of an edge) is asked of the guest once it has stayed; the picture meanwhile is
+    /// cut or in the middle, never stretched. A cell that changed size (the guest's own resize, or its
+    /// answer) makes the window that size when the window is its own to size: not maximized, full
+    /// screen or tiled, and not just sized by the compositor.
+    pub fn keep_size(&self, hub: &Hub) {
+        let Host::Window(window) = &self.host else { return };
+        let Some(allocated) = self.frame.allocated() else { return };
+        let wanted = self.frame.wanted_size();
+        {
+            let mut lately = self.wanted_lately.borrow_mut();
+            if lately.last() != Some(&wanted) {
+                lately.push(wanted);
+                let extra = lately.len().saturating_sub(4);
+                lately.drain(..extra);
+            }
+        }
+        if let Some((size, since)) = self.host_size.get() {
+            if size != allocated || allocated == wanted {
+                self.host_size.set((allocated != wanted).then(|| (allocated, Instant::now())));
+                return;
+            }
+            if since.elapsed() >= SIZE_STILL {
+                self.ask_size(hub, allocated);
+            }
+            let cell = {
+                let cell = self.cell.borrow();
+                (cell.cell.w, cell.cell.h)
+            };
+            let answering =
+                self.asked.get().is_some_and(|(_, then, at)| then == cell && at.elapsed() < GUEST_ANSWER);
+            if since.elapsed() < HOST_SIZE_HOLD || answering || !self.free(window) {
+                return;
+            }
+            // The compositor's size has stood long enough: the cell, which follows it as far as the
+            // guest would go, is the window's size from here on.
+            self.host_size.set(None);
+        }
+        if allocated != wanted && self.free(window) {
+            hub.trace(&format!(
+                "view {}: the window is made its cell's size {wanted:?}, from {allocated:?}",
+                self.id
+            ));
+            window.set_default_size(wanted.0, wanted.1);
+        }
+    }
+
+    /// Notes a size the widget was given that is not its cell's.
+    fn watch_size(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.frame.connect_size(move |width, height| {
+            let Some(view) = weak.upgrade() else { return };
+            let ours = (width, height) == view.frame.wanted_size()
+                || view.wanted_lately.borrow().contains(&(width, height));
+            if !ours {
+                view.host_size.set(Some(((width, height), Instant::now())));
+            }
+        });
+    }
+
+    /// Asks the guest for the window's size, in its pixels at the ratio now, once for each size.
+    fn ask_size(&self, hub: &Hub, (width, height): (i32, i32)) {
+        let cell = self.cell.borrow();
+        if !cell.resizable {
+            return;
+        }
+        let ratio = self.frame.ratio();
+        let size = ((f64::from(width) * ratio).round() as i32, (f64::from(height) * ratio).round() as i32);
+        let now = (cell.cell.w, cell.cell.h);
+        if size == now || self.asked.get().is_some_and(|(asked, then, _)| asked == size && then == now) {
+            return;
+        }
+        self.asked.set(Some((size, now, Instant::now())));
+        hub.note(&format!(
+            "view {}: the window is {width}x{height}, so the guest's is asked to be {}x{}",
+            self.id, size.0, size.1
+        ));
+        hub.request(Request::Resize { id: self.id.clone(), w: size.0, h: size.1 });
+    }
+
+    /// Whether the window's size is its own to choose: not maximized, full screen or tiled.
+    fn free(&self, window: &gtk::Window) -> bool {
+        let Some(toplevel) = window.surface().and_then(|surface| surface.downcast::<gdk::Toplevel>().ok())
+        else {
+            return false;
+        };
+        let held = gdk::ToplevelState::MAXIMIZED
+            | gdk::ToplevelState::FULLSCREEN
+            | gdk::ToplevelState::TILED
+            | gdk::ToplevelState::TOP_TILED
+            | gdk::ToplevelState::BOTTOM_TILED
+            | gdk::ToplevelState::LEFT_TILED
+            | gdk::ToplevelState::RIGHT_TILED;
+        !toplevel.state().intersects(held)
     }
 
     /// Windows' scale or the steps it offers changed.
@@ -294,7 +416,15 @@ impl View {
     fn guest_point(&self, hub: &Hub, x: f64, y: f64) -> Point {
         let screen = hub.screen_size();
         // The widget holds the whole cell, the part off the screen black, so no offset is added.
-        point_for(&self.cell.borrow(), self.surface(), Point::default(), x, y, screen)
+        let (shift_x, shift_y) = self.frame.picture_shift();
+        point_for(
+            &self.cell.borrow(),
+            self.surface(),
+            Point::default(),
+            x - f64::from(shift_x),
+            y - f64::from(shift_y),
+            screen,
+        )
     }
 
     fn send_pointer(&self, hub: &Hub, x: f64, y: f64) -> Point {
@@ -399,9 +529,15 @@ impl View {
         let button = gesture.current_button();
         if down {
             hub.focus(&self.cell.borrow());
-            let strip = !self.is_popup()
-                && button == PRIMARY_BUTTON
-                && on_drag_strip(&self.cell.borrow(), self.surface(), x, y);
+            let strip = !self.is_popup() && button == PRIMARY_BUTTON && {
+                let (shift_x, shift_y) = self.frame.picture_shift();
+                on_drag_strip(
+                    &self.cell.borrow(),
+                    self.surface(),
+                    x - f64::from(shift_x),
+                    y - f64::from(shift_y),
+                )
+            };
             if strip
                 && let Some(event) = gesture.current_event()
                 && let Some(device) = event.device()

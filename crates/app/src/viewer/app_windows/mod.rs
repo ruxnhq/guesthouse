@@ -7,8 +7,10 @@
 //! against its parent's for a popup cell, and shows its cell's part of the frame with no copy. A new
 //! view has the newest frame at once, so a window opened on a still screen is not black.
 //!
-//! What this milestone does not do: resize by a window's edges, maximize, icons, launcher entries. A
-//! guest desktop that is not the normal one keeps the windows as they are and takes no input for them.
+//! A host window takes the size the compositor gives it (a tiling layout, a maximize, the user's drag)
+//! and the guest's window is asked for that size; the picture is cut or in the middle, never
+//! stretched, until the guest's cell has it. A cell that changes size makes a window that is its own
+//! to size that size. A guest desktop that is not the normal one keeps the windows as they are and takes no input for them.
 //! A link that goes down leaves the windows with their last picture, and the helper's next layout
 //! after it comes back says what became of them.
 

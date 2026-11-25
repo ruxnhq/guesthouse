@@ -33,7 +33,7 @@ use super::screen::Screen;
 use super::window_size::GuestSizer;
 use crate::application::{APP_ID, use_built_in_icons};
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 use guesthouse_app_core::app_windows::{connect, viewer_lock};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::host_sensors::sensors_file;
@@ -54,6 +54,9 @@ const USAGE: &str = "Usage: guesthouse --app-windows NAME
 NAME is the machine's name or id. Its Windows programs each get a window of their own, for as long
 as the machine runs. App windows has to be on for the machine (guesthouse-vm set NAME app-windows on),
 and the machine's own screen in the app has to be closed, as the machine serves one viewer.";
+const NOT_WAYLAND: &str = "App windows need a Wayland desktop session, and this one is not (an X11 \
+session, or GDK_BACKEND set to x11). Log in with a Wayland session to use them; the machine's own screen \
+works in either.";
 /// Another id than the app's, or a running app would be asked to activate and this process would end.
 const APP_ID_SUFFIX: &str = ".AppWindows";
 /// Linux's numbers for the signals that end the process: a terminal's Ctrl+C, `kill`, and a terminal
@@ -153,6 +156,14 @@ pub fn run_with(
         let Some((context, machine, run_folder, slot, link, running)) = pieces.borrow_mut().take() else {
             return;
         };
+        // Each window's picture is a surface of the view's own under the compositor's control, which
+        // only a Wayland session has.
+        if gdk::Display::default().and_downcast::<gdk_wayland::WaylandDisplay>().is_none() {
+            eprintln!("{NOT_WAYLAND}");
+            let _ = write_log(&context, NOT_WAYLAND);
+            application.quit();
+            return;
+        }
         let started = open(application, &context, &machine, run_folder, slot, link, running);
         for signal in SIGNALS {
             let hub = Rc::downgrade(&started);

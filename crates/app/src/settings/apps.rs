@@ -45,14 +45,23 @@ struct Looked {
     icons: HashMap<String, gdk::Texture>,
 }
 
+/// The picture of an icon the guest sent, if it is a whole PNG of a sane size: it is not trusted, and
+/// is checked before an image loader opens it, as it is before it is written to a file.
+fn texture_of(png: Vec<u8>) -> Option<gdk::Texture> {
+    if !launcher::valid_icon(&png) {
+        return None;
+    }
+    gdk::Texture::from_bytes(&glib::Bytes::from_owned(png)).ok()
+}
+
 fn decode_icons(look: &Look) -> HashMap<String, gdk::Texture> {
     let Look::Listed(found) = look else { return HashMap::new() };
     found
         .apps
         .iter()
         .filter_map(|app| {
-            let png = guesthouse_app_core::text::base64_decode(&app.icon).filter(|png| !png.is_empty())?;
-            let texture = gdk::Texture::from_bytes(&glib::Bytes::from_owned(png)).ok()?;
+            let png = guesthouse_app_core::text::base64_decode(&app.icon)?;
+            let texture = texture_of(png)?;
             Some((app.id.clone(), texture))
         })
         .collect()
@@ -498,10 +507,8 @@ impl Apps {
     }
 
     fn icon_of(&self, row: &Row) -> gtk::Image {
-        let texture = self.0.inner.borrow().icons.get(&row.program).cloned().or_else(|| {
-            let png = row.icon.clone()?;
-            gdk::Texture::from_bytes(&glib::Bytes::from_owned(png)).ok()
-        });
+        let texture =
+            self.0.inner.borrow().icons.get(&row.program).cloned().or_else(|| texture_of(row.icon.clone()?));
         let image = match texture {
             Some(texture) => gtk::Image::from_paintable(Some(&texture)),
             None => gtk::Image::from_icon_name(FALLBACK_ICON),

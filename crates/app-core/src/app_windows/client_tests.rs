@@ -68,6 +68,8 @@ fn cell(id: &str, popup_of: Option<&str>) -> Cell {
         id: id.into(),
         pid: 1,
         exe: "x.exe".into(),
+        app: String::new(),
+        name: String::new(),
         cls: "X".into(),
         title: format!("window {id}"),
         cell: rect(0, 0, 300, 200),

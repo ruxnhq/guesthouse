@@ -332,6 +332,8 @@ mod tests {
             id: id.into(),
             pid: 1,
             exe: "x.exe".into(),
+            app: String::new(),
+            name: String::new(),
             cls: "X".into(),
             title: id.into(),
             cell: at,

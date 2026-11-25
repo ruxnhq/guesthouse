@@ -23,6 +23,8 @@ fn cell(id: &str, exe: &str, popup: bool) -> Cell {
         id: id.into(),
         pid: 1,
         exe: exe.into(),
+        app: String::new(),
+        name: String::new(),
         cls: String::new(),
         title: String::new(),
         cell: rect,
@@ -44,6 +46,7 @@ fn entry(machine: &Machine, name: &str, program: &str, start_menu: bool) -> List
         app_id: super::launcher::app_id(machine, program),
         name: format!("{name} ({})", machine.name),
         program: program.into(),
+        target: String::new(),
         start_menu,
         hidden: false,
     }
@@ -264,11 +267,12 @@ fn a_start_menu_entry_is_matched_to_its_windows_by_the_slug_of_its_file() {
     let machine = machine();
     let mut paint = entry(&machine, "Paint", r"C:\Windows\mspaint.exe", true);
     paint.program = "Accessories/Paint".into();
+    paint.target = r"C:\Windows\mspaint.exe".into();
     let windows = [cell("1", r"C:\Windows\mspaint.exe", false)];
     let rows = rows_launcher(&machine, std::slice::from_ref(&paint), &no_icons);
     assert_eq!(rows[0].open, None);
     let row = entry_row(&machine, &paint, Some(&windows), &no_icons);
-    assert_eq!((row.open, row.target.as_str()), (Some(1), "mspaint"));
+    assert_eq!((row.open, row.target.as_str()), (Some(1), r"C:\Windows\mspaint.exe"));
     let program = row.to_program();
     assert_eq!(program.launch, super::message::Launch::App("Accessories/Paint".into()));
     assert_eq!(
@@ -276,4 +280,22 @@ fn a_start_menu_entry_is_matched_to_its_windows_by_the_slug_of_its_file() {
         paint.app_id,
         "it makes the same entry again"
     );
+}
+
+#[test]
+fn a_window_that_says_which_program_it_is_of_is_matched_by_that_and_not_by_its_host_process() {
+    let frame_host = |app: &str| Cell { app: app.into(), ..cell("1", "ApplicationFrameHost.exe", false) };
+    let windows = [
+        frame_host("aumid:Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+        frame_host("aumid:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"),
+        Cell { app: r"C:\Users\me\custom\winver.exe".into(), ..cell("3", "winver.exe", false) },
+    ];
+    assert_eq!(open_windows("aumid:microsoft.windowscalculator_8wekyb3d8bbwe!app", &windows), 1);
+    assert_eq!(
+        open_windows(r"C:\Windows\System32\winver.exe", &windows),
+        0,
+        "another folder, another program"
+    );
+    assert_eq!(open_windows(r"c:\users\me\custom\winver.exe", &windows), 1);
+    assert_eq!(open_windows("ApplicationFrameHost.exe", &windows), 0, "a Store app is not the host");
 }

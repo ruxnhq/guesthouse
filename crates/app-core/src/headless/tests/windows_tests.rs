@@ -46,6 +46,8 @@ fn cell(id: &str, title: &str, popup_of: Option<&str>) -> Cell {
         id: id.into(),
         pid: 10,
         exe: "notepad.exe".into(),
+        app: String::new(),
+        name: String::new(),
         cls: "Notepad".into(),
         title: title.into(),
         cell: rect(10, 20, 100, 200),

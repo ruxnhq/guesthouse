@@ -22,7 +22,7 @@ use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::machine::Machine;
 use guesthouse_app_core::text::base64_decode;
 use guesthouse_daemon::slot::Slot;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The viewer's one identity of programs, set at its start.
@@ -31,25 +31,44 @@ static IDENTITY: OnceLock<Arc<Identity>> = OnceLock::new();
 pub struct Identity {
     context: Arc<Context>,
     machine: Machine,
+    slot: Option<Slot>,
     apps: Mutex<Vec<App>>,
-    /// The program files seen so far, by app id, so that an icon that comes after a window opened is
-    /// written for it too.
-    seen: Mutex<BTreeMap<String, String>>,
+    /// The programs seen so far, by app id, so that an icon or a Start menu list that comes after a
+    /// window opened is written for it too.
+    seen: Mutex<BTreeMap<String, Seen>>,
+    /// The app ids whose icon has been asked of the helper, so each is asked once while it is in flight
+    /// and not again once it is on disk.
+    asked: Mutex<BTreeSet<String>>,
+}
+
+/// What a window said of its program, and the cell to ask the icon of.
+#[derive(Clone)]
+struct Seen {
+    key: String,
+    name: String,
+    cell: String,
 }
 
 /// Starts the identity of this viewer's machine. The Start menu's programs, with their icons, are asked
 /// of the helper in a thread of their own, as it takes a moment and no window waits for it.
 pub fn init(context: Arc<Context>, machine: Machine, slot: Option<Slot>) {
-    let identity = Arc::new(Identity { context, machine, apps: Mutex::default(), seen: Mutex::default() });
+    let identity = Arc::new(Identity {
+        context,
+        machine,
+        slot,
+        apps: Mutex::default(),
+        seen: Mutex::default(),
+        asked: Mutex::default(),
+    });
     if IDENTITY.set(identity.clone()).is_ok() {
-        std::thread::spawn(move || identity.fetch_apps(slot));
+        std::thread::spawn(move || identity.fetch_apps());
     }
 }
 
 /// The app id for a window of this cell's program. `None` before `init`, or when no entry could be
 /// written, which leaves the window with the viewer's own id as it always had.
 pub fn app_id_for(cell: &Cell) -> Option<String> {
-    IDENTITY.get()?.app_id_for(&cell.exe)
+    IDENTITY.get()?.app_id_for(cell)
 }
 
 /// Gives the window the app id once its surface is mapped.
@@ -77,27 +96,103 @@ pub fn set_when_mapped(window: &gtk::Window, id: &str) {
     }
 }
 
+/// Gives an already mapped window another app id, as its program turned out to be another.
+pub fn set_now(window: &gtk::Window, id: &str) {
+    if let Some(surface) = window.surface()
+        && surface.is_mapped()
+        && let Some(top) = surface.downcast_ref::<WaylandToplevel>()
+    {
+        top.set_application_id(id);
+    }
+}
+
 impl Identity {
     fn log(&self, text: &str) {
         let _ = write_log(&self.context, &format!("app windows identity: {text}"));
     }
 
-    fn app_id_for(&self, exe: &str) -> Option<String> {
-        let program = program_of(exe, &self.apps.lock().ok()?);
+    fn app_id_for(self: &Arc<Self>, cell: &Cell) -> Option<String> {
+        let key = program_key(cell);
+        let seen = Seen { key, name: cell.name.clone(), cell: cell.id.clone() };
+        self.write_for(&seen)
+    }
+
+    /// Writes the entry for what a window said, and asks for the icon if it has none yet.
+    fn write_for(self: &Arc<Self>, seen: &Seen) -> Option<String> {
+        let program = program_of(&seen.key, &seen.name, &self.apps.lock().ok()?);
+        let id = launcher::app_id(&self.machine, &program.exe);
         match launcher::ensure_for_window(&self.context, &self.machine, &program) {
             Ok(id) => {
-                self.seen.lock().ok()?.insert(id.clone(), exe.to_owned());
+                self.seen.lock().ok()?.insert(id.clone(), seen.clone());
+                let has_icon = program.icon.is_some() || launcher::icon_of(&self.context, &id).is_some();
+                if !has_icon {
+                    self.ask_icon(&id, &seen.cell);
+                }
                 Some(id)
             }
             Err(failure) => {
-                self.log(&format!("no launcher entry for {exe}: {failure}"));
+                self.log(&format!("no launcher entry for {id}: {failure}"));
                 None
             }
         }
     }
 
-    fn fetch_apps(&self, slot: Option<Slot>) {
-        let Ok(mut link) = connect_side(&self.context, &self.machine, slot) else { return };
+    /// Asks the helper for the icon of the program of this cell, in a thread, and writes the entry
+    /// again when it comes.
+    fn ask_icon(self: &Arc<Self>, id: &str, cell: &str) {
+        if !self.asked.lock().is_ok_and(|mut asked| asked.insert(id.to_owned())) {
+            return;
+        }
+        let (me, id, cell) = (self.clone(), id.to_owned(), cell.to_owned());
+        std::thread::spawn(move || {
+            let png = me.fetch_icon(&cell);
+            match png {
+                Ok(png) => {
+                    if let Some(seen) = me.seen.lock().ok().and_then(|seen| seen.get(&id).cloned()) {
+                        me.write_with_icon(&seen, png);
+                    }
+                }
+                Err(why) => {
+                    me.log(&format!("no icon for {id}: {why}"));
+                    // A later window of the program asks again.
+                    if let Ok(mut asked) = me.asked.lock() {
+                        asked.remove(&id);
+                    }
+                }
+            }
+        });
+    }
+
+    fn fetch_icon(&self, cell: &str) -> std::result::Result<Vec<u8>, String> {
+        let mut link = connect_side(&self.context, &self.machine, self.slot).map_err(|f| f.to_string())?;
+        link.wait_ready().map_err(|f| f.to_string())?;
+        let patience = self.context.app_windows.timing.apps_request;
+        let answer = link
+            .client
+            .ask(Request::Icon { id: cell.to_owned(), size: ICON_SIDE }, patience)
+            .map_err(|f| f.to_string())?;
+        if !answer.ok {
+            return Err(answer.error);
+        }
+        answer
+            .icon
+            .as_deref()
+            .and_then(base64_decode)
+            .filter(|png| !png.is_empty())
+            .ok_or_else(|| "the helper sent no picture".to_owned())
+    }
+
+    fn write_with_icon(&self, seen: &Seen, png: Vec<u8>) {
+        let Ok(apps) = self.apps.lock() else { return };
+        let mut program = program_of(&seen.key, &seen.name, &apps);
+        program.icon = Some(png);
+        if let Err(failure) = launcher::ensure_for_window(&self.context, &self.machine, &program) {
+            self.log(&format!("the icon could not be written: {failure}"));
+        }
+    }
+
+    fn fetch_apps(self: &Arc<Self>) {
+        let Ok(mut link) = connect_side(&self.context, &self.machine, self.slot) else { return };
         if let Err(failure) = link.wait_ready() {
             return self.log(&format!("the Start menu was not asked: {failure}"));
         }
@@ -113,13 +208,22 @@ impl Identity {
             }
             Err(failure) => return self.log(&format!("the helper did not list its programs: {failure}")),
         }
-        // Windows that opened before the icons came get them now.
-        let seen: Vec<String> =
+        // Windows that opened before the list came get its names and icons now.
+        let seen: Vec<Seen> =
             self.seen.lock().map(|seen| seen.values().cloned().collect()).unwrap_or_default();
-        for exe in seen {
-            self.app_id_for(&exe);
+        for seen in seen {
+            self.write_for(&seen);
         }
     }
+}
+
+/// The side of the icon asked for: sharp on a scaled screen, and scaled down by the desktop elsewhere.
+const ICON_SIDE: u32 = 96;
+
+/// What the window's program is known by: what its helper says, else the program's file name, which
+/// is all an older helper tells.
+pub fn program_key(cell: &Cell) -> String {
+    if cell.app.is_empty() { cell.exe.clone() } else { cell.app.clone() }
 }
 
 /// The file name of a path of the guest, in lower case.
@@ -127,31 +231,45 @@ fn file_name(path: &str) -> String {
     path.rsplit(['\\', '/']).next().unwrap_or(path).to_lowercase()
 }
 
-/// What is known of the program whose window has this `exe`: the Start menu program that starts it, if
-/// the list has one, with its name and icon, else a name made from the file's.
-pub fn program_of(exe: &str, apps: &[App]) -> Program {
-    let wanted = file_name(exe);
+/// What is known of the program whose window has this key (a path, an `aumid:`, or a bare file name)
+/// and says it is called `name`: the Start menu program that starts it, if the list has one, with its
+/// name and icon, else the window's own word for it, else a name made from the file's.
+pub fn program_of(key: &str, name: &str, apps: &[App]) -> Program {
     let found = apps
         .iter()
-        .filter(|app| !app.target.is_empty() && file_name(&app.target) == wanted)
+        .filter(|app| {
+            !app.target.is_empty()
+                && if key.contains(['\\', '/']) || launcher::is_aumid(key) {
+                    launcher::normal_key(&app.target) == launcher::normal_key(key)
+                } else {
+                    file_name(&app.target) == file_name(key)
+                }
+        })
         .min_by_key(|app| app.minor);
     match found {
         Some(app) => Program {
             name: app.name.clone(),
-            exe: app.target.clone(),
+            exe: key.to_owned(),
             launch: Launch::App(app.id.clone()),
             icon: base64_decode(&app.icon).filter(|png| !png.is_empty()),
         },
         None => {
-            let stem = wanted.strip_suffix(".exe").unwrap_or(&wanted);
-            let mut name = stem.to_owned();
-            if let Some(first) = name.get(..1) {
-                name = first.to_uppercase() + &name[1..];
-            }
+            let named = name.trim();
+            let name = if named.is_empty() {
+                let wanted = file_name(key);
+                let stem = wanted.strip_suffix(".exe").unwrap_or(&wanted);
+                let mut made = stem.to_owned();
+                if let Some(first) = made.get(..1) {
+                    made = first.to_uppercase() + &made[1..];
+                }
+                made
+            } else {
+                named.to_owned()
+            };
             Program {
                 name,
-                exe: exe.to_owned(),
-                launch: Launch::Path { path: exe.to_owned(), args: String::new() },
+                exe: key.to_owned(),
+                launch: Launch::Path { path: key.to_owned(), args: String::new() },
                 icon: None,
             }
         }
@@ -172,7 +290,7 @@ mod tests {
             app("Accessories/Paint Help", "Paint Help", r"C:\Windows\System32\mspaint.exe", true),
             app("Accessories/Paint", "Paint", r"C:\Windows\System32\mspaint.exe", false),
         ];
-        let program = program_of("MSPaint.exe", &apps);
+        let program = program_of("MSPaint.exe", "", &apps);
         assert_eq!(program.name, "Paint");
         assert_eq!(program.launch, Launch::App("Accessories/Paint".into()));
         assert_eq!(program.icon.as_deref(), Some(&b"\x89PNG\r\n\x1a\n"[..]));
@@ -180,8 +298,37 @@ mod tests {
 
     #[test]
     fn a_program_with_no_shortcut_is_named_from_its_file_and_has_no_icon() {
-        let program = program_of("calculator.exe", &[app("A/B", "B", r"C:\b.exe", false)]);
+        let program = program_of("calculator.exe", "", &[app("A/B", "B", r"C:\b.exe", false)]);
         assert_eq!((program.name.as_str(), program.icon), ("Calculator", None));
         assert_eq!(program.launch, Launch::Path { path: "calculator.exe".into(), args: String::new() });
+    }
+
+    #[test]
+    fn a_window_that_says_what_it_is_gets_its_own_name_and_a_store_app_its_own_id() {
+        let machine = Machine::new("work", "Office PC", "/d", "/v");
+        let calculator = program_of("aumid:Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "Calculator", &[]);
+        let notepad = program_of("aumid:Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "Notepad", &[]);
+        assert_eq!((calculator.name.as_str(), notepad.name.as_str()), ("Calculator", "Notepad"));
+        let (a, b) = (launcher::app_id(&machine, &calculator.exe), launcher::app_id(&machine, &notepad.exe));
+        assert_ne!(a, b, "two Store apps are two programs though one process hosts both");
+        assert!(a.starts_with("guesthouse-work-microsoft-windowscalculator-"), "{a}");
+    }
+
+    #[test]
+    fn a_copy_of_a_program_in_another_folder_is_another_program_and_the_same_path_one_program() {
+        let machine = Machine::new("work", "Office PC", "/d", "/v");
+        let id = |path: &str| launcher::app_id(&machine, &program_of(path, "Winver", &[]).exe);
+        assert_ne!(id(r"C:\Windows\System32\winver.exe"), id(r"C:\Users\me\custom\winver.exe"));
+        assert_eq!(id(r"C:\Windows\System32\winver.exe"), id(r"c:/windows/system32/WINVER.EXE"));
+    }
+
+    #[test]
+    fn a_window_and_the_start_menu_entry_of_its_program_get_one_app_id() {
+        let machine = Machine::new("work", "Office PC", "/d", "/v");
+        let apps = [app("Accessories/Paint", "Paint", r"C:\Windows\System32\mspaint.exe", false)];
+        let window = program_of(r"c:\windows\system32\mspaint.exe", "Paint (guest's words)", &apps);
+        assert_eq!(window.name, "Paint", "the user's own entry names it");
+        let page = guesthouse_app_core::app_windows::program_of(&apps[0], None);
+        assert_eq!(launcher::app_id(&machine, &window.exe), launcher::app_id(&machine, &page.exe));
     }
 }

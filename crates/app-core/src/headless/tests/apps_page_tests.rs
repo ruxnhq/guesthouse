@@ -30,6 +30,8 @@ fn a_look_gets_the_programs_with_their_icons_and_the_windows_that_are_open() {
         id: id.into(),
         pid: 5,
         exe: r"C:\Windows\mspaint.exe".into(),
+        app: String::new(),
+        name: String::new(),
         cls: String::new(),
         title: String::new(),
         cell: crate::app_windows::Rect { x: 0, y: 0, w: 9, h: 9 },

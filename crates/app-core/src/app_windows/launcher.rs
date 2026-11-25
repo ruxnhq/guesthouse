@@ -26,6 +26,7 @@ const PREFIX: &str = "guesthouse-";
 const EXTENSION: &str = ".desktop";
 const KEY_MACHINE: &str = "X-Guesthouse-Machine";
 const KEY_PROGRAM: &str = "X-Guesthouse-Program";
+const KEY_TARGET: &str = "X-Guesthouse-Target";
 const KEY_START_MENU: &str = "X-Guesthouse-Start-Menu";
 /// The GUI program that `Exec=` starts. It sits beside `guesthouse-vm`.
 pub const GUI_PROGRAM: &str = "guesthouse";
@@ -52,17 +53,18 @@ pub struct Listed {
     pub app_id: String,
     pub name: String,
     pub program: String,
+    /// The program's key the app id was made from: what its windows are matched by.
+    pub target: String,
     pub start_menu: bool,
     pub hidden: bool,
 }
 
-/// The slug of a program's file name: `C:\Windows\Notepad.exe` is `notepad`.
-pub fn slug_of(exe: &str) -> String {
-    let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
-    let lower = file.to_lowercase();
-    let stem = lower.strip_suffix(".exe").unwrap_or(&lower);
+const AUMID_PREFIX: &str = "aumid:";
+
+/// `a.b c` as `a-b-c`: letters and digits kept, anything else a dash, none doubled or at the ends.
+fn slugify(text: &str) -> String {
     let mut slug = String::new();
-    for character in stem.chars() {
+    for character in text.to_lowercase().chars() {
         let kept = if character.is_ascii_alphanumeric() { character } else { '-' };
         if kept != '-' || !slug.ends_with('-') {
             slug.push(kept);
@@ -72,13 +74,62 @@ pub fn slug_of(exe: &str) -> String {
     if slug.is_empty() { "program".to_owned() } else { slug.to_owned() }
 }
 
-/// The app id of a machine's program: what its entry's file is called without `.desktop`, and what
-/// the viewer gives each of the program's windows.
-pub fn app_id(machine: &Machine, exe: &str) -> String {
-    format!("{PREFIX}{}-{}", machine.id, slug_of(exe))
+/// The slug of a program's file name: `C:\Windows\Notepad.exe` is `notepad`.
+pub fn slug_of(exe: &str) -> String {
+    let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe);
+    let lower = file.to_lowercase();
+    slugify(lower.strip_suffix(".exe").unwrap_or(&lower))
 }
 
-/// The slug part of one of the machine's app ids: `guesthouse-work-mspaint` is `mspaint`.
+/// A program's path as one comparable word.
+pub fn normal_key(key: &str) -> String {
+    key.replace('/', "\\").to_lowercase()
+}
+
+/// Whether the key names a packaged app by its Application User Model ID.
+pub fn is_aumid(key: &str) -> bool {
+    key.get(..AUMID_PREFIX.len()).is_some_and(|start| start.eq_ignore_ascii_case(AUMID_PREFIX))
+}
+
+/// The key of a packaged app: `aumid:` and its Application User Model ID.
+pub fn aumid_key(aumid: &str) -> String {
+    format!("{AUMID_PREFIX}{aumid}")
+}
+
+/// Six hex digits of a stable hash (FNV-1a), so a copy of a program in another folder is another
+/// program with an id of its own, and the same path gives the same id in every run and every version.
+fn short_hash(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:06x}", hash & 0xff_ffff)
+}
+
+/// What an app id's program part is made from. A key is a full path (`C:\Tools\paint.exe`), an
+/// `aumid:` and a package's Application User Model ID, or a bare file name from a helper or a caller
+/// that does not know the folder, which is `notepad` and the same program as any file of that name.
+/// A path and an AUMID get a hash of the whole key after the slug, so that two programs of one file
+/// name stay two.
+pub fn program_part(key: &str) -> String {
+    if is_aumid(key) {
+        let aumid = &key[AUMID_PREFIX.len()..];
+        let package = aumid.split(['_', '!']).next().unwrap_or(aumid);
+        return format!("{}-{}", slugify(package), short_hash(&normal_key(key)));
+    }
+    if key.contains(['\\', '/']) {
+        return format!("{}-{}", slug_of(key), short_hash(&normal_key(key)));
+    }
+    slug_of(key)
+}
+
+/// The app id of a machine's program: what its entry's file is called without `.desktop`, and what
+/// the viewer gives each of the program's windows.
+pub fn app_id(machine: &Machine, key: &str) -> String {
+    format!("{PREFIX}{}-{}", machine.id, program_part(key))
+}
+
+/// The program part of one of the machine's app ids: `guesthouse-work-mspaint-1a2b3c` is `mspaint-1a2b3c`.
 pub fn slug_in_app_id<'a>(machine: &Machine, app_id: &'a str) -> Option<&'a str> {
     app_id.strip_prefix(&format!("{PREFIX}{}-", machine.id))
 }
@@ -197,6 +248,7 @@ pub fn desktop_text(
         Launch::Path { path, .. } => (false, path.as_str()),
     };
     text.push_str(&format!("{KEY_PROGRAM}={}\n", escape_value(value)));
+    text.push_str(&format!("{KEY_TARGET}={}\n", escape_value(&program.exe)));
     if key {
         text.push_str(&format!("{KEY_START_MENU}=true\n"));
     }
@@ -250,14 +302,15 @@ pub fn add(context: &Context, machine: &Machine, program: &Program) -> Result<Pa
 /// none, or rewritten when it had no icon and now has one.
 pub fn ensure_for_window(context: &Context, machine: &Machine, program: &Program) -> Result<String> {
     let id = app_id(machine, &program.exe);
-    let file = entry_file(context, &id);
+    let there = fs::read_to_string(entry_file(context, &id)).ok();
+    if there.as_ref().is_some_and(|text| !text.lines().any(|line| line == "NoDisplay=true")) {
+        return Ok(id);
+    }
+    let icon_there = icon_file(context, &id).is_file();
     let wants_icon = program.icon.as_ref().is_some_and(|png| !png.is_empty());
-    let there = fs::read_to_string(&file).ok();
-    let settled = there.as_ref().is_some_and(|text| {
-        let visible = !text.lines().any(|line| line == "NoDisplay=true");
-        visible || !wants_icon || icon_file(context, &id).is_file()
-    });
-    if !settled {
+    let icon = (wants_icon || icon_there).then(|| icon_file(context, &id));
+    let wanted = desktop_text(context, machine, program, icon.as_deref(), true);
+    if there.as_deref() != Some(wanted.as_str()) || (wants_icon && !icon_there) {
         write_entry(context, machine, program, true)?;
     }
     Ok(id)
@@ -294,6 +347,7 @@ pub fn list_all(context: &Context, machine: &Machine) -> Vec<Listed> {
             app_id: file.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
             name: unescape_value(value_of(&text, "Name").unwrap_or_default()),
             program: unescape_value(value_of(&text, KEY_PROGRAM).unwrap_or_default()),
+            target: value_of(&text, KEY_TARGET).map(unescape_value).unwrap_or_default(),
             start_menu: value_of(&text, KEY_START_MENU) == Some("true"),
             hidden: value_of(&text, "NoDisplay") == Some("true"),
             file,

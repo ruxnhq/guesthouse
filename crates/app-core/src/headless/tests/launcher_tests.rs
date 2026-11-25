@@ -74,9 +74,9 @@ fn a_start_menu_program_becomes_an_entry_with_its_icon_and_the_exact_text() {
     lists(&rig, PAINT);
     let (out, result) = said(&rig.context, "launcher work add paint");
     assert_eq!(result, Ok(()));
-    let file = applications(&scratch).join("guesthouse-work-mspaint.desktop");
+    let file = applications(&scratch).join("guesthouse-work-mspaint-130b95.desktop");
     assert_eq!(out, format!("Added Paint (Office PC) to the launcher: {}.\n", file.display()));
-    let icon = scratch.path("home/.local/share/icons/hicolor/48x48/apps/guesthouse-work-mspaint.png");
+    let icon = scratch.path("home/.local/share/icons/hicolor/48x48/apps/guesthouse-work-mspaint-130b95.png");
     assert_eq!(fs::read(&icon).unwrap(), b"\x89PNG\r\n\x1a\n");
     assert_eq!(
         fs::read_to_string(&file).unwrap(),
@@ -84,14 +84,17 @@ fn a_start_menu_program_becomes_an_entry_with_its_icon_and_the_exact_text() {
             "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Paint (Office PC)\n\
              Comment=A program of Office PC, in a window of its own on this desktop.\n\
              Exec={} --app work --start-menu Accessories/Paint\nIcon={}\nTerminal=false\n\
-             Categories=Utility;\nStartupNotify=false\nStartupWMClass=guesthouse-work-mspaint\n\
-             X-Guesthouse-Machine=work\nX-Guesthouse-Program=Accessories/Paint\nX-Guesthouse-Start-Menu=true\n",
+             Categories=Utility;\nStartupNotify=false\nStartupWMClass=guesthouse-work-mspaint-130b95\n\
+             X-Guesthouse-Machine=work\nX-Guesthouse-Program=Accessories/Paint\nX-Guesthouse-Target=C:\\\\Windows\\\\System32\\\\mspaint.exe\nX-Guesthouse-Start-Menu=true\n",
             binary(&rig),
             icon.display()
         )
     );
     let (out, _) = said(&rig.context, "launcher work list");
-    assert_eq!(out, "guesthouse-work-mspaint Paint (Office PC) Start menu program Accessories/Paint\n");
+    assert_eq!(
+        out,
+        "guesthouse-work-mspaint-130b95 Paint (Office PC) Start menu program Accessories/Paint\n"
+    );
 }
 
 #[test]
@@ -106,7 +109,8 @@ fn a_program_that_is_in_no_start_menu_is_added_by_its_path_or_name() {
             || out.contains("so it has no icon."),
         "{out}"
     );
-    let text = fs::read_to_string(applications(&scratch).join("guesthouse-work-notepad.desktop")).unwrap();
+    let text =
+        fs::read_to_string(applications(&scratch).join("guesthouse-work-notepad-4e600e.desktop")).unwrap();
     assert!(text.contains("Name=Notepad (Office PC)\n"), "{text}");
     // A backslash in a path is four in the file: the Exec rules and the file's own each double it.
     assert!(
@@ -117,13 +121,16 @@ fn a_program_that_is_in_no_start_menu_is_added_by_its_path_or_name() {
         "{text}"
     );
     assert!(!text.contains("Icon="), "{text}");
-    assert!(text.contains("StartupWMClass=guesthouse-work-notepad\n"), "the file name and the class agree");
+    assert!(
+        text.contains("StartupWMClass=guesthouse-work-notepad-4e600e\n"),
+        "the file name and the class agree"
+    );
     // A name with no path is taken the same way.
     let (_, result) = said(&rig.context, "launcher work add calc.exe");
     assert_eq!(result, Ok(()));
     assert_eq!(
         files_in(&applications(&scratch)),
-        ["guesthouse-work-calc.desktop", "guesthouse-work-notepad.desktop"]
+        ["guesthouse-work-calc.desktop", "guesthouse-work-notepad-4e600e.desktop"]
     );
 }
 
@@ -171,7 +178,11 @@ fn what_the_guest_says_cannot_break_out_of_the_entry_or_the_folders() {
     assert_eq!(result, Ok(()));
     let data = scratch.path("home/.local/share");
     let written = files_in(&applications(&scratch));
-    assert_eq!(written, ["guesthouse-work-x.desktop"], "the file name is made here, from letters and dashes");
+    assert_eq!(
+        written,
+        ["guesthouse-work-x-6126cf.desktop"],
+        "the file name is made here, from letters and dashes"
+    );
     let text = fs::read_to_string(applications(&scratch).join(&written[0])).unwrap();
     assert_eq!(text.lines().filter(|line| line.starts_with("Exec=")).count(), 1, "{text}");
     assert!(
@@ -194,7 +205,9 @@ fn an_entry_goes_by_its_name_program_or_id_and_a_key_that_fits_none_says_so() {
     assert_eq!((out.as_str(), result), ("Removed Paint (Office PC) from the launcher.\n", Ok(())));
     assert_eq!(files_in(&applications(&scratch)), ["guesthouse-work-notepad.desktop"]);
     assert!(
-        !scratch.path("home/.local/share/icons/hicolor/48x48/apps/guesthouse-work-mspaint.png").exists(),
+        !scratch
+            .path("home/.local/share/icons/hicolor/48x48/apps/guesthouse-work-mspaint-130b95.png")
+            .exists(),
         "its icon goes too"
     );
     assert_eq!(

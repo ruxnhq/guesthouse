@@ -6,6 +6,8 @@ fn cell(cell: Rect, frame: Rect) -> Cell {
         id: "1".into(),
         pid: 1,
         exe: String::new(),
+        app: String::new(),
+        name: String::new(),
         cls: String::new(),
         title: String::new(),
         cell,

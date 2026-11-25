@@ -59,6 +59,16 @@ pub struct Cell {
     pub id: String,
     pub pid: u32,
     pub exe: String,
+    /// Which program the window is of, the same for every window of it and for each run: the program's
+    /// full path in the guest, or `aumid:` and the Application User Model ID for a packaged (Store)
+    /// app, whose process alone (`ApplicationFrameHost.exe`) tells nothing. Empty from a helper that
+    /// does not say, which the viewer then takes `exe` for.
+    #[serde(default)]
+    pub app: String,
+    /// What the program is called, as its file or package says (not the window's title). Empty when
+    /// the helper does not know.
+    #[serde(default)]
+    pub name: String,
     pub cls: String,
     pub title: String,
     /// Where the picture is on the guest's screen, which is what the host crops.
@@ -134,6 +144,8 @@ pub struct Answer {
     pub error: String,
     /// Only an answer to `apps` has them.
     pub apps: Option<Vec<App>>,
+    /// Only an answer to `icon` has it: a PNG in Base64, empty when the window has none.
+    pub icon: Option<String>,
 }
 
 /// Which desktop takes the input. While it is not the normal one, the host shows the whole frame in
@@ -215,6 +227,8 @@ struct RawAnswer {
     error: String,
     #[serde(default)]
     apps: Option<Vec<App>>,
+    #[serde(default)]
+    icon: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -254,6 +268,7 @@ pub fn parse_guest_line(line: &str, most: usize) -> Result<GuestMessage, LinePro
                 ok: answer.ok,
                 error: answer.error,
                 apps: answer.apps,
+                icon: answer.icon,
             })
         }
         "desktop" => GuestMessage::Desktop(read::<RawDesktop>(&kind, value)?.kind),
@@ -297,6 +312,13 @@ pub enum Request {
     Apps {
         icons: bool,
     },
+    /// The icon of the program of this cell, as a square PNG of about `size` pixels in the answer's
+    /// `icon`: the package's logo for a packaged app, else the program file's own icon, else the
+    /// window's.
+    Icon {
+        id: String,
+        size: u32,
+    },
     /// Send the layout again now.
     Layout,
     /// Set Windows' scale for its monitor to this percentage, one of the display's `steps`. The
@@ -323,6 +345,7 @@ impl Request {
             Self::Resize { .. } => "resize",
             Self::Launch(_) => "launch",
             Self::Apps { .. } => "apps",
+            Self::Icon { .. } => "icon",
             Self::Layout => "layout",
             Self::Scale { .. } => "scale",
             Self::Screen { .. } => "screen",
@@ -331,7 +354,7 @@ impl Request {
 
     /// Whether the answer may be a line of up to [`MOST_APPS_LINE_BYTES`].
     pub fn answer_is_long(&self) -> bool {
-        matches!(self, Self::Apps { .. })
+        matches!(self, Self::Apps { .. } | Self::Icon { .. })
     }
 
     /// The line to send, without its line end.
@@ -345,6 +368,7 @@ impl Request {
             Self::Launch(Launch::App(app)) => json!({"t": t, "n": n, "app": app}),
             Self::Launch(Launch::Path { path, args }) => json!({"t": t, "n": n, "path": path, "args": args}),
             Self::Apps { icons } => json!({"t": t, "n": n, "icons": icons}),
+            Self::Icon { id, size } => json!({"t": t, "n": n, "id": id, "size": size}),
             Self::Layout => json!({"t": t, "n": n}),
             Self::Scale { percent } => json!({"t": t, "n": n, "percent": percent}),
             Self::Screen { floor, ceiling } => json!({"t": t, "n": n, "floor": floor, "ceiling": ceiling}),

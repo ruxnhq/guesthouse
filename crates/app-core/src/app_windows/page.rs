@@ -214,28 +214,28 @@ pub fn launcher_label(name: &str) -> String {
     format!("{name} in the launcher")
 }
 
-/// `C:\Program Files\Edge\msedge.exe` as one comparable word.
-fn normal(path: &str) -> String {
-    path.replace('/', "\\").to_lowercase()
-}
-
-/// Whether a window's program is this one. Two paths are the same file when they read the same; a name
-/// with no folder, which is also all the launcher's entry and the viewer go by, is the same program as
-/// any file of that name.
-pub fn same_program(target: &str, window_exe: &str) -> bool {
-    if target.is_empty() || window_exe.is_empty() {
+/// Whether a window's program is this one. The window says which program it is of (`app`) when its
+/// helper knows, and then a path or a package's ID is compared whole, so a copy of a program in another
+/// folder is another program. Else, or when the target is a bare file name, which is also all an older
+/// launcher entry has, it is the file name: the same program as any file of that name.
+pub fn same_program(target: &str, window: &Cell) -> bool {
+    let window_key = if window.app.is_empty() { window.exe.as_str() } else { window.app.as_str() };
+    if target.is_empty() || window_key.is_empty() {
         return false;
     }
-    let has_folder = |text: &str| text.contains(['\\', '/']);
-    if has_folder(target) && has_folder(window_exe) {
-        return normal(target) == normal(window_exe);
+    if launcher::is_aumid(target) || launcher::is_aumid(window_key) {
+        return launcher::normal_key(target) == launcher::normal_key(window_key);
     }
-    launcher::slug_of(target) == launcher::slug_of(window_exe)
+    let has_folder = |text: &str| text.contains(['\\', '/']);
+    if has_folder(target) && has_folder(window_key) {
+        return launcher::normal_key(target) == launcher::normal_key(window_key);
+    }
+    launcher::slug_of(target) == launcher::slug_of(window_key)
 }
 
 /// How many windows of the guest belong to the program. A popup is part of its window.
 pub fn open_windows(target: &str, windows: &[Cell]) -> usize {
-    windows.iter().filter(|cell| !cell.popup && same_program(target, &cell.exe)).count()
+    windows.iter().filter(|cell| !cell.popup && same_program(target, cell)).count()
 }
 
 /// What an entry in the launcher is, back as a program's id or path.
@@ -299,6 +299,9 @@ pub fn rows_found(
 fn entry_target(machine: &Machine, entry: &Listed) -> String {
     if !entry.start_menu {
         return entry.program.clone();
+    }
+    if !entry.target.is_empty() {
+        return entry.target.clone();
     }
     launcher::slug_in_app_id(machine, &entry.app_id).unwrap_or(&entry.app_id).to_owned()
 }

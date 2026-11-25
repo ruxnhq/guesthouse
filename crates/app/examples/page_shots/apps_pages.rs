@@ -78,6 +78,8 @@ fn cell(id: &str, exe: &str, popup: bool) -> WindowCell {
         id: id.into(),
         pid: 7,
         exe: exe.into(),
+        app: String::new(),
+        name: String::new(),
         cls: String::new(),
         title: String::new(),
         cell: rect,

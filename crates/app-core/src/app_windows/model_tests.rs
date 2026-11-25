@@ -10,6 +10,8 @@ fn window(id: &str, title: &str) -> Cell {
         id: id.into(),
         pid: 10,
         exe: "app.exe".into(),
+        app: String::new(),
+        name: String::new(),
         cls: "Frame".into(),
         title: title.into(),
         cell: rect(0, 0, 400, 300),

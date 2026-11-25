@@ -71,8 +71,21 @@ fn program_for(word: &str, found: &[App]) -> Result<Program> {
     }
 }
 
-/// A program by its path or name, which has no icon to take from anywhere.
+/// A program by its path or name, which has no icon to take from anywhere. A packaged app, which is
+/// started as `shell:AppsFolder\AUMID`, is known by that ID, as its windows are.
 fn by_path(word: &str) -> Program {
+    const FOLDER: &str = "shell:appsfolder\\";
+    if word.to_lowercase().starts_with(FOLDER) {
+        let aumid = &word[FOLDER.len()..];
+        let package = aumid.split(['_', '!']).next().unwrap_or(aumid);
+        let name = package.rsplit('.').next().unwrap_or(package).to_owned();
+        return Program {
+            name,
+            exe: crate::app_windows::launcher::aumid_key(aumid),
+            launch: Launch::Path { path: word.to_owned(), args: String::new() },
+            icon: None,
+        };
+    }
     let file = word.rsplit(['\\', '/']).next().unwrap_or(word);
     let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")).unwrap_or(file);
     let mut name = stem.to_owned();

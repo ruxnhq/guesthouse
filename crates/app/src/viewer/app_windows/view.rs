@@ -96,7 +96,12 @@ impl View {
         view.add_input(hub);
         view.watch_scale(hub);
         match &view.host {
-            Host::Window(window) => view.watch_window(hub, window),
+            Host::Window(window) => {
+                view.watch_window(hub, window);
+                if let Some(id) = super::identity::app_id_for(cell) {
+                    super::identity::set_when_mapped(window, &id);
+                }
+            }
             Host::Popup(popover) => {
                 if let Some(parent) = parent {
                     popover.set_parent(&parent.frame);
@@ -189,6 +194,11 @@ impl View {
         if let Host::Window(window) = &self.host {
             if what.title {
                 window.set_title(Some(&now.title));
+            }
+            if what.other
+                && let Some(id) = super::identity::app_id_for(now)
+            {
+                super::identity::set_now(window, &id);
             }
             if what.state {
                 let (presence, order) = follow_guest_state(self.presence.get(), now.state);

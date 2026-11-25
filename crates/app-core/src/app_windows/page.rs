@@ -13,18 +13,18 @@ use super::message::{App, Cell, Launch};
 use crate::machine::Machine;
 use crate::tasks::State;
 
-pub const SWITCH_TITLE: &str = "Show apps as their own windows";
+pub const SWITCH_TITLE: &str = "Show Apps as Their Own Windows";
 pub const SWITCH_SUBTITLE: &str =
     "A Windows program opens like a Linux one, without the Windows desktop around it.";
 pub const SWITCH_INFO: &str = "With this on, the machine starts with a way for Guesthouse to reach a helper in \
                                Windows. The helper shows one program at a time, and Guesthouse puts it in a \
                                window of its own. The switch counts from the machine's next start.";
-pub const HEADING_FOUND: &str = "Programs found in Windows";
-pub const HEADING_LAUNCHER: &str = "Programs in the launcher";
+pub const HEADING_FOUND: &str = "Programs Found in Windows";
+pub const HEADING_LAUNCHER: &str = "Programs in the Launcher";
 pub const OPEN: &str = "Open";
-pub const IN_LAUNCHER: &str = "In launcher";
-pub const SHOW_ALL: &str = "Show all";
-pub const TRY_AGAIN: &str = "Try again";
+pub const IN_LAUNCHER: &str = "In Launcher";
+pub const SHOW_ALL: &str = "Show All";
+pub const TRY_AGAIN: &str = "Try Again";
 pub const FOOTNOTE: &str = "Opening an app starts this machine if it is off. The whole desktop stays one click \
                             away on the machine's card.";
 pub const LOOKING: &str = "Looking for programs in Windows.";

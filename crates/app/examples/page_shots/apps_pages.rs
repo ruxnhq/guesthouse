@@ -187,7 +187,7 @@ fn stop(vm: &mut Child) {
 
 fn switch(window: &Window, on: bool) {
     let rows = all_of::<adw::SwitchRow>(window);
-    if let Some(row) = rows.iter().find(|row| row.title() == "Show apps as their own windows") {
+    if let Some(row) = rows.iter().find(|row| row.title() == "Show Apps as Their Own Windows") {
         row.set_active(on);
     }
 }
@@ -239,7 +239,7 @@ async fn card_states(
     check(failures, !text_of(window).contains("app window"), "no viewer, nothing said of app windows");
     check(
         failures,
-        !all_of::<gtk::Button>(window).iter().any(|b| b.label().as_deref() == Some("Open another app")),
+        !all_of::<gtk::Button>(window).iter().any(|b| b.label().as_deref() == Some("Open Another App")),
         "no chips and no button with nothing open",
     );
     shot_after_paint(window, folder, &shots("1-none")).await;
@@ -299,11 +299,11 @@ async fn card_states(
     let lock = viewer_lock::take_in(&run).unwrap().unwrap();
     say(vec![open_program("Notepad", "notepad.exe", 1, Some(90), folder)]);
     check(failures, shows(window, "1 app window open.").await, "a viewer that comes again is shown");
-    check(failures, click(window, "Open another app"), "Open another app can be pressed");
+    check(failures, click(window, "Open Another App"), "Open Another App can be pressed");
     check(
         failures,
-        shows(window, "Show apps as their own windows").await,
-        "Open another app opens the Apps page of the machine",
+        shows(window, "Show Apps as Their Own Windows").await,
+        "Open Another App opens the Apps page of the machine",
     );
     close_dialogs(window).await;
     open_windows::remove_from(&run).unwrap();
@@ -337,7 +337,7 @@ pub async fn walk(window: Window, context: Arc<Context>, folder: PathBuf) {
     check(&failures, text_of(&window).contains("Apps"), "a Windows machine has an Apps page");
     show_page(&window, "apps");
     glib::timeout_future(SETTLE).await;
-    check(&failures, settle_on(&window, "Show apps as their own windows").await, "the switch is on the page");
+    check(&failures, settle_on(&window, "Show Apps as Their Own Windows").await, "the switch is on the page");
     check(
         &failures,
         text_of(&window).contains("App windows is off for this machine"),
@@ -417,10 +417,10 @@ pub async fn walk(window: Window, context: Arc<Context>, folder: PathBuf) {
     shot_after_paint(&window, &folder, &shots("05-list")).await;
 
     // Show all.
-    check(&failures, click(&window, "Show all"), "Show all can be pressed");
+    check(&failures, click(&window, "Show All"), "Show all can be pressed");
     glib::timeout_future(SETTLE).await;
     check(&failures, text_of(&window).contains("Uninstall Tool 3"), "Show all shows the minor ones");
-    scroll_to(&window, "Programs found in Windows");
+    scroll_to(&window, "Programs Found in Windows");
     shot_after_paint(&window, &folder, &shots("06-list-all")).await;
 
     // An Open in flight, which the helper never answers.
@@ -463,20 +463,20 @@ pub async fn walk(window: Window, context: Arc<Context>, folder: PathBuf) {
     );
     check(
         &failures,
-        text_of(&window).contains("Try again")
-            || all_of::<gtk::Button>(&window).iter().any(|b| b.label().as_deref() == Some("Try again")),
+        text_of(&window).contains("Try Again")
+            || all_of::<gtk::Button>(&window).iter().any(|b| b.label().as_deref() == Some("Try Again")),
         "a failure has Try again",
     );
     shot_after_paint(&window, &folder, &shots("10-failed")).await;
     lists("[]".to_owned());
     launcher::remove_all(&context, &machine.borrow());
-    check(&failures, click(&window, "Try again"), "Try again can be pressed");
+    check(&failures, click(&window, "Try Again"), "Try again can be pressed");
     check(&failures, settle_on(&window, "has no programs in its Start menu").await, "an empty list says so");
     shot_after_paint(&window, &folder, &shots("11-empty")).await;
 
     // Nobody logged in.
     helper().with(|inner| inner.welcome = Welcome::Close);
-    click(&window, "Try again");
+    click(&window, "Try Again");
     switch(&window, false);
     glib::timeout_future(SETTLE).await;
     switch(&window, true);

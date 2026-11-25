@@ -22,9 +22,9 @@ const CHIP_ICON: i32 = 18;
 const CHIP_SPACING: i32 = 6;
 const CHIP_GAP: u32 = 6;
 /// Show Screen, while the app windows that are open are being ended.
-pub const SCREEN_BUSY: &str = "Closing app windows...";
+pub const SCREEN_BUSY: &str = "Closing App Windows…";
 pub const SCREEN_LABEL: &str = "Show Screen";
-const OPEN_APPS_LABEL: &str = "Open another app";
+const OPEN_APPS_LABEL: &str = "Open Another App";
 
 /// One machine's settings, shared by the card and whatever page shows them.
 pub type MachineHandle = Rc<RefCell<Machine>>;

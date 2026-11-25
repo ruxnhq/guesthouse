@@ -96,7 +96,7 @@ impl Hero {
         let apps = wrapping_row();
         apps.add_css_class("app-chips");
         apps.set_visible(false);
-        let open_app = row_button("Open another app");
+        let open_app = row_button("Open Another App");
         open_app.add_css_class("flat");
         let actions = wrapping_row();
         let start = row_button("Start");

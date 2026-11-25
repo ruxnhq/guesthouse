@@ -5,6 +5,7 @@
 //! window only once the pointer has rested there, as it also crosses that edge on its way out.
 
 pub mod app_windows;
+mod buffer_holds;
 mod capture;
 mod capture_state;
 mod clipboard;

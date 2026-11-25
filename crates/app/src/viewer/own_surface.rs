@@ -9,6 +9,7 @@
 //! Like the pointer lock, this lives on GTK's own connection with a queue of its own. GTK goes on
 //! reading the socket for everyone, and `catch_up` takes in what landed on this queue.
 
+use super::buffer_holds::BufferHolds;
 use super::crop::Crop;
 use super::dmabuf_feedback::{self, Reading};
 use super::frames::SlotFrame;
@@ -19,8 +20,8 @@ use gdk_wayland::{WaylandDisplay, WaylandSurface};
 use gtk::gdk;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::AsFd;
-use std::sync::OnceLock;
 use std::time::Instant;
+use wayland_client::backend::ObjectId;
 use wayland_client::globals::{GlobalList, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -153,15 +154,12 @@ const LINEAR: u64 = 0;
 /// The boundary a cut buffer's start is put on.
 const CUT_ALIGNMENT: u64 = 256;
 
-/// A buffer's slot. The compositor makes the buffer before it's known whose it is, so the slot is
-/// filled in when the buffer arrives.
-type BufferSlot = OnceLock<SlotKey>;
-
 /// What the compositor has said, gathered while GTK reads.
 #[derive(Default)]
 struct Events {
-    /// The slots each buffer still holds for the compositor, given back on `release`.
-    held: HashMap<SlotKey, Box<dyn FnOnce() + Send>>,
+    /// The slots each buffer still holds for the compositor, given back on its `release`, and the
+    /// buffers no longer wanted that wait for it.
+    holds: BufferHolds<ObjectId, WlBuffer>,
     /// Buffers the compositor refused: a slot's whole frame (its frames go to GTK instead), or a cut
     /// one (cut buffers are not asked for again).
     refused: Vec<BufferKey>,
@@ -363,20 +361,19 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Events {
     }
 }
 
-impl Dispatch<WlBuffer, BufferSlot> for Events {
+impl Dispatch<WlBuffer, ()> for Events {
     fn event(
         events: &mut Self,
-        _: &WlBuffer,
+        buffer: &WlBuffer,
         event: wl_buffer::Event,
-        slot: &BufferSlot,
+        _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         if let wl_buffer::Event::Release = event
-            && let Some(key) = slot.get()
-            && let Some(release) = events.held.remove(key)
+            && let Some(retired) = events.holds.released(&buffer.id())
         {
-            release();
+            retired.destroy();
         }
     }
 }
@@ -395,9 +392,6 @@ impl Dispatch<ZwpLinuxBufferParamsV1, BufferKey> for Events {
     ) {
         match event {
             zwp_linux_buffer_params_v1::Event::Created { buffer } => {
-                if let Some(slot) = buffer.data::<BufferSlot>() {
-                    let _ = slot.set(key.0);
-                }
                 let name = slot_name(key.0);
                 events.notes.push(format!(
                     "own surface: the compositor made the buffer of {name} cut to {:?}",
@@ -419,7 +413,7 @@ impl Dispatch<ZwpLinuxBufferParamsV1, BufferKey> for Events {
     }
 
     wayland_client::event_created_child!(Events, ZwpLinuxBufferParamsV1, [
-        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (WlBuffer, BufferSlot::new()),
+        zwp_linux_buffer_params_v1::EVT_CREATED_OPCODE => (WlBuffer, ()),
     ]);
 }
 
@@ -790,16 +784,10 @@ impl OwnSurface {
             return Err(if failed { NotShown::DescriptionRefused } else { NotShown::DescriptionNotMade });
         }
         if self.generation != Some(frame.generation) {
-            for (_, buffer) in self.buffers.drain() {
-                buffer.destroy();
-            }
-            // A destroyed buffer hears no release, so its slot's file would stay open for good.
-            let older: Vec<SlotKey> =
-                self.events.held.keys().copied().filter(|held| held.0 != frame.generation).collect();
-            for key in older {
-                if let Some(release) = self.events.held.remove(&key) {
-                    release();
-                }
+            // The old ring's buffers the compositor may still show go when it lets go of them.
+            let old: Vec<WlBuffer> = self.buffers.drain().map(|(_, buffer)| buffer).collect();
+            for buffer in old {
+                self.retire(buffer);
             }
             self.asked.clear();
             self.events.refused.clear();
@@ -836,6 +824,7 @@ impl OwnSurface {
             self.showing = wanted;
         }
         let frame_size = (descriptor.width as i32, descriptor.height as i32);
+        let buffer_id = buffer.id();
         self.surface.attach(Some(buffer), 0, 0);
         self.attached_key = Some((key, frame_size));
         match window {
@@ -858,12 +847,8 @@ impl OwnSurface {
         if let Some(presentation) = &self.presentation {
             presentation.feedback(&self.surface, &handle, ());
         }
-        // The slot was shown before, and is still the compositor's until it says otherwise. That
-        // can't happen, as the producer only sends a slot it has back, but a stale hold must not
-        // keep a slot forever.
-        if let Some(stale) = self.events.held.insert(slot_key, frame.release) {
-            stale();
-        }
+        // The slot is the compositor's until it lets go of this buffer.
+        self.events.holds.hold(buffer_id, frame.release);
         self.surface.commit();
         let _ = self.queue.flush();
         // Only a compositor that says what it showed can be watched.
@@ -920,9 +905,17 @@ impl OwnSurface {
             .collect();
         for key in stale {
             if let Some(buffer) = self.buffers.remove(&key) {
-                buffer.destroy();
+                self.retire(buffer);
             }
             self.asked.remove(&key);
+        }
+    }
+
+    /// Destroys a buffer no longer wanted, or, while it still holds a slot, leaves it to go on its
+    /// release: a destroyed buffer hears no release, and its slot would never go back.
+    fn retire(&mut self, buffer: WlBuffer) {
+        if let Some(buffer) = self.events.holds.retire(buffer.id(), buffer) {
+            buffer.destroy();
         }
     }
 
@@ -945,8 +938,9 @@ impl OwnSurface {
         self.surface.commit();
         let _ = self.queue.flush();
         self.stall.nothing_awaited();
-        for (_, release) in self.events.held.drain() {
-            release();
+        // Nothing is on the surface now, so nothing it shows can be given back.
+        for buffer in self.events.holds.release_all() {
+            buffer.destroy();
         }
     }
 }

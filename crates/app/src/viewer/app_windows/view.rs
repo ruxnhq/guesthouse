@@ -141,6 +141,12 @@ impl View {
         self.frame.surface_scale()
     }
 
+    /// The monitor the host window is on, as the compositor says.
+    pub fn monitor(&self) -> Option<gdk::Monitor> {
+        let surface = self.frame.native()?.surface()?;
+        gdk::Display::default()?.monitor_at_surface(&surface)
+    }
+
     /// Whether the host window has the focus.
     pub fn is_active(&self) -> bool {
         matches!(&self.host, Host::Window(window) if window.is_active())

@@ -212,7 +212,47 @@ impl ScaleFollow {
     }
 }
 
-/// The guest's point for a point of a host surface. `offset` is how far the part of the cell that is
+/// How long the screen the guest needs must stay the same before a larger one is set: a window being
+/// dragged larger in the guest asks for many.
+pub const GROW_STILL: Duration = Duration::from_millis(500);
+/// And before a smaller one is: each new size takes Windows' monitor away for a moment and lays every
+/// window out again, so a window closed and opened again soon should not cost two.
+pub const SHRINK_STILL: Duration = Duration::from_secs(5);
+/// A size asked for that the guest has not taken is asked for again after this.
+pub const SIZE_ASK_AGAIN: Duration = Duration::from_secs(15);
+
+/// Nobody picks the guest's screen: it is what the helper says its windows need, which it works out
+/// between the floor and the ceiling the host gave it.
+#[derive(Debug, Default)]
+pub struct SizeFollow {
+    seen: Option<(Size, Instant)>,
+    asked: Option<(Size, Instant)>,
+}
+
+impl SizeFollow {
+    /// The size to set now, if any, given what the helper needs and the screen it has.
+    pub fn look(&mut self, need: Option<Size>, screen: Size, now: Instant) -> Option<Size> {
+        let need = need.filter(|need| need.w > 0 && need.h > 0)?;
+        if self.seen.is_none_or(|(seen, _)| seen != need) {
+            self.seen = Some((need, now));
+        }
+        let (_, since) = self.seen?;
+        if need == screen {
+            return None;
+        }
+        if self.asked.is_some_and(|(asked, at)| asked == need && now.duration_since(at) < SIZE_ASK_AGAIN) {
+            return None;
+        }
+        let wait = if need.w > screen.w || need.h > screen.h { GROW_STILL } else { SHRINK_STILL };
+        if now.duration_since(since) < wait {
+            return None;
+        }
+        self.asked = Some((need, now));
+        Some(need)
+    }
+}
+
+/// The guest point for a point of a host surface. `offset` is how far the part of the cell that is
 /// on the screen starts inside the cell, which is nothing unless the cell hangs over the screen's top
 /// or left edge.
 pub fn point_for(cell: &Cell, surface: Surface, offset: Point, x: f64, y: f64, screen: Size) -> Point {
@@ -263,6 +303,24 @@ mod tests {
             None,
             "a focus that went back and forth starts again"
         );
+    }
+
+    #[test]
+    fn the_screen_grows_soon_and_shrinks_late_to_what_the_windows_need() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let small = Size { w: 1920, h: 1080 };
+        let large = Size { w: 3200, h: 1080 };
+        let mut follow = SizeFollow::default();
+        assert_eq!(follow.look(None, small, at(0)), None, "the helper has not said");
+        assert_eq!(follow.look(Some(small), small, at(0)), None, "it has what it needs");
+        assert_eq!(follow.look(Some(large), small, at(100)), None, "just seen");
+        assert_eq!(follow.look(Some(large), small, at(600)), Some(large), "grows after half a second");
+        assert_eq!(follow.look(Some(large), small, at(700)), None, "asked once");
+        assert_eq!(follow.look(Some(small), large, at(1000)), None);
+        assert_eq!(follow.look(Some(small), large, at(4000)), None, "shrinks only after five seconds");
+        assert_eq!(follow.look(Some(small), large, at(6000)), Some(small));
+        assert_eq!(follow.look(Some(small), large, at(22000)), Some(small), "asked again when not taken");
     }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rect {

@@ -22,6 +22,7 @@ use super::frames::FrameRoute;
 use super::lab_crop::find_machine;
 use super::overlay::OverlayChoice;
 use super::screen::Screen;
+use super::window_size::GuestSizer;
 use crate::application::{APP_ID, use_built_in_icons};
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -33,7 +34,7 @@ use guesthouse_app_core::machine::Machine;
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::slot_of;
 use guesthouse_daemon::slot::Slot;
-use hub::Hub;
+use hub::{Hub, Sizer};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -120,12 +121,14 @@ pub fn run_with(
         .build();
     let icons = context.paths.runtime.join("icons");
     application.connect_startup(move |_| use_built_in_icons(&icons));
-    let pieces = std::cell::RefCell::new(Some((context, machine, run_folder, link, running)));
+    let pieces = std::cell::RefCell::new(Some((context, machine, run_folder, slot, link, running)));
     // Kept here so the signals and the hub live as long as the application runs.
     let hub: Rc<std::cell::RefCell<Option<Rc<Hub>>>> = Rc::default();
     application.connect_activate(move |application| {
-        let Some((context, machine, run_folder, link, running)) = pieces.borrow_mut().take() else { return };
-        let started = open(application, &context, &machine, run_folder, link, running);
+        let Some((context, machine, run_folder, slot, link, running)) = pieces.borrow_mut().take() else {
+            return;
+        };
+        let started = open(application, &context, &machine, run_folder, slot, link, running);
         for signal in SIGNALS {
             let hub = Rc::downgrade(&started);
             glib_unix::unix_signal_add_local_once(signal, move || {
@@ -145,6 +148,7 @@ fn open(
     context: &Arc<Context>,
     machine: &Machine,
     run_folder: PathBuf,
+    slot: Option<Slot>,
     link: guesthouse_app_core::app_windows::MachineLink,
     running: impl Fn() -> bool + 'static,
 ) -> Rc<Hub> {
@@ -155,7 +159,11 @@ fn open(
     };
     let overlay = OverlayChoice { shown: false, sensors: sensors_file(context, machine) };
     let screen = Screen::new(run_folder, FrameRoute::of(machine), in_memory, overlay, false, || {}, log);
-    Hub::start(application, context.clone(), machine.name.clone(), screen, link, running)
+    let sizer = match std::env::var_os("GUESTHOUSE_LAB_SIZE_FILE") {
+        Some(path) => Sizer::File(path.into()),
+        None => GuestSizer::start(context.clone(), machine.clone(), slot).map_or(Sizer::Not, Sizer::Guest),
+    };
+    Hub::start(application, context.clone(), machine.name.clone(), screen, link, sizer, running)
 }
 
 #[cfg(test)]

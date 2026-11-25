@@ -40,7 +40,7 @@ const BETWEEN_HELD_ASKS: Duration = Duration::from_secs(3);
 const SMALLEST: Size = (800, 600);
 const LARGEST: Size = (7680, 4320);
 
-type Size = (u32, u32);
+pub type Size = (u32, u32);
 
 /// The size the guest is asked for: within what Windows takes, and even both ways, as video
 /// formats that halve the colour planes need.
@@ -161,6 +161,29 @@ enum Said {
     Not(Size),
     Held(Size),
     NoHelper,
+}
+
+/// The same route for a size that does not come from a window: app windows ask for the screen their
+/// windows need. Each size sent is set once the thread gets to it; only the newest counts.
+pub struct GuestSizer {
+    sizes: Sender<Size>,
+}
+
+impl GuestSizer {
+    /// `None` in a build with no display driver, which has no modes to add a size to.
+    pub fn start(context: Arc<Context>, machine: Machine, slot: Option<Slot>) -> Option<Self> {
+        let modes = machine_modes(&context, &machine)?;
+        let (sizes, wake) = channel();
+        thread::spawn(move || run(&context, &machine, slot, &modes, &wake));
+        Some(Self { sizes })
+    }
+
+    /// Asks for this size, made even and kept within what Windows takes. Says what was asked.
+    pub fn ask(&self, size: Size) -> Size {
+        let size = fit(size);
+        let _ = self.sizes.send(size);
+        size
+    }
 }
 
 pub struct WindowSize {

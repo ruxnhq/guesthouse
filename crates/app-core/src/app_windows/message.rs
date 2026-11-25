@@ -304,6 +304,12 @@ pub enum Request {
     Scale {
         percent: u32,
     },
+    /// The smallest and the largest screen the host wants, in pixels: the helper says in `display` what
+    /// it needs between the two.
+    Screen {
+        floor: Size,
+        ceiling: Size,
+    },
 }
 
 impl Request {
@@ -319,6 +325,7 @@ impl Request {
             Self::Apps { .. } => "apps",
             Self::Layout => "layout",
             Self::Scale { .. } => "scale",
+            Self::Screen { .. } => "screen",
         }
     }
 
@@ -340,6 +347,7 @@ impl Request {
             Self::Apps { icons } => json!({"t": t, "n": n, "icons": icons}),
             Self::Layout => json!({"t": t, "n": n}),
             Self::Scale { percent } => json!({"t": t, "n": n, "percent": percent}),
+            Self::Screen { floor, ceiling } => json!({"t": t, "n": n, "floor": floor, "ceiling": ceiling}),
         };
         value.to_string()
     }

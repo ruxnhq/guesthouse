@@ -3,9 +3,10 @@
 //! keeps one view for each cell that is shown, and hands every frame to all of them.
 
 use super::cell_picture::Guest;
-use super::plan::{ScaleFollow, Step, focus_request, steps};
+use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, steps};
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
+use crate::viewer::window_size::GuestSizer;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use guesthouse_app_core::app_windows::{
@@ -43,6 +44,10 @@ pub struct Hub {
     guest: RefCell<Guest>,
     fit: Fit,
     scale_follow: RefCell<ScaleFollow>,
+    size_follow: RefCell<SizeFollow>,
+    sizer: Sizer,
+    /// The floor and ceiling the helper was last told, cleared when the link comes up again.
+    screen_said: RefCell<Option<(Size, Size)>>,
     /// The scale of the surface of the window that last had the focus.
     focus_scale: Slot<Option<f64>>,
 }
@@ -56,6 +61,7 @@ impl Hub {
         machine: String,
         screen: Screen,
         link: MachineLink,
+        sizer: Sizer,
         running: impl Fn() -> bool + 'static,
     ) -> Rc<Self> {
         let hub = Rc::new(Self {
@@ -75,6 +81,9 @@ impl Hub {
             guest: RefCell::default(),
             fit: fit_from_environment(),
             scale_follow: RefCell::default(),
+            size_follow: RefCell::default(),
+            sizer,
+            screen_said: RefCell::default(),
             focus_scale: Slot::new(None),
         });
         add_style(&gdk::Display::default().expect("a display"));
@@ -161,6 +170,29 @@ impl Hub {
         for view in views {
             view.set_guest(now.clone());
         }
+    }
+
+    /// Tells the helper the smallest and largest screen the host wants, when they change, and sets the
+    /// screen it then says its windows need.
+    fn follow_screen(&self) {
+        let focused = self.views.borrow().values().find(|view| view.is_active()).cloned();
+        let Some((floor, ceiling)) = screen_bounds(focused.as_deref()) else { return };
+        if *self.screen_said.borrow() != Some((floor, ceiling)) {
+            self.screen_said.replace(Some((floor, ceiling)));
+            self.note(&format!(
+                "the guest's screen may be from {}x{} to {}x{}",
+                floor.w, floor.h, ceiling.w, ceiling.h
+            ));
+            self.request(Request::Screen { floor, ceiling });
+        }
+        let (need, screen) = {
+            let link = self.link.borrow();
+            let Some(model) = link.as_ref().map(|link| link.client.model()) else { return };
+            (model.need(), model.screen())
+        };
+        let Some(size) = self.size_follow.borrow_mut().look(need, screen, Instant::now()) else { return };
+        self.note(&format!("the guest's windows need a screen of {}x{}", size.w, size.h));
+        self.sizer.ask(&self.context, size);
     }
 
     /// A view's surface was given another scale by the compositor: a monitor's scale changed, or the
@@ -281,7 +313,11 @@ impl Hub {
         };
         self.follow_guest();
         self.follow_scale();
+        self.follow_screen();
         for update in updates {
+            if matches!(update, Update::Status(_)) {
+                self.screen_said.replace(None);
+            }
             match update {
                 Update::Status(status) => self.note(&format!("the link is {status:?}")),
                 Update::Note(text) => self.note(&text),
@@ -421,3 +457,64 @@ fn fit_from_environment() -> Fit {
         _ => Fit::Sharp,
     }
 }
+
+/// Where a size the guest needs goes.
+pub enum Sizer {
+    /// The route the whole-desktop viewer sizes the guest by.
+    Guest(GuestSizer),
+    /// Lab only: the size is written to this file, for a stand-in to take.
+    File(std::path::PathBuf),
+    /// A machine with no display driver keeps its screen.
+    Not,
+}
+
+impl Sizer {
+    fn ask(&self, context: &Context, size: Size) {
+        let wanted = (size.w.max(0) as u32, size.h.max(0) as u32);
+        match self {
+            Self::Guest(sizer) => {
+                let (w, h) = sizer.ask(wanted);
+                let _ =
+                    write_log(context, &format!("app windows: the guest's screen is asked to be {w}x{h}"));
+            }
+            Self::File(path) => {
+                let _ = std::fs::write(path, format!("{} {}", wanted.0, wanted.1));
+            }
+            Self::Not => {}
+        }
+    }
+}
+
+/// The largest the screen is wanted (every monitor side by side, in its own pixels, within what the
+/// driver takes) and the smallest (the monitor of the window that has the focus, or the largest, in
+/// its own pixels): a window maximized in the guest is then one monitor's worth, and Windows offers
+/// the steps it would offer on that monitor.
+fn screen_bounds(focused: Option<&View>) -> Option<(Size, Size)> {
+    let display = gdk::Display::default()?;
+    let monitors = display.monitors();
+    let mut all = Vec::new();
+    for index in 0..monitors.n_items() {
+        let Some(monitor) = monitors.item(index).and_then(|item| item.downcast::<gdk::Monitor>().ok()) else {
+            continue;
+        };
+        all.push(monitor);
+    }
+    let device = |monitor: &gdk::Monitor| {
+        let geometry = monitor.geometry();
+        let scale = monitor.scale();
+        Size {
+            w: (f64::from(geometry.width()) * scale).round() as i32,
+            h: (f64::from(geometry.height()) * scale).round() as i32,
+        }
+    };
+    let largest = all.iter().map(device).max_by_key(|size| i64::from(size.w) * i64::from(size.h))?;
+    let floor = focused.and_then(|view| view.monitor()).map_or(largest, |monitor| device(&monitor));
+    let ceiling = Size {
+        w: all.iter().map(|monitor| device(monitor).w).sum::<i32>().min(LARGEST_SCREEN.w),
+        h: all.iter().map(|monitor| device(monitor).h).max().unwrap_or(floor.h).min(LARGEST_SCREEN.h),
+    };
+    Some((floor, ceiling))
+}
+
+/// What the display driver and Windows take at the most.
+const LARGEST_SCREEN: Size = Size { w: 7680, h: 4320 };

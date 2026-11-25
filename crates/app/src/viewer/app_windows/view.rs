@@ -254,8 +254,20 @@ impl View {
         self.framed.tick(hub, newest, sdr_white_nits, self.out_of_sight());
     }
 
+    /// A window out of sight shows no frame, and nor does one whose guest window is minimized: its
+    /// cell then says where the window was, and the frame there is something else now.
     fn out_of_sight(&self) -> bool {
         matches!(&self.host, Host::Window(window) if window.is_suspended())
+            || self.cell.borrow().state == State::Minimized
+    }
+
+    /// Whether the compositor says it has no minimize for this window.
+    fn cannot_minimize(&self, window: &gtk::Window) -> bool {
+        window
+            .surface()
+            .and_then(|surface| surface.downcast::<gdk::Toplevel>().ok())
+            .and_then(|toplevel| super::capabilities::can_minimize(&toplevel))
+            == Some(false)
     }
 
     /// The window's size against its cell's. A size the compositor chose (a tiling layout, a maximize,
@@ -515,6 +527,16 @@ impl View {
                 let (presence, order) = follow_guest_state(self.presence.get(), now.state);
                 self.presence.set(presence);
                 match order {
+                    Order::Minimize if self.cannot_minimize(window) => {
+                        // A compositor with no minimize (most tiling ones) would leave the window up
+                        // with nothing to show: the guest's window comes back instead.
+                        hub.note(&format!(
+                            "view {}: the compositor has no minimize, so the guest's window is restored",
+                            self.id
+                        ));
+                        self.presence.set(Presence::Up);
+                        hub.request(Request::Restore { id: self.id.clone() });
+                    }
                     Order::Minimize => window.minimize(),
                     Order::Present => window.present(),
                     Order::Nothing => {}

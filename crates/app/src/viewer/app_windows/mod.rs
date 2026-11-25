@@ -14,6 +14,7 @@
 //! A link that goes down leaves the windows with their last picture, and the helper's next layout
 //! after it comes back says what became of them.
 
+mod capabilities;
 mod cell_picture;
 mod feed;
 mod framed;

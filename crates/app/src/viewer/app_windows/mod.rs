@@ -12,6 +12,7 @@
 //! A link that goes down leaves the windows with their last picture, and the helper's next layout
 //! after it comes back says what became of them.
 
+mod cell_picture;
 mod feed;
 mod hub;
 pub mod plan;
@@ -154,15 +155,7 @@ fn open(
     };
     let overlay = OverlayChoice { shown: false, sensors: sensors_file(context, machine) };
     let screen = Screen::new(run_folder, FrameRoute::of(machine), in_memory, overlay, false, || {}, log);
-    Hub::start(
-        application,
-        context.clone(),
-        machine.name.clone(),
-        screen,
-        link,
-        machine.direct_frames(),
-        running,
-    )
+    Hub::start(application, context.clone(), machine.name.clone(), screen, link, running)
 }
 
 #[cfg(test)]

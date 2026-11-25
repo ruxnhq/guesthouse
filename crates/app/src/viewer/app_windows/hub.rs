@@ -2,18 +2,21 @@
 //! frames and the input (in a screen that is in no window), and the link to the guest's helper. It
 //! keeps one view for each cell that is shown, and hands every frame to all of them.
 
-use super::plan::{Step, focus_request, steps};
+use super::cell_picture::Guest;
+use super::plan::{ScaleFollow, Step, focus_request, steps};
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use guesthouse_app_core::app_windows::{Cell, Desktop, MachineLink, Point, Request, Size, Update};
+use guesthouse_app_core::app_windows::{
+    Cell, Desktop, Fit, MachineLink, Point, Request, Size, Update, WINDOWS_STEPS,
+};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::log::write_log;
 use std::cell::{Cell as Slot, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often the link to the helper is looked at. Each look is a drain of a channel.
 const LOOK: Duration = Duration::from_millis(15);
@@ -30,14 +33,18 @@ pub struct Hub {
     hosted: RefCell<BTreeMap<String, bool>>,
     /// The cell the guest was last told has the focus.
     focus_sent: RefCell<Option<String>>,
-    /// Whether GTK may hand the frames to the compositor.
-    offload: bool,
     trace: bool,
     ended: Slot<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     mismatch_said: Slot<bool>,
     /// The guest's input desktop is the normal one, where the cells mean what they say.
     input_allowed: Slot<bool>,
+    /// What the views were last told of Windows' scale.
+    guest: RefCell<Guest>,
+    fit: Fit,
+    scale_follow: RefCell<ScaleFollow>,
+    /// The scale of the surface of the window that last had the focus.
+    focus_scale: Slot<Option<f64>>,
 }
 
 use std::sync::Arc;
@@ -49,7 +56,6 @@ impl Hub {
         machine: String,
         screen: Screen,
         link: MachineLink,
-        offload: bool,
         running: impl Fn() -> bool + 'static,
     ) -> Rc<Self> {
         let hub = Rc::new(Self {
@@ -61,12 +67,15 @@ impl Hub {
             views: RefCell::default(),
             hosted: RefCell::default(),
             focus_sent: RefCell::default(),
-            offload,
             trace: std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some(),
             ended: Slot::new(false),
             hold: RefCell::new(Some(application.hold())),
             mismatch_said: Slot::new(false),
             input_allowed: Slot::new(true),
+            guest: RefCell::default(),
+            fit: fit_from_environment(),
+            scale_follow: RefCell::default(),
+            focus_scale: Slot::new(None),
         });
         add_style(&gdk::Display::default().expect("a display"));
         let weak = Rc::downgrade(&hub);
@@ -103,8 +112,70 @@ impl Hub {
         &self.application
     }
 
-    pub fn offload(&self) -> bool {
-        self.offload
+    /// Windows' scale as the views are to go by.
+    pub fn guest(&self) -> Guest {
+        self.guest.borrow().clone()
+    }
+
+    /// What the helper says of Windows' scale now.
+    fn guest_from_model(&self) -> Guest {
+        let link = self.link.borrow();
+        let model = link.as_ref().map(|link| link.client.model());
+        let percent = model.map_or(100, |model| model.scale_percent());
+        let offered = model.and_then(|model| model.steps()).map_or(WINDOWS_STEPS.to_vec(), <[u32]>::to_vec);
+        Guest { percent, offered, fit: self.fit }
+    }
+
+    /// Asks Windows for the step the focused window's monitor wants, once it has stayed there. Only a
+    /// helper that reported the steps it offers is asked.
+    fn follow_scale(&self) {
+        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
+        if let Some(active) = views.iter().find(|view| view.is_active()) {
+            self.focus_scale.set(Some(active.surface_scale()));
+        }
+        let (guest, offered) = {
+            let link = self.link.borrow();
+            let Some(model) = link.as_ref().map(|link| link.client.model()) else { return };
+            (model.scale_percent(), model.steps().map(<[u32]>::to_vec).unwrap_or_default())
+        };
+        let step =
+            self.scale_follow.borrow_mut().look(self.focus_scale.get(), guest, &offered, Instant::now());
+        if let Some(percent) = step {
+            self.note(&format!(
+                "the focused window is on a monitor at {:?}: Windows is asked for {percent} %",
+                self.focus_scale.get()
+            ));
+            self.request(Request::Scale { percent });
+        }
+    }
+
+    /// Tells every view when Windows' scale changed.
+    fn follow_guest(&self) {
+        let now = self.guest_from_model();
+        if *self.guest.borrow() == now {
+            return;
+        }
+        self.note(&format!("Windows' scale is {} %", now.percent));
+        self.guest.replace(now.clone());
+        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
+        for view in views {
+            view.set_guest(now.clone());
+        }
+    }
+
+    /// A view's surface was given another scale by the compositor: a monitor's scale changed, or the
+    /// window went to a monitor of another scale. Its popups go by its ratio.
+    pub fn scale_changed(&self, id: &str) {
+        let Some(view) = self.views.borrow().get(id).cloned() else { return };
+        let children: Vec<Rc<View>> = view
+            .children
+            .borrow()
+            .iter()
+            .filter_map(|child| self.views.borrow().get(child).cloned())
+            .collect();
+        for child in children {
+            child.replace_popup(&view);
+        }
     }
 
     /// For the log, and for a lab that reads what the process says as it goes.
@@ -208,6 +279,8 @@ impl Hub {
             Some(link) => link.client.poll(),
             None => return,
         };
+        self.follow_guest();
+        self.follow_scale();
         for update in updates {
             match update {
                 Update::Status(status) => self.note(&format!("the link is {status:?}")),
@@ -337,5 +410,14 @@ impl Hub {
         self.link.borrow_mut().take();
         self.hold.borrow_mut().take();
         self.application.quit();
+    }
+}
+
+/// Lab only: `GUESTHOUSE_APP_WINDOWS_FIT=size` shows a window on a monitor whose scale Windows is
+/// not exactly at with the size Windows means, scaled by the compositor, rather than sharp.
+fn fit_from_environment() -> Fit {
+    match std::env::var("GUESTHOUSE_APP_WINDOWS_FIT").as_deref() {
+        Ok("size") => Fit::Size,
+        _ => Fit::Sharp,
     }
 }

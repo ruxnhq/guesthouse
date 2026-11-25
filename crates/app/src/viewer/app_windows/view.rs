@@ -2,11 +2,10 @@
 //! the pointer, keys and window events that go back to the guest. The frames and the input themselves
 //! are the hub's, shared by every view.
 
+use super::cell_picture::{CellPicture, Guest};
 use super::hub::Hub;
 use super::plan::{HostChange, Order, Presence, follow_guest_state, follow_host_state, point_for};
-use crate::viewer::crop::Crop;
 use crate::viewer::input::button_name;
-use crate::viewer::screen_frame::ScreenFrame;
 use crate::viewer::title_drag::{PRIMARY_BUTTON, is_move};
 use adw::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -40,11 +39,8 @@ enum Host {
 pub struct View {
     pub id: String,
     host: Host,
-    frame: ScreenFrame,
-    picture: gtk::Picture,
+    frame: CellPicture,
     cell: RefCell<Cell>,
-    /// Where the part of the cell that is on the screen starts inside the cell.
-    offset: Slot<Point>,
     presence: Slot<Presence>,
     held: RefCell<Option<HeldPress>>,
     moved_window: Slot<bool>,
@@ -61,20 +57,9 @@ pub fn add_style(display: &gdk::Display) {
 impl View {
     /// A toplevel for `cell`, or a popup against `parent`. Nothing is shown until a frame is given.
     pub fn open(hub: &Rc<Hub>, cell: &Cell, parent: Option<&Rc<View>>) -> Rc<View> {
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::Fill)
-            .can_shrink(true)
-            .can_target(false)
-            .css_classes(["guest-picture"])
-            .build();
-        let offload = gtk::GraphicsOffload::new(Some(&picture));
-        offload.set_enabled(if hub.offload() {
-            gtk::GraphicsOffloadEnabled::Enabled
-        } else {
-            gtk::GraphicsOffloadEnabled::Disabled
-        });
-        let frame = ScreenFrame::new(&offload, 16.0 / 9.0);
+        let frame = CellPicture::default();
         frame.set_focusable(false);
+        frame.set_guest(hub.guest());
         let host = match parent {
             None => Host::Window(
                 gtk::Window::builder()
@@ -101,9 +86,7 @@ impl View {
             id: cell.id.clone(),
             host,
             frame,
-            picture,
             cell: RefCell::new(cell.clone()),
-            offset: Slot::new(Point::default()),
             presence: Slot::new(Presence::Up),
             held: RefCell::default(),
             moved_window: Slot::new(false),
@@ -111,6 +94,7 @@ impl View {
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
+        view.watch_scale(hub);
         match &view.host {
             Host::Window(window) => view.watch_window(hub, window),
             Host::Popup(popover) => {
@@ -144,8 +128,38 @@ impl View {
 
     /// A new frame, which every view shows.
     pub fn set_texture(&self, texture: &gdk::Texture) {
-        self.picture.set_paintable(Some(texture));
-        self.frame.set_frame(texture.width(), texture.height());
+        self.frame.set_texture(texture);
+    }
+
+    /// Windows' scale or the steps it offers changed.
+    pub fn set_guest(&self, guest: Guest) {
+        self.frame.set_guest(guest);
+    }
+
+    /// The scale of the surface the view is on, as the compositor gave it.
+    pub fn surface_scale(&self) -> f64 {
+        self.frame.surface_scale()
+    }
+
+    /// Whether the host window has the focus.
+    pub fn is_active(&self) -> bool {
+        matches!(&self.host, Host::Window(window) if window.is_active())
+    }
+
+    /// A popup follows its parent's ratio when the parent's surface changes scale.
+    fn watch_scale(self: &Rc<Self>, hub: &Rc<Hub>) {
+        let weak = (Rc::downgrade(self), Rc::downgrade(hub));
+        self.frame.connect_scale(move |scale| {
+            let Some((view, hub)) = both(&weak) else { return };
+            hub.trace(&format!("view {} is on a surface at scale {scale}", view.id));
+            hub.scale_changed(&view.id);
+        });
+    }
+
+    /// Places the popups again, as the ratio they go by may have changed.
+    pub fn replace_popup(&self, parent: &Rc<View>) {
+        self.frame.check_ratio();
+        self.place_popup(parent);
     }
 
     pub fn set_cursor(&self, cursor: Option<&gdk::Cursor>) {
@@ -157,13 +171,7 @@ impl View {
     pub fn recrop(&self, screen: Size) {
         let cell = self.cell.borrow();
         let Some(shown) = crop(cell.cell, screen) else { return };
-        self.offset.set(shown.offset);
-        self.frame.set_crop(Some(Crop {
-            x: shown.source.x,
-            y: shown.source.y,
-            width: shown.source.w,
-            height: shown.source.h,
-        }));
+        self.frame.set_cell((cell.cell.w, cell.cell.h), shown.source, shown.offset);
     }
 
     /// The helper changed something of the cell. `now` is how it stands.
@@ -206,14 +214,9 @@ impl View {
         popover.set_pointing_to(Some(&gdk::Rectangle::new(place.x, place.y, place.w.max(1), 0)));
     }
 
-    /// The host surface in the units a pointer comes in.
+    /// The cell as it is shown, in the units a pointer comes in.
     fn surface(&self) -> Surface {
-        let (width, height) = (self.frame.width(), self.frame.height());
-        if width > 0 && height > 0 {
-            Surface { w: f64::from(width), h: f64::from(height) }
-        } else {
-            Surface::of_cell(&self.cell.borrow())
-        }
+        Surface::shown(&self.cell.borrow(), self.frame.ratio())
     }
 
     /// Takes the host window away. A popup goes with its parent, so a parent's popups are the
@@ -231,7 +234,8 @@ impl View {
     /// The guest point for a point of this surface, and where it was sent.
     fn guest_point(&self, hub: &Hub, x: f64, y: f64) -> Point {
         let screen = hub.screen_size();
-        point_for(&self.cell.borrow(), self.surface(), self.offset.get(), x, y, screen)
+        // The widget holds the whole cell, the part off the screen black, so no offset is added.
+        point_for(&self.cell.borrow(), self.surface(), Point::default(), x, y, screen)
     }
 
     fn send_pointer(&self, hub: &Hub, x: f64, y: f64) -> Point {
@@ -245,6 +249,13 @@ impl View {
         let motion = gtk::EventControllerMotion::new();
         let this = weak.clone();
         motion.connect_motion(move |_, x, y| {
+            if let Some((view, hub)) = both(&this) {
+                view.on_motion(&hub, x, y);
+            }
+        });
+        // A pointer that comes in is at a point too, and may not move again before it clicks.
+        let this = weak.clone();
+        motion.connect_enter(move |_, x, y| {
             if let Some((view, hub)) = both(&this) {
                 view.on_motion(&hub, x, y);
             }
@@ -291,7 +302,11 @@ impl View {
             Some(false) => {}
             Some(true) => self.start_window_move(),
             None => {
-                self.send_pointer(hub, x, y);
+                let point = self.send_pointer(hub, x, y);
+                hub.trace(&format!(
+                    "motion in {} at ({x:.3},{y:.3}) is the guest's ({},{})",
+                    self.id, point.x, point.y
+                ));
             }
         }
     }
@@ -327,12 +342,7 @@ impl View {
             hub.focus(&self.cell.borrow());
             let strip = !self.is_popup()
                 && button == PRIMARY_BUTTON
-                && on_drag_strip(
-                    &self.cell.borrow(),
-                    self.surface(),
-                    x + f64::from(self.offset.get().x),
-                    y + f64::from(self.offset.get().y),
-                );
+                && on_drag_strip(&self.cell.borrow(), self.surface(), x, y);
             if strip
                 && let Some(event) = gesture.current_event()
                 && let Some(device) = event.device()

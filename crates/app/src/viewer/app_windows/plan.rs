@@ -3,10 +3,11 @@
 //! surface goes in the guest. No toolkit in here, so it is all tested without a display.
 
 use guesthouse_app_core::app_windows::{
-    Cell, Change, Desktop, Fields, Model, Point, Request, Size, State, Surface, guest_point,
+    Cell, Change, Desktop, Fields, Model, Point, Request, Size, State, Surface, guest_point, nearest_step,
 };
 use guesthouse_app_core::input::TABLET_RANGE;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 /// What a cell is shown as on the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +84,8 @@ pub fn steps(changes: &[Change], model: &Model, hosted: &mut BTreeMap<String, bo
             }
             Change::Screen(size) => steps.push(Step::Screen(*size)),
             Change::Desktop(desktop) => steps.push(Step::Desktop(*desktop)),
+            // The hub reads Windows' scale and the screen it needs from the model after each look.
+            Change::Display(_) => {}
         }
     }
     steps
@@ -164,6 +167,51 @@ pub fn focus_request(already: Option<&str>, cell: &Cell) -> Option<Request> {
     (!cell.popup && already != Some(cell.id.as_str())).then(|| Request::Focus { id: cell.id.clone() })
 }
 
+/// How long the focused window must stay on a monitor that asks for another step before Windows is
+/// asked for it. Every change makes each program in the guest lay itself out again.
+pub const SCALE_STILL: Duration = Duration::from_millis(1000);
+/// How long an asked step that Windows has not taken is left before it is asked for again.
+pub const SCALE_ASK_AGAIN: Duration = Duration::from_secs(10);
+
+/// Windows' scale follows the monitor of the host window that has the focus: it has one scale for its
+/// one screen, and the monitor the user works on is the one it should be right for. The other monitors
+/// show their windows at the size Windows means, scaled by the compositor, until one of their windows
+/// gets the focus.
+#[derive(Debug, Default)]
+pub struct ScaleFollow {
+    /// The step the focused window's monitor asks for, and since when.
+    wanted: Option<(u32, Instant)>,
+    /// The step last asked for, and when.
+    asked: Option<(u32, Instant)>,
+}
+
+impl ScaleFollow {
+    /// The step to ask Windows for now, if any. `focus_scale` is the scale of the surface of the window
+    /// that has the focus (`None` when no host window has it, which leaves Windows as it is), `guest` is
+    /// Windows' percentage now and `offered` the steps it offers (empty: the helper takes no scale).
+    pub fn look(
+        &mut self,
+        focus_scale: Option<f64>,
+        guest: u32,
+        offered: &[u32],
+        now: Instant,
+    ) -> Option<u32> {
+        let step = focus_scale.and_then(|scale| nearest_step(scale, offered))?;
+        if self.wanted.is_none_or(|(wanted, _)| wanted != step) {
+            self.wanted = Some((step, now));
+        }
+        let (_, since) = self.wanted?;
+        if step == guest || now.duration_since(since) < SCALE_STILL {
+            return None;
+        }
+        if self.asked.is_some_and(|(asked, at)| asked == step && now.duration_since(at) < SCALE_ASK_AGAIN) {
+            return None;
+        }
+        self.asked = Some((step, now));
+        Some(step)
+    }
+}
+
 /// The guest's point for a point of a host surface. `offset` is how far the part of the cell that is
 /// on the screen starts inside the cell, which is nothing unless the cell hangs over the screen's top
 /// or left edge.
@@ -181,6 +229,41 @@ pub fn tablet_value(pixel: i32, side: i32) -> i64 {
 mod tests {
     use super::*;
     use guesthouse_app_core::app_windows::{Caption, Hello, Layout, Rect};
+
+    #[test]
+    fn windows_follows_the_focused_monitor_once_it_has_stayed() {
+        let steps = [100, 125, 150, 175, 200];
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut follow = ScaleFollow::default();
+        assert_eq!(follow.look(Some(1.5), 100, &steps, at(0)), None, "just seen");
+        assert_eq!(follow.look(Some(1.5), 100, &steps, at(900)), None, "not still long enough");
+        assert_eq!(follow.look(Some(1.5), 100, &steps, at(1000)), Some(150));
+        assert_eq!(follow.look(Some(1.5), 100, &steps, at(1300)), None, "asked once");
+        assert_eq!(follow.look(Some(1.5), 150, &steps, at(1500)), None, "taken");
+        assert_eq!(follow.look(Some(1.3), 150, &steps, at(2000)), None);
+        assert_eq!(follow.look(Some(1.3), 150, &steps, at(3000)), Some(125), "the nearest step");
+        assert_eq!(follow.look(Some(1.3), 150, &steps, at(14000)), Some(125), "asked again when not taken");
+    }
+
+    #[test]
+    fn windows_is_left_alone_with_no_focus_or_no_steps() {
+        let start = Instant::now();
+        let later = start + Duration::from_secs(5);
+        let mut follow = ScaleFollow::default();
+        assert_eq!(follow.look(None, 100, &[100, 125], start), None);
+        assert_eq!(follow.look(None, 100, &[100, 125], later), None);
+        assert_eq!(follow.look(Some(2.0), 100, &[], start), None);
+        assert_eq!(follow.look(Some(2.0), 100, &[], later), None);
+        let mut follow = ScaleFollow::default();
+        assert_eq!(follow.look(Some(1.5), 100, &[100, 125, 150], start), None);
+        assert_eq!(follow.look(Some(1.0), 100, &[100, 125, 150], start + Duration::from_millis(800)), None);
+        assert_eq!(
+            follow.look(Some(1.5), 100, &[100, 125, 150], start + Duration::from_millis(1600)),
+            None,
+            "a focus that went back and forth starts again"
+        );
+    }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rect {
         Rect { x, y, w, h }

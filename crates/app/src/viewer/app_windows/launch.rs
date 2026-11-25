@@ -66,7 +66,7 @@ impl ViewerProcess for Started {
 
 /// Starts this program again as the machine's viewer, in a process group of its own and with no
 /// terminal, so that it goes on when this one ends and when the terminal closes.
-fn start_viewer(machine: &Machine) -> Result<Box<dyn ViewerProcess>, Failure> {
+pub fn start_viewer(machine: &Machine) -> Result<Box<dyn ViewerProcess>, Failure> {
     let program = std::env::current_exe()?;
     let child = Command::new(program)
         .arg(super::ARGUMENT)

@@ -90,8 +90,9 @@ enum Described {
     Preferred,
 }
 
-/// Why the surface didn't show a frame, which goes to GTK instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why the surface didn't show a frame. The guest's screen then has GTK show it; an app window, whose
+/// picture GTK never draws, shows nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NotShown {
     NotPlaced,
     PeakNotKnown,

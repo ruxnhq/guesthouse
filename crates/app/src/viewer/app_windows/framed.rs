@@ -5,11 +5,12 @@
 
 use super::cell_picture::CellPicture;
 use super::hub::Hub;
-use crate::viewer::own_surface::OwnSurface;
+use crate::viewer::own_surface::{NotShown, OwnSurface};
 use crate::viewer::slot_hold::HeldFrame;
 use gtk::gdk;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 
 pub struct Framed {
     /// For the log.
@@ -25,6 +26,8 @@ pub struct Framed {
     /// GTK's surface the compositor couldn't put a surface of the view's own over: not asked again
     /// until GTK makes another, as each try waits on the compositor.
     refused_on: RefCell<Option<gdk::Surface>>,
+    /// The reasons a frame could never be shown that the log has had, each said once.
+    said: RefCell<HashSet<NotShown>>,
 }
 
 impl Framed {
@@ -36,6 +39,7 @@ impl Framed {
             behind: Cell::new(true),
             hidden: Cell::new(false),
             refused_on: RefCell::default(),
+            said: RefCell::default(),
         }
     }
 
@@ -68,8 +72,8 @@ impl Framed {
             Ok(()) => self.behind.set(false),
             Err(not_shown) => {
                 self.behind.set(not_shown.may_later());
-                if !not_shown.may_later() {
-                    hub.note(&format!("{}: the frame isn't shown, as {}", self.name, not_shown.why()));
+                if !not_shown.may_later() && self.said.borrow_mut().insert(not_shown) {
+                    hub.note(&format!("{}: the window stays empty, as {}", self.name, not_shown.why()));
                 }
             }
         }

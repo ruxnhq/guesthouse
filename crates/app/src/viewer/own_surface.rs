@@ -691,7 +691,17 @@ impl OwnSurface {
         let offset = u64::from(descriptor.offset as u32)
             + crop.y as u64 * u64::from(descriptor.stride)
             + crop.x as u64 * u64::from(bytes);
-        offset.is_multiple_of(CUT_ALIGNMENT).then_some((crop.x, crop.y, crop.width, crop.height))
+        // The compositor takes the plane to run stride x height from its start, which must stay
+        // inside the frame's own (a cell at the bottom right would reach past it by its x).
+        let stride = u64::from(descriptor.stride);
+        let end = offset + stride * crop.height as u64;
+        let frame_end = u64::from(descriptor.offset as u32) + stride * u64::from(descriptor.height);
+        (offset.is_multiple_of(CUT_ALIGNMENT) && end <= frame_end).then_some((
+            crop.x,
+            crop.y,
+            crop.width,
+            crop.height,
+        ))
     }
 
     /// Sets the viewport's source for a buffer of this size, and says if it changed. It has to lie

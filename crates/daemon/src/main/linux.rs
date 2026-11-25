@@ -281,11 +281,11 @@ fn serve_nvidia(
     Ok(())
 }
 
-/// Whether a guest context's queues share one channel group: yes, unless
-/// `GUESTHOUSE_CONTEXT_GROUPS` is 0.
+/// Whether a guest context's queues share one channel group: only when
+/// `GUESTHOUSE_CONTEXT_GROUPS` is 1. It has run on one card and one host driver so far.
 #[cfg(feature = "nvidia")]
 fn context_groups(setting: Option<&str>) -> bool {
-    setting.map(str::trim) != Some("0")
+    setting.map(str::trim) == Some("1")
 }
 
 /// How long a ring channel of a context with several queues holds the GPU, unless

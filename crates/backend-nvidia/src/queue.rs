@@ -6,6 +6,7 @@ use crate::channel::{
 };
 use crate::list_repair;
 use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry, ZERO_EXTENDED_BASE, has_no_extended_base};
+use crate::queue_layout::SubchannelUse;
 use crate::ring_position::has_ring_position_flag;
 use crate::ring_request::RingMove;
 use crate::rm::Rm;
@@ -347,6 +348,22 @@ impl<R: Rm> NvidiaBackend<R> {
         }
     }
 
+    /// Notes which subchannels a watched queue's commands use, and logs the first use of each.
+    fn watch_queue(&mut self, host: &dyn HostServices, work: &Work<'_>, listing: &[u8], kind: &str) {
+        let Some(watch) = &mut self.queue_watch else { return };
+        let found = SubchannelUse::of_listing(host, work.space, listing);
+        let Some((new, submission)) = watch.entry(work.queue).or_default().add(found) else { return };
+        let place = self.queue_places.get(&work.queue).map_or("nothing".to_owned(), ToString::to_string);
+        log::info!(
+            "queue {:#x} of context {:#x} on node {} ({kind}, placed by {place}): submission {submission} \
+             is the first with subchannels {new:#04b}{}",
+            work.queue,
+            work.context,
+            work.node,
+            if found.unread { ", and has commands that can't be read" } else { "" }
+        );
+    }
+
     /// The entries a submission on a guest's ring adds, read from where the channel runs them.
     fn ring_listing(host: &dyn HostServices, space: SpaceId, ring: u64, entries: u32, end: u32) -> Vec<u8> {
         let Some(span) = host.shared_span(space, ring) else { return Vec::new() };
@@ -537,6 +554,11 @@ impl<R: Rm> NvidiaBackend<R> {
     ) -> Result<u32, WorkStart> {
         self.settle_move(host, work.queue, Instant::now())?;
         let first = end.saturating_sub(entries);
+        if self.queue_watch.is_some() {
+            let ring = self.queue_ring(work.queue).unwrap_or(ring_address);
+            let listing = Self::ring_listing(host, work.space, ring, entries, end);
+            self.watch_queue(host, work, &listing, "ring");
+        }
         let mirrored = self.engine_for(work) == Engine::Graphics && mirrors_pool(work);
         if self.video_engine(work).is_none() && (self.local_window.window().is_none() || mirrored) {
             let ring = self.queue_ring(work.queue).unwrap_or(ring_address);
@@ -739,6 +761,7 @@ impl<R: Rm> NvidiaBackend<R> {
             self.watch_local_window(host, work, listing);
             self.watch_guest_pool(host, work, listing);
         }
+        self.watch_queue(host, work, listing, "list");
         if !self.list_channel(host, work) {
             return Err(WorkStart::Finished);
         }
@@ -919,6 +942,10 @@ impl<R: Rm> NvidiaBackend<R> {
 
     pub(crate) fn close(&mut self, handle: u32) {
         self.guest_rings.remove(&handle);
+        self.queue_places.remove(&handle);
+        if let Some(watch) = &mut self.queue_watch {
+            watch.remove(&handle);
+        }
         self.local_window.forget(handle);
         self.pool_mirror.forget(handle);
         let Some(queue) = self.queues.remove(&handle) else { return };
@@ -1021,6 +1048,7 @@ mod tests {
             space: SpaceId(1),
             node: 1,
             client_hint: 0,
+            context: 0,
             context_queues: 1,
             private,
             commands: None,

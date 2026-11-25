@@ -27,6 +27,7 @@ pub mod private_data;
 pub mod profile;
 pub mod pushbuffer;
 pub mod queue;
+mod queue_layout;
 pub mod record;
 mod ring_position;
 mod ring_request;
@@ -168,6 +169,10 @@ pub struct NvidiaBackend<R> {
     pub(crate) guest_rings: HashMap<u32, GuestRing>,
     /// Rings asked for, which queues can move to.
     pub(crate) ring_moves: RingMoves,
+    /// Where each hardware queue's private data places it among its context's queues.
+    pub(crate) queue_places: HashMap<u32, queue_layout::QueuePlace>,
+    /// Which subchannels each queue's commands have used, kept only while queues are watched.
+    pub(crate) queue_watch: Option<HashMap<u32, queue_layout::Watched>>,
     /// Where shaders' local addresses sit, from the first queue that set it.
     pub(crate) local_window: local_window::LocalWindow,
     /// Compute drivers' own pools, for their contexts' other channels.
@@ -195,6 +200,12 @@ impl<R: Rm> NvidiaBackend<R> {
     /// [`Self::set_graphics_timeslice`] goes before this one.
     pub fn set_shared_context_timeslice(&mut self, micros: u64) {
         self.device.shared_context_timeslice_micros = micros;
+    }
+
+    /// Logs where each hardware queue's private data places it, and each subchannel a queue's
+    /// commands use the first time they do. Reads every submission's commands, so it costs speed.
+    pub fn watch_queues(&mut self) {
+        self.queue_watch = Some(HashMap::new());
     }
 
     /// Reads the card and works out everything the guest will be told. Nothing here changes the card.
@@ -287,6 +298,8 @@ impl<R: Rm> NvidiaBackend<R> {
             peek_page: None,
             guest_rings: HashMap::new(),
             ring_moves: RingMoves::default(),
+            queue_places: HashMap::new(),
+            queue_watch: None,
             local_window: local_window::LocalWindow::default(),
             pool_mirror: local_window::PoolMirror::default(),
             sked_pages: sked_page::SkedPages::default(),
@@ -554,6 +567,16 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
                 self.guest_rings.insert(queue, ring);
             }
             None => grant_list_entries(private).ok_or_else(too_short)?,
+        }
+        match queue_layout::QueuePlace::parse(private) {
+            Some(place) => {
+                log::debug!("queue {queue:#x} is placed by {place}");
+                if self.queue_watch.is_some() {
+                    log::info!("queue {queue:#x} is placed by {place}");
+                }
+                self.queue_places.insert(queue, place);
+            }
+            None => log::debug!("queue {queue:#x} has private data that places nothing"),
         }
         let token = serial.wrapping_add(1).max(1);
         let field = private.get_mut(RECORD_QUEUE_TOKEN..RECORD_QUEUE_TOKEN + 4).ok_or_else(too_short)?;

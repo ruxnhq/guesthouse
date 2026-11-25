@@ -486,6 +486,7 @@ mod tests {
             space: guesthouse_backend::SpaceId(1),
             node: 0,
             client_hint: 0,
+            context: 0,
             context_queues: 1,
             private: &[],
             commands: None,

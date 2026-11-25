@@ -866,6 +866,7 @@ mod tests {
             space: guesthouse_backend::SpaceId(3),
             node: 1,
             client_hint: 0x6,
+            context: 0,
             context_queues: 1,
             private,
             commands: None,

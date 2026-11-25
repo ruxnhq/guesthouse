@@ -260,6 +260,7 @@ impl WorkBuilder {
             space: self.space,
             node: self.node,
             client_hint: 0,
+            context: 0,
             context_queues: 1,
             private: &self.private,
             commands: self.commands,

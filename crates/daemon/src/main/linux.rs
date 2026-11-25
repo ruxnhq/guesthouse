@@ -264,6 +264,9 @@ fn serve_nvidia(
     let shared = env::var("GUESTHOUSE_SHARED_CONTEXT_TIMESLICE_US").ok();
     let shared = timeslice("GUESTHOUSE_SHARED_CONTEXT_TIMESLICE_US", shared.as_deref());
     backend.set_shared_context_timeslice(shared.unwrap_or(SHARED_CONTEXT_TIMESLICE_MICROS));
+    if env::var_os("GUESTHOUSE_QUEUE_WATCH").is_some() {
+        backend.watch_queues();
+    }
     let limits = MemoryLimits::new(backend.facts(), video_cap(cap.as_deref()), guest_ram(ram.as_deref()));
     let config = session_config(limits);
     let mut session = Session::new(backend, memory, config);

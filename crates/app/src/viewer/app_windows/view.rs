@@ -119,6 +119,9 @@ pub struct View {
     /// window larger than the work area) is not asked for again, and the guest's is asked for the
     /// window's size instead.
     set_size: Slot<Option<((i32, i32), Instant)>>,
+    /// For a popup, the view it hangs on, and whether it is still to be shown.
+    parent: RefCell<Weak<View>>,
+    popup_waiting: Slot<bool>,
     /// The guest's cursor, shown again when the pointer leaves an edge.
     guest_cursor: RefCell<Option<gdk::Cursor>>,
     /// The edge the pointer is on, while it is on one.
@@ -178,6 +181,8 @@ impl View {
             set_size: Slot::new(None),
             guest_cursor: RefCell::default(),
             on_edge: Slot::new(None),
+            parent: RefCell::new(Weak::new()),
+            popup_waiting: Slot::new(false),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -207,22 +212,18 @@ impl View {
                     window.minimize();
                 }
             }
-            Host::Popup(popover) => match parent {
-                // A menu that is open when the viewer starts comes in the same layout as its window,
-                // which is not on the screen yet: its place against the window is not known until it
-                // is, so it is shown then (measured: it landed at 0,50 instead).
-                Some(parent) if !parent.frame.is_mapped() => {
-                    let (popover, weak) = (popover.clone(), Rc::downgrade(&view));
-                    let weak_parent = Rc::downgrade(parent);
-                    parent.frame.connect_map(move |_| {
-                        if let (Some(view), Some(parent)) = (weak.upgrade(), weak_parent.upgrade()) {
-                            view.place_popup(&parent);
-                            popover.popup();
-                        }
-                    });
+            // A popup is shown once its parent window has been given its size by the compositor, so
+            // the parent is on the screen: GTK waits for the compositor to place a new popup, and a
+            // compositor that places no popup of a window it has not mapped yet (sway) would wait for
+            // the parent, whose first frame waits for GTK (measured: the viewer stood still). Its place
+            // against the parent is only known then too (measured on KWin: it landed at 0,50).
+            Host::Popup(_) => {
+                if let Some(parent) = parent {
+                    view.parent.replace(Rc::downgrade(parent));
                 }
-                _ => popover.popup(),
-            },
+                view.popup_waiting.set(true);
+                view.show_popup_when_ready();
+            }
         }
         view
     }
@@ -276,7 +277,10 @@ impl View {
     /// answer) makes the window that size when the window is its own to size: not maximized, full
     /// screen or tiled, and not just sized by the compositor.
     pub fn keep_size(&self, hub: &Hub) {
-        let Host::Window(window) = &self.host else { return };
+        let Host::Window(window) = &self.host else {
+            self.show_popup_when_ready();
+            return;
+        };
         let Some(allocated) = self.frame.allocated() else { return };
         let wanted = self.frame.wanted_size();
         let free = self.free(window);
@@ -355,6 +359,21 @@ impl View {
                 }
             }
         }
+    }
+
+    /// Shows a popup still to be shown once its parent has its size (see `open`).
+    fn show_popup_when_ready(&self) {
+        let Host::Popup(popover) = &self.host else { return };
+        if !self.popup_waiting.get() {
+            return;
+        }
+        let Some(parent) = self.parent.borrow().upgrade() else { return };
+        if parent.frame.allocated().is_none() || parent.popup_waiting.get() {
+            return;
+        }
+        self.popup_waiting.set(false);
+        self.place_popup(&parent);
+        popover.popup();
     }
 
     /// Notes a size the widget was given that is not its cell's.

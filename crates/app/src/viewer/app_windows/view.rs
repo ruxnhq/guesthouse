@@ -122,6 +122,8 @@ pub struct View {
     /// For a popup, the view it hangs on, and whether it is still to be shown.
     parent: RefCell<Weak<View>>,
     popup_waiting: Slot<bool>,
+    /// The parent's size when the popup was placed: a parent that changes size moves its picture.
+    placed_against: Slot<Option<(i32, i32)>>,
     /// The guest's cursor, shown again when the pointer leaves an edge.
     guest_cursor: RefCell<Option<gdk::Cursor>>,
     /// The edge the pointer is on, while it is on one.
@@ -183,6 +185,7 @@ impl View {
             on_edge: Slot::new(None),
             parent: RefCell::new(Weak::new()),
             popup_waiting: Slot::new(false),
+            placed_against: Slot::new(None),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -364,11 +367,20 @@ impl View {
     /// Shows a popup still to be shown once its parent has its size (see `open`).
     fn show_popup_when_ready(&self) {
         let Host::Popup(popover) = &self.host else { return };
-        if !self.popup_waiting.get() {
-            return;
-        }
         let Some(parent) = self.parent.borrow().upgrade() else { return };
         if parent.frame.allocated().is_none() || parent.popup_waiting.get() {
+            return;
+        }
+        if !self.popup_waiting.get() {
+            if self.placed_against.get() != parent.frame.allocated() {
+                self.place_popup(&parent);
+                // A popup up is not always moved by a new place (measured on sway 1.12: it stayed where
+                // it was), so it is put up again there.
+                if popover.is_visible() {
+                    popover.popdown();
+                    popover.popup();
+                }
+            }
             return;
         }
         self.popup_waiting.set(false);
@@ -573,13 +585,32 @@ impl View {
     fn place_popup(&self, parent: &Rc<View>) {
         let Host::Popup(popover) = &self.host else { return };
         let parent_cell = parent.cell.borrow();
-        let place = popup_place(&self.cell.borrow(), &parent_cell, parent.surface());
+        self.placed_against.set(parent.frame.allocated());
+        let mut place = popup_place(&self.cell.borrow(), &parent_cell, parent.surface());
+        // The parent's picture may sit in the middle of a window larger than its cell.
+        let (shift_x, shift_y) = parent.frame.picture_shift();
+        place.x += shift_x;
+        place.y += shift_y;
         // The popup's top left corner is at `place`: its top edge is the bottom of an empty rectangle
-        // there, and its width is the rectangle's, so the centres agree.
+        // there, as wide as the popup, so the centres agree. GTK keeps that rectangle inside the parent
+        // widget (measured on sway and mutter: a menu reaching past its window's right edge landed half
+        // the overhang to the left), so the rectangle is put inside and the offset makes up the rest.
+        let (room_w, room_h) = parent.frame.allocated().unwrap_or((i32::MAX, i32::MAX));
+        let width = place.w.max(1).min(room_w.max(1));
+        let x = place.x.clamp(0, (room_w - width).max(0));
+        let y = place.y.clamp(0, room_h.max(0));
+        let centred = f64::from(x) + f64::from(width) / 2.0 - f64::from(place.w.max(1)) / 2.0;
         popover.set_position(gtk::PositionType::Bottom);
         // Measured in a nested KWin: GTK puts the surface one pixel below the rectangle's edge.
-        popover.set_offset(0, -1);
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(place.x, place.y, place.w.max(1), 0)));
+        popover.set_offset((f64::from(place.x) - centred).round() as i32, place.y - y - 1);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x, y, width, 0)));
+        if std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some() {
+            eprintln!(
+                "app windows: popup {} placed at {place:?} against {:?}",
+                self.id,
+                parent.frame.allocated()
+            );
+        }
     }
 
     /// The cell as it is shown, in the units a pointer comes in.

@@ -632,8 +632,11 @@ impl View {
     }
 
     /// Takes the host window away. A popup goes with its parent, so a parent's popups are the
-    /// caller's to take first.
+    /// caller's to take first. A popup that goes alone is no longer one of its parent's.
     pub fn destroy(&self) {
+        if let Some(parent) = self.parent.borrow().upgrade() {
+            parent.children.borrow_mut().retain(|child| *child != self.id);
+        }
         self.framed.end();
         match &self.host {
             Host::Window(window) => window.destroy(),

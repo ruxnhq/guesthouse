@@ -65,11 +65,11 @@ pub fn steps(changes: &[Change], model: &Model, hosted: &mut BTreeMap<String, bo
                 match (there, wanted) {
                     (false, Hosting::Not) => {}
                     (false, _) => open_if_shown(id, model, hosted, &mut steps),
-                    (true, Hosting::Not) => close(id, hosted, &mut steps),
+                    (true, Hosting::Not) => close(id, model, hosted, &mut steps),
                     (true, wanted) => {
                         // A window that became a popup or the other way is another kind of host window.
                         if hosted.get(id).copied() != Some(wanted == Hosting::Popup) {
-                            close(id, hosted, &mut steps);
+                            close(id, model, hosted, &mut steps);
                             open_if_shown(id, model, hosted, &mut steps);
                         } else if what.any() {
                             steps.push(Step::Update { id: id.clone(), what: *what });
@@ -79,7 +79,7 @@ pub fn steps(changes: &[Change], model: &Model, hosted: &mut BTreeMap<String, bo
             }
             Change::Removed(cell) => {
                 if hosted.contains_key(&cell.id) {
-                    close(&cell.id, hosted, &mut steps);
+                    close(&cell.id, model, hosted, &mut steps);
                 }
             }
             Change::Screen(size) => steps.push(Step::Screen(*size)),
@@ -91,9 +91,21 @@ pub fn steps(changes: &[Change], model: &Model, hosted: &mut BTreeMap<String, bo
     steps
 }
 
-fn close(id: &str, hosted: &mut BTreeMap<String, bool>, steps: &mut Vec<Step>) {
-    hosted.remove(id);
+/// Closes the host window, which takes the popups that hang on it, and on them, with it: they are not
+/// hosted any more either, so they open again when the window does.
+fn close(id: &str, model: &Model, hosted: &mut BTreeMap<String, bool>, steps: &mut Vec<Step>) {
+    forget_with_popups(id, model, hosted);
     steps.push(Step::Close(id.to_owned()));
+}
+
+fn forget_with_popups(id: &str, model: &Model, hosted: &mut BTreeMap<String, bool>) {
+    if hosted.remove(id).is_none() {
+        return;
+    }
+    let popups: Vec<String> = model.popups_of(id).map(|popup| popup.id.clone()).collect();
+    for popup in popups {
+        forget_with_popups(&popup, model, hosted);
+    }
 }
 
 /// Opens the cell if the model has it and it is to be shown, and then its popups that were waiting
@@ -490,6 +502,28 @@ mod tests {
         rig.show(vec![covered, popup("p", "w", rect(5, 5, 50, 50))]);
         let steps = rig.show(vec![window("w", rect(0, 0, 200, 100)), popup("p", "w", rect(5, 5, 50, 50))]);
         assert_eq!(steps, vec![open("w"), open("p")]);
+    }
+
+    #[test]
+    fn a_window_covered_with_its_popup_up_brings_the_popup_back_when_shown_again() {
+        let mut rig = Rig::new();
+        let shown = || {
+            vec![
+                window("w", rect(0, 0, 200, 100)),
+                popup("m", "w", rect(5, 5, 50, 50)),
+                popup("s", "m", rect(60, 5, 50, 50)),
+            ]
+        };
+        rig.show(shown());
+        let covered = Cell { state: State::Covered, ..window("w", rect(0, 0, 200, 100)) };
+        let steps = rig.show(vec![
+            covered,
+            popup("m", "w", rect(5, 5, 50, 50)),
+            popup("s", "m", rect(60, 5, 50, 50)),
+        ]);
+        assert_eq!(steps, vec![close_of("w")]);
+        assert!(rig.hosted.is_empty(), "{:?}", rig.hosted);
+        assert_eq!(rig.show(shown()), vec![open("w"), open("m"), open("s")]);
     }
 
     #[test]

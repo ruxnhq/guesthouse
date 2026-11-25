@@ -100,7 +100,6 @@ public class AppWindows : Form
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint f);
     [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr c);
-    [DllImport("user32.dll")] static extern uint GetDpiForSystem();
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
     [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint action, uint param, out RECT rect, uint flags);
     [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmod, WinEventProc proc, uint pid, uint thread, uint flags);
@@ -398,6 +397,15 @@ public class AppWindows : Form
 
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == WM_DPICHANGED)
+        {
+            // The overlay keeps covering the screen in physical pixels: Windows' suggested rectangle is not taken.
+            FitToScreen();
+            foreach (Cell c in cells.Values) { c.ThumbDirty = true; if (!c.Popup) ReadCaption(c); }
+            scanDue = true; Kick();
+            m.Result = IntPtr.Zero;
+            return;
+        }
         if (m.Msg == WM_DISPLAYCHANGE) OnDisplayChange();
         else if (m.Msg == WM_SETTINGCHANGE) { FitPackArea(); }
         else if (m.Msg == WM_WTSSESSION_CHANGE)
@@ -414,9 +422,12 @@ public class AppWindows : Form
     void OnDisplayChange()
     {
         FitToScreen();
+        KeepScale();
         foreach (Cell c in cells.Values)
         {
-            c.CellW = Math.Min(c.CellW, ovW); c.CellH = Math.Min(c.CellH, ovH);
+            // A larger screen may have room for an overflow cell, and a window cut to the old screen gets its whole size back.
+            c.CellW = Math.Min(c.SrcW > 0 ? c.SrcW - c.InL - c.InR : c.CellW, ovW); c.CellH = Math.Min(c.SrcH > 0 ? c.SrcH - c.InT - c.InB : c.CellH, ovH);
+            if (c.Overflow) c.Placed = false;
             if (c.Placed && !c.Overflow && (c.X + c.CellW > packR || c.Y + c.CellH > packB)) c.Placed = false;
             c.ThumbDirty = true;
         }
@@ -782,7 +793,7 @@ public class AppWindows : Form
             if (buttons == 0 && (c.Style & WS_SYSMENU) != 0)
             {
                 int count = 1 + ((c.Style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) != 0 ? 2 : 0);
-                buttons = (count * 46 + 8) * (int)GetDpiForSystem() / 96;
+                buttons = (count * 46 + 8) * (int)GetDpiForWindow(c.Src) / 96;
             }
         }
         c.CaptionH = height; c.ButtonsW = buttons;
@@ -1246,7 +1257,7 @@ public class AppWindows : Form
 
     string HelloLine()
     {
-        int scale = (int)(GetDpiForSystem() * 100 / 96);
+        int scale = PercentNow();
         return "{\"t\":\"hello\",\"v\":" + I(ProtocolVersion) + ",\"session\":\"" + session + "\",\"screen\":" + ScreenJson() + ",\"scale\":" + I(scale) + "}";
     }
 
@@ -1275,6 +1286,7 @@ public class AppWindows : Form
             if (feedToFile) feedPending = true;
         }
         if (feedPending) WriteFeed();
+        DisplayStep(false);
     }
 
     Link Current() { lock (linkGate) { return current; } }
@@ -1411,6 +1423,181 @@ public class AppWindows : Form
         if (seq == 0) LayoutStep();
         link.SendLayout(lastLayout);
         if (desktopKind != "normal") link.Send(DesktopLine());
+        lastDisplay = DisplayLine();
+        link.Send(lastDisplay);
+    }
+
+    // ================================================================ Windows' scale and the screen the windows need
+    // Windows has one scale for its one monitor. The host asks for a step ("scale"), and the helper sets it live with the undocumented
+    // DisplayConfigSetDeviceInfo type -4 (what Settings uses; no rights needed), which takes the step relative to the step Windows
+    // recommends for the monitor. The recommended step changes with the resolution, so the helper works in percentages and sets the
+    // percentage again after a change of mode. Only Windows' steps can be set live: a custom percentage takes a sign-out.
+    [StructLayout(LayoutKind.Sequential)] struct LUID { public uint Low; public int High; }
+    [StructLayout(LayoutKind.Sequential)] struct DcHeader { public int Type; public int Size; public LUID Adapter; public uint Id; }
+    [StructLayout(LayoutKind.Sequential)] struct DcDpiGet { public DcHeader H; public int Min, Cur, Max; }
+    [StructLayout(LayoutKind.Sequential)] struct DcDpiSet { public DcHeader H; public int Rel; }
+    [StructLayout(LayoutKind.Sequential)] struct DcPathSource { public LUID Adapter; public uint Id, ModeIdx, Flags; }
+    [StructLayout(LayoutKind.Sequential)] struct DcPathTarget { public LUID Adapter; public uint Id, ModeIdx; public int Tech, Rot, Scaling; public uint RateN, RateD; public int Order, Avail; public uint Flags; }
+    [StructLayout(LayoutKind.Sequential)] struct DcPath { public DcPathSource S; public DcPathTarget T; public uint Flags; }
+    [StructLayout(LayoutKind.Sequential)] struct DcMode { public int Type; public uint Id; public LUID Adapter; [MarshalAs(UnmanagedType.ByValArray, SizeConst = 48)] public byte[] Data; }
+    [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
+    [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint np, [Out] DcPath[] p, ref uint nm, [Out] DcMode[] m, IntPtr topology);
+    [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(ref DcDpiGet g);
+    [DllImport("user32.dll")] static extern int DisplayConfigSetDeviceInfo(ref DcDpiSet s);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+    [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
+    const int QDC_ONLY_ACTIVE_PATHS = 2, DC_GET_DPI_SCALE = -3, DC_SET_DPI_SCALE = -4, WM_DPICHANGED = 0x02E0;
+    static readonly int[] DpiSteps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
+
+    int wantedPercent;                          // the step the host asked for last, set again after a change of mode
+    int modeW, modeH;                           // the screen's size when the scale was last looked after
+    int floorW, floorH, ceilW, ceilH;           // from the host's "screen": the smallest and largest screen it wants
+    string lastDisplay = "";
+
+    static bool FirstPath(out DcPath path)
+    {
+        path = new DcPath();
+        uint np, nm;
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out np, out nm) != 0 || np == 0) return false;
+        DcPath[] paths = new DcPath[np]; DcMode[] modes = new DcMode[nm];
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref np, paths, ref nm, modes, IntPtr.Zero) != 0 || np == 0) return false;
+        path = paths[0];
+        return true;
+    }
+
+    // Windows' percentage now, from the monitor (the helper is per-monitor aware). GetDpiForSystem keeps the one of sign-in, and the
+    // overlay's own DPI follows a change only once its WM_DPICHANGED has come.
+    int PercentNow()
+    {
+        uint x, y;
+        if (GetDpiForMonitor(MonitorFromWindow(Handle, 1), 0, out x, out y) != 0) x = GetDpiForWindow(Handle);
+        return (int)Math.Round(x * 100.0 / 96.0);
+    }
+
+    // The steps Windows offers now, from the smallest; empty when DisplayConfig does not say.
+    List<int> OfferedSteps(out int recommendedIndex)
+    {
+        List<int> offered = new List<int>();
+        recommendedIndex = -1;
+        DcPath path;
+        if (!FirstPath(out path)) return offered;
+        DcDpiGet g = new DcDpiGet();
+        g.H.Type = DC_GET_DPI_SCALE; g.H.Size = Marshal.SizeOf(typeof(DcDpiGet)); g.H.Adapter = path.S.Adapter; g.H.Id = path.S.Id;
+        if (DisplayConfigGetDeviceInfo(ref g) != 0) return offered;
+        int current = Array.IndexOf(DpiSteps, PercentNow());
+        if (current < 0) return offered;        // a custom percentage: no step to count from
+        recommendedIndex = current - g.Cur;
+        for (int rel = g.Min; rel <= g.Max; rel++)
+        {
+            int i = recommendedIndex + rel;
+            if (i >= 0 && i < DpiSteps.Length) offered.Add(DpiSteps[i]);
+        }
+        return offered;
+    }
+
+    // Sets Windows' scale to a step it offers. Null when it took it, else why not.
+    string SetScale(int percent)
+    {
+        int recommended;
+        List<int> offered = OfferedSteps(out recommended);
+        if (!offered.Contains(percent)) return "Windows does not offer " + percent + " % at this resolution (it offers " + string.Join(",", offered) + ")";
+        if (PercentNow() == percent) return null;
+        DcPath path;
+        if (!FirstPath(out path)) return "no display path";
+        DcDpiSet set = new DcDpiSet();
+        set.H.Type = DC_SET_DPI_SCALE; set.H.Size = Marshal.SizeOf(typeof(DcDpiSet)); set.H.Adapter = path.S.Adapter; set.H.Id = path.S.Id;
+        set.Rel = Array.IndexOf(DpiSteps, percent) - recommended;
+        int result = DisplayConfigSetDeviceInfo(ref set);
+        return result == 0 ? null : "Windows refused the scale, error " + result;
+    }
+
+    // The smallest screen, within the host's floor and ceiling, that holds every window at its own size with none overflowing:
+    // the windows (tallest first) are stacked in columns as high as the screen less the taskbar, and the columns stand side by side.
+    // Null until the host has said its floor.
+    string NeedJson()
+    {
+        if (floorW <= 0 || floorH <= 0) return null;
+        int taskbar = Math.Max(0, ovH - (packB - packT));
+        List<int[]> sizes = new List<int[]>();
+        int tallest = 0;
+        foreach (Cell c in cells.Values)
+        {
+            if (!c.Active || c.Popup || c.Iconic) continue;
+            int w = c.SrcW - c.InL - c.InR, h = c.SrcH - c.InT - c.InB;
+            if (w <= 0 || h <= 0) continue;
+            sizes.Add(new int[] { w, h });
+            tallest = Math.Max(tallest, h);
+        }
+        int needH = Math.Max(floorH, tallest + taskbar);
+        if (ceilH > 0) needH = Math.Min(needH, ceilH);
+        int room = Math.Max(1, needH - taskbar);
+        sizes.Sort(delegate(int[] a, int[] b) { return b[1].CompareTo(a[1]); });
+        int width = 0, columnW = 0, columnH = 0;
+        foreach (int[] size in sizes)
+        {
+            if (columnH > 0 && columnH + size[1] > room) { width += columnW; columnW = 0; columnH = 0; }
+            columnW = Math.Max(columnW, size[0]); columnH += size[1];
+        }
+        width += columnW;
+        int needW = Math.Max(floorW, width);
+        if (ceilW > 0) needW = Math.Min(needW, ceilW);
+        return "{\"w\":" + I(needW & ~1) + ",\"h\":" + I(needH & ~1) + "}";
+    }
+
+    string DisplayLine()
+    {
+        int recommended;
+        List<int> offered = OfferedSteps(out recommended);
+        StringBuilder sb = new StringBuilder("{\"t\":\"display\",\"scale\":" + I(PercentNow()) + ",\"steps\":[");
+        for (int i = 0; i < offered.Count; i++) { if (i > 0) sb.Append(','); sb.Append(I(offered[i])); }
+        sb.Append(']');
+        string need = NeedJson();
+        if (need != null) sb.Append(",\"need\":").Append(need);
+        return sb.Append('}').ToString();
+    }
+
+    // Sends the display line when anything in it changed, after each layout.
+    void DisplayStep(bool always)
+    {
+        string line = DisplayLine();
+        if (line == lastDisplay && !always) return;
+        lastDisplay = line;
+        Link link = Current();
+        if (link != null) link.Send(line);
+    }
+
+    // A change of mode can change the step Windows recommends, and with it the percentage a relative step means.
+    void KeepScale()
+    {
+        // A change of scale sends WM_DISPLAYCHANGE too: only a new size is a change of mode.
+        if (ovW == modeW && ovH == modeH) return;
+        modeW = ovW; modeH = ovH;
+        if (wantedPercent <= 0 || PercentNow() == wantedPercent) return;
+        string why = SetScale(wantedPercent);
+        if (why != null) LogError(new Exception("scale " + wantedPercent + " after a change of mode: " + why));
+    }
+
+    void OnScaleRequest(Link link, long n, Dictionary<string, object> r)
+    {
+        int percent = (int)Num(r, "percent", 0);
+        string why = SetScale(percent);
+        if (why == null) { wantedPercent = percent; modeW = ovW; modeH = ovH; }
+        Answer(link, n, why == null, why);
+        scanDue = true; Kick();
+        DisplayStep(true);
+    }
+
+    void OnScreenRequest(Link link, long n, Dictionary<string, object> r)
+    {
+        Dictionary<string, object> floor = r.ContainsKey("floor") ? r["floor"] as Dictionary<string, object> : null;
+        Dictionary<string, object> ceiling = r.ContainsKey("ceiling") ? r["ceiling"] as Dictionary<string, object> : null;
+        if (floor == null) { Answer(link, n, false, "screen needs a floor"); return; }
+        modeW = ovW; modeH = ovH;
+        floorW = (int)Num(floor, "w", 0); floorH = (int)Num(floor, "h", 0);
+        ceilW = ceiling != null ? (int)Num(ceiling, "w", 0) : 0; ceilH = ceiling != null ? (int)Num(ceiling, "h", 0) : 0;
+        Answer(link, n, true, null);
+        DisplayStep(true);
     }
 
     // ================================================================ Requests
@@ -1452,7 +1639,7 @@ public class AppWindows : Form
         {
             string kind = Str(r, "t");
             // A side connection looks and starts programs. What changes a window belongs to the driving connection.
-            if (link.Side && (kind == "focus" || kind == "minimize" || kind == "restore" || kind == "resize" || kind == "close"))
+            if (link.Side && (kind == "focus" || kind == "minimize" || kind == "restore" || kind == "resize" || kind == "close" || kind == "scale" || kind == "screen"))
             {
                 Answer(link, n, false, "a side connection cannot " + kind + " a window");
                 return;
@@ -1467,6 +1654,8 @@ public class AppWindows : Form
                 case "close": CloseWindow(link, n, r); break;
                 case "launch": Launch(link, n, r); break;
                 case "apps": Apps(link, n, Str(r, "icons") != "False"); break;
+                case "scale": OnScaleRequest(link, n, r); break;
+                case "screen": OnScreenRequest(link, n, r); break;
                 default: Answer(link, n, false, "this helper does not know the request " + Str(r, "t")); break;
             }
         }

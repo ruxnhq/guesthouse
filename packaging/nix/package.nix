@@ -58,7 +58,7 @@ let
     procps
     curl
   ];
-  version = "0.9.0";
+  version = "0.10.0";
   # One folder for everything the app finds by where its own program is, as it does with the guest files.
   home = "$out/lib/guesthouse";
   # The macOS part, which other installs fetch the first time a Mac is made. Its programs are built for
@@ -76,7 +76,7 @@ stdenvNoCC.mkDerivation {
 
   src = fetchurl {
     url = "https://github.com/ruxnhq/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
-    hash = "sha256-5qIKBZ5pu4ePlfNacf1vyxzXe9o8sbv2PDIJUbk0Pr4=";
+    hash = "sha256-SqXyxMwv1Hf0j52Cag7F+16QIiJNfEN/1jentbIo5m4=";
   };
   sourceRoot = "guesthouse-${version}-x86_64";
 

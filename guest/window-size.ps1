@@ -40,9 +40,24 @@ public static class Session {
   // back notifications while an app is fullscreen, borderless or exclusive.
   const int Busy = 2, Direct3DFullscreen = 3;
   [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+  [StructLayout(LayoutKind.Sequential)] struct Rect { public int L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public Rect Monitor, Work; public int Flags; }
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out Rect r);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+  [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MonitorInfo info);
+  // Busy is also what Windows says while the app windows helper's overlay, a topmost window over the
+  // whole screen that never takes the foreground, is up. So busy counts only when the foreground
+  // window itself covers its monitor, as a game in borderless fullscreen does.
   public static bool AppFullscreen() {
     int state;
-    return SHQueryUserNotificationState(out state) == 0 && (state == Busy || state == Direct3DFullscreen);
+    if (SHQueryUserNotificationState(out state) != 0) return false;
+    if (state == Direct3DFullscreen) return true;
+    if (state != Busy) return false;
+    IntPtr front = GetForegroundWindow();
+    Rect r; MonitorInfo info = new MonitorInfo(); info.Size = Marshal.SizeOf(typeof(MonitorInfo));
+    if (front == IntPtr.Zero || !GetWindowRect(front, out r) || !GetMonitorInfo(MonitorFromWindow(front, 2), ref info)) return true;
+    return r.L <= info.Monitor.L && r.T <= info.Monitor.T && r.R >= info.Monitor.R && r.B >= info.Monitor.B;
   }
 }
 public static class Screen {

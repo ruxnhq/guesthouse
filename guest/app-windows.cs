@@ -439,8 +439,9 @@ public class AppWindows : Form
         {
             // A larger screen may have room for an overflow cell, and a window cut to the old screen gets its whole size back.
             c.CellW = Math.Min(c.SrcW > 0 ? c.SrcW - c.InL - c.InR : c.CellW, ovW); c.CellH = Math.Min(c.SrcH > 0 ? c.SrcH - c.InT - c.InB : c.CellH, ovH);
-            if (c.Overflow) c.Placed = false;
-            if (c.Placed && !c.Overflow && (c.X + c.CellW > packR || c.Y + c.CellH > packB)) c.Placed = false;
+            // Every window is placed again, in order, so the packing is the one the need was worked out for.
+            if (!c.Popup) c.Placed = false;
+            if (c.Placed && (c.X + c.CellW > packR || c.Y + c.CellH > packB)) c.Placed = false;
             c.ThumbDirty = true;
         }
         scanDue = true; Kick();
@@ -1528,36 +1529,65 @@ public class AppWindows : Form
         return result == 0 ? null : "Windows refused the scale, error " + result;
     }
 
-    // The smallest screen, within the host's floor and ceiling, that holds every window at its own size with none overflowing:
-    // the windows (tallest first) are stacked in columns as high as the screen less the taskbar, and the columns stand side by side.
-    // Null until the host has said its floor.
+    // Whether boxes of these sizes, in this order, all find a spot in a pack area of w x h, by the same rule as TrySpot: the first
+    // spot, top to bottom and left to right, among the corners next to boxes already placed.
+    static bool PacksInto(List<int[]> sizes, int w, int h)
+    {
+        List<int[]> placed = new List<int[]>();
+        foreach (int[] size in sizes)
+        {
+            List<int> xs = new List<int>(); List<int> ys = new List<int>();
+            xs.Add(0); ys.Add(0);
+            foreach (int[] b in placed) { xs.Add(b[0] + b[2]); ys.Add(b[1] + b[3]); }
+            xs.Sort(); ys.Sort();
+            bool found = false;
+            foreach (int y in ys)
+            {
+                if (y + size[1] > h) break;
+                foreach (int x in xs)
+                {
+                    if (x + size[0] > w) break;
+                    bool hit = false;
+                    foreach (int[] b in placed) if (Hit(x, y, size[0], size[1], b[0], b[1], b[2], b[3])) { hit = true; break; }
+                    if (!hit) { placed.Add(new int[] { x, y, size[0], size[1] }); found = true; break; }
+                }
+                if (found) break;
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    // The smallest screen, within the host's floor and ceiling, that holds every window at its own size with none overflowing,
+    // packed as the helper packs them after a change of mode (every cell placed again, in order). The height is the floor's, or
+    // the tallest window's; the width grows from the floor in steps of 16 until all fit. Null until the host has said its floor.
     string NeedJson()
     {
         if (floorW <= 0 || floorH <= 0) return null;
-        int taskbar = Math.Max(0, ovH - (packB - packT));
-        List<int[]> sizes = new List<int[]>();
-        int tallest = 0;
+        int taskbarH = Math.Max(0, ovH - (packB - packT)), taskbarW = Math.Max(0, ovW - (packR - packL));
+        List<Cell> order = new List<Cell>();
         foreach (Cell c in cells.Values)
         {
             if (!c.Active || c.Popup || c.Iconic) continue;
-            int w = c.SrcW - c.InL - c.InR, h = c.SrcH - c.InT - c.InB;
-            if (w <= 0 || h <= 0) continue;
-            sizes.Add(new int[] { w, h });
-            tallest = Math.Max(tallest, h);
+            // A maximized or screen-sized window takes the screen it is given, and the floor is a monitor's worth:
+            // counting it would make the screen grow to the ceiling and stay there.
+            if (IsZoomed(c.Src) || CoversScreen(c)) continue;
+            if (c.SrcW - c.InL - c.InR <= 0 || c.SrcH - c.InT - c.InB <= 0) continue;
+            order.Add(c);
         }
-        int needH = Math.Max(floorH, tallest + taskbar);
-        if (ceilH > 0) needH = Math.Min(needH, ceilH);
-        int room = Math.Max(1, needH - taskbar);
-        sizes.Sort(delegate(int[] a, int[] b) { return b[1].CompareTo(a[1]); });
-        int width = 0, columnW = 0, columnH = 0;
-        foreach (int[] size in sizes)
+        order.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
+        List<int[]> sizes = new List<int[]>();
+        int tallest = 0, widest = 0;
+        foreach (Cell c in order)
         {
-            if (columnH > 0 && columnH + size[1] > room) { width += columnW; columnW = 0; columnH = 0; }
-            columnW = Math.Max(columnW, size[0]); columnH += size[1];
+            int w = c.SrcW - c.InL - c.InR, h = c.SrcH - c.InT - c.InB + Label;
+            sizes.Add(new int[] { w, h });
+            tallest = Math.Max(tallest, h); widest = Math.Max(widest, w);
         }
-        width += columnW;
-        int needW = Math.Max(floorW, width);
-        if (ceilW > 0) needW = Math.Min(needW, ceilW);
+        int maxW = ceilW > 0 ? ceilW : 7680, maxH = ceilH > 0 ? ceilH : 4320;
+        int needH = Math.Min(Math.Max(floorH, tallest + taskbarH), maxH);
+        int needW = Math.Min(Math.Max(floorW, widest + taskbarW), maxW);
+        while (needW < maxW && !PacksInto(sizes, needW - taskbarW, needH - taskbarH)) needW = Math.Min(maxW, needW + 16);
         return "{\"w\":" + I(needW & ~1) + ",\"h\":" + I(needH & ~1) + "}";
     }
 

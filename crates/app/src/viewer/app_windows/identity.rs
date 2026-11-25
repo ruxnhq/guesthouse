@@ -22,7 +22,8 @@ use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::machine::Machine;
 use guesthouse_app_core::text::base64_decode;
 use guesthouse_daemon::slot::Slot;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The viewer's one identity of programs, set at its start.
@@ -77,16 +78,32 @@ pub fn app_id_for(cell: &Cell) -> Option<String> {
     IDENTITY.get()?.app_id_for(cell)
 }
 
-/// Gives the window the app id once its surface is mapped.
+thread_local! {
+    /// The app id each toplevel has now, by its address: the one it was opened with, or the one
+    /// `set_now` gave it since, which a later map gives it again.
+    static CURRENT: RefCell<HashMap<usize, String>> = RefCell::default();
+}
+
+fn window_key(window: &gtk::Window) -> usize {
+    window.as_ptr() as usize
+}
+
+/// Gives the window the app id once its surface is mapped, and the one it has then each time it is
+/// mapped again.
 pub fn set_when_mapped(window: &gtk::Window, id: &str) {
     super::published::add(window, id);
-    let id = id.to_owned();
+    let address = window_key(window);
+    CURRENT.with(|current| current.borrow_mut().insert(address, id.to_owned()));
+    window.connect_destroy(move |_| {
+        CURRENT.with(|current| current.borrow_mut().remove(&address));
+    });
     let hook = move |window: &gtk::Window| {
         let Some(surface) = window.surface() else { return };
         let apply = {
-            let id = id.clone();
             move |surface: &gtk::gdk::Surface| {
+                let id = CURRENT.with(|current| current.borrow().get(&address).cloned());
                 if surface.is_mapped()
+                    && let Some(id) = id
                     && let Some(top) = surface.downcast_ref::<WaylandToplevel>()
                 {
                     top.set_application_id(&id);
@@ -106,6 +123,11 @@ pub fn set_when_mapped(window: &gtk::Window, id: &str) {
 /// Gives an already mapped window another app id, as its program turned out to be another.
 pub fn set_now(window: &gtk::Window, id: &str) {
     super::published::change(window, id);
+    CURRENT.with(|current| {
+        if let Some(now) = current.borrow_mut().get_mut(&window_key(window)) {
+            id.clone_into(now);
+        }
+    });
     if let Some(surface) = window.surface()
         && surface.is_mapped()
         && let Some(top) = surface.downcast_ref::<WaylandToplevel>()

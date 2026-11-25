@@ -154,6 +154,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `remote-desktop` | on or off | Windows |
 | `app-windows` | on or off: whether the machine gets a way in for the app windows helper, and the commands `windows` and `app` work. It counts from the next start. | Windows |
 | `ssh` | on or off | Windows |
+| `vendor-id` | `retry`: a machine kept on Microsoft's vendor ID after starts without its GPU has its card maker's tried again at the next start. Some games will not start on Microsoft's. It can be said at any time. | Windows |
 
 These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop`, `ssh` and `app-windows`. `app-windows` can be changed at any time, and a running machine has it from its next start. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 

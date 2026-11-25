@@ -110,9 +110,11 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
                              dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh,
                              app-windows, auto-snapshot
-                             throwaway
+                             throwaway, vendor-id
                              only-through is an interface's name, such as wg0, or off. dns is an
-                             IPv4 address, or auto
+                             IPv4 address, or auto. vendor-id takes retry: a Windows machine kept
+                             on Microsoft's vendor ID has its card maker's tried again at the next
+                             start
   forward MACHINE add|remove tcp|udp HOST GUEST
                              a port on this PC that reaches a port in the guest
 

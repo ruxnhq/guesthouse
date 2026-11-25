@@ -121,6 +121,10 @@ pub struct IdentityState {
     /// The vendor number of the package Windows holds.
     #[serde(default = "nvidia_vendor")]
     pub package_vendor: u16,
+    /// How many starts on the maker's number in a row have ended with Windows lacking its GPU. One
+    /// that gets its GPU there clears it.
+    #[serde(default)]
+    pub failed_checks: u32,
 }
 
 impl Default for IdentityState {
@@ -132,6 +136,7 @@ impl Default for IdentityState {
             note: String::new(),
             restart_due: false,
             package_vendor: nvidia_vendor(),
+            failed_checks: 0,
         }
     }
 }
@@ -146,6 +151,55 @@ impl IdentityState {
     pub fn problem(&self, up: bool) -> &str {
         if self.reason.is_empty() && up { &self.note } else { &self.reason }
     }
+
+    /// Whether the maker's number has failed its GPU check as often as it's tried by itself.
+    pub fn out_of_tries(&self) -> bool {
+        self.failed_checks >= CHECK_TRIES
+    }
+
+    /// Whether the machine is on Microsoft's number because a start on its maker's had no GPU.
+    pub fn fell_back(&self) -> bool {
+        self.shown == Shown::Microsoft && self.reason == FELL_BACK
+    }
+
+    /// What the machine's row says. A machine that stays on Microsoft's number for a reason is also
+    /// told what that costs, as the game that won't start says nothing about a vendor number.
+    pub fn row_text(&self, up: bool, machine: &Machine) -> String {
+        let said = self.problem(up);
+        if self.shown != Shown::Microsoft || self.reason.is_empty() {
+            return said.to_owned();
+        }
+        let maker = maker_name(machine);
+        let why = if !self.fell_back() {
+            said.to_owned()
+        } else if self.out_of_tries() {
+            format!(
+                "Windows started without its GPU on {maker}'s vendor ID {} times, so it stays on \
+                 Microsoft's. To try {maker}'s again: guesthouse-vm set {} vendor-id retry",
+                self.failed_checks, machine.id
+            )
+        } else {
+            format!(
+                "Windows started without its GPU on {maker}'s vendor ID, so it sees Microsoft's for now. \
+                 The next start tries {maker}'s again."
+            )
+        };
+        format!("{why} {NO_GAMES}")
+    }
+
+    /// For the user's own word to try the maker's number again: whatever kept the machine on
+    /// Microsoft's is forgotten, and the next start has Windows take the package afresh. It says
+    /// whether there was anything to forget.
+    pub fn try_again(&mut self) -> bool {
+        if self.shown == Shown::Maker {
+            return false;
+        }
+        let kept = !self.failed_script.is_empty() || self.failed_checks > 0 || !self.reason.is_empty();
+        self.failed_script.clear();
+        self.failed_checks = 0;
+        self.reason.clear();
+        kept
+    }
 }
 
 /// Where this machine's choice of identity is kept.
@@ -156,6 +210,12 @@ pub fn state_file(context: &Context, machine: &Machine) -> PathBuf {
 /// What a machine moved to Microsoft's number after a failed GPU check is told, and keeps as its
 /// reason.
 pub const FELL_BACK: &str = "The next start shows Windows Microsoft's vendor ID again.";
+/// How many starts in a row on the maker's number may end without the GPU before a machine stays on
+/// Microsoft's: the first, and one more try. A check can fail once on a guest that takes the number
+/// well at its next start, and each failed one costs the user a start, so it's two and no more.
+pub const CHECK_TRIES: u32 = 2;
+/// What a machine kept on Microsoft's number is told it costs.
+pub const NO_GAMES: &str = "Some games will not start while Windows sees Microsoft's vendor ID.";
 /// What an Intel machine is told instead.
 pub const STAYS_ON_INTEL: &str = "Windows keeps Intel's vendor ID, as Intel's Direct3D 12 driver doesn't open on \
                                   Microsoft's, and nothing would put Intel's back.";
@@ -187,12 +247,23 @@ fn undo_old_fall_back(state: &mut IdentityState, machine: &Machine) {
     }
 }
 
+/// Builds before the count of failed checks kept a machine on Microsoft's number after its first one,
+/// by naming the script as failed, until a build with another script. Such a machine has had one
+/// failed check, and gets the try that's left.
+fn count_old_fall_back(state: &mut IdentityState) {
+    if state.fell_back() && state.failed_checks == 0 && !state.failed_script.is_empty() {
+        state.failed_script.clear();
+        state.failed_checks = 1;
+    }
+}
+
 /// A file that's missing or bad says Microsoft's number, which always works. So does a package for
 /// another maker's number than this machine's, which the guest gets again for its own maker.
 pub fn read_state(context: &Context, machine: &Machine) -> IdentityState {
     let text = fs::read_to_string(state_file(context, machine)).unwrap_or_default();
     let mut state: IdentityState = serde_json::from_str(&text).unwrap_or_default();
     undo_old_fall_back(&mut state, machine);
+    count_old_fall_back(&mut state);
     if state.shown == Shown::Maker && state.package_vendor != maker_identity(machine).vendor {
         state.shown = Shown::Microsoft;
         state.restart_due = false;
@@ -321,5 +392,98 @@ mod tests {
             falls_back_after_failed_check(GpuMaker::Nvidia)
                 && !falls_back_after_failed_check(GpuMaker::Intel)
         );
+    }
+
+    /// The file a machine was left with by 0.10.0 after one failed check.
+    const PINNED_BY_AN_EARLIER_BUILD: &str = r#"{"shown":"microsoft","failed_script":"0dc59626496a5133",
+        "reason":"The next start shows Windows Microsoft's vendor ID again.","note":"","restart_due":false,
+        "package_vendor":4318}"#;
+
+    fn nvidia_machine(context: &Context) -> Machine {
+        let machine = Machine::new("win", "Win", "/d", "/v");
+        fs::create_dir_all(machine.folder(context)).unwrap();
+        machine
+    }
+
+    #[test]
+    fn a_machine_an_earlier_build_pinned_after_one_failed_check_has_one_try_left() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let machine = nvidia_machine(&context);
+        fs::write(state_file(&context, &machine), PINNED_BY_AN_EARLIER_BUILD).unwrap();
+        let state = read_state(&context, &machine);
+        assert_eq!(
+            (state.shown, state.failed_script.as_str(), state.failed_checks),
+            (Shown::Microsoft, "", 1)
+        );
+        assert!(state.fell_back() && !state.out_of_tries());
+        let said = state.row_text(false, &machine);
+        assert!(said.contains("The next start tries NVIDIA's again.") && said.ends_with(NO_GAMES), "{said}");
+    }
+
+    #[test]
+    fn a_script_that_could_not_make_the_package_stays_named_as_failed() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let machine = nvidia_machine(&context);
+        let refused = IdentityState {
+            failed_script: "abc".into(),
+            reason: "Windows keeps Microsoft's vendor ID. Why.".into(),
+            ..IdentityState::default()
+        };
+        write_state(&context, &machine, &refused).unwrap();
+        assert_eq!(read_state(&context, &machine), refused);
+        assert_eq!(
+            refused.row_text(true, &machine),
+            format!("Windows keeps Microsoft's vendor ID. Why. {NO_GAMES}")
+        );
+    }
+
+    #[test]
+    fn a_machine_out_of_tries_is_told_how_to_try_again_and_what_it_costs() {
+        let machine = Machine::new("win", "Win", "/d", "/v");
+        let stuck = IdentityState {
+            failed_script: "abc".into(),
+            reason: FELL_BACK.into(),
+            failed_checks: CHECK_TRIES,
+            ..IdentityState::default()
+        };
+        assert!(stuck.out_of_tries());
+        assert_eq!(
+            stuck.row_text(false, &machine),
+            format!(
+                "Windows started without its GPU on NVIDIA's vendor ID 2 times, so it stays on Microsoft's. \
+                 To try NVIDIA's again: guesthouse-vm set win vendor-id retry {NO_GAMES}"
+            )
+        );
+    }
+
+    #[test]
+    fn a_machine_on_its_makers_number_or_with_nothing_wrong_is_told_nothing_about_games() {
+        let machine = Machine::new("win", "Win", "/d", "/v");
+        let fine = IdentityState { shown: Shown::Maker, note: "later".into(), ..IdentityState::default() };
+        assert_eq!(
+            (fine.row_text(true, &machine), fine.row_text(false, &machine)),
+            ("later".into(), String::new())
+        );
+        let waiting = IdentityState { note: "next start".into(), ..IdentityState::default() };
+        assert_eq!(waiting.row_text(true, &machine), "next start", "about to move, with no reason to stay");
+        assert_eq!(IdentityState::default().row_text(true, &machine), "");
+    }
+
+    #[test]
+    fn trying_again_forgets_what_kept_the_machine_on_microsofts_number() {
+        let mut stuck = IdentityState {
+            failed_script: "abc".into(),
+            reason: FELL_BACK.into(),
+            failed_checks: CHECK_TRIES,
+            ..IdentityState::default()
+        };
+        assert!(stuck.try_again());
+        assert_eq!(stuck, IdentityState::default());
+        assert!(!stuck.try_again(), "nothing is left to forget");
+        let mut settled = IdentityState { shown: Shown::Maker, ..IdentityState::default() };
+        assert!(!settled.try_again());
+        assert_eq!(settled.shown, Shown::Maker);
     }
 }

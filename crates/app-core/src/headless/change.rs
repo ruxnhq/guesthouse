@@ -6,7 +6,7 @@ use super::run_task;
 use crate::context::Context;
 use crate::display::{Driver, DriverPackage, forget_note, read_state};
 use crate::failure::{Failure, Result};
-use crate::gpu_identity::{Shown, maker_name, read_state as read_identity};
+use crate::gpu_identity::{Shown, maker_name, read_state as read_identity, write_state as write_identity};
 use crate::gpu_maker::GpuMaker;
 use crate::limits::{cores_range, ram_field};
 use crate::machine::{Kind, Machine, SCREENS, read_refresh};
@@ -23,7 +23,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 20] = [
+const SETTINGS: [&str; 21] = [
     "cores",
     "ram",
     "vram",
@@ -44,6 +44,7 @@ const SETTINGS: [&str; 20] = [
     "app-windows",
     "auto-snapshot",
     "throwaway",
+    "vendor-id",
 ];
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
@@ -103,6 +104,22 @@ fn apply_display(context: &Context, machine: &Machine, out: &mut dyn Write) -> R
         run_task(context, machine, "apply_display", true, out)?;
     }
     Ok(())
+}
+
+/// `vendor-id retry`: a machine kept on Microsoft's number gets its maker's tried again at its next
+/// start. The number itself is not the user's to pick, as only those two can work.
+fn try_vendor_again(context: &Context, machine: &Machine, value: &str, out: &mut dyn Write) -> Result<()> {
+    if !value.eq_ignore_ascii_case("retry") {
+        return Err(Failure("vendor-id takes retry.".to_owned()));
+    }
+    let maker = maker_name(machine);
+    let mut identity = read_identity(context, machine);
+    if identity.shown == Shown::Maker {
+        return Ok(writeln!(out, "Windows is already shown {maker}'s vendor ID.")?);
+    }
+    identity.try_again();
+    write_identity(context, machine, &identity)?;
+    Ok(writeln!(out, "The next start tries {maker}'s vendor ID again.")?)
 }
 
 fn said(out: &mut dyn Write, key: &str, value: &str) -> Result<()> {
@@ -244,6 +261,10 @@ pub(super) fn set(
             let address = if value.eq_ignore_ascii_case("auto") { "" } else { value };
             set_dns(context, &mut machine, address)?;
             return said(out, key, value);
+        }
+        "vendor-id" => {
+            only_for_windows(&machine, key)?;
+            return try_vendor_again(context, &machine, value, out);
         }
         "throwaway" => {
             crate::throwaway::set_throwaway(context, &mut machine, on_or_off(key, value)?)?;

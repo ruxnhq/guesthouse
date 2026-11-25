@@ -226,7 +226,7 @@ pub fn status_since(context: &Context, machine: &Machine, before: Option<(u8, Se
         let shown = read_state(context, machine);
         found.display_problem = shown.problem(found.state == State::Running).to_owned();
         let identity = read_identity(context, machine);
-        found.identity_note = identity.problem(found.state == State::Running).to_owned();
+        found.identity_note = identity.row_text(found.state == State::Running, machine);
         found.token_note = crate::token_change::refused_note(context, machine).unwrap_or_default();
         if found.state == State::Off && !found.busy {
             found.restore_point = restore_point(context, machine);

@@ -170,25 +170,130 @@ fn a_failed_gpu_start_on_nvidias_number_goes_back_to_microsofts() {
     let state = IdentityState { shown: Shown::Maker, restart_due: true, ..IdentityState::default() };
     write_state(&rig.context, &rig.machine, &state).unwrap();
     let said = after_failed_gpu(&task, Failure::new("no GPU"));
-    assert_eq!(said.0, format!("no GPU {FELL_BACK}"));
+    assert_eq!(said.0, format!("no GPU {FELL_BACK} That start then tries NVIDIA's once more."));
     let state = rig.state();
     assert_eq!(state.shown, Shown::Microsoft);
     assert_eq!(state.reason, FELL_BACK);
     assert!(!state.restart_due);
+    assert_eq!(
+        (state.failed_checks, state.failed_script.as_str()),
+        (1, ""),
+        "one check is not the script's end"
+    );
+}
+
+/// A start on the maker's number that ended without the GPU.
+fn fail_a_check(rig: &Rig) -> String {
+    let host = RecordingHost::default();
+    let task = Task::new(&rig.context, &host, "start", rig.machine.clone());
+    let mut state = rig.state();
+    state.shown = Shown::Maker;
+    state.restart_due = true;
+    write_state(&rig.context, &rig.machine, &state).unwrap();
+    after_failed_gpu(&task, Failure::new("no GPU")).0
 }
 
 #[test]
-fn a_package_that_cost_a_start_is_not_staged_again() {
+fn a_package_that_cost_one_start_is_staged_once_more() {
     let scratch = Scratch::new();
     let rig = Rig::new(&scratch, true, &[STAGED]);
-    let host = RecordingHost::default();
-    let task = Task::new(&rig.context, &host, "start", rig.machine.clone());
-    let state = IdentityState { shown: Shown::Maker, restart_due: true, ..IdentityState::default() };
-    write_state(&rig.context, &rig.machine, &state).unwrap();
-    after_failed_gpu(&task, Failure::new("no GPU"));
+    fail_a_check(&rig);
+    let try_two = will_stage(&rig.context, &rig.machine).unwrap();
+    assert!(try_two.ends_with(":try-2"), "a snapshot before it is its own: {try_two}");
     assert_eq!(rig.boot(), "");
-    assert!(rig.asked().is_empty(), "the next start stays on Microsoft's number");
+    assert_eq!(rig.asked().len(), 1, "the next start has Windows take the package again");
+    let state = rig.state();
+    assert_eq!((state.shown, state.reason.as_str()), (Shown::Maker, ""));
+    assert!(state.restarts_windows());
+    assert_eq!(state.failed_checks, 1, "kept until a check on the maker's number has passed");
+    assert_eq!(shown_identity(&rig.context, &rig.machine), NVIDIA_RENDER);
+}
+
+#[test]
+fn a_check_that_passes_on_the_makers_number_clears_the_count() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &[STAGED]);
+    fail_a_check(&rig);
+    assert_eq!(rig.boot(), "");
+    // The next call is the one after the new VM's check and Windows' restart have passed.
+    assert_eq!(rig.boot(), "");
+    assert_eq!(
+        rig.state(),
+        IdentityState { shown: Shown::Maker, restart_due: true, ..IdentityState::default() }
+    );
+    assert_eq!(fail_a_check(&rig), format!("no GPU {FELL_BACK} That start then tries NVIDIA's once more."));
+    assert_eq!(rig.state().failed_checks, 1, "a failure long after is the first again");
+}
+
+#[test]
+fn a_package_that_cost_two_starts_in_a_row_is_not_staged_again() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &[STAGED, STAGED, STAGED]);
+    fail_a_check(&rig);
+    assert_eq!(rig.boot(), "");
+    let said = fail_a_check(&rig);
+    assert_eq!(
+        said,
+        format!("no GPU {FELL_BACK} It stays there, as NVIDIA's has now failed 2 times in a row.")
+    );
+    let state = rig.state();
+    assert!(state.out_of_tries() && !state.failed_script.is_empty());
+    assert_eq!(will_stage(&rig.context, &rig.machine), None, "no snapshot for a start that changes nothing");
+    for _ in 0..3 {
+        assert_eq!(rig.boot(), "");
+    }
+    assert_eq!(rig.asked().len(), 1, "every later start stays on Microsoft's number");
+    assert_eq!(rig.state(), state);
     assert_eq!(shown_identity(&rig.context, &rig.machine), MICROSOFT_RENDER);
+}
+
+#[test]
+fn a_new_builds_script_gets_its_own_tries_after_the_old_one_ran_out() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &[STAGED, STAGED]);
+    fail_a_check(&rig);
+    assert_eq!(rig.boot(), "");
+    fail_a_check(&rig);
+    scratch.write("program/guest/gpu-identity.ps1", "make the package another way");
+    assert!(will_stage(&rig.context, &rig.machine).is_some());
+    assert_eq!(rig.boot(), "");
+    let state = rig.state();
+    assert_eq!((state.shown, state.failed_checks, state.failed_script.as_str()), (Shown::Maker, 0, ""));
+}
+
+#[test]
+fn the_users_word_gets_the_number_tried_again_after_the_tries_ran_out() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &[STAGED, STAGED]);
+    fail_a_check(&rig);
+    assert_eq!(rig.boot(), "");
+    fail_a_check(&rig);
+    let mut state = rig.state();
+    assert!(state.try_again());
+    write_state(&rig.context, &rig.machine, &state).unwrap();
+    assert_eq!(rig.boot(), "");
+    assert_eq!(rig.asked().len(), 2);
+    assert_eq!(rig.state().shown, Shown::Maker);
+}
+
+#[test]
+fn a_machine_an_earlier_build_pinned_after_one_failed_check_is_staged_again() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, true, &[STAGED]);
+    let pinned = IdentityState {
+        failed_script: script_id(SCRIPT_TEXT),
+        reason: FELL_BACK.into(),
+        ..IdentityState::default()
+    };
+    write_state(&rig.context, &rig.machine, &pinned).unwrap();
+    assert!(will_stage(&rig.context, &rig.machine).is_some());
+    assert_eq!(rig.boot(), "");
+    assert_eq!(rig.asked().len(), 1);
+    assert_eq!(shown_identity(&rig.context, &rig.machine), NVIDIA_RENDER);
+    assert_eq!(
+        fail_a_check(&rig),
+        format!("no GPU {FELL_BACK} It stays there, as NVIDIA's has now failed 2 times in a row.")
+    );
 }
 
 #[test]

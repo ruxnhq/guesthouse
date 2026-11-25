@@ -269,6 +269,11 @@ pub fn icon_of(context: &Context, app_id: &str) -> Option<Vec<u8>> {
     safe.then(|| fs::read(icon_file(context, app_id)).ok()).flatten().filter(|png| !png.is_empty())
 }
 
+/// Where the icon of an entry is saved, if it has one on this host now.
+pub fn icon_path(context: &Context, app_id: &str) -> Option<PathBuf> {
+    icon_of(context, app_id).map(|_| icon_file(context, app_id))
+}
+
 /// Writes a file whole or not at all, in the folder it is for.
 fn write_whole(file: &Path, data: &[u8]) -> Result<()> {
     let folder = file.parent().ok_or_else(|| Failure::new("A launcher file has no folder."))?;

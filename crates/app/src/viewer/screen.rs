@@ -43,7 +43,7 @@ const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
 
 /// Who is handed each frame when the screen has no window of its own.
 /// App windows: what is done with each frame, as its slot, and on each look whether one came or not.
-pub(super) struct TextureHandler {
+pub(super) struct SlotHandler {
     pub frame: Box<dyn Fn(HeldFrame, Option<u32>)>,
     pub tick: Box<dyn Fn()>,
 }
@@ -127,7 +127,7 @@ pub(super) struct Inner {
     /// App windows: this screen has no window of its own. It only owns the frames and the input, and
     /// hands each frame to whoever asked for them.
     pub(super) headless: Cell<bool>,
-    pub(super) on_texture: RefCell<Option<TextureHandler>>,
+    pub(super) on_slots: RefCell<Option<SlotHandler>>,
 }
 
 #[derive(Clone)]
@@ -228,7 +228,7 @@ impl Screen {
             followed_at: Cell::new(Instant::now()),
             title_drag: RefCell::default(),
             headless: Cell::new(false),
-            on_texture: RefCell::default(),
+            on_slots: RefCell::default(),
         }));
         this.add_input();
         this.connect_life();
@@ -492,8 +492,7 @@ impl Screen {
         self.0.headless.set(true);
         self.0.own_impossible.set(true);
         self.0.direct_frames.set(false);
-        *self.0.on_texture.borrow_mut() =
-            Some(TextureHandler { frame: Box::new(frame), tick: Box::new(tick) });
+        *self.0.on_slots.borrow_mut() = Some(SlotHandler { frame: Box::new(frame), tick: Box::new(tick) });
         if self.0.poll_source.borrow().is_some() {
             return;
         }
@@ -512,7 +511,7 @@ impl Screen {
             gpu.as_mut().map(|source| (source.newest_slot(), source.sdr_white_nits()))
         };
         self.follow_gpu_cursor();
-        let handler = self.0.on_texture.borrow();
+        let handler = self.0.on_slots.borrow();
         let Some(handler) = handler.as_ref() else { return };
         if let Some((Some(frame), sdr_white_nits)) = newest {
             self.0.booting.set(false);
@@ -533,7 +532,7 @@ impl Screen {
         if let Some(source) = self.0.poll_source.borrow_mut().take() {
             source.remove();
         }
-        *self.0.on_texture.borrow_mut() = None;
+        *self.0.on_slots.borrow_mut() = None;
         self.close_guest();
         self.0.gpu.borrow_mut().take();
         self.0.qemu.borrow_mut().take();

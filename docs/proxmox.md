@@ -16,6 +16,16 @@ A tester has run this on one host since 20 November 2026. This page says what ra
 
 The six patches in those packages are the `hw/hyperv` commits of `qemu/qemu-gpupv.patch` from 0.7.0. They're the same in 0.7.5. The first day ran on an earlier build with the same six patches, `11.1.3-2+virgl1+gpupv1`, which differed only in being built against virglrenderer 1.3.0 instead of Debian's 1.1.0. The table under [what ran](#what-ran) says which build each part ran on, where "both" means the two 11.1.3-2 builds. On `11.1.3-4+gpupv1` so far: both VMs started and stopped with `qm`, side by side, and its last row.
 
+## Checking a host
+
+```
+packaging/proxmox/guesthouse-pve.sh check
+```
+
+It runs as root and only reads. It says what the host has and lacks for a VM with the GPU, and then what to put right, in that order: a card that `vfio-pci` has or that its driver is kept off, Landlock with the `lsm=` line for the host's boot loader, the `pve-qemu-kvm` and what keeps it, a newer one from Proxmox, the user's groups, lingering and Guesthouse's GPU files, the packages for making a Windows guest and swtpm's AppArmor rules, and each VM's `args:`, `memory:` and file in `/etc/guesthouse/proxmox` against each other, as the hookscript checks them. `guesthouse-check`'s own lines come after the user's. It ends with 1 if something stops a VM or the making of its guest. `--report` prints the same without the names of users, the host and VMs, and without users' paths, for an issue.
+
+It has run on the host here, where it found nothing to put right, and on made-up hosts in `tests/proxmox/run.sh`.
+
 ## Why its own pve-qemu-kvm
 
 Proxmox starts every VM with `/usr/bin/qemu-system-x86_64` from its package `pve-qemu-kvm`, and a VM can't name another one. Proxmox's QEMU knows nothing of GPU-PV. Guesthouse's own QEMU has the devices, but none of Proxmox's patches: its backup, its machine types and the rest that `qemu-server` expects. And the devices can't be added from outside, as a VMBus device has to be inside QEMU's process, and Proxmox builds QEMU without modules.

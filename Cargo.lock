@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-app"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "async-channel",
  "gdk4-wayland",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-app-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend-intel",
  "guesthouse-backend-nvidia",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-app-windows"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-control",
  "windows-reactor",
@@ -934,14 +934,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-messages",
 ]
 
 [[package]]
 name = "guesthouse-backend-amd"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-messages",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-intel"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-nvidia"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-nvidia",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-standin"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-messages",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-card-check"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-nvidia",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-control"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-daemon"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-amd",
@@ -1032,14 +1032,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-frame-socket"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "rustix",
 ]
 
 [[package]]
 name = "guesthouse-guest-share"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-p9",
  "windows-sys 0.61.2",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-hcs"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-hcs-boot"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-hcs",
  "guesthouse-host-windows",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-host-windows"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-control",
  "guesthouse-hcs",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-installer-windows"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "lzma-rust2",
  "serde",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-jail"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -1100,22 +1100,22 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-messages"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "guesthouse-nvapi-shim"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "guesthouse-p9"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "guesthouse-replay"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -1127,14 +1127,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-sensors"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "guesthouse-service"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "guesthouse-control",
  "guesthouse-hcs",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-transport"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "hashbrown"

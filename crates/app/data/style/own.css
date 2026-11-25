@@ -114,6 +114,17 @@
   box-shadow: 0 0 0 2px @accent_bg_color;
 }
 
+.app-chip {
+  padding: 3px 10px 3px 7px;
+  border-radius: 999px;
+  background: alpha(@card_fg_color, 0.07);
+  font-size: 0.9em;
+}
+
+.app-chips flowboxchild {
+  padding: 0;
+}
+
 .machine-thumbnail {
   border-radius: 12px;
 }

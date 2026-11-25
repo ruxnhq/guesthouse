@@ -7,7 +7,9 @@
 use super::*;
 use guesthouse_app_core::agent::GuestAgent;
 use guesthouse_app_core::app_windows::launcher::{self, Program};
+use guesthouse_app_core::app_windows::open_windows::{self, OpenProgram};
 use guesthouse_app_core::app_windows::stand_in::{FakeHelper, Welcome};
+use guesthouse_app_core::app_windows::viewer_lock;
 use guesthouse_app_core::app_windows::{
     Caption, Cell as WindowCell, Layout, LinkSettings, Point, Rect, Size, State as WindowState, Timing,
     answer_line, forward_word, host_port,
@@ -209,6 +211,112 @@ fn programs_in_launcher(context: &Context, machine: &Machine) {
     }
 }
 
+fn open_program(name: &str, key: &str, windows: u32, shade: Option<u8>, folder: &Path) -> OpenProgram {
+    let icon = shade.map(|shade| {
+        let file = folder.join(format!("open-{}.png", name.replace(' ', "-")));
+        fs::write(&file, guesthouse_app_core::text::base64_decode(&icon(shade)).unwrap()).unwrap();
+        file
+    });
+    OpenProgram { key: key.into(), name: name.into(), windows, icon }
+}
+
+/// The machine's card in the Library with app windows open and without, as the viewer's file says.
+async fn card_states(
+    window: &Window,
+    context: &Arc<Context>,
+    machine: &MachineHandle,
+    folder: &Path,
+    failures: &Rc<Cell<u32>>,
+) {
+    let shots = |name: &str| format!("card-{name}");
+    let run = context.run_folder(None);
+    fs::create_dir_all(&run).unwrap();
+    let mut vm = vm_with(context, &machine.borrow(), false);
+    glib::timeout_future(LONG).await;
+    glib::timeout_future(LONG).await;
+    check(failures, shows(window, "Running.").await, "the stand-in machine runs");
+    check(failures, !text_of(window).contains("app window"), "no viewer, nothing said of app windows");
+    check(
+        failures,
+        !all_of::<gtk::Button>(window).iter().any(|b| b.label().as_deref() == Some("Open another app")),
+        "no chips and no button with nothing open",
+    );
+    shot_after_paint(window, folder, &shots("1-none")).await;
+
+    // A stale file with no viewer holding the lock counts for nothing.
+    open_windows::write_to(&run, &[open_program("Notepad", "notepad.exe", 1, None, folder)]).unwrap();
+    glib::timeout_future(LONG).await;
+    check(
+        failures,
+        !text_of(window).contains("app window"),
+        "a file left by a viewer that is gone is not shown",
+    );
+    open_windows::remove_from(&run).unwrap();
+
+    let lock = viewer_lock::take_in(&run).unwrap().expect("no viewer holds the lock here");
+    let edge = r"C:\Program Files\Edge\msedge.exe";
+    let say = |programs: Vec<OpenProgram>| open_windows::write_to(&run, &programs).unwrap();
+    say(vec![open_program("Notepad", "notepad.exe", 1, Some(90), folder)]);
+    check(failures, shows(window, "1 app window open.").await, "one window is said in the singular");
+    shot_after_paint(window, folder, &shots("2-one")).await;
+    shot_after_paint_of(&card_of(window), folder, &shots("2-one-card")).await;
+
+    say(vec![
+        open_program("Microsoft Edge", edge, 2, Some(30), folder),
+        open_program("Notepad", "notepad.exe", 1, Some(90), folder),
+        open_program("Paint", "mspaint.exe", 3, None, folder),
+    ]);
+    check(failures, shows(window, "6 app windows open.").await, "windows are counted over the programs");
+    shot_after_paint(window, folder, &shots("3-three")).await;
+    shot_after_paint_of(&card_of(window), folder, &shots("3-three-card")).await;
+
+    let many: Vec<OpenProgram> = (0..14u8)
+        .map(|n| {
+            let name = format!("Program number {n}");
+            open_program(&name, &format!("p{n}.exe"), u32::from(n % 3) + 1, Some(n * 17), folder)
+        })
+        .collect();
+    say(many);
+    glib::timeout_future(LONG).await;
+    glib::timeout_future(LONG).await;
+    shot_after_paint(window, folder, &shots("4-long-row")).await;
+    shot_after_paint_of(&card_of(window), folder, &shots("4-long-row-card")).await;
+
+    window.widget().set_default_size(420, 760);
+    glib::timeout_future(LONG).await;
+    shot_after_paint(window, folder, &shots("5-narrow")).await;
+    shot_after_paint_of(&card_of(window), folder, &shots("5-narrow-card")).await;
+    window.widget().set_default_size(1100, 760);
+    glib::timeout_future(LONG).await;
+
+    // The viewer ends: the file goes with it, and so do the chips.
+    open_windows::remove_from(&run).unwrap();
+    drop(lock);
+    glib::timeout_future(LONG).await;
+    check(failures, !text_of(window).contains("app window"), "the chips go when the viewer ends");
+
+    let lock = viewer_lock::take_in(&run).unwrap().unwrap();
+    say(vec![open_program("Notepad", "notepad.exe", 1, Some(90), folder)]);
+    check(failures, shows(window, "1 app window open.").await, "a viewer that comes again is shown");
+    check(failures, click(window, "Open another app"), "Open another app can be pressed");
+    check(
+        failures,
+        shows(window, "Show apps as their own windows").await,
+        "Open another app opens the Apps page of the machine",
+    );
+    close_dialogs(window).await;
+    open_windows::remove_from(&run).unwrap();
+    drop(lock);
+    stop(&mut vm);
+    glib::timeout_future(LONG).await;
+    glib::timeout_future(LONG).await;
+}
+
+fn card_of(window: &Window) -> gtk::Widget {
+    let boxes = all_of::<gtk::Box>(window);
+    boxes.iter().find(|b| b.has_css_class("machine-card")).expect("the card").clone().upcast()
+}
+
 pub async fn walk(window: Window, context: Arc<Context>, folder: PathBuf) {
     let failures = Rc::new(Cell::new(0));
     glib::timeout_future(LONG).await;
@@ -222,6 +330,7 @@ pub async fn walk(window: Window, context: Arc<Context>, folder: PathBuf) {
     };
     glib::timeout_future(LONG).await;
     let shots = |name: &str| format!("apps-{name}");
+    card_states(&window, &context, &machine, &folder, &failures).await;
     window.show_settings(machine.clone());
     glib::timeout_future(LONG).await;
     check(&failures, text_of(&window).contains("Apps"), "a Windows machine has an Apps page");

@@ -1,9 +1,10 @@
 //! The chosen machine at length, at the top of the library: its last screen behind its name, what
 //! it is, what there is to say about it, and everything that can be done to it now.
 
-use super::machine_card::MachineCard;
+use super::machine_card::{MachineCard, SCREEN_BUSY, SCREEN_LABEL, chip};
 use crate::rows::{icon_button, row_button};
 use adw::prelude::*;
+use guesthouse_app_core::app_windows::open_windows::OpenProgram;
 use guesthouse_app_core::tasks::State;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,6 +25,10 @@ struct Parts {
     kind: gtk::Label,
     specs: gtk::FlowBox,
     notes: gtk::Label,
+    /// What is open as app windows: a chip for each program, and the way to open another.
+    apps: gtk::FlowBox,
+    open_app: gtk::Button,
+    open: RefCell<Vec<OpenProgram>>,
     start: gtk::Button,
     show: gtk::Button,
     stop: gtk::Button,
@@ -88,10 +93,15 @@ impl Hero {
         let specs = wrapping_row();
         let notes = gtk::Label::builder().xalign(0.0).wrap(true).selectable(true).build();
         notes.add_css_class("hero-notes");
+        let apps = wrapping_row();
+        apps.add_css_class("app-chips");
+        apps.set_visible(false);
+        let open_app = row_button("Open another app");
+        open_app.add_css_class("flat");
         let actions = wrapping_row();
         let start = row_button("Start");
         start.add_css_class("suggested-action");
-        let show = row_button("Show Screen");
+        let show = row_button(SCREEN_LABEL);
         show.add_css_class("suggested-action");
         let stop = row_button("Shut Down");
         let force = row_button("Force Off");
@@ -112,7 +122,9 @@ impl Hero {
         for part in [chip.upcast_ref::<gtk::Widget>(), name.upcast_ref(), kind.upcast_ref()] {
             body.append(part);
         }
-        for part in [specs.upcast_ref::<gtk::Widget>(), notes.upcast_ref(), actions.upcast_ref()] {
+        for part in
+            [specs.upcast_ref::<gtk::Widget>(), apps.upcast_ref(), notes.upcast_ref(), actions.upcast_ref()]
+        {
             body.append(part);
         }
         let root = gtk::Overlay::builder()
@@ -135,6 +147,9 @@ impl Hero {
             kind,
             specs,
             notes,
+            apps,
+            open_app,
+            open: RefCell::default(),
             start,
             show,
             stop,
@@ -147,6 +162,7 @@ impl Hero {
         this.connect(&this.0.stop, MachineCard::shut_down);
         this.connect(&this.0.force, MachineCard::on_force);
         this.connect(&settings, MachineCard::show_settings);
+        this.connect(&this.0.open_app, MachineCard::open_apps_page);
         this
     }
 
@@ -201,6 +217,23 @@ impl Hero {
         parts.specs.set_visible(parts.specs.first_child().is_some());
     }
 
+    /// A chip for each program with windows open, made again only when that changes.
+    fn set_apps(&self, programs: &[OpenProgram]) {
+        let parts = &self.0;
+        if *parts.open.borrow() == programs && parts.apps.first_child().is_some() == !programs.is_empty() {
+            return;
+        }
+        *parts.open.borrow_mut() = programs.to_vec();
+        parts.apps.remove_all();
+        for program in programs {
+            parts.apps.append(&chip(program));
+        }
+        if !programs.is_empty() {
+            add_to(&parts.apps, &parts.open_app);
+        }
+        parts.apps.set_visible(!programs.is_empty());
+    }
+
     /// Puts the chosen machine's last screen behind the words. It's read from its file, so only
     /// when there may be a new one.
     pub fn show_picture(&self) {
@@ -229,9 +262,12 @@ impl Hero {
         set_shown(&parts.start, shown.is_off());
         parts.start.set_sensitive(shown.can_start);
         set_shown(&parts.show, shown.has_screen());
+        parts.show.set_sensitive(!card.screen_busy());
+        parts.show.set_label(if card.screen_busy() { SCREEN_BUSY } else { SCREEN_LABEL });
         set_shown(&parts.stop, shown.state == State::Running);
         parts.stop.set_sensitive(shown.can_stop);
         set_shown(&parts.force, !shown.is_off());
+        self.set_apps(&card.open_programs());
     }
 }
 

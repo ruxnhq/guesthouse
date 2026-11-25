@@ -34,7 +34,7 @@ use super::window_size::GuestSizer;
 use crate::application::{APP_ID, use_built_in_icons};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use guesthouse_app_core::app_windows::{connect, viewer_lock};
+use guesthouse_app_core::app_windows::{connect, is_on, modes, viewer_lock};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::host_sensors::sensors_file;
 use guesthouse_app_core::log::{log_panics, write_log};
@@ -114,10 +114,24 @@ pub fn run(request: Request) -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         }
     };
+    let _ = _lock.record_pid();
+    // A machine shows its screen or its app windows. With the screen open in the app these would take
+    // the connection from each other once a second.
+    if modes::screen_open(&context, slot).unwrap_or(false) {
+        let text = modes::screen_open_text(&machine);
+        eprintln!("{text}");
+        let _ = write_log(&context, &format!("app windows for {}: not started. {text}", machine.name));
+        return glib::ExitCode::SUCCESS;
+    }
     let run_folder = context.run_folder(Some(slot));
+    // The machine running, app windows still on for it, and the screen not open: what the viewer is for.
     let running = {
         let (context, machine) = (context.clone(), machine.clone());
-        move || slot_of(&context, &machine).is_some()
+        move || {
+            slot_of(&context, &machine).is_some()
+                && is_on(&context, &machine)
+                && !modes::screen_open_settled(&context, slot)
+        }
     };
     published::start(run_folder.clone());
     let code = run_with(context, machine, Some(slot), run_folder.clone(), running);

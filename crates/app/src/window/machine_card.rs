@@ -21,6 +21,9 @@ const HEADLINE_CHARS: i32 = 26;
 const CHIP_ICON: i32 = 18;
 const CHIP_SPACING: i32 = 6;
 const CHIP_GAP: u32 = 6;
+/// Show Screen, while the app windows that are open are being ended.
+pub const SCREEN_BUSY: &str = "Closing app windows...";
+pub const SCREEN_LABEL: &str = "Show Screen";
 const OPEN_APPS_LABEL: &str = "Open another app";
 
 /// One machine's settings, shared by the card and whatever page shows them.
@@ -74,6 +77,8 @@ pub struct MachineCard {
     shown: Rc<RefCell<Shown>>,
     parts: Rc<Parts>,
     open: Rc<RefCell<Vec<OpenProgram>>>,
+    /// The screen is being got ready, which can take a moment when app windows are open.
+    screen_busy: Rc<std::cell::Cell<bool>>,
 }
 
 fn card_button(label: &str) -> gtk::Button {
@@ -146,7 +151,7 @@ impl MachineCard {
         let spinner = gtk::Spinner::builder().spinning(true).visible(false).build();
         let start = card_button("Start");
         start.add_css_class("suggested-action");
-        let show = card_button("Show Screen");
+        let show = card_button(SCREEN_LABEL);
         let row = gtk::Box::builder().spacing(CARD_SPACING).build();
         row.append(&icon);
         row.append(&frame);
@@ -179,6 +184,7 @@ impl MachineCard {
             shown: Rc::default(),
             parts: Rc::new(parts),
             open: Rc::default(),
+            screen_busy: Rc::default(),
         };
         let pressed = this.clone();
         this.parts.start.connect_clicked(move |_| pressed.on_start());
@@ -327,10 +333,30 @@ impl MachineCard {
             apps.append(&self.parts.open_app);
         }
         apps.set_visible(!programs.is_empty());
+        // The hero shows the same chips when this machine is the chosen one.
+        self.window.card_changed(self);
+    }
+
+    /// Whether Show Screen is waiting for the app windows to end.
+    pub fn screen_busy(&self) -> bool {
+        self.screen_busy.get()
+    }
+
+    /// Show Screen says it is busy, on the card and on the hero.
+    pub fn set_screen_busy(&self, busy: bool) {
+        self.screen_busy.set(busy);
+        self.parts.show.set_sensitive(!busy);
+        self.parts.show.set_label(if busy { SCREEN_BUSY } else { SCREEN_LABEL });
+        self.window.card_changed(self);
+    }
+
+    /// The programs with windows open, as the viewer last said.
+    pub fn open_programs(&self) -> Vec<OpenProgram> {
+        self.open.borrow().clone()
     }
 
     /// The machine's Settings, turned to the Apps page.
-    fn open_apps_page(&self) {
+    pub(super) fn open_apps_page(&self) {
         self.show_settings();
         self.window.show_settings_page("apps");
     }
@@ -361,7 +387,7 @@ impl MachineCard {
     }
 
     pub fn show_screen(&self) {
-        self.window.show_screen(self.machine.clone());
+        self.window.open_screen_of(self);
     }
 
     pub fn shut_down(&self) {
@@ -387,7 +413,7 @@ impl MachineCard {
 /// One program with windows open: its icon, its name, and how many windows when that is more than one.
 /// It only tells. A window of another program can't be raised from here, as Wayland lets only the
 /// program that owns a window say which one has the focus.
-fn chip(program: &OpenProgram) -> gtk::FlowBoxChild {
+pub(super) fn chip(program: &OpenProgram) -> gtk::FlowBoxChild {
     let name = program.shown_name();
     let holder = gtk::Box::builder().spacing(CHIP_SPACING).build();
     holder.add_css_class("app-chip");

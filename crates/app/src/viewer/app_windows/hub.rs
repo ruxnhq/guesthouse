@@ -127,7 +127,7 @@ impl Hub {
         glib::timeout_add_local(CHECK_RUNNING, move || match weak.upgrade() {
             Some(hub) if !hub.ended.get() => {
                 if !running() {
-                    hub.note("the machine has stopped, so the app windows end");
+                    hub.note("the machine has stopped, app windows was turned off, or its screen was opened, so the app windows end");
                     hub.end();
                     return glib::ControlFlow::Break;
                 }

@@ -24,6 +24,8 @@ use crate::viewer::ScreenPage;
 use crate::wizard;
 use adw::prelude::*;
 use gtk::glib;
+use guesthouse_app_core::app_windows::modes::{self, Ending, ScreenMark};
+use guesthouse_app_core::app_windows::viewer_lock;
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::gpu_support::{NO_GPU_PART, gpu_ready, what_machines_are};
 use guesthouse_app_core::library::{delete, import_existing, remove_entry};
@@ -31,7 +33,7 @@ use guesthouse_app_core::log::write_log;
 use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::settings::{Fields, read_prefs, write_prefs};
 use guesthouse_app_core::setup::setup_done;
-use guesthouse_app_core::tasks::launch;
+use guesthouse_app_core::tasks::{launch, slot_of};
 use guesthouse_daemon::slot::Slot;
 use library_page::LibraryPage;
 use refresh::RefreshState;
@@ -61,6 +63,8 @@ struct Inner {
     settings: RefCell<Option<SettingsDialog>>,
     new_machine: RefCell<Option<NewMachineDialog>>,
     screen_page: RefCell<Option<ScreenPage>>,
+    /// Held while the screen page is open (or being opened), so that no app windows viewer starts.
+    screen_mark: RefCell<Option<ScreenMark>>,
     vm_running: Cell<bool>,
     host_key_down: Cell<bool>,
     refresh: RefCell<RefreshState>,
@@ -109,6 +113,7 @@ impl Window {
             settings: RefCell::default(),
             new_machine: RefCell::default(),
             screen_page: RefCell::default(),
+            screen_mark: RefCell::default(),
             vm_running: Cell::new(false),
             host_key_down: Cell::new(false),
             refresh: RefCell::default(),
@@ -407,6 +412,62 @@ impl Window {
         }
     }
 
+    /// Opens the machine's screen. A machine shows its screen or its app windows, never both, so if its
+    /// app windows viewer runs it is ended first (and the helper in the guest, so that the windows are
+    /// back where Windows had them), and the button says it is busy meanwhile. The screen's mark is
+    /// taken before anything else, which keeps a new app windows viewer from starting under it.
+    pub fn open_screen_of(&self, card: &MachineCard) {
+        if self.0.screen_page.borrow().is_some() || self.0.screen_mark.borrow().is_some() {
+            return;
+        }
+        let machine = card.machine();
+        let context = self.0.context.clone();
+        let Some(slot) = slot_of(&context, &machine.borrow()) else {
+            self.show_screen(machine);
+            return;
+        };
+        match modes::mark_screen(&context, slot) {
+            Ok(Some(mark)) => *self.0.screen_mark.borrow_mut() = Some(mark),
+            Ok(None) => {
+                self.problem("The screen is already open for this machine.");
+                return;
+            }
+            Err(error) => {
+                self.problem(&format!("The screen could not be opened: {error}."));
+                return;
+            }
+        }
+        if !viewer_lock::held(&context, slot).unwrap_or(false) {
+            self.show_screen(machine);
+            return;
+        }
+        card.set_screen_busy(true);
+        let (this, card, handle) = (self.clone(), card.clone(), machine.clone());
+        let for_work = machine.borrow().clone();
+        let work_context = context.clone();
+        in_background(
+            &context,
+            move || {
+                let ending = Ending {
+                    proc: std::path::Path::new("/proc"),
+                    terminate: &modes::terminate,
+                    wait: modes::END_WAIT,
+                };
+                modes::free_for_screen(&work_context, &for_work, slot, &ending)
+            },
+            move |result| {
+                card.set_screen_busy(false);
+                match result {
+                    Ok(()) => this.show_screen(handle),
+                    Err(text) => {
+                        this.0.screen_mark.borrow_mut().take();
+                        this.problem(&text);
+                    }
+                }
+            },
+        );
+    }
+
     pub fn show_screen(&self, machine: MachineHandle) {
         actions::allow_host_keys(self, false);
         let fullscreen = machine.borrow().opens_fullscreen && !self.0.window.is_fullscreen();
@@ -418,8 +479,23 @@ impl Window {
         *self.0.screen_page.borrow_mut() = Some(page);
     }
 
+    /// Closes the machine's screen if it is open, as the app windows are about to be: its mark goes at
+    /// once, so that nothing waits for the page's own closing. Whether there was one to close.
+    pub fn close_screen_of(&self, machine_id: &str) -> bool {
+        let open = self.0.screen_page.borrow().clone();
+        match open.filter(|page| page.machine_id() == machine_id) {
+            Some(_) => {
+                self.0.pages.pop_to_tag("library");
+                self.0.screen_mark.borrow_mut().take();
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn screen_closed(&self) {
         *self.0.screen_page.borrow_mut() = None;
+        *self.0.screen_mark.borrow_mut() = None;
         actions::allow_host_keys(self, true);
     }
 

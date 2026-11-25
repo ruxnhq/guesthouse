@@ -125,6 +125,10 @@
   padding: 0;
 }
 
+.hero .app-chip {
+  background: alpha(white, 0.16);
+}
+
 .machine-thumbnail {
   border-radius: 12px;
 }

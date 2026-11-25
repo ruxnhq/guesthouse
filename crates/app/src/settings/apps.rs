@@ -34,6 +34,9 @@ const RETRY_FIRST: u64 = 3;
 const RETRY_MOST: u64 = 15;
 const NOTE_MARGIN: i32 = 6;
 
+/// How long the screen page takes to let go of its machine once it is closed.
+const SCREEN_CLOSE_WAIT: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// What a look came to, with the pictures its icons make, which are decoded on the thread that asked.
 struct Looked {
     look: Look,
@@ -191,6 +194,16 @@ impl Apps {
             self.0.switch.set_active(!on);
             self.0.setting.set(false);
             return;
+        }
+        if !on {
+            // A viewer that runs ends by itself as it sees the switch off. The helper in the guest
+            // is ended too, so that the guest's windows are as Windows had them.
+            let (context, machine) = (context.clone(), self.0.shared.machine.borrow().clone());
+            std::thread::spawn(move || {
+                if let Some(slot) = guesthouse_app_core::tasks::slot_of(&context, &machine) {
+                    guesthouse_app_core::app_windows::modes::end_helper(&context, &machine, slot);
+                }
+            });
         }
         {
             let mut inner = self.0.inner.borrow_mut();
@@ -536,16 +549,28 @@ impl Apps {
         let machine = self.0.shared.machine.borrow().id.clone();
         let (program, start_menu) = (row.program.clone(), row.start_menu);
         let running = context.clone();
+        let running_for_work = context.clone();
         let this = self.clone();
         let key = row.app_id.clone();
-        in_background(
-            &context,
-            move || {
-                let opening = Opening { machine: &machine, program: &program, start_menu };
-                open_program(&running, &opening, &mut start_viewer, &mut std::io::sink())
-            },
-            move |result| this.opened(&key, result),
-        );
+        // The screen and the app windows are two modes of one machine. Asking for a program is asking
+        // for its window, so the machine's open screen goes, and then the program opens.
+        let closed = self.0.shared.window.close_screen_of(&machine);
+        let work = move || {
+            in_background(
+                &running_for_work,
+                move || {
+                    let opening = Opening { machine: &machine, program: &program, start_menu };
+                    open_program(&running, &opening, &mut start_viewer, &mut std::io::sink())
+                },
+                move |result| this.opened(&key, result),
+            );
+        };
+        // The screen page lets go of the machine's connection as it finishes closing.
+        if closed {
+            glib::timeout_add_local_once(SCREEN_CLOSE_WAIT, work);
+        } else {
+            work();
+        }
     }
 
     fn opened(&self, key: &str, result: Result<(), String>) {

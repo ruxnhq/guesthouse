@@ -325,6 +325,7 @@ mod copies_tests;
 mod idle_tests;
 mod launcher_tests;
 mod making_tests;
+mod modes_tests;
 mod open_tests;
 mod recipes_tests;
 mod settings_tests;

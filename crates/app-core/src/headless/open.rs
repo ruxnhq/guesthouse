@@ -9,6 +9,7 @@
 use super::app::{launch_of, start_in};
 use super::pick::find;
 use super::windows::running_slot;
+use crate::app_windows::modes::{screen_open, screen_open_text};
 use crate::app_windows::viewer_lock;
 use crate::app_windows::{Launch, connect_side, is_on, off_text};
 use crate::context::Context;
@@ -62,6 +63,11 @@ pub fn open_program(
     }
     bring_up(context, &machine, out)?;
     let slot = running_slot(context, &machine, "app windows")?;
+    // The screen and the app windows each take the machine's one connection from the other, so the
+    // one that is open is not fought: the app's own Open closes the screen first, and a command says so.
+    if screen_open(context, slot)? {
+        return Err(Failure(screen_open_text(&machine)));
+    }
     launch_when_ready(context, &machine, &launch_of(opening.program, opening.start_menu), out)?;
     ensure_viewer(context, &machine, slot, start_viewer, out)
 }

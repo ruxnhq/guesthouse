@@ -22,6 +22,22 @@ pub fn lock_file(context: &Context, slot: Slot) -> PathBuf {
 /// Held by the one viewer of a machine.
 pub struct ViewerLock(#[allow(dead_code)] File);
 
+impl ViewerLock {
+    /// Writes this process's id into the lock file, for a command that has to end the viewer to find.
+    /// Only the holder writes it, so a file that names a process is one that held the lock.
+    pub fn record_pid(&self) -> io::Result<()> {
+        use std::io::Write;
+        self.0.set_len(0)?;
+        (&self.0).write_all(std::process::id().to_string().as_bytes())
+    }
+}
+
+/// The process id the holder of this run folder's lock wrote, if it wrote one. Nothing says the
+/// process is still the holder: `modes` checks that before it signals anything.
+pub fn recorded_pid(run_folder: &Path) -> Option<u32> {
+    std::fs::read_to_string(run_folder.join(LOCK_FILE)).ok()?.trim().parse().ok()
+}
+
 /// Takes the lock, or says `None` if a viewer of this machine already has it.
 pub fn take(context: &Context, slot: Slot) -> io::Result<Option<ViewerLock>> {
     context.make_run_folder(Some(slot))?;

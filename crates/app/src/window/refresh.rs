@@ -6,10 +6,11 @@ use crate::common::in_background;
 use crate::notify;
 use gtk::glib;
 use guesthouse_app_core::actions::rebooted;
+use guesthouse_app_core::app_windows::open_windows::{OpenProgram, open_in};
 use guesthouse_app_core::card_share::look::{self as share, CardShare, Looks, Running};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::ending;
-use guesthouse_app_core::machine::{MACHINE_FILE, Machine, load_all};
+use guesthouse_app_core::machine::{Kind, MACHINE_FILE, Machine, load_all};
 use guesthouse_app_core::process_stat::Seen;
 use guesthouse_app_core::processes::all_leftovers;
 use guesthouse_app_core::slots;
@@ -53,6 +54,8 @@ struct Report {
     deleted: Vec<String>,
     share: Vec<CardShare>,
     share_looks: Looks,
+    /// The programs with app windows open, of each running Windows machine that has any.
+    open_windows: BTreeMap<String, Vec<OpenProgram>>,
 }
 
 /// The machines up now, with the processes they run in, for the share panel.
@@ -90,7 +93,17 @@ fn look(
     // Taken here, just before the clients are read, as the looks above can take a while.
     let at = started.elapsed();
     let (share, share_looks) = share::look(context, &running_now(machines, &statuses), share_before, at);
+    let open_windows = machines
+        .iter()
+        .filter(|machine| machine.kind == Kind::Windows)
+        .filter_map(|machine| {
+            let found = statuses.get(&machine.id).filter(|found| found.state == State::Running)?;
+            let open = open_in(context, slots::number(found.slot?));
+            (!open.is_empty()).then(|| (machine.id.clone(), open))
+        })
+        .collect();
     Report {
+        open_windows,
         paused: running.iter().filter(paused).map(|machine| (**machine).clone()).collect(),
         rebooted: running.iter().filter(restarted).map(|machine| (**machine).clone()).collect(),
         left: if checked && idle && !machines.is_empty() { all_leftovers(context) } else { BTreeMap::new() },
@@ -198,7 +211,7 @@ impl Window {
         state.leftovers_before.clone_from(&report.left);
     }
 
-    fn show_machine_status(&self, id: &str, status: &Status, vm_running: bool) {
+    fn show_machine_status(&self, id: &str, status: &Status, vm_running: bool, open: &[OpenProgram]) {
         let rows = self.0.cards.borrow();
         // A row can be gone if it was deleted while this was being read.
         let Some(row) = rows.get(id) else { return };
@@ -215,6 +228,7 @@ impl Window {
         {
             notify::send(self, id, &title, &body);
         }
+        row.set_app_windows(open);
         row.set_status(status, vm_running);
         if let Some(settings) = self.0.settings.borrow().as_ref().filter(|dialog| dialog.machine_id() == id) {
             settings.set_status(status);
@@ -285,7 +299,8 @@ impl Window {
         }
         self.say_what_stopped(&report);
         for (id, status) in &report.statuses {
-            self.show_machine_status(id, status, report.vm_running);
+            let open = report.open_windows.get(id).map_or(&[][..], Vec::as_slice);
+            self.show_machine_status(id, status, report.vm_running, open);
         }
         self.0.refresh.borrow_mut().looked = true;
         self.tell_the_tray(&report);

@@ -18,6 +18,7 @@ mod hub;
 pub mod identity;
 pub mod launch;
 pub mod plan;
+mod published;
 mod view;
 
 use super::frames::FrameRoute;
@@ -110,7 +111,11 @@ pub fn run(request: Request) -> glib::ExitCode {
         let (context, machine) = (context.clone(), machine.clone());
         move || slot_of(&context, &machine).is_some()
     };
-    run_with(context, machine, Some(slot), run_folder, running)
+    published::start(run_folder.clone());
+    let code = run_with(context, machine, Some(slot), run_folder.clone(), running);
+    // While the lock is still held, so that the Library never sees a file of a viewer that is gone.
+    let _ = guesthouse_app_core::app_windows::open_windows::remove_from(&run_folder);
+    code
 }
 
 /// The process, for a machine that is running and a folder its sockets are in. `running` is asked now

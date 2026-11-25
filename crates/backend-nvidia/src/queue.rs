@@ -1,5 +1,6 @@
 //! Getting a queue's submissions onto the GPU.
 
+use crate::Device;
 use crate::channel::{
     AREA_SIZE, Channel, ChannelPlace, Engine, LIST_AREA, LOCAL_MEMORY_ALIGN, LOCAL_MEMORY_BYTES, ListChannel,
     ListFull, Seat,
@@ -141,6 +142,16 @@ fn mirrors_pool(work: &Work<'_>) -> bool {
 /// is already on the group, and stays.
 fn shared_context_timeslice(engine: Engine, context_queues: u32, everyone: u64, shared: u64) -> Option<u64> {
     (engine == Engine::Graphics && context_queues > 1 && everyone == 0 && shared != 0).then_some(shared)
+}
+
+/// The context's queues are in more than one group. Its shared group, which may already be running,
+/// gets the slice the others have, once; one made later gets it when its channel is made.
+fn split_context<R: Rm>(device: &mut Device<R>, context: u32) {
+    let (everyone, shared) = (device.graphics_timeslice_micros, device.shared_context_timeslice_micros);
+    if !device.context_groups.is_split(context) && everyone == 0 {
+        Channel::set_context_group_timeslice(device, context, shared);
+    }
+    device.context_groups.note_split(context);
 }
 
 fn word(data: &[u8], at: usize) -> u32 {
@@ -441,6 +452,16 @@ impl<R: Rm> NvidiaBackend<R> {
         let local_memory = self.local_memory_place(host, engine);
         let Some(space) = self.spaces.get(&work.space) else { return };
         let seat = self.seat_for(work, engine);
+        if seat.is_none()
+            && self.device.context_groups.enabled
+            && engine == Engine::Graphics
+            && work.context != 0
+            && work.context_queues > 1
+        {
+            // A graphics queue the layout leaves out has a group of its own, so as with a refused seat the
+            // context's queues wait across groups, and the shared group gets the slice the others have.
+            split_context(&mut self.device, work.context);
+        }
         let (device, generation, sizes) = (&mut self.device, self.generation, self.host_branch);
         let seated = seat.and_then(|seat| {
             match Channel::new_in_context(device, generation, sizes, space, place, work.context, seat) {
@@ -462,12 +483,7 @@ impl<R: Rm> NvidiaBackend<R> {
                     );
                     // The context's queues wait across groups after all, so the shared one gets the
                     // slice the others have.
-                    let (everyone, shared) =
-                        (device.graphics_timeslice_micros, device.shared_context_timeslice_micros);
-                    if !device.context_groups.is_split(work.context) && everyone == 0 {
-                        Channel::set_context_group_timeslice(device, work.context, shared);
-                    }
-                    device.context_groups.note_split(work.context);
+                    split_context(device, work.context);
                     None
                 }
             }
@@ -1859,7 +1875,45 @@ mod tests {
             }
             assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
             assert!((2..=4).all(|queue| !lab.channel(queue).in_context_group()));
-            assert_eq!(lab.slices(), 3, "the ones alone still get the shared slice");
+            assert_eq!(lab.slices(), 4, "the ones alone and the group they wait for get the shared slice");
+        }
+
+        #[test]
+        fn an_unseated_queue_made_after_the_group_gives_it_the_shared_slice() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, None);
+            lab.submit(1, CONTEXT, 2, &drawing_work());
+            assert_eq!(lab.slices(), 0, "a seated group has the RM's slice");
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
+            assert_eq!(lab.slices(), 2, "the group's, and the queue's own");
+        }
+
+        #[test]
+        fn an_unseated_queue_made_before_the_group_gives_it_the_shared_slice() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, Some(DRAWS));
+            lab.queue(2, None);
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
+            assert_eq!(lab.slices(), 1, "the queue's own");
+            lab.submit(1, CONTEXT, 2, &drawing_work());
+            assert!(lab.channel(1).in_context_group());
+            assert_eq!(lab.slices(), 2, "and the group's, when its channel is made");
+        }
+
+        #[test]
+        fn a_lone_unseated_queue_or_one_with_the_layout_off_changes_nothing() {
+            let mut lab = Lab::new(true);
+            lab.queue(1, None);
+            lab.submit(1, CONTEXT, 1, &compute_work());
+            assert_eq!(lab.slices(), 0);
+            assert!(!lab.backend.device.context_groups.is_split(CONTEXT));
+            let mut off = Lab::new(false);
+            off.queue(1, Some(DRAWS));
+            off.queue(2, None);
+            off.submit(1, CONTEXT, 2, &drawing_work());
+            off.submit(2, CONTEXT, 2, &compute_work());
+            assert!(!off.backend.device.context_groups.is_split(CONTEXT));
         }
 
         #[test]

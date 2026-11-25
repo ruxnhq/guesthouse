@@ -34,8 +34,10 @@ const RETRY_FIRST: u64 = 3;
 const RETRY_MOST: u64 = 15;
 const NOTE_MARGIN: i32 = 6;
 
-/// How long the screen page takes to let go of its machine once it is closed.
-const SCREEN_CLOSE_WAIT: std::time::Duration = std::time::Duration::from_millis(600);
+/// How often an Open looks whether the screen page it closed has let go of its machine, and how long
+/// it waits for that at most.
+const SCREEN_CLOSE_LOOK: Duration = Duration::from_millis(50);
+const SCREEN_CLOSE_MOST: Duration = Duration::from_secs(10);
 
 /// What a look came to, with the pictures its icons make, which are decoded on the thread that asked.
 struct Looked {
@@ -565,12 +567,32 @@ impl Apps {
                 move |result| this.opened(&key, result),
             );
         };
-        // The screen page lets go of the machine's connection as it finishes closing.
-        if closed {
-            glib::timeout_add_local_once(SCREEN_CLOSE_WAIT, work);
-        } else {
+        if !closed {
             work();
+            return;
         }
+        // The screen page lets go of the machine's connection as it finishes closing, and then it is
+        // no longer the window's open screen.
+        let window = self.0.shared.window.clone();
+        let this = self.clone();
+        let key = row.app_id.clone();
+        let name = self.0.shared.machine.borrow().name.clone();
+        let deadline = std::time::Instant::now() + SCREEN_CLOSE_MOST;
+        let mut work = Some(work);
+        glib::timeout_add_local(SCREEN_CLOSE_LOOK, move || {
+            if window.open_screen().is_none() {
+                if let Some(work) = work.take() {
+                    work();
+                }
+                return glib::ControlFlow::Break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let text = format!("The screen of {name} did not close, so the app was not opened.");
+                this.opened(&key, Err(text));
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     fn opened(&self, key: &str, result: Result<(), String>) {

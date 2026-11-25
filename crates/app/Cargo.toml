@@ -39,7 +39,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 guesthouse-frame-socket.workspace = true
 # Reading a shared buffer and passing QEMU a socket, without `unsafe`.
 rustix = { version = "1", features = ["fs", "net"] }
-# Lab only: the crop window lets go of what it holds down in the guest on SIGTERM and SIGINT.
+# App windows let go of what they hold down in the guest on SIGTERM and SIGINT.
 # glib's own main loop takes the signals, as nothing else here may install a handler.
 glib-unix = "0.22"
 # What the app remembers is a small JSON file.

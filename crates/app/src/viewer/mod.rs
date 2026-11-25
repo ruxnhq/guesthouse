@@ -20,7 +20,6 @@ mod frames;
 mod guest_cursor;
 mod import;
 mod input;
-pub mod lab_crop;
 mod monitors;
 mod overlay;
 mod own_screen;
@@ -33,7 +32,6 @@ mod screen_frame;
 mod slot_hold;
 mod socket_frames;
 mod stall;
-mod title_drag;
 mod window_size;
 
 use crate::common::in_background;

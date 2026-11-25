@@ -13,7 +13,6 @@
 //! What it does and why it falls back goes in the app's log, a line for each change and none for
 //! each frame, so a report from a desktop or card nobody here has can say what happened.
 
-use super::crop::Crop;
 use super::dmabuf_feedback::fourcc_name;
 use super::frames::{FrameRoute, SlotFrame};
 use super::import::texture;
@@ -145,18 +144,8 @@ impl Screen {
             self.follow_direct_frames();
             return;
         };
-        let _ = own.set_crop(self.0.aspect.crop());
         self.pass_on_notes(&mut own);
         *self.0.own.borrow_mut() = Some(own);
-    }
-
-    /// Lab only: shows just this rectangle of the guest's frame, on the own surface and in GTK alike,
-    /// or the whole frame again with `None`.
-    pub fn set_crop(&self, crop: Option<Crop>) {
-        self.0.aspect.set_crop(crop);
-        if let Some(own) = self.0.own.borrow_mut().as_mut() {
-            let _ = own.set_crop(crop);
-        }
     }
 
     /// The page has stopped moving, so the own surface can go where the picture is. It's placed on
@@ -240,7 +229,7 @@ impl Screen {
         // A newer frame takes the place of one still waiting to move over.
         self.0.handover.borrow_mut().take();
         let (width, height) = (frame.descriptor.width, frame.descriptor.height);
-        self.0.aspect.set_frame(width as i32, height as i32);
+        self.0.aspect.set_ratio(f64::from(width) / f64::from(height));
         self.0.spinner.set_visible(false);
         self.0.booting.set(false);
         self.0.qemu.borrow_mut().take();
@@ -396,20 +385,7 @@ impl Screen {
             (frame.width() - bounds.width()).abs() <= FILL_WITHIN
                 && (frame.height() - bounds.height()).abs() <= FILL_WITHIN
         };
-        // With a rectangle of the frame, the picture reaches well past the room. A subsurface isn't
-        // clipped by its parent, so it goes only where the rectangle is in view.
-        let bounds = if self.0.aspect.shown_crop().is_some() {
-            let Some(frame) = frame else { return };
-            let in_view = self.0.aspect.in_view();
-            graphene::Rect::new(
-                frame.x() + in_view.x(),
-                frame.y() + in_view.y(),
-                in_view.width(),
-                in_view.height(),
-            )
-        } else {
-            frame.filter(fills).unwrap_or(bounds)
-        };
+        let bounds = frame.filter(fills).unwrap_or(bounds);
         let (shift_x, shift_y) = native.surface_transform();
         let corner = graphene::Point::new(bounds.x() + shift_x as f32, bounds.y() + shift_y as f32);
         let moved = own.place(

@@ -497,8 +497,7 @@ pub struct OwnSurface {
     place: Option<(i32, i32, i32, i32)>,
     /// Whether the frames sent reach the screen.
     stall: StallWatch,
-    /// The rectangle of each frame to show, as it was asked for: a cell of the guest's screen for an app
-    /// window, or a lab crop.
+    /// The rectangle of each frame to show, as it was asked for: a program window's cell of the guest's screen.
     crop: Option<Crop>,
     /// The viewport's source now: the rectangle as it fits the buffer, or `None` for all of it.
     source: Option<Crop>,

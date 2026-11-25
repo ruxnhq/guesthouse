@@ -56,8 +56,6 @@ mod imp {
         /// may have chosen (a tiling layout, a maximize) rather than the cell's.
         pub allocated: Cell<Option<(i32, i32)>>,
         pub on_size: RefCell<Option<SizeSaid>>,
-        /// Lab only: what the last place went by, said once each time it changes.
-        pub traced: RefCell<String>,
     }
 
     #[glib::object_subclass]
@@ -169,25 +167,9 @@ impl CellPicture {
         let (room_w, room_h) = imp.allocated.get().unwrap_or((i32::MAX, i32::MAX));
         let width = logical_length(source.w, ratio).min(room_w - shift_x - left).max(1);
         let height = logical_length(source.h, ratio).min(room_h - shift_y - top).max(1);
-        let covered = |logical: i32, pixels: i32| {
-            if std::env::var_os("GUESTHOUSE_LAB_SOURCE_CELL").is_some() {
-                return pixels;
-            }
-            ((f64::from(logical) * scale).round() * ratio / scale).round() as i32
-        };
-        let crop = Crop {
-            x: source.x,
-            y: source.y,
-            width: covered(width, source.w),
-            height: covered(height, source.h),
-        };
+        let covered = |logical: i32| ((f64::from(logical) * scale).round() * ratio / scale).round() as i32;
+        let crop = Crop { x: source.x, y: source.y, width: covered(width), height: covered(height) };
         let place = ((x, y, width, height), crop);
-        if std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some() {
-            let said = format!("scale {scale} ratio {ratio} place {:?} source {crop:?}", place.0);
-            if imp.traced.replace(said.clone()) != said {
-                eprintln!("app windows: cell picture {said}");
-            }
-        }
         Some(place)
     }
 

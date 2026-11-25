@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 const LOOK: Duration = Duration::from_millis(15);
 /// How often the machine is asked whether it still runs.
 const CHECK_RUNNING: Duration = Duration::from_secs(2);
+/// The variable that asks every daemon and viewer of the app for a fuller log.
+const VERBOSE: &str = "GUESTHOUSE_VERBOSE";
 
 pub struct Hub {
     application: adw::Application,
@@ -36,7 +38,7 @@ pub struct Hub {
     hosted: RefCell<BTreeMap<String, bool>>,
     /// The cell the guest was last told has the focus.
     focus_sent: RefCell<Option<String>>,
-    trace: bool,
+    verbose: bool,
     ended: Slot<bool>,
     hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     mismatch_said: Slot<bool>,
@@ -44,7 +46,6 @@ pub struct Hub {
     input_allowed: Slot<bool>,
     /// What the views were last told of Windows' scale.
     guest: RefCell<Guest>,
-    fit: Fit,
     scale_follow: RefCell<ScaleFollow>,
     size_follow: RefCell<SizeFollow>,
     sizer: Sizer,
@@ -84,13 +85,12 @@ impl Hub {
             views: RefCell::default(),
             hosted: RefCell::default(),
             focus_sent: RefCell::default(),
-            trace: std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some(),
+            verbose: std::env::var_os(VERBOSE).is_some(),
             ended: Slot::new(false),
             hold: RefCell::new(Some(application.hold())),
             mismatch_said: Slot::new(false),
             input_allowed: Slot::new(true),
             guest: RefCell::default(),
-            fit: fit_from_environment(),
             scale_follow: RefCell::default(),
             size_follow: RefCell::default(),
             sizer,
@@ -154,7 +154,7 @@ impl Hub {
         let model = link.as_ref().map(|link| link.client.model());
         let percent = model.map_or(100, |model| model.scale_percent());
         let offered = model.and_then(|model| model.steps()).map_or(WINDOWS_STEPS.to_vec(), <[u32]>::to_vec);
-        Guest { percent, offered, fit: self.fit }
+        Guest { percent, offered, fit: Fit::Sharp }
     }
 
     /// Asks Windows for the step the focused window's monitor wants, once it has stayed there; with no
@@ -245,18 +245,15 @@ impl Hub {
         }
     }
 
-    /// For the log, and for a lab that reads what the process says as it goes.
+    /// For the log.
     pub fn note(&self, text: &str) {
         let _ = write_log(&self.context, &format!("app windows: {text}"));
-        if self.trace {
-            eprintln!("app windows: {text}");
-        }
     }
 
-    /// For a lab only: what an event did, a line each.
+    /// What an event did, a line each, in the log with `GUESTHOUSE_VERBOSE` and not without it.
     pub fn trace(&self, text: &str) {
-        if self.trace {
-            eprintln!("app windows: {text}");
+        if self.verbose {
+            self.note(text);
         }
     }
 
@@ -554,21 +551,10 @@ impl Hub {
     }
 }
 
-/// Lab only: `GUESTHOUSE_APP_WINDOWS_FIT=size` shows a window on a monitor whose scale Windows is
-/// not exactly at with the size Windows means, scaled by the compositor, rather than sharp.
-fn fit_from_environment() -> Fit {
-    match std::env::var("GUESTHOUSE_APP_WINDOWS_FIT").as_deref() {
-        Ok("size") => Fit::Size,
-        _ => Fit::Sharp,
-    }
-}
-
 /// Where a size the guest needs goes.
 pub enum Sizer {
     /// The route the whole-desktop viewer sizes the guest by.
     Guest(GuestSizer),
-    /// Lab only: the size is written to this file, for a stand-in to take.
-    File(std::path::PathBuf),
     /// A machine with no display driver keeps its screen.
     Not,
 }
@@ -581,9 +567,6 @@ impl Sizer {
                 let (w, h) = sizer.ask(wanted);
                 let _ =
                     write_log(context, &format!("app windows: the guest's screen is asked to be {w}x{h}"));
-            }
-            Self::File(path) => {
-                let _ = std::fs::write(path, format!("{} {}", wanted.0, wanted.1));
             }
             Self::Not => {}
         }

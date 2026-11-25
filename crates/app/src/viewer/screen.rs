@@ -14,7 +14,6 @@ use super::pointer_lock::{PointerLock, pointer_lock};
 use super::screen_frame::ScreenFrame;
 use super::slot_hold::HeldFrame;
 use super::socket_frames::SocketFrames;
-use super::title_drag::TitleDrag;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use guesthouse_app_core::forwarded_input::ForwardedInput;
@@ -41,7 +40,6 @@ const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
 .performance-overlay { background: rgba(0, 0, 0, 0.65); color: white; padding: 6px 10px; border-radius: 6px;
   font-size: smaller; font-feature-settings: \"tnum\"; }";
 
-/// Who is handed each frame when the screen has no window of its own.
 /// App windows: what is done with each frame, as its slot, and on each look whether one came or not.
 pub(super) struct SlotHandler {
     pub frame: Box<dyn Fn(HeldFrame, Option<u32>)>,
@@ -122,8 +120,6 @@ pub(super) struct Inner {
     /// The frame GTK is showing because the own surface couldn't take it yet, to hand over once it can.
     pub(super) handover: RefCell<Option<HeldFrame>>,
     pub(super) followed_at: Cell<Instant>,
-    /// Lab only: a press on the guest program's title bar that may move the window.
-    pub(super) title_drag: RefCell<TitleDrag>,
     /// App windows: this screen has no window of its own. It only owns the frames and the input, and
     /// hands each frame to whoever asked for them.
     pub(super) headless: Cell<bool>,
@@ -226,7 +222,6 @@ impl Screen {
             handover: RefCell::default(),
             on_own_surface: RefCell::default(),
             followed_at: Cell::new(Instant::now()),
-            title_drag: RefCell::default(),
             headless: Cell::new(false),
             on_slots: RefCell::default(),
         }));
@@ -471,7 +466,7 @@ impl Screen {
 
     fn show(&self, texture: gdk::Texture) {
         self.0.picture.set_paintable(Some(&texture));
-        self.0.aspect.set_frame(texture.width(), texture.height());
+        self.0.aspect.set_ratio(f64::from(texture.width()) / f64::from(texture.height()));
         self.0.spinner.set_visible(false);
         // One that takes the place of a frame still waiting to be drawn isn't one more on screen.
         if !self.0.waiting.replace(true) {

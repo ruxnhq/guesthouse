@@ -13,7 +13,6 @@ use adw::prelude::*;
 use gtk::glib;
 use guesthouse_app::application::application;
 use guesthouse_app::settings::SettingsDialog;
-use guesthouse_app::viewer::lab_crop;
 use guesthouse_app::window::{MachineHandle, Window};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::library::{NewMachine, create};
@@ -601,57 +600,6 @@ async fn viewer_page(
     check(&failures, window.open_screen().is_none(), "leaving the page closes it");
 }
 
-/// Lab only: a window with one rectangle of the guest's frame, at the rectangle's size, which follows
-/// the rectangle's file.
-async fn crop_window(
-    window: Window,
-    context: Arc<Context>,
-    folder: PathBuf,
-    failures: Rc<Cell<u32>>,
-    machine: MachineHandle,
-) {
-    // The viewer page has let go of the stand-in's frames, and it serves one viewer.
-    fake_frames::serve(&context.run_folder(None), Arc::default());
-    let follow = folder.join("crop-rectangle");
-    let follow_text = follow.to_string_lossy().into_owned();
-    let arguments = [
-        "--lab-crop-window",
-        "x",
-        "100",
-        "50",
-        "200",
-        "120",
-        "Cropped",
-        "--drag",
-        "20",
-        "60",
-        "--follow",
-        &follow_text,
-    ];
-    let request = lab_crop::request(&arguments.map(str::to_owned)).unwrap().unwrap();
-    let application = window.widget().application().and_downcast::<adw::Application>().unwrap();
-    // Frames in rows from the start. This display can't have the own surface, and a viewer that
-    // asked for tiles asks again, which the stand-in, serving one viewer, would never answer.
-    let mut in_rows = machine.borrow().clone();
-    in_rows.direct_frames_off = true;
-    let cropped = lab_crop::open_window(&application, &context, &in_rows, context.run_folder(None), &request);
-    glib::timeout_future(LONG).await;
-    let size = (cropped.width(), cropped.height());
-    check(&failures, size == (200, 120), &format!("the crop window is its rectangle and no more: {size:?}"));
-    shot_after_paint_of(cropped.upcast_ref(), &folder, "18b-crop-window").await;
-    fs::write(&follow, "300 200 160 100").unwrap();
-    glib::timeout_future(LONG).await;
-    let size = (cropped.width(), cropped.height());
-    check(&failures, size == (160, 100), &format!("the crop window follows its file: {size:?}"));
-    shot_after_paint_of(cropped.upcast_ref(), &folder, "18c-crop-window-moved").await;
-    fs::write(&follow, "closed").unwrap();
-    glib::timeout_future(LONG).await;
-    check(&failures, !cropped.is_visible(), "the crop window closes with the guest's window");
-    let told = folder.join("crop-rectangle.host");
-    check(&failures, !told.exists(), "a window the guest closed tells the caller nothing");
-    glib::timeout_future(SETTLE).await;
-}
-
 /// An Ubuntu machine: its settings say its GPU is a preview, and its own frames reach the viewer.
 async fn ubuntu_pages(window: Window, context: Arc<Context>, folder: PathBuf, failures: Rc<Cell<u32>>) {
     let disk = folder.join("ubuntu.qcow2").display().to_string();
@@ -794,7 +742,6 @@ async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     let mut vm = pretend_vm(&context, &machines[1].borrow());
     running_pages(window.clone(), folder.clone(), failures.clone(), machines[1].clone()).await;
     viewer_page(window.clone(), folder.clone(), failures.clone(), machines[1].clone(), released).await;
-    crop_window(window.clone(), context.clone(), folder.clone(), failures.clone(), machines[1].clone()).await;
     let _ = vm.kill();
     let _ = vm.wait();
     ubuntu_pages(window.clone(), context.clone(), folder.clone(), failures.clone()).await;

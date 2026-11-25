@@ -1,6 +1,6 @@
 //! `guesthouse`: the desktop app.
 
-use guesthouse_app::viewer::{app_windows, lab_crop};
+use guesthouse_app::viewer::app_windows;
 use guesthouse_app::{gpu_reset, installer};
 use std::env;
 use std::path::PathBuf;
@@ -37,7 +37,7 @@ fn main() -> gtk::glib::ExitCode {
         unsafe { env::remove_var(installer::VARIABLE) };
         return installer::run(&payload);
     }
-    // Lab only: one rectangle of a running machine's screen in a window of its own.
+    // The viewer of app windows: a machine's programs as windows of their own.
     let arguments: Vec<String> = env::args().skip(1).collect();
     match app_windows::request(&arguments) {
         Some(Ok(request)) => return app_windows::run(request),
@@ -50,14 +50,6 @@ fn main() -> gtk::glib::ExitCode {
     // One step from a launcher entry to a program's window.
     match app_windows::launch::request(&arguments) {
         Some(Ok(request)) => return app_windows::launch::run(request),
-        Some(Err(text)) => {
-            eprintln!("{text}");
-            return gtk::glib::ExitCode::FAILURE;
-        }
-        None => {}
-    }
-    match lab_crop::request(&arguments) {
-        Some(Ok(request)) => return lab_crop::run(request),
         Some(Err(text)) => {
             eprintln!("{text}");
             return gtk::glib::ExitCode::FAILURE;

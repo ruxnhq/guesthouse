@@ -27,7 +27,6 @@ mod secure;
 mod view;
 
 use super::frames::FrameRoute;
-use super::lab_crop::find_machine;
 use super::overlay::OverlayChoice;
 use super::screen::Screen;
 use super::window_size::GuestSizer;
@@ -38,7 +37,7 @@ use guesthouse_app_core::app_windows::{connect, is_on, modes, viewer_lock};
 use guesthouse_app_core::context::Context;
 use guesthouse_app_core::host_sensors::sensors_file;
 use guesthouse_app_core::log::{log_panics, write_log};
-use guesthouse_app_core::machine::Machine;
+use guesthouse_app_core::machine::{Machine, load_all};
 use guesthouse_app_core::screen_gpu::memory_frames;
 use guesthouse_app_core::tasks::slot_of;
 use guesthouse_daemon::slot::Slot;
@@ -80,6 +79,15 @@ pub fn request(arguments: &[String]) -> Option<Result<Request, String>> {
         [machine] => Ok(Request { machine: machine.clone() }),
         _ => Err(USAGE.to_owned()),
     })
+}
+
+/// The machine of this name, or of this id.
+pub(super) fn find_machine(context: &Context, wanted: &str) -> Result<Machine, String> {
+    let (machines, _) = load_all(context);
+    machines
+        .into_iter()
+        .find(|machine| machine.name == wanted || machine.id == wanted)
+        .ok_or_else(|| format!("There is no machine called {wanted} in {}", context.paths.machines.display()))
 }
 
 pub fn run(request: Request) -> glib::ExitCode {
@@ -141,8 +149,8 @@ pub fn run(request: Request) -> glib::ExitCode {
 }
 
 /// The process, for a machine that is running and a folder its sockets are in. `running` is asked now
-/// and then, and ends the process when it says no. Public for a lab that stands in for the machine.
-pub fn run_with(
+/// and then, and ends the process when it says no.
+fn run_with(
     context: Arc<Context>,
     machine: Machine,
     slot: Option<Slot>,
@@ -163,9 +171,11 @@ pub fn run_with(
         .build();
     let icons = context.paths.runtime.join("icons");
     application.connect_startup(move |_| use_built_in_icons(&icons));
+    let wayland = Rc::new(std::cell::Cell::new(true));
     let pieces = std::cell::RefCell::new(Some((context, machine, run_folder, slot, link, running)));
     // Kept here so the signals and the hub live as long as the application runs.
     let hub: Rc<std::cell::RefCell<Option<Rc<Hub>>>> = Rc::default();
+    let on_wayland = wayland.clone();
     application.connect_activate(move |application| {
         let Some((context, machine, run_folder, slot, link, running)) = pieces.borrow_mut().take() else {
             return;
@@ -175,6 +185,7 @@ pub fn run_with(
         if gdk::Display::default().and_downcast::<gdk_wayland::WaylandDisplay>().is_none() {
             eprintln!("{NOT_WAYLAND}");
             let _ = write_log(&context, NOT_WAYLAND);
+            on_wayland.set(false);
             application.quit();
             return;
         }
@@ -190,7 +201,9 @@ pub fn run_with(
         }
         *hub.borrow_mut() = Some(started);
     });
-    application.run_with_args::<&str>(&[])
+    let code = application.run_with_args::<&str>(&[]);
+    // A session that cannot show them is a failure for whoever started the viewer, not a quiet end.
+    if wayland.get() { code } else { glib::ExitCode::FAILURE }
 }
 
 fn open(
@@ -209,10 +222,7 @@ fn open(
     };
     let overlay = OverlayChoice { shown: false, sensors: sensors_file(context, machine) };
     let screen = Screen::new(run_folder, FrameRoute::of(machine), in_memory, overlay, false, || {}, log);
-    let sizer = match std::env::var_os("GUESTHOUSE_LAB_SIZE_FILE") {
-        Some(path) => Sizer::File(path.into()),
-        None => GuestSizer::start(context.clone(), machine.clone(), slot).map_or(Sizer::Not, Sizer::Guest),
-    };
+    let sizer = GuestSizer::start(context.clone(), machine.clone(), slot).map_or(Sizer::Not, Sizer::Guest);
     Hub::start(application, context.clone(), machine.name.clone(), screen, link, sizer, running)
 }
 
@@ -228,7 +238,6 @@ mod tests {
     fn only_its_own_argument_asks_for_app_windows() {
         assert_eq!(request(&[]), None);
         assert_eq!(request(&arguments("--at-login")), None);
-        assert_eq!(request(&arguments("--lab-crop-window Win11 1 2 3 4 T")), None);
         assert_eq!(
             request(&arguments("--app-windows Win11")),
             Some(Ok(Request { machine: "Win11".to_owned() }))

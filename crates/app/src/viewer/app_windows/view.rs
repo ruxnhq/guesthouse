@@ -8,7 +8,6 @@ use super::hub::Hub;
 use super::plan::{HostChange, Order, Presence, follow_guest_state, follow_host_state, point_for};
 use crate::viewer::input::button_name;
 use crate::viewer::slot_hold::HeldFrame;
-use crate::viewer::title_drag::{PRIMARY_BUTTON, is_move};
 use adw::prelude::*;
 use gtk::{gdk, glib, graphene};
 use guesthouse_app_core::app_windows::{
@@ -69,6 +68,16 @@ type Asked = ((i32, i32), (i32, i32), Instant);
 
 const BACK: u32 = 8;
 const FORWARD: u32 = 9;
+/// GDK's number for the primary button.
+const PRIMARY_BUTTON: u32 = 1;
+/// How far the pointer goes with the button down, in the window's logical pixels, before a press on
+/// the title bar moves the window rather than clicks. A hand that clicks moves a pixel or two.
+const MOVE_AFTER: f64 = 4.0;
+/// Whether the pointer has gone far enough from the press to be a move.
+fn is_move((from_x, from_y): (f64, f64), (to_x, to_y): (f64, f64)) -> bool {
+    (to_x - from_x).hypot(to_y - from_y) > MOVE_AFTER
+}
+
 /// GTK draws nothing in a window or popup: the picture is on the view's own surface over it, and
 /// what the window has past the picture (under a logical unit at the right and bottom) is clear.
 const STYLE: &str = "window.app-window-view { background: #000000; }
@@ -847,4 +856,16 @@ impl View {
 
 fn both(pair: &(Weak<View>, Weak<Hub>)) -> Option<(Rc<View>, Rc<Hub>)> {
     Some((pair.0.upgrade()?, pair.1.upgrade()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hand_that_clicks_is_not_a_move() {
+        assert!(!is_move((10.0, 10.0), (12.0, 13.0)));
+        assert!(is_move((10.0, 10.0), (15.0, 10.0)));
+        assert!(is_move((10.0, 10.0), (10.0, 4.0)));
+    }
 }

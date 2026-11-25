@@ -89,6 +89,8 @@ pub struct Device<R> {
     /// The same for the ring channels of a guest context that has several queues, unless
     /// `graphics_timeslice_micros` is set. 0 leaves the RM's own choice.
     pub shared_context_timeslice_micros: u64,
+    /// The channel groups that guest contexts' queues share.
+    pub context_groups: crate::channel::ContextGroups,
     pub client: Handle,
     pub device: Handle,
     pub subdevice: Handle,
@@ -141,6 +143,7 @@ impl<R: Rm> Device<R> {
         Ok(Self {
             graphics_timeslice_micros: 0,
             shared_context_timeslice_micros: 0,
+            context_groups: crate::channel::ContextGroups::default(),
             rm,
             client,
             device: DEVICE_HANDLE,

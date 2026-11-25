@@ -2,7 +2,7 @@
 
 use crate::channel::{
     AREA_SIZE, Channel, ChannelPlace, Engine, LIST_AREA, LOCAL_MEMORY_ALIGN, LOCAL_MEMORY_BYTES, ListChannel,
-    ListFull,
+    ListFull, Seat,
 };
 use crate::list_repair;
 use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry, ZERO_EXTENDED_BASE, has_no_extended_base};
@@ -405,6 +405,15 @@ impl<R: Rm> NvidiaBackend<R> {
         }
     }
 
+    /// The seat a new ring channel takes in its context's group, where the queue's private data
+    /// names one. Only graphics channels of a context the guest named, with the setting on.
+    fn seat_for(&self, work: &Work<'_>, engine: Engine) -> Option<Seat> {
+        if !self.device.context_groups.enabled || engine != Engine::Graphics || work.context == 0 {
+            return None;
+        }
+        self.queue_places.get(&work.queue)?.seat()
+    }
+
     /// The queue's channel on a guest's ring, made the first time. `first` is where this
     /// submission starts, and the entry before it is free for the prelude.
     fn ring_channel(&mut self, host: &mut dyn HostServices, work: &Work<'_>, ring_address: u64, first: u32) {
@@ -431,11 +440,40 @@ impl<R: Rm> NvidiaBackend<R> {
         let engine = self.video_engine(work).map_or(Engine::Graphics, Engine::Video);
         let local_memory = self.local_memory_place(host, engine);
         let Some(space) = self.spaces.get(&work.space) else { return };
-        let made = Channel::new(&mut self.device, self.generation, self.host_branch, space, place, engine);
+        let seat = self.seat_for(work, engine);
+        let (device, generation, sizes) = (&mut self.device, self.generation, self.host_branch);
+        let seated = seat.and_then(|seat| {
+            match Channel::new_in_context(device, generation, sizes, space, place, work.context, seat) {
+                Ok(channel) => {
+                    log::info!(
+                        "queue {:#x} is channel {} of context {:#x}'s group, on {seat:?}",
+                        work.queue,
+                        device.context_groups.members(work.context),
+                        work.context
+                    );
+                    Some(channel)
+                }
+                Err(error) => {
+                    log::info!(
+                        "queue {:#x} can't sit on {seat:?} in context {:#x}'s group ({error}), so it gets a \
+                         group of its own",
+                        work.queue,
+                        work.context
+                    );
+                    None
+                }
+            }
+        });
+        let made = match seated {
+            Some(channel) => Ok(channel),
+            None => Channel::new(device, generation, sizes, space, place, engine),
+        };
         let (everyone, shared) =
             (self.device.graphics_timeslice_micros, self.device.shared_context_timeslice_micros);
         match made {
             Ok(mut channel) => {
+                // A channel in its context's group waits inside the group, on the RM's own slice.
+                let shared = if channel.in_context_group() { 0 } else { shared };
                 if let Some(micros) = shared_context_timeslice(engine, work.context_queues, everyone, shared)
                 {
                     log::info!(
@@ -573,6 +611,7 @@ impl<R: Rm> NvidiaBackend<R> {
             // This submission still ends on the old ring. The move goes with its doorbell.
             self.begin_ring_move(host, work, old_ring, ring_address, entries, end)?;
         }
+        self.keep_to_bound_subchannels(host, work, entries, end)?;
         let channel_class = self.generation.channel_class;
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
         let QueueChannel::Ring { channel, ring_address: running } = &mut queue.channel else {
@@ -601,6 +640,37 @@ impl<R: Rm> NvidiaBackend<R> {
             self.invalidate_and_wait();
         }
         Ok(end)
+    }
+
+    /// A channel on a compute seat has no object for drawing or copying, and commands for one
+    /// would fault on the card, taking the context's whole group with them. So a submission with any
+    /// stops its queue here. The entries are read from the ring the channel runs now, which during
+    /// a move is still the old one.
+    fn keep_to_bound_subchannels(
+        &self,
+        host: &dyn HostServices,
+        work: &Work<'_>,
+        entries: u32,
+        end: u32,
+    ) -> Result<(), WorkStart> {
+        let Some(LiveQueue { channel: QueueChannel::Ring { channel, ring_address }, .. }) =
+            self.queues.get(&work.queue)
+        else {
+            return Ok(());
+        };
+        let Some(bound) = channel.only_bound().filter(|_| work.may_run) else { return Ok(()) };
+        let listing = Self::ring_listing(host, work.space, *ring_address, entries, end);
+        let found = SubchannelUse::of_listing(host, work.space, &listing);
+        if found.leaves(bound) {
+            log::warn!(
+                "queue {:#x} stops: its channel only computes, and its commands use subchannels {:#04b}{}",
+                work.queue,
+                found.used,
+                if found.unread { " and some can't be read" } else { "" }
+            );
+            return Err(WorkStart::QueueFailed);
+        }
+        Ok(())
     }
 
     /// The ring a queue's channel runs, if it has one.

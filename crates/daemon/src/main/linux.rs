@@ -264,6 +264,7 @@ fn serve_nvidia(
     let shared = env::var("GUESTHOUSE_SHARED_CONTEXT_TIMESLICE_US").ok();
     let shared = timeslice("GUESTHOUSE_SHARED_CONTEXT_TIMESLICE_US", shared.as_deref());
     backend.set_shared_context_timeslice(shared.unwrap_or(SHARED_CONTEXT_TIMESLICE_MICROS));
+    backend.set_context_groups(context_groups(env::var("GUESTHOUSE_CONTEXT_GROUPS").ok().as_deref()));
     if env::var_os("GUESTHOUSE_QUEUE_WATCH").is_some() {
         backend.watch_queues();
     }
@@ -278,6 +279,13 @@ fn serve_nvidia(
     lock_calls(locked)?;
     server.run()?;
     Ok(())
+}
+
+/// Whether a guest context's queues share one channel group: yes, unless
+/// `GUESTHOUSE_CONTEXT_GROUPS` is 0.
+#[cfg(feature = "nvidia")]
+fn context_groups(setting: Option<&str>) -> bool {
+    setting.map(str::trim) != Some("0")
 }
 
 /// How long a ring channel of a context with several queues holds the GPU, unless

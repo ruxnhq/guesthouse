@@ -202,6 +202,13 @@ impl<R: Rm> NvidiaBackend<R> {
         self.device.shared_context_timeslice_micros = micros;
     }
 
+    /// Whether the ring queues of one guest context share a channel group, each on the subcontext
+    /// its private data names, as NVIDIA's own kernel driver lays them out. Off, every channel has
+    /// a group of its own. For channels made from now on.
+    pub fn set_context_groups(&mut self, enabled: bool) {
+        self.device.context_groups.enabled = enabled;
+    }
+
     /// Logs where each hardware queue's private data places it, and each subchannel a queue's
     /// commands use the first time they do. Reads every submission's commands, so it costs speed.
     pub fn watch_queues(&mut self) {

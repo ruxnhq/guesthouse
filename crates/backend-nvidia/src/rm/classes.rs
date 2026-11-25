@@ -17,6 +17,8 @@ pub const DEFERRED_API: u32 = 0x5080;
 pub const CONTROL_GET_WORK_SUBMIT_TOKEN: u32 = 0xC36F_0108;
 pub const CONTROL_SET_TIMESLICE: u32 = 0xA06C_0103;
 pub const CONTROL_SCHEDULE_CHANNEL_GROUP: u32 = 0xA06C_0101;
+/// The same for one channel, which is how a channel that joins a running group is started.
+pub const CONTROL_SCHEDULE_CHANNEL: u32 = 0xA06F_0103;
 pub const CONTROL_GET_CLASS_ENGINE: u32 = 0x906F_0101;
 /// Keeps a control for the GPU to run when a channel reaches a method naming it.
 pub const CONTROL_DEFERRED_API: u32 = 0x5080_0103;

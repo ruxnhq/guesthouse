@@ -7,6 +7,7 @@
 //! group such a wait hands the GPU to the queue it waits for, where a group for each queue sits out
 //! its timeslice.
 
+use crate::channel::Seat;
 use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry};
 use guesthouse_backend::{HostServices, SpaceId};
 
@@ -80,15 +81,15 @@ impl QueuePlace {
     /// on the second runqueue gets the asynchronous subcontext it names, and no class that draws or
     /// copies: the RM takes compute beside a group's drawing only on the second runqueue, and has
     /// no copy engine there. Anything else keeps a group of its own.
-    pub(crate) fn seat(self) -> Seat {
+    pub(crate) fn seat(self) -> Option<Seat> {
         if self.draws() {
-            return if self.share_index() == 0 { Seat::Drawing } else { Seat::Alone };
+            return (self.share_index() == 0).then_some(Seat::Drawing);
         }
         // Subcontext 0 is the synchronous one, which the RM refuses compute of the second runqueue on.
         if self.computes() && self.second_runqueue() && self.share_index() != 0 {
-            return Seat::Compute { index: self.share_index(), prefer_lower: self.prefer_lower() };
+            return Some(Seat::Compute { index: self.share_index(), prefer_lower: self.prefer_lower() });
         }
-        Seat::Alone
+        None
     }
 }
 
@@ -111,17 +112,6 @@ impl std::fmt::Display for QueuePlace {
         }
         write!(out, ")")
     }
-}
-
-/// A channel's place in its context's group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Seat {
-    /// The group's synchronous subcontext, with every class.
-    Drawing,
-    /// An asynchronous subcontext, on the second runqueue.
-    Compute { index: u8, prefer_lower: bool },
-    /// A group of its own.
-    Alone,
 }
 
 /// Methods from here up go to the object bound on their subchannel, and below it to the channel.
@@ -245,25 +235,25 @@ mod tests {
 
     #[test]
     fn a_queue_that_draws_sits_on_the_first_subcontext() {
-        assert_eq!(QueuePlace(0x100).seat(), Seat::Drawing);
-        assert_eq!(QueuePlace(0x900).seat(), Seat::Drawing, "with a ring of its own");
-        assert_eq!(QueuePlace(0x500).seat(), Seat::Drawing, "the runqueue bit is the compute queues'");
+        assert_eq!(QueuePlace(0x100).seat(), Some(Seat::Drawing));
+        assert_eq!(QueuePlace(0x900).seat(), Some(Seat::Drawing), "with a ring of its own");
+        assert_eq!(QueuePlace(0x500).seat(), Some(Seat::Drawing), "the runqueue bit is the compute queues'");
     }
 
     #[test]
     fn a_queue_that_computes_on_the_second_runqueue_sits_on_the_subcontext_it_names() {
-        assert_eq!(QueuePlace(0x601).seat(), Seat::Compute { index: 1, prefer_lower: false });
-        assert_eq!(QueuePlace(0x1E02).seat(), Seat::Compute { index: 2, prefer_lower: true });
+        assert_eq!(QueuePlace(0x601).seat(), Some(Seat::Compute { index: 1, prefer_lower: false }));
+        assert_eq!(QueuePlace(0x1E02).seat(), Some(Seat::Compute { index: 2, prefer_lower: true }));
     }
 
     #[test]
     fn anything_else_keeps_a_group_of_its_own() {
-        assert_eq!(QueuePlace(0).seat(), Seat::Alone, "no kind: a copy node's queue");
-        assert_eq!(QueuePlace(0x200).seat(), Seat::Alone, "compute on the first runqueue");
-        assert_eq!(QueuePlace(0x201).seat(), Seat::Alone);
-        assert_eq!(QueuePlace(0x101).seat(), Seat::Alone, "the kernel driver refuses a drawing queue there");
-        assert_eq!(QueuePlace(0x400).seat(), Seat::Alone, "the runqueue bit alone");
-        assert_eq!(QueuePlace(0x600).seat(), Seat::Alone, "subcontext 0 is the drawing queue's");
+        assert_eq!(QueuePlace(0).seat(), None, "no kind: a copy node's queue");
+        assert_eq!(QueuePlace(0x200).seat(), None, "compute on the first runqueue");
+        assert_eq!(QueuePlace(0x201).seat(), None);
+        assert_eq!(QueuePlace(0x101).seat(), None, "the kernel driver refuses a drawing queue there");
+        assert_eq!(QueuePlace(0x400).seat(), None, "the runqueue bit alone");
+        assert_eq!(QueuePlace(0x600).seat(), None, "subcontext 0 is the drawing queue's");
     }
 
     #[test]

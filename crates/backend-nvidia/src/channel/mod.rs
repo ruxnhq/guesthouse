@@ -7,10 +7,12 @@
 
 mod area;
 pub mod copy;
+mod group;
 mod list;
 
 pub use area::Area;
 pub use copy::{COPY_AREA_EXTRA, COPY_WINDOW, CopyChannel};
+pub use group::{ContextGroups, Left, Seat};
 pub use list::{LIST_AREA, ListChannel, ListFull};
 
 use crate::local_window::{
@@ -21,8 +23,8 @@ use crate::profile::{Generation, HostBranch};
 use crate::pushbuffer::{increasing, ring_entry};
 use crate::rm::classes::{
     CHANNEL_GROUP, CONTEXT_SHARE, CONTROL_DEFERRED_API, CONTROL_GET_CLASS_ENGINE,
-    CONTROL_GET_WORK_SUBMIT_TOKEN, CONTROL_SCHEDULE_CHANNEL_GROUP, CONTROL_SET_TIMESLICE,
-    CONTROL_UPDATE_CHANNEL_INFO, DEFERRED_API, ENGINE_COPY_0, ENGINE_GRAPHICS,
+    CONTROL_GET_WORK_SUBMIT_TOKEN, CONTROL_SCHEDULE_CHANNEL, CONTROL_SCHEDULE_CHANNEL_GROUP,
+    CONTROL_SET_TIMESLICE, CONTROL_UPDATE_CHANNEL_INFO, DEFERRED_API, ENGINE_COPY_0, ENGINE_GRAPHICS,
 };
 use crate::rm::device::{AddressSpace, Device, Mapping};
 use crate::rm::{Handle, Rm, RmError};
@@ -44,10 +46,16 @@ const SHARE_PARAM_FLAGS: usize = 0x04;
 /// Graphics and video channels go on the synchronous subcontext, and copy channels on the other.
 const SHARE_SYNCHRONOUS: u32 = 0;
 const SHARE_ASYNCHRONOUS: u32 = 1;
+/// An asynchronous subcontext from the lower ones, where the guest's driver asks for that.
+const SHARE_ASYNCHRONOUS_PREFER_LOWER: u32 = 3;
 const CHANNEL_PARAM_ERROR_CONTEXT: usize = 0x00;
 const CHANNEL_PARAM_BUFFER: usize = 0x04;
 pub(crate) const CHANNEL_PARAM_RING: usize = 0x08;
 pub(crate) const CHANNEL_PARAM_RING_ENTRIES: usize = 0x10;
+const CHANNEL_PARAM_FLAGS: usize = 0x14;
+/// Puts a channel on its group's second runqueue. The RM takes the compute class on an
+/// asynchronous subcontext of a group that also draws only on a channel made with this.
+const CHANNEL_FLAG_SECOND_RUNQUEUE: u32 = 0x10;
 const CHANNEL_PARAM_SHARE: usize = 0x18;
 pub(crate) const CHANNEL_PARAM_CONTROL_MEMORY: usize = 0x24;
 const CHANNEL_PARAM_CONTROL_OFFSET: usize = 0x48;
@@ -88,6 +96,7 @@ pub(crate) const VIDEO_SUBCHANNEL: u32 = 4;
 const VIDEO_CLASS_PARAMS: usize = 12;
 const SET_OBJECT: u32 = 0;
 const SCHEDULE_ENABLED: [u8; 3] = [1, 0, 0];
+const SCHEDULE_CHANNEL_ENABLED: [u8; 2] = [1, 0];
 
 /// Bytes of shader local memory a graphics channel starts with. A launch that needs more than the
 /// channel has is failed by the GPU.
@@ -153,6 +162,11 @@ pub struct Channel {
     memory: Handle,
     group: Handle,
     channel: Handle,
+    /// The guest context whose group this channel is in, and its subcontext there. `None` for a
+    /// channel with a group of its own.
+    seat: Option<(u32, u8)>,
+    /// A bit for each subchannel the prelude binds an object on.
+    bound: u8,
     /// The object that runs deferred controls, which graphics channels have.
     deferred_api: Option<Handle>,
     /// The compute object, which graphics channels have. The RM maps it as a SKED page.
@@ -214,7 +228,7 @@ impl Channel {
         map_doorbell_once(device, generation)?;
 
         let zeros = |&(class, size): &(u32, usize)| (class, vec![0; size]);
-        let (engine_number, mut classes): (u32, Vec<(u32, Vec<u8>)>) = match engine {
+        let (engine_number, classes): (u32, Vec<(u32, Vec<u8>)>) = match engine {
             Engine::Graphics => (ENGINE_GRAPHICS, generation.graphics_classes.iter().map(zeros).collect()),
             Engine::Copy => (ENGINE_COPY_0, vec![(generation.copy_class, vec![0; 8])]),
             Engine::Video(video) => (video.rm_engine, vec![(video.class, video.class_params())]),
@@ -242,21 +256,14 @@ impl Channel {
         put32(&mut params, CHANNEL_PARAM_ENGINE, engine_number);
         let channel = device.alloc(group, generation.channel_class, &mut params)?;
 
-        let mut deferred_api = None;
-        let mut compute = None;
-        let mut bind_with = Vec::with_capacity(classes.len());
-        for (class, params) in &mut classes {
-            let object = device.alloc(channel, *class, params)?;
-            let mut binding = *class;
-            if *class == DEFERRED_API {
-                deferred_api = Some(object);
-                binding = class_engine_id(device, channel, object).unwrap_or(*class);
-            }
-            if *class == generation.compute_class {
-                compute = Some(object);
-            }
-            bind_with.push(binding);
-        }
+        let first = match engine {
+            Engine::Graphics => 0,
+            Engine::Copy => COPY_SUBCHANNEL,
+            Engine::Video(_) => VIDEO_SUBCHANNEL,
+        };
+        let mut classes: Vec<SubchannelClass> =
+            (first..).zip(classes).map(|(subchannel, (class, params))| (subchannel, class, params)).collect();
+        let objects = Objects::make(device, generation, channel, &mut classes)?;
         let mut token = [0; 4];
         device.control(channel, CONTROL_GET_WORK_SUBMIT_TOKEN, &mut token)?;
         let mut schedule = SCHEDULE_ENABLED;
@@ -265,18 +272,7 @@ impl Channel {
             set_timeslice(device, group, device.graphics_timeslice_micros);
         }
 
-        let first = match engine {
-            Engine::Graphics => 0,
-            Engine::Copy => COPY_SUBCHANNEL,
-            Engine::Video(_) => VIDEO_SUBCHANNEL,
-        };
-        let mut words = Vec::with_capacity(classes.len() * 2);
-        for (subchannel, binding) in (first..).zip(bind_with) {
-            words.extend([increasing(subchannel, SET_OBJECT, 1), binding]);
-        }
-        // Class binds, then the cache invalidate. Local memory is inserted between them.
-        let setup_words = words.len() as u32;
-        words.extend(l2_invalidate_words());
+        let (words, setup_words) = objects.prelude();
         area.store_words(PRELUDE, &words);
         Ok(Self {
             engine,
@@ -285,8 +281,10 @@ impl Channel {
             memory,
             group,
             channel,
-            deferred_api,
-            compute,
+            seat: None,
+            bound: objects.bound(),
+            deferred_api: objects.deferred_api,
+            compute: objects.compute,
             token: u32::from_le_bytes(token),
             ring_entries: place.ring_entries,
             setup_words,
@@ -294,6 +292,85 @@ impl Channel {
             local_memory: None,
             late_pool_words: None,
         })
+    }
+
+    /// A graphics channel in its guest context's group, on the seat its queue's private data
+    /// names. The first channel of a context makes the group, and the first on a subcontext makes
+    /// that. If anything is refused, all this made is freed again and nothing of the group has
+    /// changed, so the caller can make the channel in a group of its own.
+    pub fn new_in_context<R: Rm>(
+        device: &mut Device<R>,
+        generation: &Generation,
+        sizes: &HostBranch,
+        space: &AddressSpace,
+        place: ChannelPlace,
+        context: u32,
+        seat: Seat,
+    ) -> Result<Self, RmError> {
+        if seat.slot() == 0 && seat != Seat::Drawing {
+            return Err(RmError::System("the first subcontext is the drawing channel's".to_owned()));
+        }
+        let area = Area::new(place.area_size).map_err(|error| RmError::System(error.to_string()))?;
+        let size = place.area_size as u64;
+        let memory = device.alloc_host_pages(area.host_address(), size)?;
+        let mapping = Mapping { memory, length: size, address: place.area_address, ..Mapping::default() };
+        if let Err(error) = device.map(space, &mapping) {
+            let _ = device.free(memory);
+            return Err(error);
+        }
+        let mut made = Vec::new();
+        let seated = map_doorbell_once(device, generation).and_then(|()| {
+            Seated::make(device, generation, sizes, space, &place, memory, (context, seat), &mut made)
+        });
+        let seated = match seated {
+            Ok(seated) => seated,
+            Err(error) => {
+                // Newest first: the channel, a subcontext it made, a group it made.
+                for handle in made.into_iter().rev() {
+                    if let Err(error) = device.free(handle) {
+                        log::warn!("a refused channel left {handle:#x} behind: {error}");
+                    }
+                }
+                if let Err(error) = device.unmap(space, memory, place.area_address, size) {
+                    log::warn!("a refused channel's area stays mapped: {error}");
+                }
+                let _ = device.free(memory);
+                return Err(error);
+            }
+        };
+        device.context_groups.join(context, seated.group, seat.slot(), seated.share);
+        let objects = seated.objects;
+        let (words, setup_words) = objects.prelude();
+        area.store_words(PRELUDE, &words);
+        Ok(Self {
+            engine: Engine::Graphics,
+            area,
+            area_address: place.area_address,
+            memory,
+            group: seated.group,
+            channel: seated.channel,
+            seat: Some((context, seat.slot())),
+            bound: objects.bound(),
+            deferred_api: objects.deferred_api,
+            compute: objects.compute,
+            token: seated.token,
+            ring_entries: place.ring_entries,
+            setup_words,
+            prelude_words: words.len() as u32,
+            local_memory: None,
+            late_pool_words: None,
+        })
+    }
+
+    /// Whether this channel shares its group with its context's other channels.
+    pub fn in_context_group(&self) -> bool {
+        self.seat.is_some()
+    }
+
+    /// The subchannels with an object, as a bit each, for a channel that binds fewer classes than
+    /// the guest's driver has on its own. Commands for any other subchannel would fault there.
+    pub fn only_bound(&self) -> Option<u8> {
+        (self.seat.is_some_and(|(_, slot)| slot != 0)).then_some(self.bound)
     }
 
     /// The compute object, for a graphics channel.
@@ -506,9 +583,173 @@ impl Channel {
             device.unmap(space, handle, address, length)?;
             device.free(handle)?;
         }
-        device.free(self.group)?;
+        match self.seat {
+            None => device.free(self.group)?,
+            Some((context, slot)) => {
+                // The channel, then what it was the last to use. The books are settled first, so a
+                // refused free leaves no seat that a later channel would try to sit on.
+                let left = device.context_groups.leave(context, slot);
+                let freed: Vec<Result<(), RmError>> = [Some(self.channel), left.share, left.group]
+                    .into_iter()
+                    .flatten()
+                    .map(|handle| device.free(handle))
+                    .collect();
+                freed.into_iter().collect::<Result<(), RmError>>()?;
+            }
+        }
         device.unmap(space, self.memory, self.area_address, self.area.size() as u64)?;
         device.free(self.memory)
+    }
+}
+
+/// A class for a channel, with the subchannel the guest's commands reach it on and its parameters.
+type SubchannelClass = (u32, u32, Vec<u8>);
+
+/// The objects a channel was given.
+struct Objects {
+    deferred_api: Option<Handle>,
+    compute: Option<Handle>,
+    /// Each subchannel, and what binds its object there.
+    bindings: Vec<(u32, u32)>,
+}
+
+impl Objects {
+    fn make<R: Rm>(
+        device: &mut Device<R>,
+        generation: &Generation,
+        channel: Handle,
+        classes: &mut [SubchannelClass],
+    ) -> Result<Self, RmError> {
+        let mut objects =
+            Self { deferred_api: None, compute: None, bindings: Vec::with_capacity(classes.len()) };
+        for (subchannel, class, params) in classes {
+            let object = device.alloc(channel, *class, params)?;
+            let mut binding = *class;
+            if *class == DEFERRED_API {
+                objects.deferred_api = Some(object);
+                binding = class_engine_id(device, channel, object).unwrap_or(*class);
+            }
+            if *class == generation.compute_class {
+                objects.compute = Some(object);
+            }
+            objects.bindings.push((*subchannel, binding));
+        }
+        Ok(objects)
+    }
+
+    /// The prelude's words, and how many of them come before the cache invalidate. Local memory
+    /// is inserted between the class binds and the invalidate.
+    fn prelude(&self) -> (Vec<u32>, u32) {
+        let mut words = Vec::with_capacity(self.bindings.len() * 2);
+        for &(subchannel, binding) in &self.bindings {
+            words.extend([increasing(subchannel, SET_OBJECT, 1), binding]);
+        }
+        let setup_words = words.len() as u32;
+        words.extend(l2_invalidate_words());
+        (words, setup_words)
+    }
+
+    fn bound(&self) -> u8 {
+        self.bindings.iter().fold(0, |bound, &(subchannel, _)| bound | 1 << subchannel)
+    }
+}
+
+/// A channel made in its context's group.
+struct Seated {
+    group: Handle,
+    share: Handle,
+    channel: Handle,
+    objects: Objects,
+    token: u32,
+}
+
+impl Seated {
+    /// Makes the group and the subcontext unless the context has them, then the channel and its
+    /// objects, and starts the channel. Every handle made goes on `made` as it is made, for the
+    /// caller to free if a later step is refused.
+    #[allow(clippy::too_many_arguments)]
+    fn make<R: Rm>(
+        device: &mut Device<R>,
+        generation: &Generation,
+        sizes: &HostBranch,
+        space: &AddressSpace,
+        place: &ChannelPlace,
+        memory: Handle,
+        (context, seat): (u32, Seat),
+        made: &mut Vec<Handle>,
+    ) -> Result<Self, RmError> {
+        let running = device.context_groups.group(context);
+        let group = match running {
+            Some(group) => group,
+            None => {
+                // No error context: the group outlives its first channel, whose memory that would
+                // be. Each channel has its own.
+                let mut params = vec![0; sizes.channel_group_params];
+                put32(&mut params, GROUP_PARAM_ADDRESS_SPACE, space.handle);
+                put32(&mut params, GROUP_PARAM_ENGINE, ENGINE_GRAPHICS);
+                let group = device.alloc(device.device, CHANNEL_GROUP, &mut params)?;
+                made.push(group);
+                group
+            }
+        };
+        let share = match device.context_groups.share(context, seat.slot()) {
+            Some(share) => share,
+            None => {
+                let flags = match seat {
+                    Seat::Drawing => SHARE_SYNCHRONOUS,
+                    Seat::Compute { prefer_lower: false, .. } => SHARE_ASYNCHRONOUS,
+                    Seat::Compute { prefer_lower: true, .. } => SHARE_ASYNCHRONOUS_PREFER_LOWER,
+                };
+                let mut params = vec![0; sizes.context_share_params];
+                put32(&mut params, SHARE_PARAM_ADDRESS_SPACE, space.handle);
+                put32(&mut params, SHARE_PARAM_FLAGS, flags);
+                let share = device.alloc(group, CONTEXT_SHARE, &mut params)?;
+                made.push(share);
+                share
+            }
+        };
+        let computes_only = matches!(seat, Seat::Compute { .. });
+        let mut params = vec![0; sizes.channel_params];
+        put32(&mut params, CHANNEL_PARAM_ERROR_CONTEXT, memory);
+        put32(&mut params, CHANNEL_PARAM_BUFFER, memory);
+        put64(&mut params, CHANNEL_PARAM_RING, place.ring_address);
+        put32(&mut params, CHANNEL_PARAM_RING_ENTRIES, place.ring_entries);
+        if computes_only {
+            put32(&mut params, CHANNEL_PARAM_FLAGS, CHANNEL_FLAG_SECOND_RUNQUEUE);
+        }
+        put32(&mut params, CHANNEL_PARAM_SHARE, share);
+        put32(&mut params, CHANNEL_PARAM_CONTROL_MEMORY, memory);
+        put64(&mut params, CHANNEL_PARAM_CONTROL_OFFSET, CONTROL_BLOCK as u64);
+        put32(&mut params, CHANNEL_PARAM_ENGINE, ENGINE_GRAPHICS);
+        let channel = device.alloc(group, generation.channel_class, &mut params)?;
+        made.push(channel);
+
+        // Each class keeps the subchannel the guest's commands assume, whatever is left out.
+        let kept = |class: u32| !computes_only || class == generation.compute_class || class == DEFERRED_API;
+        let mut classes: Vec<SubchannelClass> = (0..)
+            .zip(generation.graphics_classes)
+            .filter(|(_, (class, _))| kept(*class))
+            .map(|(subchannel, &(class, size))| (subchannel, class, vec![0; size]))
+            .collect();
+        let objects = Objects::make(device, generation, channel, &mut classes)?;
+        let mut token = [0; 4];
+        device.control(channel, CONTROL_GET_WORK_SUBMIT_TOKEN, &mut token)?;
+        match running {
+            None => {
+                let mut schedule = SCHEDULE_ENABLED;
+                device.control(group, CONTROL_SCHEDULE_CHANNEL_GROUP, &mut schedule)?;
+                set_timeslice(device, group, device.graphics_timeslice_micros);
+            }
+            Some(_) => {
+                let mut schedule = SCHEDULE_CHANNEL_ENABLED;
+                if let Err(error) = device.control(channel, CONTROL_SCHEDULE_CHANNEL, &mut schedule) {
+                    log::debug!("a channel that joined a group starts with the group instead: {error}");
+                    let mut schedule = SCHEDULE_ENABLED;
+                    device.control(group, CONTROL_SCHEDULE_CHANNEL_GROUP, &mut schedule)?;
+                }
+            }
+        }
+        Ok(Self { group, share, channel, objects, token: u32::from_le_bytes(token) })
     }
 }
 
@@ -818,6 +1059,290 @@ mod tests {
         channel(&mut device, &space, Engine::Copy);
         let maps = device.rm.calls.iter().filter(|call| matches!(call, crate::rm::fake::Call::MapDoorbell));
         assert_eq!(maps.count(), 1);
+    }
+
+    const CONTEXT: u32 = 0x4000_0040;
+    const COMPUTE_SEAT: Seat = Seat::Compute { index: 1, prefer_lower: false };
+
+    fn place_at(slot: u64) -> ChannelPlace {
+        let area_address = AREA_ADDRESS + slot * AREA_SIZE as u64;
+        ChannelPlace { area_address, ring_address: 0x900_0000 + slot * 0x1_0000, ..place() }
+    }
+
+    fn seated(device: &mut Device<FakeRm>, space: &AddressSpace, slot: u64, seat: Seat) -> Channel {
+        Channel::new_in_context(device, &BLACKWELL, &HOST_615, space, place_at(slot), CONTEXT, seat).unwrap()
+    }
+
+    fn allocations(device: &Device<FakeRm>, of: u32) -> Vec<(Handle, Handle, Vec<u8>)> {
+        let made = device.rm.calls.iter().filter_map(|call| match call {
+            Call::Alloc { parent, handle, class, params } if *class == of => {
+                Some((*parent, *handle, params.clone()))
+            }
+            _ => None,
+        });
+        made.collect()
+    }
+
+    fn controls(device: &Device<FakeRm>, of: u32) -> Vec<Handle> {
+        let sent = device.rm.calls.iter().filter_map(|call| match call {
+            Call::Control { object, command, .. } if *command == of => Some(*object),
+            _ => None,
+        });
+        sent.collect()
+    }
+
+    fn frees(device: &Device<FakeRm>) -> Vec<Handle> {
+        let freed = device.rm.calls.iter().filter_map(|call| match call {
+            Call::Free { handle, .. } => Some(*handle),
+            _ => None,
+        });
+        freed.collect()
+    }
+
+    fn word_at(params: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(params[at..at + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn a_contexts_channels_share_one_group_with_a_subcontext_for_each_seat() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        let compute = seated(&mut device, &space, 1, COMPUTE_SEAT);
+        let groups = allocations(&device, CHANNEL_GROUP);
+        assert_eq!(groups.len(), 1, "one group for both");
+        let (_, group, params) = &groups[0];
+        assert_eq!(word_at(params, GROUP_PARAM_ERROR_CONTEXT), 0, "the group outlives any one channel");
+        assert_eq!(word_at(params, GROUP_PARAM_ADDRESS_SPACE), space.handle);
+        assert_eq!((drawing.group, compute.group), (*group, *group));
+
+        let shares = allocations(&device, CONTEXT_SHARE);
+        let flags: Vec<u32> =
+            shares.iter().map(|(_, _, params)| word_at(params, SHARE_PARAM_FLAGS)).collect();
+        assert_eq!(flags, [SHARE_SYNCHRONOUS, SHARE_ASYNCHRONOUS]);
+        assert!(shares.iter().all(|(parent, _, params)| {
+            parent == group && word_at(params, SHARE_PARAM_ADDRESS_SPACE) == space.handle
+        }));
+
+        let channels = allocations(&device, BLACKWELL.channel_class);
+        assert!(channels.iter().all(|(parent, _, _)| parent == group));
+        let placed: Vec<(u32, u32)> = channels
+            .iter()
+            .map(|(_, _, params)| {
+                (word_at(params, CHANNEL_PARAM_FLAGS), word_at(params, CHANNEL_PARAM_SHARE))
+            })
+            .collect();
+        assert_eq!(placed, [(0, shares[0].1), (CHANNEL_FLAG_SECOND_RUNQUEUE, shares[1].1)]);
+    }
+
+    #[test]
+    fn a_compute_seat_gets_the_compute_class_and_deferred_controls_on_their_usual_subchannels() {
+        let (mut device, space) = device();
+        seated(&mut device, &space, 0, Seat::Drawing);
+        let compute = seated(&mut device, &space, 1, COMPUTE_SEAT);
+        let on_channel = |class: u32| {
+            allocations(&device, class).iter().filter(|(parent, _, _)| *parent == compute.channel).count()
+        };
+        for &(class, _) in BLACKWELL.graphics_classes {
+            let expected = usize::from(class == BLACKWELL.compute_class || class == DEFERRED_API);
+            assert_eq!(on_channel(class), expected, "class {class:#x}");
+        }
+        assert!(compute.compute_object().is_some());
+        let words = compute.area().load_words(PRELUDE, compute.setup_words as usize);
+        assert_eq!(words[0], increasing(COMPUTE_SUBCHANNEL, SET_OBJECT, 1));
+        assert_eq!(words[1], BLACKWELL.compute_class);
+        assert_eq!(words[2], increasing(5, SET_OBJECT, 1));
+        assert_eq!(words.len(), 4);
+        assert_eq!(compute.only_bound(), Some(1 << COMPUTE_SUBCHANNEL | 1 << 5));
+        assert!(compute.in_context_group());
+    }
+
+    #[test]
+    fn a_drawing_seat_binds_every_class_and_is_not_held_to_some() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        let alone =
+            Channel::new(&mut device, &BLACKWELL, &HOST_615, &space, place_at(1), Engine::Graphics).unwrap();
+        let (seat, own) = (drawing.setup_words as usize, alone.setup_words as usize);
+        assert_eq!(drawing.area().load_words(PRELUDE, seat), alone.area().load_words(PRELUDE, own));
+        assert_eq!(drawing.only_bound(), None);
+        assert_eq!(alone.only_bound(), None);
+        assert!(!alone.in_context_group());
+    }
+
+    #[test]
+    fn the_group_is_started_once_and_a_channel_that_joins_is_started_alone() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        let compute = seated(&mut device, &space, 1, COMPUTE_SEAT);
+        assert_eq!(controls(&device, CONTROL_SCHEDULE_CHANNEL_GROUP), [drawing.group]);
+        assert_eq!(controls(&device, CONTROL_SCHEDULE_CHANNEL), [compute.channel]);
+    }
+
+    #[test]
+    fn a_channel_the_rm_will_not_start_alone_is_started_with_its_group() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        device.rm.refuse_control = Some(CONTROL_SCHEDULE_CHANNEL);
+        seated(&mut device, &space, 1, COMPUTE_SEAT);
+        assert_eq!(controls(&device, CONTROL_SCHEDULE_CHANNEL_GROUP), [drawing.group, drawing.group]);
+        assert_eq!(device.context_groups.members(CONTEXT), 2);
+    }
+
+    #[test]
+    fn a_compute_seat_can_come_first() {
+        let (mut device, space) = device();
+        let compute = seated(&mut device, &space, 0, COMPUTE_SEAT);
+        let drawing = seated(&mut device, &space, 1, Seat::Drawing);
+        assert_eq!(controls(&device, CONTROL_SCHEDULE_CHANNEL_GROUP), [compute.group]);
+        assert_eq!(controls(&device, CONTROL_SCHEDULE_CHANNEL), [drawing.channel]);
+        assert_eq!(allocations(&device, CHANNEL_GROUP).len(), 1);
+    }
+
+    #[test]
+    fn queues_that_name_one_subcontext_share_it() {
+        let (mut device, space) = device();
+        seated(&mut device, &space, 0, COMPUTE_SEAT);
+        seated(&mut device, &space, 1, COMPUTE_SEAT);
+        seated(&mut device, &space, 2, Seat::Compute { index: 2, prefer_lower: true });
+        let shares = allocations(&device, CONTEXT_SHARE);
+        let flags: Vec<u32> =
+            shares.iter().map(|(_, _, params)| word_at(params, SHARE_PARAM_FLAGS)).collect();
+        assert_eq!(flags, [SHARE_ASYNCHRONOUS, SHARE_ASYNCHRONOUS_PREFER_LOWER]);
+    }
+
+    #[test]
+    fn another_context_gets_another_group() {
+        let (mut device, space) = device();
+        seated(&mut device, &space, 0, Seat::Drawing);
+        let other = Channel::new_in_context(
+            &mut device,
+            &BLACKWELL,
+            &HOST_615,
+            &space,
+            place_at(1),
+            CONTEXT + 0x40,
+            Seat::Drawing,
+        );
+        other.unwrap();
+        assert_eq!(allocations(&device, CHANNEL_GROUP).len(), 2);
+        assert_eq!(device.context_groups.len(), 2);
+    }
+
+    #[test]
+    fn a_seat_the_rm_refuses_frees_what_it_made_and_leaves_the_group_as_it_was() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        let before = device.rm.calls.len();
+        device.rm.refuse_class = Some(BLACKWELL.compute_class);
+        let refused = Channel::new_in_context(
+            &mut device,
+            &BLACKWELL,
+            &HOST_615,
+            &space,
+            place_at(1),
+            CONTEXT,
+            COMPUTE_SEAT,
+        );
+        assert!(refused.is_err());
+        device.rm.refuse_class = None;
+        let shares = allocations(&device, CONTEXT_SHARE);
+        let channels = allocations(&device, BLACKWELL.channel_class);
+        let freed: Vec<Handle> = device.rm.calls[before..]
+            .iter()
+            .filter_map(|call| match call {
+                Call::Free { handle, .. } => Some(*handle),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(freed[..2], [channels[1].1, shares[1].1], "the channel, then the subcontext it made");
+        assert!(!freed.contains(&drawing.group), "the group is the drawing channel's too");
+        assert_eq!(device.context_groups.members(CONTEXT), 1);
+        assert_eq!(device.context_groups.share(CONTEXT, 1), None);
+        let unmapped = device.rm.calls[before..].iter().any(
+            |call| matches!(call, Call::UnmapDma { address, .. } if *address == place_at(1).area_address),
+        );
+        assert!(unmapped, "its area is unmapped, so the address can be used again");
+        // The same place can be used for a channel in a group of its own.
+        Channel::new(&mut device, &BLACKWELL, &HOST_615, &space, place_at(1), Engine::Graphics).unwrap();
+    }
+
+    #[test]
+    fn a_first_channel_the_rm_refuses_takes_its_new_group_with_it() {
+        let (mut device, space) = device();
+        device.rm.refuse_class = Some(BLACKWELL.compute_class);
+        let refused = Channel::new_in_context(
+            &mut device,
+            &BLACKWELL,
+            &HOST_615,
+            &space,
+            place_at(0),
+            CONTEXT,
+            COMPUTE_SEAT,
+        );
+        assert!(refused.is_err());
+        let group = allocations(&device, CHANNEL_GROUP)[0].1;
+        assert!(frees(&device).contains(&group));
+        assert!(device.context_groups.is_empty());
+    }
+
+    #[test]
+    fn a_compute_seat_on_the_first_subcontext_is_refused_before_anything_is_made() {
+        let (mut device, space) = device();
+        let calls = device.rm.calls.len();
+        let seat = Seat::Compute { index: 0, prefer_lower: false };
+        let refused =
+            Channel::new_in_context(&mut device, &BLACKWELL, &HOST_615, &space, place_at(0), CONTEXT, seat);
+        assert!(refused.is_err());
+        assert_eq!(device.rm.calls.len(), calls);
+    }
+
+    #[test]
+    fn a_channel_that_leaves_takes_its_subcontext_and_the_last_one_the_group() {
+        let (mut device, space) = device();
+        let drawing = seated(&mut device, &space, 0, Seat::Drawing);
+        let first = seated(&mut device, &space, 1, COMPUTE_SEAT);
+        let second = seated(&mut device, &space, 2, COMPUTE_SEAT);
+        let (group, shares) = (drawing.group, allocations(&device, CONTEXT_SHARE));
+        let (drawing_channel, first_channel, second_channel) =
+            (drawing.channel, first.channel, second.channel);
+
+        let before = frees(&device).len();
+        first.close(&mut device, &space).unwrap();
+        assert_eq!(frees(&device)[before..][0], first_channel);
+        assert!(!frees(&device).contains(&shares[1].1), "the other compute channel is still on it");
+
+        // The drawing channel can go before the rest, and the group stays for them.
+        let before = frees(&device).len();
+        drawing.close(&mut device, &space).unwrap();
+        assert_eq!(frees(&device)[before..][..2], [drawing_channel, shares[0].1]);
+        assert!(!frees(&device).contains(&group));
+
+        let before = frees(&device).len();
+        second.close(&mut device, &space).unwrap();
+        assert_eq!(frees(&device)[before..][..3], [second_channel, shares[1].1, group]);
+        assert!(device.context_groups.is_empty());
+    }
+
+    #[test]
+    fn a_group_of_its_own_still_goes_whole() {
+        let (mut device, space) = device();
+        let alone = channel(&mut device, &space, Engine::Graphics);
+        let group = alone.group;
+        let before = frees(&device).len();
+        alone.close(&mut device, &space).unwrap();
+        assert_eq!(frees(&device)[before], group);
+    }
+
+    #[test]
+    fn a_seated_channel_gets_no_slice_unless_every_graphics_channel_does() {
+        let (mut device, space) = device();
+        seated(&mut device, &space, 0, Seat::Drawing);
+        assert!(timeslices_asked_for(&device).is_empty());
+        let (mut device, space) = self::device();
+        device.graphics_timeslice_micros = 4000;
+        seated(&mut device, &space, 0, Seat::Drawing);
+        seated(&mut device, &space, 1, COMPUTE_SEAT);
+        assert_eq!(timeslices_asked_for(&device), [4000], "once, for the group");
     }
 
     #[test]

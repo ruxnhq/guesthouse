@@ -325,6 +325,7 @@ impl Rm for FakeRm {
             return Ok(STATUS_OK);
         }
         if command == super::classes::CONTROL_SCHEDULE_CHANNEL_GROUP
+            || command == super::classes::CONTROL_SCHEDULE_CHANNEL
             || command == super::classes::CONTROL_DEFERRED_API
         {
             return Ok(STATUS_OK);

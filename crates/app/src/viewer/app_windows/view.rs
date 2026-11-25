@@ -26,6 +26,44 @@ const HOST_SIZE_HOLD: Duration = Duration::from_millis(800);
 /// How long the guest has to answer a size before the window goes back to its cell's.
 const GUEST_ANSWER: Duration = Duration::from_millis(3000);
 
+/// How far in from a window's edge a press resizes the window, in logical units, and how far along
+/// the edge from a corner it takes the corner. Windows' own resize border is outside the frame the
+/// helper crops, so the host window has to have its own: an undecorated window has none from any
+/// compositor.
+const EDGE: f64 = 4.0;
+const CORNER: f64 = 14.0;
+
+/// The edge of a window of `width` by `height` that a point is on, if any.
+fn edge_at(x: f64, y: f64, width: f64, height: f64) -> Option<gdk::SurfaceEdge> {
+    let (left, right, top, bottom) = (x < EDGE, x >= width - EDGE, y < EDGE, y >= height - EDGE);
+    let (near_left, near_right) = (x < CORNER, x >= width - CORNER);
+    let (near_top, near_bottom) = (y < CORNER, y >= height - CORNER);
+    Some(match () {
+        _ if (top && near_left) || (left && near_top) => gdk::SurfaceEdge::NorthWest,
+        _ if (top && near_right) || (right && near_top) => gdk::SurfaceEdge::NorthEast,
+        _ if (bottom && near_left) || (left && near_bottom) => gdk::SurfaceEdge::SouthWest,
+        _ if (bottom && near_right) || (right && near_bottom) => gdk::SurfaceEdge::SouthEast,
+        _ if top => gdk::SurfaceEdge::North,
+        _ if bottom => gdk::SurfaceEdge::South,
+        _ if left => gdk::SurfaceEdge::West,
+        _ if right => gdk::SurfaceEdge::East,
+        _ => return None,
+    })
+}
+
+fn edge_cursor(edge: gdk::SurfaceEdge) -> &'static str {
+    match edge {
+        gdk::SurfaceEdge::NorthWest => "nw-resize",
+        gdk::SurfaceEdge::North => "n-resize",
+        gdk::SurfaceEdge::NorthEast => "ne-resize",
+        gdk::SurfaceEdge::West => "w-resize",
+        gdk::SurfaceEdge::East => "e-resize",
+        gdk::SurfaceEdge::SouthWest => "sw-resize",
+        gdk::SurfaceEdge::South => "s-resize",
+        _ => "se-resize",
+    }
+}
+
 /// A size asked of the guest, the cell's size then, and when.
 type Asked = ((i32, i32), (i32, i32), Instant);
 
@@ -81,6 +119,10 @@ pub struct View {
     /// window larger than the work area) is not asked for again, and the guest's is asked for the
     /// window's size instead.
     set_size: Slot<Option<((i32, i32), Instant)>>,
+    /// The guest's cursor, shown again when the pointer leaves an edge.
+    guest_cursor: RefCell<Option<gdk::Cursor>>,
+    /// The edge the pointer is on, while it is on one.
+    on_edge: Slot<Option<gdk::SurfaceEdge>>,
 }
 
 pub fn add_style(display: &gdk::Display) {
@@ -134,6 +176,8 @@ impl View {
             free_size: Slot::new(None),
             was_free: Slot::new(true),
             set_size: Slot::new(None),
+            guest_cursor: RefCell::default(),
+            on_edge: Slot::new(None),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -389,7 +433,59 @@ impl View {
     }
 
     pub fn set_cursor(&self, cursor: Option<&gdk::Cursor>) {
-        self.frame.set_cursor(cursor);
+        self.guest_cursor.replace(cursor.cloned());
+        if self.on_edge.get().is_none() {
+            self.frame.set_cursor(cursor);
+        }
+    }
+
+    /// The edge of the window a point of the picture's widget is on, when a press there resizes it: a
+    /// window the guest lets be resized, free to be sized.
+    fn resize_edge(&self, x: f64, y: f64) -> Option<gdk::SurfaceEdge> {
+        let Host::Window(window) = &self.host else { return None };
+        if !self.cell.borrow().resizable || !self.free(window) {
+            return None;
+        }
+        let (width, height) = self.frame.allocated()?;
+        edge_at(x, y, f64::from(width), f64::from(height))
+    }
+
+    /// Shows the resize cursor while the pointer is on an edge, and the guest's elsewhere. Says whether
+    /// it is on one.
+    fn follow_edge(&self, x: f64, y: f64) -> bool {
+        let edge = self.resize_edge(x, y);
+        if self.on_edge.replace(edge) != edge {
+            match edge {
+                Some(edge) => self.frame.set_cursor_from_name(Some(edge_cursor(edge))),
+                None => self.frame.set_cursor(self.guest_cursor.borrow().as_ref()),
+            }
+        }
+        edge.is_some()
+    }
+
+    /// A press on an edge: the compositor resizes the window from here on, and the guest's window
+    /// follows it (`keep_size`).
+    fn start_resize(&self, gesture: &gtk::GestureClick, edge: gdk::SurfaceEdge, x: f64, y: f64) {
+        let Some(event) = gesture.current_event() else { return };
+        let Some(device) = event.device() else { return };
+        let Some(native) = self.frame.native() else { return };
+        let at = graphene::Point::new(x as f32, y as f32);
+        let Some(on_surface) = self.frame.compute_point(&native, &at) else { return };
+        let (shift_x, shift_y) = native.surface_transform();
+        if let Some(toplevel) = native.surface().and_then(|surface| surface.downcast::<gdk::Toplevel>().ok())
+        {
+            toplevel.begin_resize(
+                edge,
+                Some(&device),
+                PRIMARY_BUTTON as i32,
+                f64::from(on_surface.x()) + shift_x,
+                f64::from(on_surface.y()) + shift_y,
+                event.time(),
+            );
+        }
+        self.moved_window.set(true);
+        // The compositor has the button from here on, as for a move.
+        gesture.reset();
     }
 
     /// What of the cell is on the guest's screen, as a rectangle of the frame. A cell with none keeps
@@ -541,6 +637,7 @@ impl View {
             // Still a click, which the guest gets whole when it is let go.
             Some(false) => {}
             Some(true) => self.start_window_move(),
+            None if self.follow_edge(x, y) => {}
             None => {
                 let point = self.send_pointer(hub, x, y);
                 hub.trace(&format!(
@@ -578,6 +675,13 @@ impl View {
 
     fn on_button(&self, hub: &Hub, gesture: &gtk::GestureClick, x: f64, y: f64, down: bool) {
         let button = gesture.current_button();
+        if down
+            && button == PRIMARY_BUTTON
+            && let Some(edge) = self.resize_edge(x, y)
+        {
+            self.start_resize(gesture, edge, x, y);
+            return;
+        }
         if down {
             hub.focus(&self.cell.borrow());
             let strip = !self.is_popup() && button == PRIMARY_BUTTON && {

@@ -9,7 +9,7 @@ use crate::app_windows::{
 use std::sync::Arc;
 use std::time::Duration;
 
-fn refused(context: &Context, words: &str) -> String {
+pub(super) fn refused(context: &Context, words: &str) -> String {
     match said(context, words).1 {
         Err(Problem::Failed(failure)) => failure.0,
         other => panic!("{words:?} gave {other:?}"),
@@ -61,20 +61,39 @@ fn cell(id: &str, title: &str, popup_of: Option<&str>) -> Cell {
     }
 }
 
-struct Rig {
-    context: Context,
-    agent: Arc<ScriptedAgent>,
-    helper: FakeHelper,
+pub(super) struct Rig {
+    pub context: Context,
+    pub agent: Arc<ScriptedAgent>,
+    pub helper: FakeHelper,
+    pub machine: Machine,
 }
 
 /// A Windows machine that runs as pid 40, whose helper is a pretend one on a port of its own, and whose
 /// agent answers from a list. With `on` false the switch was never set.
-fn rig(scratch: &Scratch, kind: Kind, on: bool, answers: &[&str]) -> Rig {
+pub(super) fn rig(scratch: &Scratch, kind: Kind, on: bool, answers: &[&str]) -> Rig {
     rig_listening(scratch, kind, on, answers, true)
 }
 
 /// With `listening` false the machine's helper port is one that nothing listens on.
-fn rig_listening(scratch: &Scratch, kind: Kind, on: bool, answers: &[&str], listening: bool) -> Rig {
+pub(super) fn rig_listening(
+    scratch: &Scratch,
+    kind: Kind,
+    on: bool,
+    answers: &[&str],
+    listening: bool,
+) -> Rig {
+    rig_with(scratch, kind, on, answers, listening, true)
+}
+
+/// With `up` false the machine is off: its process is not there until `start_process` makes it.
+pub(super) fn rig_with(
+    scratch: &Scratch,
+    kind: Kind,
+    on: bool,
+    answers: &[&str],
+    listening: bool,
+    up: bool,
+) -> Rig {
     let mut context = scratch_context(scratch);
     let agent = Arc::new(ScriptedAgent::answering(answers));
     context.agent = agent.clone();
@@ -89,18 +108,25 @@ fn rig_listening(scratch: &Scratch, kind: Kind, on: bool, answers: &[&str], list
     if on && kind == Kind::Windows {
         set_on(&context, &machine, true).unwrap();
     }
+    if up {
+        start_process(&context, &machine);
+    }
+    Rig { context, agent, helper, machine }
+}
+
+/// The machine's QEMU, as the system would show it.
+pub(super) fn start_process(context: &Context, machine: &Machine) {
     let qemu = context.paths.qemu.display().to_string();
     let monitor = format!("unix:{}/qmp.sock,server=on", context.run_folder(None).display());
     let disk = format!("file={},format=qcow2", machine.disk);
-    let nic = format!("user,{}", forward_word(host_port(&context, None)));
+    let nic = format!("user,{}", forward_word(host_port(context, None)));
     crate::processes::stand_in::fake_process(
-        &context,
+        context,
         40,
         &[&qemu, "-qmp", &monitor, &disk, "-nic", &nic],
         &[],
         "",
     );
-    Rig { context, agent, helper }
 }
 
 fn two_cells() -> Layout {
@@ -212,6 +238,8 @@ fn the_words_after_windows_and_app_are_checked() {
     assert!(usage_of("app a").contains("app needs a machine and a program."));
     assert!(usage_of("app a b c").contains("app takes only a machine and a program."));
     assert!(usage_of("app a b --json").contains("app has no option --json."));
-    assert!(USAGE.contains("windows MACHINE [--json]") && USAGE.contains("app MACHINE PROGRAM"));
+    assert!(
+        USAGE.contains("windows MACHINE [--json]") && USAGE.contains("app MACHINE PROGRAM [--start-menu]")
+    );
     assert!(USAGE.contains("remote-desktop, ssh,\n                             app-windows,"));
 }

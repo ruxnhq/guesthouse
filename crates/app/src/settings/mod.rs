@@ -9,6 +9,7 @@
 
 mod account;
 mod android;
+mod apps;
 mod copies;
 mod disk;
 mod display;
@@ -183,6 +184,7 @@ struct Pages {
     storage: adw::PreferencesPage,
     network: adw::PreferencesPage,
     devices: adw::PreferencesPage,
+    apps: adw::PreferencesPage,
     advanced: adw::PreferencesPage,
     list: gtk::ListBox,
 }
@@ -292,6 +294,7 @@ impl Pages {
             storage: add("storage", "Storage"),
             network: add("network", "Network"),
             devices: add("devices", "Devices"),
+            apps: add("apps", "Apps"),
             advanced: add("advanced", "Advanced"),
             list,
         };
@@ -387,6 +390,7 @@ struct Parts {
     disk: disk::Disk,
     drives: drives::Drives,
     snapshots: snapshots::Snapshots,
+    apps: Option<apps::Apps>,
     _starting: starting::Starting,
     _token: token::Token,
     _account: account::Account,
@@ -477,6 +481,7 @@ impl SettingsDialog {
         let remote_access = remote_access::RemoteAccess::new(&shared, &pages.network);
         let sharing = sharing::Sharing::new(&shared, &pages.devices);
         let usb = usb::Usb::new(&shared, &pages.devices);
+        let apps = apps::Apps::new(&shared, &pages.apps);
         let jail = jail::Jail::new(&shared, &advanced.security);
         for group in [&overview.gpu, &overview.guest, &overview.actions] {
             hide_if_empty(group);
@@ -489,6 +494,7 @@ impl SettingsDialog {
             (&pages.storage, "storage"),
             (&pages.network, "network"),
             (&pages.devices, "devices"),
+            (&pages.apps, "apps"),
             (&pages.advanced, "advanced"),
         ];
         for (page, name) in named {
@@ -515,6 +521,7 @@ impl SettingsDialog {
             disk,
             drives,
             snapshots,
+            apps,
             network,
             remote_access,
             sharing,
@@ -578,6 +585,9 @@ impl SettingsDialog {
         parts.disk.set_status(status);
         parts.drives.set_status(status);
         parts.snapshots.set_status(status);
+        if let Some(apps) = &parts.apps {
+            apps.set_status(status);
+        }
         parts.sharing.set_status(status);
         parts.network.set_status(status);
         parts.remote_access.set_status(status);

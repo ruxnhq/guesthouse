@@ -41,12 +41,22 @@ pub struct AgentStarter {
     machine: Machine,
     slot: Option<Slot>,
     started: AtomicBool,
+    /// Whether the last start failed for a reason that time can mend: a guest that is still starting
+    /// has no session yet and an agent that is not up.
+    may_pass: AtomicBool,
     last: Mutex<Option<std::result::Result<(), String>>>,
 }
 
 impl AgentStarter {
     fn new(context: Arc<Context>, machine: Machine, slot: Option<Slot>) -> Self {
-        Self { context, machine, slot, started: AtomicBool::new(false), last: Mutex::new(None) }
+        Self {
+            context,
+            machine,
+            slot,
+            started: AtomicBool::new(false),
+            may_pass: AtomicBool::new(false),
+            last: Mutex::new(None),
+        }
     }
 
     /// Whether this starter started a helper that was not running.
@@ -55,6 +65,10 @@ impl AgentStarter {
     }
 
     /// Why the last start failed, if it did.
+    pub fn may_pass(&self) -> bool {
+        self.may_pass.load(Ordering::Relaxed)
+    }
+
     pub fn failure(&self) -> Option<String> {
         self.last.lock().ok()?.clone()?.err()
     }
@@ -85,6 +99,7 @@ impl AgentStarter {
         if said.contains(STARTED_WORD) {
             return Ok(());
         }
+        self.may_pass.store(said.contains(NOBODY_WORD) || said.trim().is_empty(), Ordering::Relaxed);
         Err(if said.contains(NOBODY_WORD) {
             format!("Nobody is logged in to {name}, so there is no session for the app windows helper.")
         } else if said.trim().is_empty() {
@@ -206,6 +221,12 @@ impl MachineLink {
             Status::Down(why) => why.clone(),
             _ => format!("The app windows helper in {name} did not answer."),
         }))
+    }
+
+    /// Whether the helper's start failed in a way that a guest that is still coming up explains, so
+    /// that asking again a little later can work: nobody is logged in yet, or the agent does not answer.
+    pub fn start_may_pass(&self) -> bool {
+        self.starter.may_pass()
     }
 
     /// Ends the helper if this link started it, so that no helper a look started is left running. What

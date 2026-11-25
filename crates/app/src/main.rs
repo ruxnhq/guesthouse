@@ -47,6 +47,15 @@ fn main() -> gtk::glib::ExitCode {
         }
         None => {}
     }
+    // One step from a launcher entry to a program's window.
+    match app_windows::launch::request(&arguments) {
+        Some(Ok(request)) => return app_windows::launch::run(request),
+        Some(Err(text)) => {
+            eprintln!("{text}");
+            return gtk::glib::ExitCode::FAILURE;
+        }
+        None => {}
+    }
     match lab_crop::request(&arguments) {
         Some(Ok(request)) => return lab_crop::run(request),
         Some(Err(text)) => {

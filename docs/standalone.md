@@ -2,9 +2,9 @@
 
 Guesthouse starts the daemon and QEMU for you. If you'd rather start them yourself, from a script or from libvirt, you can. The daemon can take the guest's memory as two files you name, and `guesthouse-vm command` prints the words to start a machine this way.
 
-I've started the daemon on its memory files, with a pretend GPU behind it, and started the patched QEMU with the GPU's devices beside it. QEMU connected to both sockets, and both had the same two files open. I haven't run a Windows guest with the real GPU this way yet, and I don't test it with each release. Treat this page as a map, and expect to find things I missed.
+I've started the daemon on its memory files, with a pretend GPU behind it, and started the patched QEMU with the GPU's devices beside it. QEMU connected to both sockets, and both had the same two files open. That's as far as I've run it myself. A tester has run a Windows guest with a real GPU this way, from a script, and [what has run](#what-has-run) says what, with the versions. I don't test it with each release. Treat this page as a map, and expect to find things I missed.
 
-On Proxmox VE, where Proxmox starts QEMU, [Proxmox VE](proxmox.md) says how a VM runs this way and what has run.
+On Proxmox VE, where Proxmox starts QEMU, [Proxmox VE](proxmox.md) says how a VM runs this way and what has run. For libvirt, [the picture over spice](standalone-spicedisplay.md) has a domain that runs.
 
 ## The pieces
 
@@ -62,6 +62,40 @@ The environment of the daemon, besides the two files:
 | `GUESTHOUSE_AMD_CARD` | The PCI address of the AMD card, for a machine on AMD. |
 | `GUESTHOUSE_NVIDIA_CARD` | The PCI address of the NVIDIA card, for a machine given one other than setup's. Unset is setup's card. |
 
+## What has run
+
+A tester ran one Windows machine this way on 20 November 2026, from a shell script with the printed words in it. The runs haven't been repeated since, so no release after 0.7.0 has run this way with Guesthouse's own QEMU.
+
+| | |
+|---|---|
+| Host | A Proxmox VE 9.2 host: Debian 13, kernel `7.0.14-29-pve`. Guesthouse was installed for an ordinary user, as on any Debian, and Proxmox started nothing in these runs |
+| Card | Radeon 780M, `1002:15bf`, an integrated RDNA3 GPU |
+| Guesthouse | 0.7.0: its daemon, its QEMU, and the words its `guesthouse-vm command` printed |
+| Guest | Windows 11 Pro, build 26300, with AMD's driver from Adrenalin 26.10.2 (32.0.32015.12012). 4 cores, 6 GiB of RAM, a TPM, and its disk on SATA. Guesthouse 0.6.2 had made and installed it, and `guesthouse-vm start` had started it many times before |
+
+The steps, as the script took them:
+
+1. `guesthouse-vm command NAME`, with the machine stopped. Asked while the machine was running, it added two notes, about the slots and about a TCP port in use, and both were about the running machine itself.
+2. The run folder, the old sockets removed, and `swtpm`, as printed.
+3. The daemon as the user, in the background, with the printed environment and its output in `daemon.out`. The tester's own `GUESTHOUSE_AMD_IB_DUMP=1` was in the environment too. Then the wait for both sockets, which gave up if the daemon had gone.
+4. QEMU with the printed words, less `-display dbus,p2p=yes` and the app's four `-qmp`. In their place it had `-display none`, one `-qmp unix:PATH,server=on,wait=off`, and `-pidfile` with `-daemonize`, so the script didn't have to stay.
+5. To stop, two lines to the QMP socket, `{"execute": "qmp_capabilities"}` and `{"execute": "system_powerdown"}`. Then a wait for QEMU's process to go, `kill` for the daemon and a wait for it, and `rm` for the two memory files. The script would have sent QMP's `quit` after 150 seconds, and never had to.
+
+What came of it:
+
+| Run | | GravityMark 1.89, Direct3D 12, 1920x1080 |
+|---|---|---|
+| The same Windows from `guesthouse-vm start`, the same afternoon | | 6553 |
+| Daemon and QEMU as the user | the desktop came up at 1920x1080 and 144 Hz, as Guesthouse had left it, and the GPU was working | 6094 a minute after the boot, then 6477 |
+| Daemon as the user, QEMU as root | the GPU was working. Root's QEMU opened the user's memory files, which are mode 600, and both sockets | 6557 |
+| The same, on a throwaway copy of the disk, with [some words changed](#which-of-qemus-words-are-yours) | the GPU was working | 6300, with the render device at another address |
+
+- Each stop in these runs went the same way. QEMU had gone 4 seconds after `system_powerdown`, the daemon ended on `kill`, `swtpm` had ended by itself, and after the `rm` nothing of the machine was left in `/dev/shm`.
+- The kernel's log had no line from amdgpu in any of it, and none in the run below.
+- The same script also ran the QEMU of a `pve-qemu-kvm` 11.1.3-2 built with only the `hw/hyperv` commits of the patch, unpacked beside the system's and run as root. The GPU was working, and GravityMark was 6478. So a QEMU with only that part of the patch runs a Windows guest this way, and [Proxmox VE](proxmox.md) builds on that. Its daemon side has run there since, from a hookscript.
+
+Not run: any release after 0.7.0 with Guesthouse's own QEMU, a machine with its disk on NVMe, an NVIDIA or Intel card, a machine in a slot other than 0, and QEMU as a user that is neither the daemon's nor root.
+
 ## Which of QEMU's words are yours
 
 The printed list is about 90 words. In groups:
@@ -71,6 +105,15 @@ The printed list is about 90 words. In groups:
 - **Only the app uses these.** `-display dbus,p2p=yes` and the four `-qmp` sockets are how the app's viewer and its controls reach QEMU. Without the app you can drop them. Keep one `-qmp` of your own to talk to QEMU.
 
 That's my reading of it. I haven't taken words out one at a time to see what breaks.
+
+A tester changed a few, all at once, on a throwaway copy of a machine's disk, in the runs under [what has run](#what-has-run). Windows started with the GPU working with all of these:
+
+- Proxmox's CPU word for a Windows guest in place of the printed one. It has no `hv-stimer-direct`, `hv-frequencies` or `hv-tlbflush`. It kept `-svm`, on an AMD CPU.
+- `tpm-tis` in place of `tpm-crb`, on a new, empty TPM.
+- Another build of the firmware, Proxmox's, with new variables. Windows booted from the disk with no boot entry.
+- In a second start, `gpupv-render` at another PCI address as well, `addr=0x12`. Windows found a new device, installed its driver on it by itself, and the GPU was working after 75 seconds.
+
+One at a time wasn't tried, and neither was a start without `-svm`.
 
 The printed command runs QEMU unjailed, with its sockets as paths. The app puts QEMU in a jail ([security](security.md)) and hands it its sockets open. In this mode that is yours to do. A QEMU that a guest has taken over can do anything your user can.
 

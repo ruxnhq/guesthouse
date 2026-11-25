@@ -328,3 +328,43 @@ fn an_icon_that_is_not_a_small_png_is_not_written() {
         "no icon file came of it"
     );
 }
+
+/// The viewer writes a hidden entry from more than one thread (a window, the program list, each icon)
+/// while the user may add the same program: each write is whole, and the user's entry stays.
+#[test]
+fn entries_written_at_once_are_each_whole_and_a_chosen_one_is_never_hidden_again() {
+    let scratch = Scratch::new();
+    let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
+    let (context, machine) = (&rig.context, &rig.machine);
+    // A large icon, so a write takes long enough for another to come in the middle of it.
+    let mut icon = small_png();
+    let end = icon.split_off(icon.len() - 12);
+    icon.resize(900_000, 7);
+    icon.extend(end);
+    let calculator = Program { icon: Some(icon.clone()), ..program("Calculator", "Calculator.exe") };
+    let start = std::sync::Barrier::new(9);
+    std::thread::scope(|threads| {
+        for _ in 0..8 {
+            threads.spawn(|| {
+                start.wait();
+                for _ in 0..20 {
+                    launcher::ensure_for_window(context, machine, &calculator).unwrap();
+                }
+            });
+        }
+        start.wait();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        launcher::add(context, machine, &calculator).unwrap();
+    });
+    let file = applications(&scratch).join("guesthouse-work-calculator.desktop");
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(!text.contains("NoDisplay") && text.ends_with('\n'), "{text}");
+    let icons = scratch.path("home/.local/share/icons/hicolor/48x48/apps");
+    assert_eq!(fs::read(icons.join("guesthouse-work-calculator.png")).unwrap(), icon);
+    assert_eq!(
+        files_in(&applications(&scratch)),
+        ["guesthouse-work-calculator.desktop"],
+        "no file half written is left"
+    );
+    assert_eq!(files_in(&icons), ["guesthouse-work-calculator.png"]);
+}

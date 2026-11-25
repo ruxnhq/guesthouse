@@ -20,8 +20,10 @@ use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::log::write_log;
 use crate::machine::{Machine, valid_id};
+use rustix::fs::{FlockOperation, flock};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PREFIX: &str = "guesthouse-";
 const EXTENSION: &str = ".desktop";
@@ -302,15 +304,46 @@ pub fn valid_icon(png: &[u8]) -> bool {
         && png.ends_with(&IEND)
 }
 
-/// Writes a file whole or not at all, in the folder it is for.
+/// Writes a file whole or not at all, in the folder it is for. Each write has a file of its own to
+/// write into before it takes the name, as more than one thread or process may write the same entry.
 fn write_whole(file: &Path, data: &[u8]) -> Result<()> {
+    write_whole_unless(file, data, |_| false)
+}
+
+/// The same, but leaves the file as it is if, just before the new one would take its place, what is
+/// there now is one `keep` says to keep. The look and the rename are made under a lock on the folder,
+/// which every writer of these files takes, so nothing comes between them.
+fn write_whole_unless(file: &Path, data: &[u8], keep: impl Fn(&[u8]) -> bool) -> Result<()> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     let folder = file.parent().ok_or_else(|| Failure::new("A launcher file has no folder."))?;
     fs::create_dir_all(folder)?;
     let name = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    let new = folder.join(format!(".{name}.new"));
-    fs::write(&new, data)?;
-    fs::rename(&new, file)?;
-    Ok(())
+    let write = WRITES.fetch_add(1, Ordering::Relaxed);
+    let new = folder.join(format!(".{name}.{}.{write}.new", std::process::id()));
+    let written = fs::write(&new, data).map_err(Failure::from);
+    let placed = written.and_then(|()| {
+        // A folder that can't be locked (some network file systems) is written without: the write
+        // is still whole, only the look before it may be overtaken.
+        let held = fs::File::open(folder).ok();
+        if let Some(held) = &held {
+            let _ = flock(held, FlockOperation::LockExclusive);
+        }
+        if fs::read(file).is_ok_and(|there| keep(&there)) {
+            fs::remove_file(&new)?;
+        } else {
+            fs::rename(&new, file)?;
+        }
+        Ok(())
+    });
+    if placed.is_err() {
+        let _ = fs::remove_file(&new);
+    }
+    placed
+}
+
+/// Whether an entry's text is one the user asked for, which a hidden one never replaces.
+fn is_visible_entry(text: &[u8]) -> bool {
+    !String::from_utf8_lossy(text).lines().any(|line| line == "NoDisplay=true")
 }
 
 fn write_entry(context: &Context, machine: &Machine, program: &Program, hidden: bool) -> Result<PathBuf> {
@@ -334,7 +367,9 @@ fn write_entry(context: &Context, machine: &Machine, program: &Program, hidden: 
         _ => icon_file(context, &id).is_file().then(|| icon_file(context, &id)),
     };
     let file = entry_file(context, &id);
-    write_whole(&file, desktop_text(context, machine, program, icon.as_deref(), hidden).as_bytes())?;
+    let text = desktop_text(context, machine, program, icon.as_deref(), hidden);
+    // The user may have added the program while this was being written.
+    write_whole_unless(&file, text.as_bytes(), |there| hidden && is_visible_entry(there))?;
     Ok(file)
 }
 
@@ -349,7 +384,7 @@ pub fn add(context: &Context, machine: &Machine, program: &Program) -> Result<Pa
 pub fn ensure_for_window(context: &Context, machine: &Machine, program: &Program) -> Result<String> {
     let id = app_id(machine, &program.exe);
     let there = fs::read_to_string(entry_file(context, &id)).ok();
-    if there.as_ref().is_some_and(|text| !text.lines().any(|line| line == "NoDisplay=true")) {
+    if there.as_ref().is_some_and(|text| is_visible_entry(text.as_bytes())) {
         return Ok(id);
     }
     let icon_there = icon_file(context, &id).is_file();

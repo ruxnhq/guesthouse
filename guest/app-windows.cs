@@ -137,6 +137,7 @@ public class AppWindows : Form
 
     // Window styles are read as 64-bit and masked to 32 bits before testing bits.
     const long MASK32 = 0xFFFFFFFFL;
+    const long WS_SYSMENU = 0x00080000L, WS_MINIMIZEBOX = 0x00020000L, WS_MAXIMIZEBOX = 0x00010000L;
     const long WS_POPUP = 0x80000000L, WS_CAPTION = 0x00C00000L, WS_THICKFRAME = 0x00040000L;
     const long WS_EX_TOPMOST = 0x8L, WS_EX_TRANSPARENT = 0x20L, WS_EX_TOOLWINDOW = 0x80L, WS_EX_LAYERED = 0x80000L, WS_EX_NOACTIVATE = 0x08000000L;
 
@@ -750,6 +751,14 @@ public class AppWindows : Form
             height = Math.Max(0, info.rcTitleBar.B - c.Frame.T);
             RECT b;
             if (DwmGetWindowAttribute(c.Src, DWMWA_CAPTION_BUTTON_BOUNDS, out b, 16) == 0) buttons = Math.Max(0, b.R - b.L);
+            // Store apps (Calculator, Settings) draw their title bar in a frame window that reports no button bounds. Without a width the
+            // host's drag strip would cover the buttons, so the width is worked out from the style, as Windows' own buttons are 46 px
+            // (at 100%) wide, and a little more is left for the border at the right.
+            if (buttons == 0 && (c.Style & WS_SYSMENU) != 0)
+            {
+                int count = 1 + ((c.Style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) != 0 ? 2 : 0);
+                buttons = (count * 46 + 8) * (int)GetDpiForSystem() / 96;
+            }
         }
         c.CaptionH = height; c.ButtonsW = buttons;
     }

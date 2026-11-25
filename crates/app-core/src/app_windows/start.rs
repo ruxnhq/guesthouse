@@ -121,6 +121,21 @@ pub struct MachineLink {
 /// windows off, or that has no token, with the reason in words. It does not wait: the link comes up on
 /// its thread, and starts the helper itself if nothing answers.
 pub fn connect(context: &Arc<Context>, machine: &Machine, slot: Option<Slot>) -> Result<MachineLink> {
+    connect_as(context, machine, slot, false)
+}
+
+/// The same as a side connection, which a command uses beside a running viewer: the helper keeps the
+/// viewer's connection and the viewer is not disturbed.
+pub fn connect_side(context: &Arc<Context>, machine: &Machine, slot: Option<Slot>) -> Result<MachineLink> {
+    connect_as(context, machine, slot, true)
+}
+
+fn connect_as(
+    context: &Arc<Context>,
+    machine: &Machine,
+    slot: Option<Slot>,
+    side: bool,
+) -> Result<MachineLink> {
     let name = &machine.name;
     if machine.kind != Kind::Windows {
         return Err(Failure(format!(
@@ -136,6 +151,7 @@ pub fn connect(context: &Arc<Context>, machine: &Machine, slot: Option<Slot>) ->
     let config = LinkConfig {
         port: host_port(context, slot),
         token,
+        side,
         starter: Some(starter.clone()),
         timing: context.app_windows.timing,
     };

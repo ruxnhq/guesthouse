@@ -53,6 +53,7 @@ fn config(port: u16, starter: Option<&Arc<Starter>>) -> LinkConfig {
     LinkConfig {
         port,
         token: TOKEN.to_owned(),
+        side: false,
         starter: starter.map(|starter| starter.clone() as Arc<dyn HelperStarter>),
         timing: quick(),
     }
@@ -411,4 +412,36 @@ fn a_second_client_takes_the_connection_and_the_first_comes_back_later() {
     assert!(first.wait_for(SECONDS, |c| matches!(c.status(), Status::Down(_))), "the first was replaced");
     up(&mut first);
     assert!(helper.connections() >= 3, "and it took the connection back after its wait");
+}
+
+#[test]
+fn a_side_client_works_beside_the_driving_one_and_does_not_disturb_it() {
+    let helper = FakeHelper::start(TOKEN);
+    let mut driver = Client::start(config(helper.port, None));
+    up(&mut driver);
+    let mut side = Client::start(LinkConfig { side: true, ..config(helper.port, None) });
+    up(&mut side);
+    let answer = side.ask(Request::Layout, SECONDS).unwrap();
+    assert!(answer.ok);
+    // The driving connection was never replaced, so it stayed up and made no second connection.
+    assert_eq!(*driver.status(), Status::Up);
+    assert_eq!((helper.connections(), helper.with(|inner| inner.side_connections)), (1, 1));
+    let answer = driver.ask(Request::Focus { id: "10".into() }, SECONDS).unwrap();
+    assert!(answer.ok, "and it still drives");
+}
+
+#[test]
+fn two_driving_clients_still_take_the_connection_from_each_other() {
+    let helper = FakeHelper::start(TOKEN);
+    let mut first = Client::start(config(helper.port, None));
+    up(&mut first);
+    let mut side = Client::start(LinkConfig { side: true, ..config(helper.port, None) });
+    up(&mut side);
+    let mut second = Client::start(config(helper.port, None));
+    up(&mut second);
+    assert!(
+        first.wait_for(SECONDS, |c| matches!(c.status(), Status::Down(_))),
+        "a second driver replaces the first"
+    );
+    assert_eq!(*side.status(), Status::Up, "and a side one is not touched by either");
 }

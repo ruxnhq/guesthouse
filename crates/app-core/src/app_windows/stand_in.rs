@@ -3,7 +3,9 @@
 //! answers requests, and can be made to do what a real one does when things go wrong: close without a
 //! word, say nothing, speak another version, drop the connection, or be replaced by a second client.
 
-use super::message::{Layout, PROTOCOL_VERSION, Size, answer_line, desktop_line, hello_line, layout_line};
+use super::message::{
+    Layout, PROTOCOL_VERSION, SIDE_WORD, Size, answer_line, desktop_line, hello_line, layout_line,
+};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
@@ -38,6 +40,8 @@ pub struct Inner {
     pub requests: Vec<Value>,
     pub tokens_refused: usize,
     pub connections: usize,
+    /// Side connections taken, which never replace the driving one.
+    pub side_connections: usize,
     current: Option<TcpStream>,
 }
 
@@ -75,6 +79,7 @@ impl FakeHelper {
             requests: Vec::new(),
             tokens_refused: 0,
             connections: 0,
+            side_connections: 0,
             current: None,
         }));
         let responder: Arc<Mutex<Responder>> = Arc::new(Mutex::new(Box::new(answer_all)));
@@ -167,7 +172,12 @@ fn serve(stream: TcpStream, token: &str, inner: &Mutex<Inner>, responder: &Mutex
     let Ok(reading) = stream.try_clone() else { return };
     let mut reader = BufReader::new(reading);
     let mut first = String::new();
-    if reader.read_line(&mut first).is_err() || first.trim_end() != token {
+    let read = reader.read_line(&mut first);
+    let (given, side) = match first.trim_end().split_once(' ') {
+        Some((given, word)) if word == SIDE_WORD => (given, true),
+        _ => (first.trim_end(), false),
+    };
+    if read.is_err() || given != token {
         inner.lock().unwrap().tokens_refused += 1;
         let _ = stream.shutdown(Shutdown::Both);
         return;
@@ -175,11 +185,15 @@ fn serve(stream: TcpStream, token: &str, inner: &Mutex<Inner>, responder: &Mutex
     let mut writer = stream.try_clone().unwrap();
     let welcome = {
         let mut inner = inner.lock().unwrap();
-        // One host connection at a time: a second replaces the first.
-        if let Some(old) = inner.current.replace(stream.try_clone().unwrap()) {
-            let _ = old.shutdown(Shutdown::Both);
+        // One driving connection at a time: a second replaces the first. A side one is beside it.
+        if side {
+            inner.side_connections += 1;
+        } else {
+            if let Some(old) = inner.current.replace(stream.try_clone().unwrap()) {
+                let _ = old.shutdown(Shutdown::Both);
+            }
+            inner.connections += 1;
         }
-        inner.connections += 1;
         inner.welcome
     };
     match welcome {

@@ -231,6 +231,7 @@ public class AppWindows : Form
         readonly Queue<string> lines = new Queue<string>();
         string latestLayout;        // only the newest layout matters, the ones it replaced are not sent
         bool closed;
+        public bool Side;           // a short look or job beside the host's driving connection: never the current link
 
         public Link(TcpClient client, NetworkStream stream) { this.client = client; this.stream = stream; }
 
@@ -285,6 +286,7 @@ public class AppWindows : Form
     readonly string token;
     readonly string session = Guid.NewGuid().ToString("N");
     readonly object linkGate = new object();
+    int sideLinks; const int SideLinksMax = 4;
     Link current;                               // the host's connection; a newer one replaces it
     int vx, vy, ovW, ovH;                       // virtual screen origin and size = overlay
     int packL, packT, packR, packB;             // where cells are packed, inside the overlay: the screen less the taskbar
@@ -1220,6 +1222,7 @@ public class AppWindows : Form
     void Serve(TcpClient client)
     {
         Link link = null;
+        bool counted = false;
         try
         {
             IPAddress from = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
@@ -1229,12 +1232,25 @@ public class AppWindows : Form
             stream.ReadTimeout = TokenWaitMs;
             stream.WriteTimeout = WriteTimeoutMs;
             string first = ReadLine(stream, TokenMaxBytes);
-            if (first == null || first != token) return;
+            if (first == null) return;
+            // "TOKEN side": a command's connection, which does not take the viewer's.
+            bool side = false;
+            int space = first.IndexOf(' ');
+            if (space > 0 && first.Substring(space + 1) == "side") { side = true; first = first.Substring(0, space); }
+            if (first != token) return;
             stream.ReadTimeout = Timeout.Infinite;
             link = new Link(client, stream);
-            Link old;
-            lock (linkGate) { old = current; current = link; }
-            if (old != null) old.Close();
+            link.Side = side;
+            if (side)
+            {
+                lock (linkGate) { if (sideLinks >= SideLinksMax) return; sideLinks++; counted = true; }
+            }
+            else
+            {
+                Link old;
+                lock (linkGate) { old = current; current = link; }
+                if (old != null) old.Close();
+            }
             Thread writing = new Thread(link.WriteLoop);
             writing.IsBackground = true;
             writing.Start();
@@ -1253,7 +1269,11 @@ public class AppWindows : Form
         }
         finally
         {
-            if (link != null) { lock (linkGate) { if (current == link) current = null; } link.Close(); }
+            if (link != null)
+            {
+                lock (linkGate) { if (current == link) current = null; if (counted) sideLinks--; }
+                link.Close();
+            }
             try { client.Close(); } catch { }
         }
     }
@@ -1304,7 +1324,14 @@ public class AppWindows : Form
         long n = Num(r, "n", -1);
         try
         {
-            switch (Str(r, "t"))
+            string kind = Str(r, "t");
+            // A side connection looks and starts programs. What changes a window belongs to the driving connection.
+            if (link.Side && (kind == "focus" || kind == "minimize" || kind == "restore" || kind == "resize" || kind == "close"))
+            {
+                Answer(link, n, false, "a side connection cannot " + kind + " a window");
+                return;
+            }
+            switch (kind)
             {
                 case "layout": link.SendLayout(lastLayout); Answer(link, n, true, null); break;
                 case "focus": Wait(link, n, "focus", r); break;

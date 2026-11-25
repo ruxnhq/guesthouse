@@ -8,7 +8,9 @@
 //! [`super::Client`] is the end that the rest of the program holds. This is the thread behind it.
 
 use super::message::{Answer, parse_guest_line};
-use super::message::{GuestMessage, LineProblem, MOST_APPS_LINE_BYTES, MOST_LINE_BYTES, Request, token_line};
+use super::message::{
+    GuestMessage, LineProblem, MOST_APPS_LINE_BYTES, MOST_LINE_BYTES, Request, side_token_line, token_line,
+};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
@@ -110,6 +112,8 @@ pub struct LinkConfig {
     /// On this PC, where the machine's forward is.
     pub port: u16,
     pub token: String,
+    /// A side connection, which does not take the helper's driving connection from the viewer.
+    pub side: bool,
     pub starter: Option<Arc<dyn HelperStarter>>,
     pub timing: Timing,
 }
@@ -412,7 +416,12 @@ impl Link {
             stream.set_write_timeout(Some(timing.write))?;
             stream.set_nodelay(true)?;
             let mut writer = stream.try_clone()?;
-            writer.write_all(token_line(&self.config.token).as_bytes())?;
+            let first = if self.config.side {
+                side_token_line(&self.config.token)
+            } else {
+                token_line(&self.config.token)
+            };
+            writer.write_all(first.as_bytes())?;
             Ok(stream)
         });
         let stream = match opened {

@@ -188,3 +188,8 @@ fn each_request_is_written_as_the_contract_has_it() {
 fn the_token_goes_first_on_a_line_of_its_own() {
     assert_eq!(token_line("abc123"), "abc123\n");
 }
+
+#[test]
+fn a_side_connection_says_so_after_the_token() {
+    assert_eq!(side_token_line("abc123"), "abc123 side\n");
+}

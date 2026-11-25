@@ -326,6 +326,17 @@ pub fn token_line(token: &str) -> String {
     format!("{token}\n")
 }
 
+/// The first line of a side connection: the token, then a space and the word `side`. A side connection
+/// is for a short look or a short job (`layout`, `apps` and `launch`, and the answers to them): the
+/// helper does not take it for the host's one driving connection, so it neither replaces that one nor
+/// is it sent the layout when that changes. A helper of this version before the word was added
+/// refuses the line as a wrong token.
+pub fn side_token_line(token: &str) -> String {
+    format!("{token} {SIDE_WORD}\n")
+}
+
+pub const SIDE_WORD: &str = "side";
+
 /// The lines a helper writes, for the fake one and for a test that wants a message as it is sent.
 pub fn hello_line(session: &str, screen: Size, scale: u32) -> String {
     json!({"t": "hello", "v": PROTOCOL_VERSION, "session": session, "screen": screen, "scale": scale})

@@ -2,7 +2,7 @@
 //! its own on this desktop is the viewer's job. This only launches it in the guest.
 
 use super::windows::running_slot;
-use crate::app_windows::{Launch, Request, connect};
+use crate::app_windows::{Launch, Request, connect_side};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::machine::Machine;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub(super) fn run(context: &Context, machine: &Machine, program: &str, out: &mut dyn Write) -> Result<()> {
     let slot = running_slot(context, machine, "app windows")?;
     let name = &machine.name;
-    let mut link = connect(&Arc::new(context.clone()), machine, Some(slot))?;
+    let mut link = connect_side(&Arc::new(context.clone()), machine, Some(slot))?;
     link.wait_ready()?;
     // The helper stays running: what it starts is shown by it.
     let request = Request::Launch(Launch::Path { path: program.to_owned(), args: String::new() });

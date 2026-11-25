@@ -2,7 +2,7 @@
 //! Only a machine that has app windows on is asked. A helper that is not running is started for the
 //! look and ended after, so no helper that a look started is left running.
 
-use crate::app_windows::{MachineLink, connect, describe, is_on, off_text};
+use crate::app_windows::{MachineLink, connect_side, describe, is_on, off_text};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
 use crate::machine::{Kind, Machine};
@@ -37,7 +37,7 @@ pub(super) fn running_slot(context: &Context, machine: &Machine, what: &str) -> 
 
 pub(super) fn run(context: &Context, machine: &Machine, json: bool, out: &mut dyn Write) -> Result<()> {
     let slot = running_slot(context, machine, "windows")?;
-    let mut link = connect(&Arc::new(context.clone()), machine, Some(slot))?;
+    let mut link = connect_side(&Arc::new(context.clone()), machine, Some(slot))?;
     let result = look(&mut link, machine, json, out);
     link.end_if_started();
     result

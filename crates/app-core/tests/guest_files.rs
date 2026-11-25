@@ -119,7 +119,7 @@ fn the_app_windows_helper_only_answers_the_host() {
     let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
     assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
     assert!(helper.contains("if (!IPAddress.IsLoopback(from) && from.ToString() != HostAddress) return;"));
-    assert!(helper.contains("if (first == null || first != token) return;"));
+    assert!(helper.contains("if (first != token) return;"));
     let runner = fs::read_to_string(guest_file("app-windows.ps1")).unwrap();
     assert!(runner.contains("Get-Content C:\\gpupv\\token.txt"));
 }

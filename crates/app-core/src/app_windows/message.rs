@@ -94,6 +94,21 @@ pub struct Layout {
     pub cells: Vec<Cell>,
 }
 
+/// Windows' screen as the helper sees it now, whole each time: sent after the first layout and again
+/// whenever any of it changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Display {
+    /// Windows' percentage for its one monitor, as it is now (not as it was at sign-in).
+    pub scale: u32,
+    /// The percentages Windows offers for the monitor at its resolution now, from the smallest.
+    #[serde(default)]
+    pub steps: Vec<u32>,
+    /// The smallest screen that holds every window's cell with none overflowing, the taskbar
+    /// included. `None` when the helper cannot say.
+    #[serde(default)]
+    pub need: Option<Size>,
+}
+
 /// A program from the Start menu.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct App {
@@ -138,6 +153,7 @@ pub enum GuestMessage {
     Layout(Layout),
     Answer(Answer),
     Desktop(Desktop),
+    Display(Display),
     /// A type this build does not know, which a later helper may send.
     Other(String),
 }
@@ -241,6 +257,7 @@ pub fn parse_guest_line(line: &str, most: usize) -> Result<GuestMessage, LinePro
             })
         }
         "desktop" => GuestMessage::Desktop(read::<RawDesktop>(&kind, value)?.kind),
+        "display" => GuestMessage::Display(read(&kind, value)?),
         _ => GuestMessage::Other(kind),
     })
 }
@@ -282,6 +299,11 @@ pub enum Request {
     },
     /// Send the layout again now.
     Layout,
+    /// Set Windows' scale for its monitor to this percentage, one of the display's `steps`. The
+    /// answer says whether Windows took it, and a `display` message follows with the scale it is at.
+    Scale {
+        percent: u32,
+    },
 }
 
 impl Request {
@@ -296,6 +318,7 @@ impl Request {
             Self::Launch(_) => "launch",
             Self::Apps { .. } => "apps",
             Self::Layout => "layout",
+            Self::Scale { .. } => "scale",
         }
     }
 
@@ -316,6 +339,7 @@ impl Request {
             Self::Launch(Launch::Path { path, args }) => json!({"t": t, "n": n, "path": path, "args": args}),
             Self::Apps { icons } => json!({"t": t, "n": n, "icons": icons}),
             Self::Layout => json!({"t": t, "n": n}),
+            Self::Scale { percent } => json!({"t": t, "n": n, "percent": percent}),
         };
         value.to_string()
     }
@@ -353,6 +377,14 @@ pub fn answer_line(re: u64, ok: bool, error: &str) -> String {
     } else {
         json!({"t": "answer", "re": re, "ok": false, "error": error}).to_string()
     }
+}
+
+pub fn display_line(display: &Display) -> String {
+    let mut value = json!({"t": "display", "scale": display.scale, "steps": display.steps});
+    if let Some(need) = display.need {
+        value["need"] = json!(need);
+    }
+    value.to_string()
 }
 
 pub fn desktop_line(kind: &str) -> String {

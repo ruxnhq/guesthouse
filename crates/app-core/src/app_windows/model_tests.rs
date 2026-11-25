@@ -47,6 +47,7 @@ fn ids(changes: &[Change]) -> Vec<String> {
             Change::Restarted => "restart".into(),
             Change::Screen(_) => "screen".into(),
             Change::Desktop(_) => "desktop".into(),
+            Change::Display(_) => "display".into(),
         })
         .collect()
 }
@@ -203,4 +204,16 @@ fn the_focused_and_the_shown_cells_are_found() {
     model.layout(&layout(1, vec![window("w", "A"), focused, minimized]));
     assert_eq!(model.focused().unwrap().id, "v");
     assert_eq!(model.shown().count(), 2);
+}
+
+#[test]
+fn a_display_message_sets_the_scale_and_is_a_change_only_when_it_differs() {
+    let mut model = ready();
+    let display =
+        Display { scale: 125, steps: vec![100, 125, 150, 175], need: Some(Size { w: 2560, h: 1440 }) };
+    assert_eq!(ids(&model.display(&display)), ["display"]);
+    assert_eq!(model.scale_percent(), 125);
+    assert_eq!(model.steps(), Some(&[100, 125, 150, 175][..]));
+    assert_eq!(model.need(), Some(Size { w: 2560, h: 1440 }));
+    assert!(model.display(&display).is_empty(), "the same again changes nothing");
 }

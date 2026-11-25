@@ -193,3 +193,22 @@ fn the_token_goes_first_on_a_line_of_its_own() {
 fn a_side_connection_says_so_after_the_token() {
     assert_eq!(side_token_line("abc123"), "abc123 side\n");
 }
+
+#[test]
+fn a_display_line_is_read_and_written_and_need_may_be_missing() {
+    let line = r#"{"t":"display","scale":150,"steps":[100,125,150,175],"need":{"w":2560,"h":1440}}"#;
+    let display =
+        Display { scale: 150, steps: vec![100, 125, 150, 175], need: Some(Size { w: 2560, h: 1440 }) };
+    assert_eq!(parse_guest_line(line, MOST_LINE_BYTES), Ok(GuestMessage::Display(display.clone())));
+    assert_eq!(
+        parse_guest_line(&display_line(&display), MOST_LINE_BYTES),
+        Ok(GuestMessage::Display(display.clone()))
+    );
+    let bare = parse_guest_line(r#"{"t":"display","scale":100}"#, MOST_LINE_BYTES);
+    assert_eq!(bare, Ok(GuestMessage::Display(Display { scale: 100, steps: vec![], need: None })));
+}
+
+#[test]
+fn a_scale_request_names_the_percentage() {
+    assert_eq!(Request::Scale { percent: 125 }.line(4), r#"{"n":4,"percent":125,"t":"scale"}"#);
+}

@@ -18,7 +18,7 @@
 //!   viewer that decides whether to show them dimmed or to close them: [`Model::clear`] is what it
 //!   calls to close them.
 
-use super::message::{Cell, Desktop, Hello, Layout, Size, State};
+use super::message::{Cell, Desktop, Display, Hello, Layout, Size, State};
 
 /// How deep a popup of a popup of a popup may go before it is taken for a loop in the helper's data.
 const MOST_DEPTH: usize = 8;
@@ -74,6 +74,8 @@ pub enum Change {
     Removed(Cell),
     Screen(Size),
     Desktop(Desktop),
+    /// Windows' scale, the steps it offers, or the screen it needs changed.
+    Display(Display),
 }
 
 /// What a layout did.
@@ -89,6 +91,7 @@ pub struct Model {
     seq: Option<u64>,
     screen: Size,
     scale: u32,
+    display: Option<Display>,
     desktop: Desktop,
     cells: Vec<Cell>,
 }
@@ -100,6 +103,7 @@ impl Default for Model {
             seq: None,
             screen: Size::default(),
             scale: 100,
+            display: None,
             desktop: Desktop::Normal,
             cells: Vec::new(),
         }
@@ -129,7 +133,30 @@ impl Model {
         }
         self.screen = hello.screen;
         self.scale = hello.scale;
+        if started_again {
+            self.display = None;
+        }
         changes
+    }
+
+    /// The helper said how Windows' screen stands: its scale now, the steps it offers, the size it needs.
+    pub fn display(&mut self, display: &Display) -> Vec<Change> {
+        if self.display.as_ref() == Some(display) {
+            return Vec::new();
+        }
+        self.scale = display.scale;
+        self.display = Some(display.clone());
+        vec![Change::Display(display.clone())]
+    }
+
+    /// The steps Windows offers now, if a helper has said.
+    pub fn steps(&self) -> Option<&[u32]> {
+        self.display.as_ref().map(|display| display.steps.as_slice()).filter(|steps| !steps.is_empty())
+    }
+
+    /// The screen the helper needs for every window to have a cell, if it has said.
+    pub fn need(&self) -> Option<Size> {
+        self.display.as_ref().and_then(|display| display.need)
     }
 
     pub fn layout(&mut self, layout: &Layout) -> Applied {

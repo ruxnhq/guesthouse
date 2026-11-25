@@ -110,6 +110,7 @@ impl Client {
                 applied.changes
             }
             GuestMessage::Desktop(desktop) => self.model.desktop(desktop),
+            GuestMessage::Display(display) => self.model.display(&display),
             GuestMessage::Answer(_) | GuestMessage::Other(_) => Vec::new(),
         };
         if !changes.is_empty() {

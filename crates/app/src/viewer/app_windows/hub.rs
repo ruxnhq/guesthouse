@@ -4,6 +4,7 @@
 
 use super::cell_picture::Guest;
 use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, steps};
+use super::secure::SecureWindow;
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
 use crate::viewer::window_size::GuestSizer;
@@ -50,6 +51,8 @@ pub struct Hub {
     screen_said: RefCell<Option<(Size, Size)>>,
     /// The scale of the surface of the window that last had the focus.
     focus_scale: Slot<Option<f64>>,
+    /// The one window with the guest's whole frame, while its input desktop is not the normal one.
+    secure: RefCell<Option<Rc<SecureWindow>>>,
 }
 
 use std::sync::Arc;
@@ -85,6 +88,7 @@ impl Hub {
             sizer,
             screen_said: RefCell::default(),
             focus_scale: Slot::new(None),
+            secure: RefCell::new(None),
         });
         add_style(&gdk::Display::default().expect("a display"));
         let weak = Rc::downgrade(&hub);
@@ -170,6 +174,9 @@ impl Hub {
         for view in views {
             view.set_guest(now.clone());
         }
+        if let Some(secure) = self.secure.borrow().as_ref() {
+            secure.set_guest(now.clone());
+        }
     }
 
     /// Tells the helper the smallest and largest screen the host wants, when they change, and sets the
@@ -242,6 +249,10 @@ impl Hub {
 
     /// A host window got the focus, so the guest's window becomes the foreground one.
     pub fn focus(&self, cell: &Cell) {
+        // The window with the whole frame has the guest's input while it is there.
+        if self.secure.borrow().is_some() {
+            return;
+        }
         let request = focus_request(self.focus_sent.borrow().as_deref(), cell);
         if let Some(request) = request {
             *self.focus_sent.borrow_mut() = Some(cell.id.clone());
@@ -278,6 +289,20 @@ impl Hub {
         self.screen.send_key(keycode, down);
     }
 
+    /// The pointer, buttons and keys of the window that shows the secure desktop: the only window the
+    /// guest takes input from while its input desktop is not the normal one.
+    pub fn secure_pointer(&self, point: Point) {
+        self.screen.send_pointer(point, self.screen_size());
+    }
+
+    pub fn secure_button(&self, name: &'static str, down: bool) {
+        self.screen.send_button(name, down);
+    }
+
+    pub fn secure_key(&self, keycode: u32, down: bool) {
+        self.screen.send_key(keycode, down);
+    }
+
     pub fn scroll_controller(&self) -> gtk::EventControllerScroll {
         self.screen.scroll_controller(gtk::PropagationPhase::Bubble)
     }
@@ -302,6 +327,10 @@ impl Hub {
         for view in views {
             view.set_texture(texture);
             view.set_cursor(cursor.as_ref());
+        }
+        if let Some(secure) = self.secure.borrow().as_ref() {
+            secure.set_texture(texture);
+            secure.set_cursor(cursor.as_ref());
         }
     }
 
@@ -349,6 +378,8 @@ impl Hub {
             Step::Restart => {
                 self.note("the helper started again, so every window goes");
                 self.close_all();
+                // What desktop it is on is said again after its hello.
+                self.show_desktop(Desktop::Normal);
             }
             Step::Open(id) => {
                 let Some(cell) = self.cell_now(&id) else { return };
@@ -364,6 +395,7 @@ impl Hub {
                     cell.cell,
                     cell.title
                 ));
+                view.take_pointer(self.secure.borrow().is_none());
                 self.views.borrow_mut().insert(id, view);
             }
             Step::Close(id) => self.close(&id),
@@ -381,21 +413,48 @@ impl Hub {
                 for view in views {
                     view.recrop(size);
                 }
-            }
-            Step::Desktop(desktop) => {
-                // First milestone: the windows stay as they are and take what comes, which for a
-                // secure desktop is a picture that no longer matches them. Said, not hidden.
-                self.input_allowed.set(desktop == Desktop::Normal);
-                if desktop != Desktop::Normal {
-                    self.screen.release_everything();
-                    self.note(&format!(
-                        "the guest's input desktop is {desktop:?}: the windows stay as they are, and take no pointer"
-                    ));
-                } else {
-                    self.note("the guest's input desktop is normal again");
+                if let Some(secure) = self.secure.borrow().as_ref() {
+                    secure.recrop(size);
                 }
             }
+            Step::Desktop(desktop) => self.show_desktop(desktop),
         }
+    }
+
+    /// The guest's input desktop is `desktop`. Not the normal one: one window shows the whole frame and
+    /// has the input, and the app windows stay as they are and take none. The normal one again: that
+    /// window goes and the app window that had the focus has it again.
+    fn show_desktop(self: &Rc<Self>, desktop: Desktop) {
+        self.input_allowed.set(desktop == Desktop::Normal);
+        self.screen.release_everything();
+        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
+        for view in &views {
+            view.take_pointer(desktop == Desktop::Normal);
+        }
+        let old = self.secure.borrow_mut().take();
+        let came_from = old
+            .as_ref()
+            .map(|old| old.came_from.clone())
+            .unwrap_or_else(|| views.iter().find(|view| view.is_active()).map(|view| view.id.clone()));
+        if let Some(old) = &old {
+            old.close();
+        }
+        if desktop == Desktop::Normal {
+            if old.is_some() {
+                self.note("the guest's input desktop is normal again");
+            }
+            if old.is_some()
+                && let Some(view) = came_from.and_then(|id| self.views.borrow().get(&id).cloned())
+            {
+                view.bring_forward();
+            }
+            return;
+        }
+        self.note(&format!(
+            "the guest's input desktop is {desktop:?}: one window shows the whole screen, the app windows take no input"
+        ));
+        let window = SecureWindow::open(self, desktop, None, came_from);
+        *self.secure.borrow_mut() = Some(window);
     }
 
     /// The view and the popups that hang on it, popups first.
@@ -441,6 +500,9 @@ impl Hub {
             return;
         }
         self.screen.release_everything();
+        if let Some(secure) = self.secure.borrow_mut().take() {
+            secure.close();
+        }
         self.close_all();
         self.screen.end_headless();
         self.link.borrow_mut().take();

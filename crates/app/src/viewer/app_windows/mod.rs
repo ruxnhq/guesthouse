@@ -19,6 +19,7 @@ pub mod identity;
 pub mod launch;
 pub mod plan;
 mod published;
+mod secure;
 mod view;
 
 use super::frames::FrameRoute;

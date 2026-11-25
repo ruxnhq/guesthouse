@@ -63,6 +63,12 @@ pub struct StandIn {
     pub card_free: Option<u64>,
     /// Set to make the next mapping fail.
     pub fail_next_map: bool,
+    /// Set to make every mapping in this address space fail.
+    pub fail_maps_in: Option<SpaceId>,
+    /// The pieces to adopt the fence area in, if not whole.
+    pub fence_piece: Option<u64>,
+    /// The host address and size of everything adopted, in order.
+    pub adopted: Vec<(u64, u64)>,
     /// Whether submissions go to the pretend GPU. If not, they finish at once.
     pub run_work: bool,
     /// Whether the pretend GPU runs a submission to the end before answering, so none is left
@@ -189,6 +195,9 @@ impl StandIn {
             spilled: Vec::new(),
             card_free: None,
             fail_next_map: false,
+            fail_maps_in: None,
+            fence_piece: None,
+            adopted: Vec::new(),
             run_work: false,
             run_work_at_once: false,
             doorbells: Vec::new(),
@@ -386,8 +395,13 @@ impl Backend for StandIn {
         self.card_free
     }
 
-    fn adopt_host_pages(&mut self, _host_address: u64, _size: u64) -> Result<MemoryId, BackendError> {
+    fn adopt_host_pages(&mut self, host_address: u64, size: u64) -> Result<MemoryId, BackendError> {
+        self.adopted.push((host_address, size));
         Ok(self.new_memory())
+    }
+
+    fn fence_piece(&self) -> Option<u64> {
+        self.fence_piece
     }
 
     fn release_memory(&mut self, memory: MemoryId) {
@@ -435,7 +449,7 @@ impl Backend for StandIn {
 
     fn map(&mut self, request: &MapRequest) -> Result<(), BackendError> {
         assert!(self.live_memory.contains(&request.memory), "mapping memory that does not exist");
-        if std::mem::take(&mut self.fail_next_map) {
+        if std::mem::take(&mut self.fail_next_map) || self.fail_maps_in == Some(request.space) {
             return Err(BackendError::new("told to fail"));
         }
         let Some(space) = self.spaces.get_mut(&request.space) else {

@@ -143,17 +143,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let closing: Vec<ReservedRange> = closing;
         closing.into_iter().for_each(|range| self.give_back_reserved(range));
         self.closed_spaces.insert(space);
-        if let Some(block) = self.fences.block {
-            let unmap = UnmapRequest {
-                space,
-                memory: block.memory,
-                address: block.gpu_address,
-                length: crate::FENCE_AREA,
-            };
-            if let Err(error) = self.backend.unmap(&unmap) {
-                log::warn!("closing an address space: {error}");
-            }
-        }
+        self.unmap_fences(space);
         self.backend.destroy_address_space(space);
     }
 

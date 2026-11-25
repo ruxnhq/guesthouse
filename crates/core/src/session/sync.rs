@@ -2,9 +2,11 @@
 
 use super::{Handled, Session, answer_status};
 use crate::deferred::DeferredAction;
-use crate::fences::{FENCE_PAGE, Fence, FenceBlock};
+use crate::fences::{FENCE_PAGE, Fence, FenceBlock, FencePiece, piece_size};
 use crate::sync_table::SyncObject;
-use guesthouse_backend::{Backend, BackendError, GuestMemory};
+use guesthouse_backend::{
+    Backend, BackendError, GuestMemory, MapMemoryType, MapRequest, SpaceId, UnmapRequest,
+};
 use guesthouse_messages::notice::Notice;
 use guesthouse_messages::sync::{
     CreateSyncObject, KIND_CPU_NOTIFICATION, KIND_MONITORED_FENCE, SignalFence, first_handle, open_answer,
@@ -13,19 +15,100 @@ use guesthouse_messages::sync::{
 use guesthouse_messages::wire::{Malformed, put_u32};
 use guesthouse_messages::{MessageHeader, Status};
 
+/// The mapping of a piece of the fences' block, which starts at `gpu_address`, in `space`.
+fn fence_mapping(space: SpaceId, gpu_address: u64, piece: FencePiece) -> MapRequest {
+    MapRequest {
+        space,
+        memory: piece.memory,
+        offset: 0,
+        length: piece.length,
+        address: gpu_address + piece.offset,
+        small_pages: true,
+        gpu_cached: false,
+        readable: true,
+        writable: true,
+        executable: false,
+        memory_type: MapMemoryType::Default,
+        driver_protection: 0,
+    }
+}
+
+fn fence_unmapping(space: SpaceId, gpu_address: u64, piece: FencePiece) -> UnmapRequest {
+    UnmapRequest { space, memory: piece.memory, address: gpu_address + piece.offset, length: piece.length }
+}
+
 impl<B: Backend, M: GuestMemory> Session<B, M> {
-    /// All fence pages as one block, made the first time something needs it.
-    pub(crate) fn fence_block(&mut self) -> Result<FenceBlock, BackendError> {
-        if let Some(block) = self.fences.block {
-            return Ok(block);
+    /// The GPU address of the fences' block, which is made the first time something needs it. Its
+    /// first piece is adopted with it, which for most backends is all of it.
+    pub(crate) fn fence_block(&mut self) -> Result<u64, BackendError> {
+        if let Some(block) = &self.fences.block {
+            return Ok(block.gpu_address);
         }
         let start = self.placed_io_space()?.start();
+        let piece = piece_size(self.backend.fence_piece());
+        // The whole area has to be there, whichever of its pieces come to be used.
         let host_address = self.memory.host_address(start, crate::FENCE_AREA)?;
-        let memory = self.backend.adopt_host_pages(host_address, crate::FENCE_AREA)?;
+        let memory = self.backend.adopt_host_pages(host_address, piece)?;
         let gpu_address = self.take_gpu_addresses(crate::FENCE_AREA, crate::ALLOCATION_ALIGN)?;
-        let block = FenceBlock { memory, gpu_address };
+        let mut block = FenceBlock::new(gpu_address, piece);
+        block.adopted(0, memory);
         self.fences.block = Some(block);
-        Ok(block)
+        Ok(gpu_address)
+    }
+
+    /// Maps the fence pieces the GPU reaches into a new address space, which gets the later ones as
+    /// they come.
+    pub(crate) fn map_fences(&mut self, space: SpaceId) -> Result<(), BackendError> {
+        let gpu_address = self.fence_block()?;
+        let Some(block) = &self.fences.block else { return Ok(()) };
+        for piece in block.reached() {
+            self.backend.map(&fence_mapping(space, gpu_address, piece))?;
+        }
+        if let Some(block) = &mut self.fences.block {
+            block.spaces.push(space);
+        }
+        Ok(())
+    }
+
+    /// Takes the fences out of an address space that is closing.
+    pub(crate) fn unmap_fences(&mut self, space: SpaceId) {
+        let Some(block) = &mut self.fences.block else { return };
+        let Some(at) = block.spaces.iter().position(|&mapped| mapped == space) else { return };
+        block.spaces.remove(at);
+        let gpu_address = block.gpu_address;
+        for piece in block.reached() {
+            if let Err(error) = self.backend.unmap(&fence_unmapping(space, gpu_address, piece)) {
+                log::warn!("closing an address space: {error}");
+            }
+        }
+    }
+
+    /// Has the GPU reach the fence at `offset` into the area, in every address space: adopts the
+    /// piece that holds it and maps that everywhere, unless it is there already. A piece that
+    /// can't go everywhere goes nowhere.
+    fn reach_fence(&mut self, offset: u64) -> Result<(), BackendError> {
+        let gpu_address = self.fence_block()?;
+        let Some(block) = &self.fences.block else { return Ok(()) };
+        let Some((piece_offset, length)) = block.missing_piece(offset) else { return Ok(()) };
+        let spaces = block.spaces.clone();
+        let start = self.placed_io_space()?.start();
+        let host_address = self.memory.host_address(start + piece_offset, length)?;
+        let memory = self.backend.adopt_host_pages(host_address, length)?;
+        let piece = FencePiece { offset: piece_offset, length, memory };
+        for (mapped, &space) in spaces.iter().enumerate() {
+            let Err(error) = self.backend.map(&fence_mapping(space, gpu_address, piece)) else { continue };
+            for &space in &spaces[..mapped] {
+                if let Err(error) = self.backend.unmap(&fence_unmapping(space, gpu_address, piece)) {
+                    log::warn!("taking back a piece of the fences: {error}");
+                }
+            }
+            self.backend.release_memory(memory);
+            return Err(error);
+        }
+        if let Some(block) = &mut self.fences.block {
+            block.adopted(piece_offset, memory);
+        }
+        Ok(())
     }
 
     fn fresh_fence_page(&mut self) -> Result<u64, BackendError> {
@@ -40,8 +123,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             return Ok(fence);
         }
         let fence = self.fresh_fence_page()?;
-        let block = self.fence_block()?;
-        Ok((fence, block.gpu_address + fence - self.placed_io_space()?.start()))
+        let offset = fence - self.placed_io_space()?.start();
+        match self.fence_block().and_then(|block| self.reach_fence(offset).map(|()| block)) {
+            Ok(gpu_address) => Ok((fence, gpu_address + offset)),
+            Err(error) => {
+                self.fences.unused_fresh_page(offset);
+                Err(error)
+            }
+        }
     }
 
     pub(super) fn create_paging_queue(&mut self, out: &mut Vec<u8>) -> Handled {

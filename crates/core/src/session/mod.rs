@@ -570,21 +570,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         // have somewhere to go. With none, as for NVIDIA and AMD, a space is the core's ranges alone.
         let ranges = [&crate::GPU_RANGES[..], self.backend.guest_placed_gpu_ranges()].concat();
         let space = self.backend.create_address_space(&ranges)?;
-        let block = self.fence_block()?;
-        self.backend.map(&guesthouse_backend::MapRequest {
-            space,
-            memory: block.memory,
-            offset: 0,
-            length: crate::FENCE_AREA,
-            address: block.gpu_address,
-            small_pages: true,
-            gpu_cached: false,
-            readable: true,
-            writable: true,
-            executable: false,
-            memory_type: guesthouse_backend::MapMemoryType::Default,
-            driver_protection: 0,
-        })?;
+        self.map_fences(space)?;
         Ok(space)
     }
 

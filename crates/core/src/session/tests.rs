@@ -199,6 +199,7 @@ fn signal_message(objects: &[u32], contexts: &[u32], values: &[u64]) -> Vec<u8> 
 
 mod copy_bounds;
 mod failing;
+mod fence_pieces;
 mod first_lock;
 mod frame_ring;
 mod indirect;

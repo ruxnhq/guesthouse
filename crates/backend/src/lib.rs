@@ -88,6 +88,14 @@ pub trait Backend: Sized {
     /// Lets the GPU reach host memory that is already mapped in this process.
     fn adopt_host_pages(&mut self, host_address: u64, size: u64) -> Result<MemoryId, BackendError>;
 
+    /// The size of the pieces to adopt the guest's fence area in, for a backend whose driver works
+    /// through every page of adopted memory each time work is sent, used or not. A piece is then
+    /// adopted and mapped only once a fence in it is handed out. It has to divide the area into
+    /// whole pages. `None`, the default, adopts the whole area at once.
+    fn fence_piece(&self) -> Option<u64> {
+        None
+    }
+
     /// The same, for host memory that is also `pages` of a file. A backend whose driver can take
     /// the file's pages themselves does, and any other adopts the mapping as before.
     fn adopt_file_pages(

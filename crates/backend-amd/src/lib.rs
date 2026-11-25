@@ -204,6 +204,12 @@ struct PreparedVideo {
 
 /// The bytes of a fence the card writes.
 const FENCE_BYTES: u64 = size_of::<u64>() as u64;
+/// The size of the pieces the guest's fence area is adopted in. amdgpu looks up every page of an
+/// adopted buffer at each submission that lists it, and every buffer mapped in a space is on its
+/// list, so the whole 16 MiB area cost every submission 4096 pages of that. In pieces, only those
+/// holding a fence that was handed out are there to list. A piece has its own cost on the list
+/// too, and at this size the whole area in pieces costs about what it did as one buffer.
+const FENCE_PIECE: u64 = 1 << 20;
 
 /// Sends a prepared run, if its command buffers are still mapped.
 fn send(vm: &mut SpaceVm, run: &PreparedRun) -> io::Result<()> {
@@ -1326,6 +1332,10 @@ impl Backend for AmdBackend {
 
     fn hold_freed_gpu_addresses(&self) -> Option<Duration> {
         self.hold_freed
+    }
+
+    fn fence_piece(&self) -> Option<u64> {
+        Some(FENCE_PIECE)
     }
 
     fn survey(setup: &Setup) -> Result<DriverSurvey, Refusal> {

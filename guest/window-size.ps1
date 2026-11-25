@@ -59,14 +59,22 @@ public static class Screen {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int ChangeDisplaySettingsEx(string display, ref Mode mode, IntPtr window, uint flags, IntPtr parameter);
   const int Current = -1, Attached = 1, WidthHeightRate = 0x80000 | 0x100000 | 0x400000;
   const uint UpdateRegistry = 1;
-  const string Ours = "RDPUDD Chained DD", Renamed = "Guesthouse Display";
+  // The display driver's monitor, from its EDID. Its adapter's name is no help: remoteman's is called the same.
+  const string OurMonitor = @"MONITOR\GHS0001\";
   static Mode Empty() { Mode mode = new Mode(); mode.Size = (short)Marshal.SizeOf(typeof(Mode)); return mode; }
   // The driver's display, if it is the one Windows shows on.
   public static string Find() {
     for (int i = 0; ; i++) {
       Display found = new Display(); found.Size = Marshal.SizeOf(typeof(Display));
       if (!EnumDisplayDevices(null, i, ref found, 0)) return null;
-      if ((found.Flags & Attached) != 0 && (found.Text == Ours || found.Text == Renamed)) return found.Name;
+      if ((found.Flags & Attached) != 0 && HasOurMonitor(found.Name)) return found.Name;
+    }
+  }
+  static bool HasOurMonitor(string adapter) {
+    for (int i = 0; ; i++) {
+      Display monitor = new Display(); monitor.Size = Marshal.SizeOf(typeof(Display));
+      if (!EnumDisplayDevices(adapter, i, ref monitor, 0)) return false;
+      if (monitor.Id != null && monitor.Id.StartsWith(OurMonitor, StringComparison.OrdinalIgnoreCase)) return true;
     }
   }
   public static bool Lists(string display, int width, int height, int rate) {

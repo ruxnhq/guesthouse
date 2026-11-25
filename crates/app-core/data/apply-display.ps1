@@ -68,8 +68,9 @@ public static class Colour {
 }
 '@
 Add-Type $source
-# The INF's name, and the one NVIDIA machines get once Windows sees NVIDIA's number (display-name.ps1).
-$ourNames = 'RDPUDD Chained DD', 'Guesthouse Display'
+# Our display is the adapter whose monitor is the driver's (its EDID's GHS0001). Not the name, as
+# remoteman's display is called "RDPUDD Chained DD" too.
+$ourMonitor = 'MONITOR\GHS0001\*'
 $takeOver = 'C:\gpupv\idd\take-over-display.ps1'
 $current = -1
 $attachedToDesktop = 1
@@ -98,7 +99,16 @@ function Has-Mode($name) {
         if ($mode.W -eq $width -and $mode.H -eq $height -and $mode.Freq -eq $hz) { return $true }
     }
 }
-function Our-Display { All-Displays | Where-Object { $ourNames -contains $_.Str } | Select-Object -First 1 }
+function Has-Our-Monitor($adapter) {
+    for ($i = 0; $i -lt 16; $i++) {
+        $monitor = New-Object Screen+DD
+        $monitor.cb = [Runtime.InteropServices.Marshal]::SizeOf($monitor)
+        if (-not [Screen]::EnumDisplayDevices($adapter, $i, [ref]$monitor, 0)) { return $false }
+        if ($monitor.Id -like $ourMonitor) { return $true }
+    }
+    $false
+}
+function Our-Display { All-Displays | Where-Object { Has-Our-Monitor $_.Name } | Select-Object -First 1 }
 
 $ours = Our-Display
 for ($try = 0; $expected -eq 1 -and -not $ours -and $try -lt $monitorTries; $try++) {
@@ -111,7 +121,7 @@ for ($waited = 0; $waited -lt $modeWait -and -not ($ours -and (Has-Mode $ours.Na
     $ours = Our-Display
 }
 if ($ours) {
-    $others = @(All-Displays | Where-Object { $ourNames -notcontains $_.Str -and ($_.Flags -band $attachedToDesktop) })
+    $others = @(All-Displays | Where-Object { $_.Name -ne $ours.Name -and ($_.Flags -band $attachedToDesktop) })
     if ($others.Count -gt 0 -or -not ($ours.Flags -band $primaryDevice)) {
         # Told a mode it hasn't got, Windows leaves ours at 800x600, where a later change fails.
         $firstHz = if (Has-Mode $ours.Name) { $hz } else { $safeHz }

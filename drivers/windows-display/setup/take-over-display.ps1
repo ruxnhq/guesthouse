@@ -2,7 +2,9 @@
 # It does nothing once that's so: Windows remembers the arrangement, for this set of monitors, in its own database.
 # Usage: take-over-display.ps1 WIDTH HEIGHT HZ LOG
 param([int]$Width = 1920, [int]$Height = 1080, [int]$Hz = 60, [string]$Log = "$env:ProgramData\Guesthouse\display.log")
-$ourNames = 'RDPUDD Chained DD', 'Guesthouse Display'
+# Ours is the adapter whose monitor is the driver's (its EDID's GHS0001). Not the name, as remoteman's
+# display is called "RDPUDD Chained DD" too.
+$ourMonitor = 'MONITOR\GHS0001\*'
 $tries = 30
 $pauseSeconds = 1
 $attachedToDesktop = 1
@@ -40,14 +42,24 @@ function All-Displays {
     }
 }
 
+function Has-Our-Monitor($adapter) {
+    for ($i = 0; $i -lt 16; $i++) {
+        $monitor = New-Object Screens+DD
+        $monitor.cb = [Runtime.InteropServices.Marshal]::SizeOf($monitor)
+        if (-not [Screens]::EnumDisplayDevices($adapter, $i, [ref]$monitor, 0)) { return $false }
+        if ($monitor.Id -like $ourMonitor) { return $true }
+    }
+    $false
+}
+
 $ours = $null
 for ($try = 0; $try -lt $tries -and -not $ours; $try++) {
-    $ours = All-Displays | Where-Object { $ourNames -contains $_.Str } | Select-Object -First 1
+    $ours = All-Displays | Where-Object { Has-Our-Monitor $_.Name } | Select-Object -First 1
     if (-not $ours) { Start-Sleep $pauseSeconds }
 }
 if (-not $ours) { Say 'our display never came up, leaving things as they are'; return }
 
-$others = @(All-Displays | Where-Object { $ourNames -notcontains $_.Str -and ($_.Flags -band $attachedToDesktop) })
+$others = @(All-Displays | Where-Object { $_.Name -ne $ours.Name -and ($_.Flags -band $attachedToDesktop) })
 if (($ours.Flags -band $primaryDevice) -and $others.Count -eq 0) { Say "$($ours.Name) is already the only display"; return }
 
 $size = [Runtime.InteropServices.Marshal]::SizeOf([type][Screens+DM])

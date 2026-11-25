@@ -21,11 +21,18 @@ public class Mode {
 }
 '@
 Add-Type $src
-$ourNames = 'RDPUDD Chained DD', 'Guesthouse Display'
+# The display driver's adapter is the one with its monitor (its EDID's GHS0001), whatever it's called.
+$ourMonitor = 'MONITOR\GHS0001\*'
 for ($i = 0; $i -lt 16; $i++) {
   $d = New-Object Mode+DD; $d.cb = [Runtime.InteropServices.Marshal]::SizeOf($d)
   if (-not [Mode]::EnumDisplayDevices([NullString]::Value, $i, [ref]$d, 0)) { break }
-  if ($ourNames -contains $d.Str) { "left alone: $($d.Name) is the display driver's" | Out-File C:\gpupv\cap\setmode.txt -Encoding ascii; return }
+  $ours = $false
+  for ($j = 0; $j -lt 16 -and -not $ours; $j++) {
+    $m = New-Object Mode+DD; $m.cb = [Runtime.InteropServices.Marshal]::SizeOf($m)
+    if (-not [Mode]::EnumDisplayDevices($d.Name, $j, [ref]$m, 0)) { break }
+    $ours = $m.Id -like $ourMonitor
+  }
+  if ($ours) { "left alone: $($d.Name) is the display driver's" | Out-File C:\gpupv\cap\setmode.txt -Encoding ascii; return }
 }
 $modes = @()
 for ($i = 0; ; $i++) {

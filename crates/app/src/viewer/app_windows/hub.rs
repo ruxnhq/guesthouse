@@ -281,6 +281,12 @@ impl Hub {
         }
     }
 
+    /// Lets go in the guest of every key and button held down through the host, as the window they
+    /// went through lost the keyboard.
+    pub fn release_held(&self) {
+        self.screen.release_everything();
+    }
+
     /// A host window lost the focus: nothing it held down in the guest stays down.
     pub fn lost_focus(&self, id: &str) {
         if self.focus_sent.borrow().as_deref() == Some(id) {

@@ -189,6 +189,15 @@ impl SecureWindow {
             }
         });
         self.window.add_controller(keys);
+        // A key or button held down as the window loses the keyboard would stay down in the guest.
+        let this = Rc::downgrade(hub);
+        self.window.connect_is_active_notify(move |window| {
+            if !window.is_active()
+                && let Some(hub) = this.upgrade()
+            {
+                hub.release_held();
+            }
+        });
         // The prompt is answered in the guest, so the host's close does nothing.
         self.window.connect_close_request(|_| glib::Propagation::Stop);
     }

@@ -205,6 +205,7 @@ public class AppWindows : Form
     class Cell
     {
         public IntPtr Src, Thumb;
+        public bool HasOrig; public int OrigL, OrigT;   // where the window was before the helper first moved it
         public int Order;                       // creation order, never changes; placement order and tie-break
         public int Stamp;                       // starts as Order; a focus raises it, so of two overflow cells the one asked for last is on top
         public uint Pid;
@@ -436,6 +437,28 @@ public class AppWindows : Form
         scanDue = true; Kick();
     }
 
+    // What the helper changed in Windows, undone as far as it can be: each window it moved that is still there and is neither minimized
+    // nor maximized goes back to where it was, and the scale goes back to the one before the host first asked for another.
+    void PutBack()
+    {
+        foreach (Cell c in cells.Values)
+        {
+            try
+            {
+                IntPtr h = c.Src;
+                if (!c.HasOrig || c.Popup || !IsWindow(h) || IsIconic(h) || IsZoomed(h) || IsHungAppWindow(h)) continue;
+                SetWindowPos(h, IntPtr.Zero, c.OrigL, c.OrigT, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+            }
+            catch (Exception ex) { LogError(ex); }
+        }
+        try
+        {
+            wantedPercent = 0;
+            if (originalPercent > 0 && PercentNow() != originalPercent) SetScale(originalPercent);
+        }
+        catch (Exception ex) { LogError(ex); }
+    }
+
     void Shutdown()
     {
         if (shutDown) return;
@@ -444,6 +467,7 @@ public class AppWindows : Form
         foreach (IntPtr hk in hooks) UnhookWinEvent(hk);
         hooks.Clear();
         WTSUnRegisterSessionNotification(Handle);
+        PutBack();                              // the windows to where they were, and Windows' scale to what it was
         ReleaseAll();                           // unregisters thumbnails and undoes the layered cure
         Link link;
         lock (linkGate) { link = current; current = null; }
@@ -1033,6 +1057,7 @@ public class AppWindows : Form
         if (++c.ParkTries > ParkTriesMax) { c.ParkTries = 0; c.ParkAfter = now + ParkBackoffMs; return; }
         // The window rectangle reaches past the frame into the invisible border, so the corner to aim at is further out.
         int x = wantL - (c.Frame.L - c.Win.L), y = wantT - (c.Frame.T - c.Win.T);
+        if (!c.HasOrig) { c.HasOrig = true; c.OrigL = c.Win.L; c.OrigT = c.Win.T; }
         SetWindowPos(h, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         c.ParkAfter = now + ParkSettleMs;
     }
@@ -1447,6 +1472,7 @@ public class AppWindows : Form
     const int QDC_ONLY_ACTIVE_PATHS = 2, DC_GET_DPI_SCALE = -3, DC_SET_DPI_SCALE = -4, WM_DPICHANGED = 0x02E0;
     static readonly int[] DpiSteps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
 
+    int originalPercent;                        // the scale before the host first asked for another, put back when the helper ends
     int wantedPercent;                          // the step the host asked for last, set again after a change of mode
     int modeW, modeH;                           // the screen's size when the scale was last looked after
     int floorW, floorH, ceilW, ceilH;           // from the host's "screen": the smallest and largest screen it wants
@@ -1607,6 +1633,7 @@ public class AppWindows : Form
     void OnScaleRequest(Link link, long n, Dictionary<string, object> r)
     {
         int percent = (int)Num(r, "percent", 0);
+        if (originalPercent == 0) originalPercent = PercentNow();
         string why = SetScale(percent);
         if (why == null) { wantedPercent = percent; modeW = ovW; modeH = ovH; }
         Answer(link, n, why == null, why);
@@ -1773,9 +1800,11 @@ public class AppWindows : Form
     // SetForegroundWindow is refused to a program that did not get the last input, so this thread joins the input of the one that did.
     bool GiveFocus(IntPtr h)
     {
+        if (IsHungAppWindow(h)) return false;          // BringWindowToTop would wait for a stuck window, on the helper's only UI thread
         if (IsIconic(h)) ShowWindowAsync(h, SW_RESTORE);
         uint pid;
-        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        IntPtr foreground = GetForegroundWindow();
+        uint foregroundThread = IsHungAppWindow(foreground) ? 0 : GetWindowThreadProcessId(foreground, out pid);
         uint mine = GetCurrentThreadId();
         bool joined = foregroundThread != 0 && foregroundThread != mine && AttachThreadInput(mine, foregroundThread, true);
         BringWindowToTop(h);
@@ -1866,7 +1895,7 @@ public class AppWindows : Form
             using (MemoryStream png = new MemoryStream())
             {
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.DrawImage(icon.ToBitmap(), 0, 0, IconSide, IconSide);
+                using (Bitmap whole = icon.ToBitmap()) g.DrawImage(whole, 0, 0, IconSide, IconSide);
                 small.Save(png, ImageFormat.Png);
                 return Convert.ToBase64String(png.ToArray());
             }

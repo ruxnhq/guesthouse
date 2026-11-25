@@ -21,6 +21,8 @@ From a terminal, `guesthouse --app NAME PROGRAM` does the same as Open for a pro
 
 A small helper runs in the Windows session. It tells Guesthouse where each program window is, and Guesthouse opens a window on the host for each one. The helper is started through the agent when it is needed. It listens only to the host, and only to a caller that sends the machine's token first. The picture comes from the guest's frames without a copy, and a click, a key or a scroll on the host window goes to the guest's window. Menus and drop-downs are popups of the window they belong to. A host window's size is asked of the guest's window, and the guest's window can ask for a size of its own.
 
+When the helper ends, because the machine goes back to Show Screen or the helper is stopped, it puts back what it changed as far as it can. Each window it moved goes back to where it was, unless it has been closed, minimized or maximized since, and Windows' scale goes back to what it was. If the helper is killed or the guest is turned off first, nothing is put back. The windows stay where the helper put them, and Windows keeps the scale it was set to.
+
 Opening a window starts one viewer for the machine. It stays while the machine runs, even when no window is open, and ends when the machine stops.
 
 ## What doesn't work yet

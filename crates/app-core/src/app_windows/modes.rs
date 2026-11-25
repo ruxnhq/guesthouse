@@ -6,8 +6,8 @@
 //! The screen's side holds a lock (`ScreenMark`) for as long as its page is open, as the app windows
 //! viewer holds its own (`viewer_lock`). Whoever wants the other mode asks for it in this order, and
 //! never connects before it is done: the screen takes its mark, which keeps a new app windows viewer
-//! out, ends the viewer that runs, ends the helper in the guest so that the windows go back to where
-//! Windows had them, and only then connects.
+//! out, ends the viewer that runs, ends the helper in the guest so that its changes are taken back as
+//! far as it can (see [`end_helper`]), and only then connects.
 //!
 //! The viewer is asked to end with SIGTERM, which it takes as it does a terminal's: it lets go of held
 //! keys and buttons and closes its windows. Its process id is in its lock file, and it is signalled only
@@ -118,7 +118,9 @@ pub fn terminate(pid: u32) -> io::Result<()> {
 }
 
 /// Ends the helper in the guest if there is one, as `guesthouse-vm windows` does for one it started.
-/// What it did to the guest's windows is taken back by the helper itself as it quits.
+/// As it quits, the helper puts each window it moved back where it was, if the window is still there
+/// and is neither minimized nor maximized, and puts Windows' scale back to what it was before the host
+/// first asked for another. A helper that is killed, not asked, puts nothing back.
 pub fn end_helper(context: &Context, machine: &Machine, slot: Slot) {
     stop_helper(context, machine, Some(slot), HELPER);
 }

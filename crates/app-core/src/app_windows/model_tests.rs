@@ -119,7 +119,7 @@ fn cells_that_are_not_in_the_layout_are_gone_a_popup_before_its_window() {
 }
 
 #[test]
-fn the_popups_of_a_window_and_the_window_of_a_popup_are_found() {
+fn the_popups_of_a_window_are_found() {
     let mut model = ready();
     model.layout(&layout(
         1,
@@ -128,10 +128,6 @@ fn the_popups_of_a_window_and_the_window_of_a_popup_are_found() {
     let of = |id: &str| model.popups_of(id).map(|cell| cell.id.clone()).collect::<Vec<_>>();
     assert_eq!(of("w"), ["p"]);
     assert_eq!(of("p"), ["q"], "a submenu belongs to the menu it came from");
-    assert_eq!(model.window_of("q").unwrap().id, "w");
-    assert_eq!(model.window_of("v").unwrap().id, "v");
-    assert!(model.window_of("lost").is_none());
-    assert_eq!(model.orphans().map(|cell| cell.id.as_str()).collect::<Vec<_>>(), ["lost"]);
     assert_eq!(model.windows().count(), 2);
 }
 
@@ -139,7 +135,6 @@ fn the_popups_of_a_window_and_the_window_of_a_popup_are_found() {
 fn a_parent_that_leads_round_to_itself_does_not_loop() {
     let mut model = ready();
     model.layout(&layout(1, vec![popup("a", "b"), popup("b", "a")]));
-    assert!(model.window_of("a").is_none());
     let applied = model.layout(&layout(2, vec![]));
     assert_eq!(applied.changes.len(), 2);
 }
@@ -200,12 +195,11 @@ fn clearing_closes_everything_and_a_reconnect_adds_it_back() {
 }
 
 #[test]
-fn the_focused_and_the_shown_cells_are_found() {
+fn the_shown_cells_are_found() {
     let mut model = ready();
     let focused = Cell { focus: true, ..window("v", "B") };
     let minimized = Cell { state: State::Minimized, ..window("m", "C") };
     model.layout(&layout(1, vec![window("w", "A"), focused, minimized]));
-    assert_eq!(model.focused().unwrap().id, "v");
     assert_eq!(model.shown().count(), 2);
 }
 

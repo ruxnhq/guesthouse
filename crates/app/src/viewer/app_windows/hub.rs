@@ -498,7 +498,7 @@ impl Hub {
         self.note(&format!(
             "the guest's input desktop is {desktop:?}: one window shows the whole screen, the app windows take no input"
         ));
-        let window = SecureWindow::open(self, desktop, None, came_from);
+        let window = SecureWindow::open(self, desktop, came_from);
         *self.secure.borrow_mut() = Some(window);
     }
 

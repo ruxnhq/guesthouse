@@ -1,6 +1,6 @@
 //! The guest's secure desktop (UAC) and its lock screen. The helper cannot see or draw there, so while
 //! the guest's input desktop is not the normal one the host shows one window with the guest's whole
-//! frame (or, when the guest says where the prompt is, a rectangle of it), takes the pointer and the
+//! frame, takes the pointer and the
 //! keys for the guest 1:1, and gives the focus back to the app window that had it when the normal
 //! desktop returns. The picture is one more cut of the hub's frame, drawn by the same widget as a
 //! window cell's, so it follows whatever that widget does with frames.
@@ -25,14 +25,9 @@ pub fn title(desktop: Desktop) -> &'static str {
     }
 }
 
-/// The part of the guest's screen the window shows: the rectangle the guest named if it lies on the
-/// screen, else the whole screen.
-pub fn region(wanted: Option<Rect>, screen: Size) -> Rect {
-    let whole = Rect { x: 0, y: 0, w: screen.w, h: screen.h };
-    match wanted {
-        Some(rect) if crop(rect, screen).is_some_and(|shown| shown.source == rect) => rect,
-        _ => whole,
-    }
+/// The part of the guest's screen the window shows: all of it.
+fn region(screen: Size) -> Rect {
+    Rect { x: 0, y: 0, w: screen.w, h: screen.h }
 }
 
 /// The cell the window stands for. Its id is no window's of the guest, so nothing asks the helper
@@ -66,18 +61,12 @@ pub struct SecureWindow {
     /// The picture, on a surface of the window's own.
     framed: Framed,
     cell: RefCell<Cell>,
-    wanted: Option<Rect>,
     /// The app window that had the focus when this one came, to be given it back.
     pub came_from: Option<String>,
 }
 
 impl SecureWindow {
-    pub fn open(
-        hub: &Rc<Hub>,
-        desktop: Desktop,
-        wanted: Option<Rect>,
-        came_from: Option<String>,
-    ) -> Rc<Self> {
+    pub fn open(hub: &Rc<Hub>, desktop: Desktop, came_from: Option<String>) -> Rc<Self> {
         let frame = CellPicture::default();
         frame.set_focusable(false);
         frame.set_guest(hub.guest());
@@ -93,8 +82,7 @@ impl SecureWindow {
             window,
             frame,
             framed,
-            cell: RefCell::new(cell_of(region(wanted, hub.screen_size()))),
-            wanted,
+            cell: RefCell::new(cell_of(region(hub.screen_size()))),
             came_from,
         });
         this.recrop(hub.screen_size());
@@ -122,7 +110,7 @@ impl SecureWindow {
     }
 
     pub fn recrop(&self, screen: Size) {
-        let region = region(self.wanted, screen);
+        let region = region(screen);
         *self.cell.borrow_mut() = cell_of(region);
         let Some(shown) = crop(region, screen) else { return };
         self.frame.set_cell((region.w, region.h), shown.source, shown.offset);
@@ -208,21 +196,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_whole_screen_unless_the_guest_names_a_rectangle_on_it() {
-        let screen = Size { w: 1920, h: 1080 };
-        let whole = Rect { x: 0, y: 0, w: 1920, h: 1080 };
-        assert_eq!(region(None, screen), whole);
-        let prompt = Rect { x: 700, y: 300, w: 520, h: 400 };
-        assert_eq!(region(Some(prompt), screen), prompt);
-        assert_eq!(
-            region(Some(Rect { x: 1800, y: 300, w: 520, h: 400 }), screen),
-            whole,
-            "hangs over the edge"
-        );
-        assert_eq!(region(Some(Rect::default()), screen), whole, "empty");
-    }
-
-    #[test]
     fn the_title_says_which_desktop_waits() {
         assert_eq!(title(Desktop::Secure), "Windows needs your answer");
         assert_eq!(title(Desktop::Locked), "Windows is locked");
@@ -231,7 +204,7 @@ mod tests {
     #[test]
     fn the_pointer_is_one_to_one_over_the_whole_screen() {
         let screen = Size { w: 1920, h: 1080 };
-        let cell = cell_of(region(None, screen));
+        let cell = cell_of(region(screen));
         let at = point_for(&cell, Surface::shown(&cell, 1.0), Point::default(), 100.5, 200.5, screen);
         assert_eq!(at, Point { x: 100, y: 200 });
         let at = point_for(&cell, Surface::shown(&cell, 2.0), Point::default(), 100.5, 200.5, screen);

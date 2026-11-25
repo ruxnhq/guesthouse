@@ -605,10 +605,10 @@ mod tests {
     fn a_point_is_the_frames_origin_plus_the_point_and_a_cell_over_the_edge_adds_its_offset() {
         let screen = Size { w: 1920, h: 1080 };
         let menu = Cell { frame: rect(105, 113, 190, 280), ..window("m", rect(1000, 100, 190, 280)) };
-        let at = point_for(&menu, Surface::of_cell(&menu), Point::default(), 7.9, 31.2, screen);
+        let at = point_for(&menu, Surface::shown(&menu, 1.0), Point::default(), 7.9, 31.2, screen);
         assert_eq!(at, Point { x: 112, y: 144 });
         let over = window("o", rect(-20, -10, 200, 100));
-        let at = point_for(&over, Surface::of_cell(&over), Point { x: 20, y: 10 }, 5.0, 5.0, screen);
+        let at = point_for(&over, Surface::shown(&over, 1.0), Point { x: 20, y: 10 }, 5.0, 5.0, screen);
         assert_eq!(at, Point { x: 5, y: 5 });
     }
 

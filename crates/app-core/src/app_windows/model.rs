@@ -225,6 +225,7 @@ impl Model {
         gone.into_iter().map(Change::Removed).collect()
     }
 
+    #[cfg(test)]
     pub fn session(&self) -> Option<&str> {
         self.session.as_deref()
     }
@@ -242,6 +243,7 @@ impl Model {
         self.scale
     }
 
+    #[cfg(test)]
     pub fn desktop_now(&self) -> Desktop {
         self.desktop
     }
@@ -264,29 +266,6 @@ impl Model {
     /// A submenu names the menu it opened from, so it is one of that menu's.
     pub fn popups_of(&self, id: &str) -> impl Iterator<Item = &Cell> {
         self.cells.iter().filter(move |cell| cell.popup && cell.parent == id)
-    }
-
-    /// The popups whose parent is not a cell of this layout. A viewer has nothing to place them
-    /// against and leaves them out.
-    pub fn orphans(&self) -> impl Iterator<Item = &Cell> {
-        self.cells.iter().filter(|cell| cell.popup && self.get(&cell.parent).is_none())
-    }
-
-    /// The window a cell belongs to: itself, or the first cell up its parents that is not a popup.
-    pub fn window_of(&self, id: &str) -> Option<&Cell> {
-        let mut cell = self.get(id)?;
-        for _ in 0..MOST_DEPTH {
-            if !cell.popup {
-                return Some(cell);
-            }
-            cell = self.get(&cell.parent)?;
-        }
-        None
-    }
-
-    /// The cell that has the guest's focus.
-    pub fn focused(&self) -> Option<&Cell> {
-        self.cells.iter().find(|cell| cell.focus)
     }
 
     /// The cells with something to show: not minimized, not hidden under an overflow cell.

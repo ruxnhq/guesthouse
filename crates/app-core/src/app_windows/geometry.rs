@@ -70,11 +70,6 @@ pub struct Surface {
 }
 
 impl Surface {
-    /// The surface of a host window made as large as its cell, which is the usual one.
-    pub fn of_cell(cell: &Cell) -> Self {
-        Self::shown(cell, 1.0)
-    }
-
     /// The cell shown at `ratio` guest pixels for each logical unit (see [`shown_ratio`]).
     pub fn shown(cell: &Cell, ratio: f64) -> Self {
         let ratio = if ratio > 0.0 { ratio } else { 1.0 };

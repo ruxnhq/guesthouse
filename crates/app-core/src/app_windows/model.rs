@@ -54,8 +54,25 @@ impl Fields {
             focus: old.focus != new.focus,
             popup_link: (old.popup, &old.parent, old.rel) != (new.popup, &new.parent, new.rel),
             caption: old.caption != new.caption,
-            other: (old.pid, &old.exe, &old.app, &old.name, &old.cls, old.overflow, old.resizable, old.corner)
-                != (new.pid, &new.exe, &new.app, &new.name, &new.cls, new.overflow, new.resizable, new.corner),
+            other: (
+                old.pid,
+                &old.exe,
+                &old.app,
+                &old.name,
+                &old.cls,
+                old.overflow,
+                old.resizable,
+                old.corner,
+            ) != (
+                new.pid,
+                &new.exe,
+                &new.app,
+                &new.name,
+                &new.cls,
+                new.overflow,
+                new.resizable,
+                new.corner,
+            ),
         }
     }
 }

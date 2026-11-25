@@ -122,7 +122,22 @@ impl View {
                     window.minimize();
                 }
             }
-            Host::Popup(popover) => popover.popup(),
+            Host::Popup(popover) => match parent {
+                // A menu that is open when the viewer starts comes in the same layout as its window,
+                // which is not on the screen yet: its place against the window is not known until it
+                // is, so it is shown then (measured: it landed at 0,50 instead).
+                Some(parent) if !parent.frame.is_mapped() => {
+                    let (popover, weak) = (popover.clone(), Rc::downgrade(&view));
+                    let weak_parent = Rc::downgrade(parent);
+                    parent.frame.connect_map(move |_| {
+                        if let (Some(view), Some(parent)) = (weak.upgrade(), weak_parent.upgrade()) {
+                            view.place_popup(&parent);
+                            popover.popup();
+                        }
+                    });
+                }
+                _ => popover.popup(),
+            },
         }
         view
     }

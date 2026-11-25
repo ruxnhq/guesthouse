@@ -170,21 +170,20 @@ impl IdentityState {
             return said.to_owned();
         }
         let maker = maker_name(machine);
-        let why = if !self.fell_back() {
-            said.to_owned()
-        } else if self.out_of_tries() {
-            format!(
+        if !self.fell_back() {
+            return format!("{said} {NO_GAMES}");
+        }
+        if self.out_of_tries() {
+            return format!(
                 "Windows started without its GPU on {maker}'s vendor ID {} times, so it stays on \
-                 Microsoft's. To try {maker}'s again: guesthouse-vm set {} vendor-id retry",
+                 Microsoft's. {NO_GAMES} To try {maker}'s again: guesthouse-vm set {} vendor-id retry",
                 self.failed_checks, machine.id
-            )
-        } else {
-            format!(
-                "Windows started without its GPU on {maker}'s vendor ID, so it sees Microsoft's for now. \
-                 The next start tries {maker}'s again."
-            )
-        };
-        format!("{why} {NO_GAMES}")
+            );
+        }
+        format!(
+            "Windows started without its GPU on {maker}'s vendor ID, so it sees Microsoft's for now. \
+             The next start tries {maker}'s again. {NO_GAMES}"
+        )
     }
 
     /// For the user's own word to try the maker's number again: whatever kept the machine on
@@ -453,7 +452,7 @@ mod tests {
             stuck.row_text(false, &machine),
             format!(
                 "Windows started without its GPU on NVIDIA's vendor ID 2 times, so it stays on Microsoft's. \
-                 To try NVIDIA's again: guesthouse-vm set win vendor-id retry {NO_GAMES}"
+                 {NO_GAMES} To try NVIDIA's again: guesthouse-vm set win vendor-id retry"
             )
         );
     }

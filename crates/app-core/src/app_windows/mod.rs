@@ -43,6 +43,7 @@ mod message_tests;
 mod model;
 #[cfg(test)]
 mod model_tests;
+pub mod open_windows;
 pub mod page;
 #[cfg(test)]
 mod page_tests;

@@ -9,7 +9,7 @@ use rustix::fs::{FlockOperation, flock};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const LOCK_FILE: &str = "app-windows-viewer.lock";
 const PRIVATE: u32 = 0o600;
@@ -25,13 +25,23 @@ pub struct ViewerLock(#[allow(dead_code)] File);
 /// Takes the lock, or says `None` if a viewer of this machine already has it.
 pub fn take(context: &Context, slot: Slot) -> io::Result<Option<ViewerLock>> {
     context.make_run_folder(Some(slot))?;
+    take_in(&context.run_folder(Some(slot)))
+}
+
+/// The same for a run folder that is already made.
+pub fn take_in(run_folder: &Path) -> io::Result<Option<ViewerLock>> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .mode(PRIVATE)
-        .open(lock_file(context, slot))?;
+        .open(run_folder.join(LOCK_FILE))?;
     Ok(flock(&file, FlockOperation::NonBlockingLockExclusive).is_ok().then_some(ViewerLock(file)))
+}
+
+/// Whether a viewer has the lock in this run folder now.
+pub fn held_in(run_folder: &Path) -> io::Result<bool> {
+    Ok(take_in(run_folder)?.is_none())
 }
 
 /// Whether a viewer of the machine has the lock now.

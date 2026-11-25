@@ -65,6 +65,12 @@ pub fn init(context: Arc<Context>, machine: Machine, slot: Option<Slot>) {
     }
 }
 
+/// What is known of the program with this app id, for what the app's Library is told of the open
+/// windows: its key, its name and where its icon is saved.
+pub fn describe(id: &str) -> Option<guesthouse_app_core::app_windows::open_windows::OpenProgram> {
+    IDENTITY.get()?.describe(id)
+}
+
 /// The app id for a window of this cell's program. `None` before `init`, or when no entry could be
 /// written, which leaves the window with the viewer's own id as it always had.
 pub fn app_id_for(cell: &Cell) -> Option<String> {
@@ -73,6 +79,7 @@ pub fn app_id_for(cell: &Cell) -> Option<String> {
 
 /// Gives the window the app id once its surface is mapped.
 pub fn set_when_mapped(window: &gtk::Window, id: &str) {
+    super::published::add(window, id);
     let id = id.to_owned();
     let hook = move |window: &gtk::Window| {
         let Some(surface) = window.surface() else { return };
@@ -98,6 +105,7 @@ pub fn set_when_mapped(window: &gtk::Window, id: &str) {
 
 /// Gives an already mapped window another app id, as its program turned out to be another.
 pub fn set_now(window: &gtk::Window, id: &str) {
+    super::published::change(window, id);
     if let Some(surface) = window.surface()
         && surface.is_mapped()
         && let Some(top) = surface.downcast_ref::<WaylandToplevel>()
@@ -109,6 +117,17 @@ pub fn set_now(window: &gtk::Window, id: &str) {
 impl Identity {
     fn log(&self, text: &str) {
         let _ = write_log(&self.context, &format!("app windows identity: {text}"));
+    }
+
+    fn describe(&self, id: &str) -> Option<guesthouse_app_core::app_windows::open_windows::OpenProgram> {
+        let seen = self.seen.lock().ok()?.get(id).cloned()?;
+        let program = program_of(&seen.key, &seen.name, &self.apps.lock().ok()?);
+        Some(guesthouse_app_core::app_windows::open_windows::OpenProgram {
+            key: seen.key,
+            name: program.name,
+            windows: 0,
+            icon: launcher::icon_path(&self.context, id),
+        })
     }
 
     fn app_id_for(self: &Arc<Self>, cell: &Cell) -> Option<String> {

@@ -1318,6 +1318,9 @@ public class AppWindows : Form
                 kind = sessionLocked ? "locked" : "secure";
             CloseDesktop(d);
         }
+        // The lock screen itself (LockApp) runs on the user's own desktop, which stays the input desktop until a key is
+        // pressed: the session's lock is what says it, not the desktop's name.
+        if (sessionLocked) kind = "locked";
         if (kind == desktopKind) return;
         desktopKind = kind;
         Link link = Current();

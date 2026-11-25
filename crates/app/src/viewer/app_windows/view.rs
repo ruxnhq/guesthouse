@@ -122,6 +122,18 @@ impl View {
         view
     }
 
+    /// Whether the picture takes the pointer. Not while the guest's input desktop is not the normal one.
+    pub fn take_pointer(&self, on: bool) {
+        self.frame.set_can_target(on);
+    }
+
+    /// Gives the host window the focus.
+    pub fn bring_forward(&self) {
+        if let Host::Window(window) = &self.host {
+            window.present();
+        }
+    }
+
     pub fn is_popup(&self) -> bool {
         matches!(self.host, Host::Popup(_))
     }

@@ -16,6 +16,7 @@ mod cell_picture;
 mod feed;
 mod hub;
 pub mod plan;
+mod secure;
 mod view;
 
 use super::frames::FrameRoute;

@@ -82,13 +82,16 @@ fn make(
     device: &mut Device<LinuxRm>,
     sizes: &'static HostBranch,
     space: &AddressSpace,
-    grouped: bool,
+    (grouped, compute_first): (bool, bool),
 ) -> Vec<Probed> {
-    let seats = [
+    let mut seats = [
         ("drawing", Seat::Drawing),
         ("compute 1", Seat::Compute { index: 1, prefer_lower: false }),
         ("compute 2", Seat::Compute { index: 2, prefer_lower: true }),
     ];
+    if compute_first {
+        seats.rotate_left(1);
+    }
     let mut made = Vec::new();
     for (slot, (name, seat)) in seats.into_iter().enumerate() {
         let area_address = FIRST_AREA + (slot * AREA_SIZE) as u64;
@@ -118,10 +121,10 @@ fn make(
 pub fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     let grouped = match mode.as_str() {
-        "grouped" => true,
+        "grouped" | "grouped-compute-first" => true,
         "alone" => false,
         _ => {
-            eprintln!("usage: context_group_probe grouped|alone [waits] [switching]");
+            eprintln!("usage: context_group_probe grouped|grouped-compute-first|alone [waits] [switching]");
             std::process::exit(2);
         }
     };
@@ -138,7 +141,7 @@ pub fn main() {
     let space = device.create_address_space(&[RANGE]).expect("address space");
     println!("pid {} client {:#x} driver {version} mode {mode}", std::process::id(), device.client);
 
-    let mut channels = make(&mut device, sizes, &space, grouped);
+    let mut channels = make(&mut device, sizes, &space, (grouped, mode == "grouped-compute-first"));
     // Each channel runs its prelude and a release, which shows it was started.
     for probed in &mut channels {
         let prelude = probed.channel.prelude_entry();
@@ -159,6 +162,9 @@ pub fn main() {
     // releases one of its own. The time from the drawing channel's doorbell to that is the wait.
     let mut times = Vec::new();
     for round in 1..=waits {
+        let drawing_at =
+            channels.iter().position(|probed| probed.name == "drawing").expect("a drawing channel");
+        channels.swap(0, drawing_at);
         let (drawing, rest) = channels.split_first_mut().expect("three channels");
         let waiter = &mut rest[(round % 2) as usize];
         let mut words = semaphore(drawing.semaphore(1), round, acquire).to_vec();

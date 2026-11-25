@@ -460,6 +460,14 @@ impl<R: Rm> NvidiaBackend<R> {
                         work.queue,
                         work.context
                     );
+                    // The context's queues wait across groups after all, so the shared one gets the
+                    // slice the others have.
+                    let (everyone, shared) =
+                        (device.graphics_timeslice_micros, device.shared_context_timeslice_micros);
+                    if !device.context_groups.is_split(work.context) && everyone == 0 {
+                        Channel::set_context_group_timeslice(device, work.context, shared);
+                    }
+                    device.context_groups.note_split(work.context);
                     None
                 }
             }
@@ -473,7 +481,8 @@ impl<R: Rm> NvidiaBackend<R> {
         match made {
             Ok(mut channel) => {
                 // A channel in its context's group waits inside the group, on the RM's own slice.
-                let shared = if channel.in_context_group() { 0 } else { shared };
+                let split = self.device.context_groups.is_split(work.context);
+                let shared = if channel.in_context_group() && !split { 0 } else { shared };
                 if let Some(micros) = shared_context_timeslice(engine, work.context_queues, everyone, shared)
                 {
                     log::info!(
@@ -1877,7 +1886,12 @@ mod tests {
             assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
             assert!(!lab.channel(2).in_context_group());
             assert_eq!(lab.channel(2).only_bound(), None, "with every class, as before");
-            assert_eq!(lab.slices(), 1, "and the shared slice");
+            assert_eq!(lab.slices(), 2, "and the shared slice, as the group it left now has too");
+            // A queue seated later in that context waits across groups as well.
+            lab.queue(3, Some(COMPUTES + 1));
+            assert!(matches!(lab.submit(3, CONTEXT, 3, &compute_work()), WorkStart::Started { .. }));
+            assert!(lab.channel(3).in_context_group());
+            assert_eq!(lab.slices(), 3);
         }
 
         #[test]

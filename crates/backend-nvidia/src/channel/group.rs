@@ -5,7 +5,7 @@
 //! each group, so that the last channel to leave takes its subcontext and the group with it.
 
 use crate::rm::Handle;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A channel's place in its context's group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,9 @@ pub struct ContextGroups {
     /// Off, every channel has a group of its own.
     pub enabled: bool,
     groups: HashMap<u32, ContextGroup>,
+    /// Contexts with a queue the RM refused a seat, whose queues are then spread over groups after
+    /// all and wait for each other across them.
+    split: HashSet<u32>,
 }
 
 impl ContextGroups {
@@ -73,6 +76,16 @@ impl ContextGroups {
         found.shares.entry(slot).or_insert((share, 0)).1 += 1;
     }
 
+    /// One of the context's queues was refused its seat, and has a group of its own.
+    pub fn note_split(&mut self, context: u32) {
+        self.split.insert(context);
+    }
+
+    /// Whether the context's queues are in more than one group, for all that it has a shared one.
+    pub fn is_split(&self, context: u32) -> bool {
+        self.split.contains(&context)
+    }
+
     /// A channel has left.
     pub fn leave(&mut self, context: u32, slot: u8) -> Left {
         let Some(found) = self.groups.get_mut(&context) else { return Left::default() };
@@ -88,6 +101,7 @@ impl ContextGroups {
         if found.members == 0 {
             left.group = Some(found.group);
             self.groups.remove(&context);
+            self.split.remove(&context);
         }
         left
     }
@@ -137,6 +151,17 @@ mod tests {
         assert_eq!(groups.leave(7, 2), Left { share: Some(103), group: Some(100) });
         assert!(groups.is_empty());
         assert_eq!(groups.group(7), None, "a later channel starts a new group");
+    }
+
+    #[test]
+    fn a_context_stays_split_until_its_group_goes() {
+        let mut groups = ContextGroups::default();
+        groups.join(7, 100, 0, 101);
+        assert!(!groups.is_split(7));
+        groups.note_split(7);
+        assert!(groups.is_split(7) && !groups.is_split(8));
+        groups.leave(7, 0);
+        assert!(!groups.is_split(7));
     }
 
     #[test]

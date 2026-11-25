@@ -362,6 +362,13 @@ impl Channel {
         })
     }
 
+    /// A slice for a guest context's shared group, which may already be running.
+    pub fn set_context_group_timeslice<R: Rm>(device: &mut Device<R>, context: u32, micros: u64) {
+        if let Some(group) = device.context_groups.group(context) {
+            set_timeslice(device, group, micros);
+        }
+    }
+
     /// Whether this channel shares its group with its context's other channels.
     pub fn in_context_group(&self) -> bool {
         self.seat.is_some()

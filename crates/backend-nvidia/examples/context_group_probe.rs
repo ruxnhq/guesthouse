@@ -1,7 +1,7 @@
 //! `context_group_probe`: runs the channel layout of a guest context's queues on the host's real
 //! card with no guest, and times a wait of one channel for another.
 //!
-//! `context_group_probe grouped` makes a drawing channel and two compute channels in one group, as
+//! `context_group_probe grouped` (or `grouped-compute-first`, for the other order) makes a drawing channel and two compute channels in one group, as
 //! [`Channel::new_in_context`] does for a guest context. `context_group_probe alone` makes three
 //! channels with a group each. Either way every channel runs a semaphore release, to show it was
 //! started, and then a compute channel waits many times for a semaphore the drawing channel

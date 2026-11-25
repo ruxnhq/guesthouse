@@ -66,7 +66,10 @@ pub use memory::{
 };
 pub use share::VARIABLE as GIVE_WAY_VARIABLE;
 pub use share::{OwnEnds, RunTimes, Share};
-pub use submit::{Context, Ib, Syncobj, sdma_write_ib, submit, submit_after, submit_all, wait_eventfd};
+pub use submit::{
+    Context, Ib, Syncobj, destroy_bo_list as destroy_buffer_list, make_bo_list as make_buffer_list,
+    sdma_write_ib, submit, submit_after, submit_all, wait_eventfd,
+};
 pub use udmabuf::Udmabuf;
 pub use video::{VARIABLE as VIDEO_VARIABLE, switch_is_on as video_switch_is_on};
 pub use video_close::{

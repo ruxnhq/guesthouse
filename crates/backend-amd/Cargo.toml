@@ -33,5 +33,11 @@ path = "src/bin/amd_adapter_check.rs"
 name = "amd-share"
 path = "src/bin/amd_share.rs"
 
+[[bin]]
+# Times amdgpu's submission call with host pages on its buffer list: none, the whole fence area as
+# one buffer, and only the pieces in use. Needs a real AMD render node.
+name = "amd-list-cost"
+path = "src/bin/amd_list_cost.rs"
+
 [lints]
 workspace = true

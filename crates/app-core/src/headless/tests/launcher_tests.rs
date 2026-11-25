@@ -6,8 +6,8 @@ use crate::testing::Scratch;
 use std::fs;
 use std::path::Path;
 
-/// The PNG's first bytes, in Base64, as an icon of a program is sent.
-const ICON: &str = "iVBORw0KGgo=";
+/// A small PNG with no picture in it (see `small_png`), in Base64, as an icon of a program is sent.
+const ICON: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAAAAAAAAAAAElFTkSuQmCC";
 
 fn applications(scratch: &Scratch) -> std::path::PathBuf {
     scratch.path("home/.local/share/applications")
@@ -77,7 +77,7 @@ fn a_start_menu_program_becomes_an_entry_with_its_icon_and_the_exact_text() {
     let file = applications(&scratch).join("guesthouse-work-mspaint-130b95.desktop");
     assert_eq!(out, format!("Added Paint (Office PC) to the launcher: {}.\n", file.display()));
     let icon = scratch.path("home/.local/share/icons/hicolor/48x48/apps/guesthouse-work-mspaint-130b95.png");
-    assert_eq!(fs::read(&icon).unwrap(), b"\x89PNG\r\n\x1a\n");
+    assert_eq!(fs::read(&icon).unwrap(), small_png());
     assert_eq!(
         fs::read_to_string(&file).unwrap(),
         format!(
@@ -235,12 +235,21 @@ fn only_a_windows_machine_with_app_windows_on_is_given_entries() {
     assert!(files_in(&applications(&scratch)).is_empty() && files_in(&applications(&other)).is_empty());
 }
 
+/// The smallest thing the launcher takes as an icon: a PNG's frame of 16 by 16, with no picture in it.
+fn small_png() -> Vec<u8> {
+    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+    bytes.extend(b"IHDR");
+    bytes.extend([0, 0, 0, 16, 0, 0, 0, 16, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    bytes.extend([0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
+    bytes
+}
+
 fn program(name: &str, exe: &str) -> Program {
     Program {
         name: name.into(),
         exe: exe.into(),
         launch: Launch::Path { path: exe.into(), args: String::new() },
-        icon: Some(b"png".to_vec()),
+        icon: Some(small_png()),
     }
 }
 
@@ -303,5 +312,19 @@ fn removing_a_machine_removes_its_entries_and_no_other_machines() {
     assert_eq!(
         files_in(&scratch.path("home/.local/share/icons/hicolor/48x48/apps")),
         ["guesthouse-work-2-notepad.png"]
+    );
+}
+
+#[test]
+fn an_icon_that_is_not_a_small_png_is_not_written() {
+    let scratch = Scratch::new();
+    let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
+    let mut bad = program("Paint", "mspaint.exe");
+    bad.icon = Some(b"<svg>not a picture</svg>".to_vec());
+    crate::app_windows::launcher::add(&rig.context, &rig.machine, &bad).unwrap();
+    assert!(
+        !scratch.path("home/.local/share/icons/hicolor/48x48/apps").exists()
+            || files_in(&scratch.path("home/.local/share/icons/hicolor/48x48/apps")).is_empty(),
+        "no icon file came of it"
     );
 }

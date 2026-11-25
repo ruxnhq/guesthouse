@@ -121,7 +121,10 @@ fn the_app_windows_helper_only_answers_the_host() {
     assert!(helper.contains("const string HostAddress = \"10.0.2.2\";"));
     assert!(helper.contains("if (from.ToString() != HostAddress) return;"));
     assert!(!helper.contains("IsLoopback"), "a program in the guest is not let in");
-    assert!(helper.contains("ReadLine(stream, TokenMaxBytes, TokenWaitMs)"), "the token line has one deadline");
+    assert!(
+        helper.contains("ReadLine(stream, TokenMaxBytes, TokenWaitMs)"),
+        "the token line has one deadline"
+    );
     assert!(helper.contains("> UnauthenticatedMax"), "connections that have not sent the token are capped");
     assert!(helper.contains("if (first != token) return;"));
     let runner = fs::read_to_string(guest_file("app-windows.ps1")).unwrap();

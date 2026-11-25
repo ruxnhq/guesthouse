@@ -197,8 +197,14 @@ impl Identity {
             .icon
             .as_deref()
             .and_then(base64_decode)
-            .filter(|png| !png.is_empty())
             .ok_or_else(|| "the helper sent no picture".to_owned())
+            .and_then(|png| {
+                if launcher::valid_icon(&png) {
+                    Ok(png)
+                } else {
+                    Err("the helper's picture is not a small PNG".to_owned())
+                }
+            })
     }
 
     fn write_with_icon(&self, seen: &Seen, png: Vec<u8>) {

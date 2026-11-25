@@ -22,6 +22,9 @@ pub struct Framed {
     behind: Cell<bool>,
     /// The picture was taken off while the window is out of sight, so it holds no slot.
     hidden: Cell<bool>,
+    /// GTK's surface the compositor couldn't put a surface of the view's own over: not asked again
+    /// until GTK makes another, as each try waits on the compositor.
+    refused_on: RefCell<Option<gdk::Surface>>,
 }
 
 impl Framed {
@@ -32,6 +35,7 @@ impl Framed {
             own: RefCell::default(),
             behind: Cell::new(true),
             hidden: Cell::new(false),
+            refused_on: RefCell::default(),
         }
     }
 
@@ -118,14 +122,21 @@ impl Framed {
             return true;
         }
         own.take();
+        if self.refused_on.borrow().as_ref() == Some(&surface) {
+            return false;
+        }
         match OwnSurface::new_above(&surface.display(), &surface) {
-            Some(mut made) => {
+            Ok(mut made) => {
                 made.set_cut_buffers(true);
                 *own = Some((surface, made));
                 true
             }
-            None => {
-                hub.note(&format!("{}: the compositor can't take a surface of the view's own", self.name));
+            Err(why) => {
+                hub.note(&format!(
+                    "{}: the window stays empty, as {why}: the program's picture needs it",
+                    self.name
+                ));
+                self.refused_on.replace(Some(surface));
                 false
             }
         }

@@ -505,27 +505,36 @@ impl OwnSurface {
     /// Under `parent`, which must be a Wayland toplevel. `None` if this isn't Wayland or the
     /// compositor lacks something this needs.
     pub fn new(display: &gdk::Display, parent: &gdk::Surface) -> Option<Self> {
-        Self::made(display, parent, false)
+        Self::made(display, parent, false).ok()
     }
 
     /// Over `parent`, a toplevel or a popup, for a window whose whole picture this is: GTK draws
     /// nothing there that has to stay on top, so its surface needs no clear part over the picture.
-    pub fn new_above(display: &gdk::Display, parent: &gdk::Surface) -> Option<Self> {
+    /// When it can't be made, says why, for the user.
+    pub fn new_above(display: &gdk::Display, parent: &gdk::Surface) -> Result<Self, &'static str> {
         Self::made(display, parent, true)
     }
 
-    fn made(display: &gdk::Display, parent: &gdk::Surface, above: bool) -> Option<Self> {
-        let display = display.downcast_ref::<WaylandDisplay>()?;
-        let parent = parent.downcast_ref::<WaylandSurface>()?.wl_surface()?;
-        let backend = display.wl_display()?.backend().upgrade()?;
+    fn made(display: &gdk::Display, parent: &gdk::Surface, above: bool) -> Result<Self, &'static str> {
+        const NOT_WAYLAND: &str = "the desktop isn't a Wayland one";
+        let display = display.downcast_ref::<WaylandDisplay>().ok_or(NOT_WAYLAND)?;
+        let parent = parent.downcast_ref::<WaylandSurface>().and_then(|parent| parent.wl_surface());
+        let parent = parent.ok_or("the window has no Wayland surface")?;
+        let backend =
+            display.wl_display().and_then(|display| display.backend().upgrade()).ok_or(NOT_WAYLAND)?;
         let connection = Connection::from_backend(backend);
-        let (globals, mut queue) = registry_queue_init::<Events>(&connection).ok()?;
+        let lost = "the connection to the desktop failed";
+        let (globals, mut queue) = registry_queue_init::<Events>(&connection).map_err(|_| lost)?;
         let handle = queue.handle();
-        let compositor: WlCompositor = bind(&globals, &handle, COMPOSITOR_VERSION)?;
-        let subcompositor: WlSubcompositor = bind(&globals, &handle, 1)?;
-        let viewporter: WpViewporter = bind(&globals, &handle, 1)?;
-        let dmabuf: ZwpLinuxDmabufV1 =
-            globals.bind(&handle, DMABUF_VERSION..=DMABUF_FEEDBACK_VERSION, ()).ok()?;
+        let compositor: WlCompositor = bind(&globals, &handle, COMPOSITOR_VERSION)
+            .ok_or("the desktop doesn't offer wl_compositor version 4")?;
+        let subcompositor: WlSubcompositor =
+            bind(&globals, &handle, 1).ok_or("the desktop doesn't offer subsurfaces (wl_subcompositor)")?;
+        let viewporter: WpViewporter =
+            bind(&globals, &handle, 1).ok_or("the desktop doesn't offer wp_viewporter")?;
+        let dmabuf: ZwpLinuxDmabufV1 = globals
+            .bind(&handle, DMABUF_VERSION..=DMABUF_FEEDBACK_VERSION, ())
+            .map_err(|_| "the desktop doesn't offer linux-dmabuf version 3 or later")?;
         let presentation: Option<WpPresentation> = bind(&globals, &handle, 1);
         let manager: Option<WpColorManagerV1> = bind(&globals, &handle, COLOUR_VERSION);
 
@@ -548,7 +557,7 @@ impl OwnSurface {
             .then(|| dmabuf.get_surface_feedback(&surface, &handle, ()));
         let mut events = Events::default();
         // The manager says what it offers before the description is asked for.
-        queue.roundtrip(&mut events).ok()?;
+        queue.roundtrip(&mut events).map_err(|_| lost)?;
         events.notes.push(format!(
             "own surface: started. The compositor's colour management: {}, PQ {}, parametric {}, \
              luminances {}, mastering {}",
@@ -565,7 +574,7 @@ impl OwnSurface {
             feedback.get_preferred(&handle, Described::Preferred);
             feedback
         });
-        Some(Self {
+        Ok(Self {
             queue,
             events,
             dmabuf,

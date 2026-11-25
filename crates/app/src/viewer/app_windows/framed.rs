@@ -66,7 +66,7 @@ impl Framed {
         let mut own = self.own.borrow_mut();
         let Some((_, own)) = own.as_mut() else { return };
         own.place(x, y, width, height);
-        own.set_crop(Some(crop));
+        let _ = own.set_crop(Some(crop));
         match own.show(frame.for_reader(), sdr_white_nits) {
             Ok(()) => self.behind.set(false),
             Err(not_shown) => {
@@ -101,7 +101,9 @@ impl Framed {
                 && let Some(((x, y, width, height), crop)) = self.picture.picture_place()
             {
                 own.place(x, y, width, height);
-                own.set_crop(Some(crop));
+                if own.set_crop(Some(crop)) {
+                    self.behind.set(true);
+                }
             }
         }
         let back_in_sight = self.hidden.get() && !out_of_sight;
@@ -129,7 +131,8 @@ impl Framed {
         }
         own.take();
         match OwnSurface::new_above(&surface.display(), &surface) {
-            Some(made) => {
+            Some(mut made) => {
+                made.set_cut_buffers(true);
                 *own = Some((surface, made));
                 true
             }

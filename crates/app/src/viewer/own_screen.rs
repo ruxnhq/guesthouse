@@ -145,7 +145,7 @@ impl Screen {
             self.follow_direct_frames();
             return;
         };
-        own.set_crop(self.0.aspect.crop());
+        let _ = own.set_crop(self.0.aspect.crop());
         self.pass_on_notes(&mut own);
         *self.0.own.borrow_mut() = Some(own);
     }
@@ -155,7 +155,7 @@ impl Screen {
     pub fn set_crop(&self, crop: Option<Crop>) {
         self.0.aspect.set_crop(crop);
         if let Some(own) = self.0.own.borrow_mut().as_mut() {
-            own.set_crop(crop);
+            let _ = own.set_crop(crop);
         }
     }
 

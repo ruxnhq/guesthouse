@@ -182,9 +182,10 @@ impl View {
         self.frame.set_guest(guest);
     }
 
-    /// The scale of the surface the view is on, as the compositor gave it.
-    pub fn surface_scale(&self) -> f64 {
-        self.frame.surface_scale()
+    /// The scale of the surface the window is on, once it is on one the compositor mapped.
+    pub fn known_scale(&self) -> Option<f64> {
+        let surface = self.frame.native()?.surface()?;
+        surface.is_mapped().then(|| surface.scale())
     }
 
     /// The monitor the host window is on, as the compositor says.
@@ -442,7 +443,8 @@ impl View {
         }
     }
 
-    /// The host window's own life: the focus, minimize and restore, and the compositor's close.
+    /// The host window's own life: the focus, the restore of a window the guest minimized, and the
+    /// compositor's close.
     fn watch_window(self: &Rc<Self>, hub: &Rc<Hub>, window: &gtk::Window) {
         let weak = (Rc::downgrade(self), Rc::downgrade(hub));
         let follow = {
@@ -458,7 +460,6 @@ impl View {
                 ));
                 match change {
                     HostChange::Restore => hub.request(Request::Restore { id: view.id.clone() }),
-                    HostChange::Minimize => hub.request(Request::Minimize { id: view.id.clone() }),
                     HostChange::Nothing => {}
                 }
                 if active && !suspended {

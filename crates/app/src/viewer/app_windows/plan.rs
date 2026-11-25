@@ -145,18 +145,18 @@ pub enum HostChange {
     Nothing,
     /// The user brought a minimized window back.
     Restore,
-    /// The user minimized the window: the compositor took it out of sight with nothing asked of it.
-    Minimize,
 }
 
-/// What the host window's activity and visibility mean. A window that goes out of sight without the
-/// guest having asked is the user's minimize, and the guest's window follows it. One the guest asked to
-/// minimize (`Minimizing`) is not told back, which keeps the two from answering each other for ever.
+/// What the host window's activity and visibility mean. Only the guest's own minimize is followed:
+/// a window the guest minimized that the user brings back is restored in the guest. A host window
+/// that goes out of sight with nothing asked of it never changes the guest's window. Wayland has no
+/// minimized state for a client to read (xdg_toplevel's states have none), and `suspended` is the same
+/// for a minimize, a locked screen, another virtual desktop, a window covered whole or a monitor that
+/// is off: taking it for a minimize minimized every guest window when the screen was locked.
 pub fn follow_host_state(presence: Presence, active: bool, suspended: bool) -> (Presence, HostChange) {
     match presence {
         Presence::Minimizing if !active || suspended => (Presence::Minimized, HostChange::Nothing),
         Presence::Minimized if active && !suspended => (Presence::Up, HostChange::Restore),
-        Presence::Up if suspended && !active => (Presence::Minimized, HostChange::Minimize),
         presence => (presence, HostChange::Nothing),
     }
 }
@@ -185,7 +185,33 @@ pub struct ScaleFollow {
     asked: Option<(u32, Instant)>,
 }
 
+/// The monitor scale Windows is to follow: that of the window that has, or last had, the focus; with
+/// none, the scale most of the windows are on; with no window on a surface yet, the largest
+/// monitor's (`largest_monitor`). Windows needs a right percentage also when nothing has the focus:
+/// a new screen mode makes it work its percentage out again, and the screen may be locked.
+pub fn scale_to_follow(focused: Option<f64>, windows: &[f64], largest_monitor: Option<f64>) -> Option<f64> {
+    if focused.is_some() {
+        return focused;
+    }
+    let mut counted: Vec<(f64, usize)> = Vec::new();
+    for scale in windows {
+        match counted.iter_mut().find(|(seen, _)| (seen - scale).abs() < 1e-6) {
+            Some((_, count)) => *count += 1,
+            None => counted.push((*scale, 1)),
+        }
+    }
+    // The first of the most common, so the answer does not change while nothing does.
+    let most = counted.iter().map(|(_, count)| *count).max();
+    counted.iter().find(|(_, count)| Some(*count) == most).map(|(scale, _)| *scale).or(largest_monitor)
+}
+
 impl ScaleFollow {
+    /// The guest's screen changed: Windows works its percentage out again for the new mode, and may
+    /// have dropped the step asked for before, so it is asked again without the usual wait.
+    pub fn screen_changed(&mut self) {
+        self.asked = None;
+    }
+
     /// The step to ask Windows for now, if any. `focus_scale` is the scale of the surface of the window
     /// that has the focus (`None` when no host window has it, which leaves Windows as it is), `guest` is
     /// Windows' percentage now and `offered` the steps it offers (empty: the helper takes no scale).
@@ -303,6 +329,29 @@ mod tests {
             None,
             "a focus that went back and forth starts again"
         );
+    }
+
+    #[test]
+    fn with_no_focus_windows_follows_the_monitor_its_windows_are_on() {
+        assert_eq!(scale_to_follow(Some(2.0), &[1.3, 1.3], Some(1.0)), Some(2.0), "the focused window's");
+        assert_eq!(scale_to_follow(None, &[1.3, 1.0, 1.3], Some(1.0)), Some(1.3), "most of the windows'");
+        assert_eq!(scale_to_follow(None, &[1.0, 1.3], Some(1.5)), Some(1.0), "the first of a tie");
+        assert_eq!(scale_to_follow(None, &[], Some(1.3)), Some(1.3), "the largest monitor's");
+        assert_eq!(scale_to_follow(None, &[], None), None);
+    }
+
+    #[test]
+    fn a_new_screen_mode_asks_for_the_step_again_at_once() {
+        let steps = [100, 125, 150, 175, 200];
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut follow = ScaleFollow::default();
+        assert_eq!(follow.look(Some(1.3), 100, &steps, at(0)), None);
+        assert_eq!(follow.look(Some(1.3), 100, &steps, at(1000)), Some(125));
+        // Taken, then a new mode makes Windows 200 % again.
+        assert_eq!(follow.look(Some(1.3), 125, &steps, at(1500)), None);
+        follow.screen_changed();
+        assert_eq!(follow.look(Some(1.3), 200, &steps, at(2000)), Some(125), "not ten seconds later");
     }
 
     #[test]
@@ -500,15 +549,13 @@ mod tests {
     }
 
     #[test]
-    fn the_users_minimize_is_sent_to_the_guest_once_and_does_not_come_back() {
+    fn a_host_window_out_of_sight_never_changes_the_guests() {
+        // A locked screen, another virtual desktop, a covered window or the user's minimize: the
+        // compositor says the same for each, so the guest is told nothing.
         let (presence, change) = follow_host_state(Presence::Up, false, true);
-        assert_eq!((presence, change), (Presence::Minimized, HostChange::Minimize));
-        // The guest's state says minimized now: the host window is already where it is told to be.
-        assert_eq!(follow_guest_state(presence, State::Minimized), (Presence::Minimized, Order::Nothing));
-        // Still out of sight, still nothing to send.
-        assert_eq!(follow_host_state(presence, false, true), (Presence::Minimized, HostChange::Nothing));
+        assert_eq!((presence, change), (Presence::Up, HostChange::Nothing));
         let (presence, change) = follow_host_state(presence, true, false);
-        assert_eq!((presence, change), (Presence::Up, HostChange::Restore));
+        assert_eq!((presence, change), (Presence::Up, HostChange::Nothing));
     }
 
     #[test]

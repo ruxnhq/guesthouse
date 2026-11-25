@@ -3,7 +3,7 @@
 //! keeps one view for each cell that is shown, and hands every frame to all of them.
 
 use super::cell_picture::Guest;
-use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, steps};
+use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, scale_to_follow, steps};
 use super::secure::SecureWindow;
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
@@ -50,8 +50,12 @@ pub struct Hub {
     sizer: Sizer,
     /// The floor and ceiling the helper was last told, cleared when the link comes up again.
     screen_said: RefCell<Option<(Size, Size)>>,
-    /// The scale of the surface of the window that last had the focus.
+    /// The window that last had the focus.
+    focus_id: RefCell<Option<String>>,
+    /// The monitor scale Windows was last made to follow, for the log.
     focus_scale: Slot<Option<f64>>,
+    /// The guest's screen as the helper last said it, so a new mode is seen.
+    screen_seen: Slot<Option<Size>>,
     /// The newest frame and the guest's SDR white with it, kept so a window that opens or comes back
     /// into sight shows it at once on a still guest. It holds its slot until the next frame.
     newest: RefCell<Option<(HeldFrame, Option<u32>)>>,
@@ -91,7 +95,9 @@ impl Hub {
             size_follow: RefCell::default(),
             sizer,
             screen_said: RefCell::default(),
+            focus_id: RefCell::default(),
             focus_scale: Slot::new(None),
+            screen_seen: Slot::new(None),
             newest: RefCell::default(),
             secure: RefCell::new(None),
         });
@@ -151,23 +157,33 @@ impl Hub {
         Guest { percent, offered, fit: self.fit }
     }
 
-    /// Asks Windows for the step the focused window's monitor wants, once it has stayed there. Only a
-    /// helper that reported the steps it offers is asked.
+    /// Asks Windows for the step the focused window's monitor wants, once it has stayed there; with no
+    /// focus, the step of the monitor the windows are on (`scale_to_follow`). Only a helper that
+    /// reported the steps it offers is asked.
     fn follow_scale(&self) {
-        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
-        if let Some(active) = views.iter().find(|view| view.is_active()) {
-            self.focus_scale.set(Some(active.surface_scale()));
+        let windows: Vec<Rc<View>> =
+            self.views.borrow().values().filter(|view| !view.is_popup()).cloned().collect();
+        if let Some(active) = windows.iter().find(|view| view.is_active()) {
+            self.focus_id.replace(Some(active.id.clone()));
         }
-        let (guest, offered) = {
+        let focused = self.focus_id.borrow().as_ref().and_then(|id| self.views.borrow().get(id).cloned());
+        let shown: Vec<f64> = windows.iter().filter_map(|view| view.known_scale()).collect();
+        let scale =
+            scale_to_follow(focused.and_then(|view| view.known_scale()), &shown, largest_monitor_scale());
+        self.focus_scale.set(scale);
+        let (guest, offered, screen) = {
             let link = self.link.borrow();
             let Some(model) = link.as_ref().map(|link| link.client.model()) else { return };
-            (model.scale_percent(), model.steps().map(<[u32]>::to_vec).unwrap_or_default())
+            (model.scale_percent(), model.steps().map(<[u32]>::to_vec).unwrap_or_default(), model.screen())
         };
+        if self.screen_seen.replace(Some(screen)).is_some_and(|seen| seen != screen) {
+            self.scale_follow.borrow_mut().screen_changed();
+        }
         let step =
             self.scale_follow.borrow_mut().look(self.focus_scale.get(), guest, &offered, Instant::now());
         if let Some(percent) = step {
             self.note(&format!(
-                "the focused window is on a monitor at {:?}: Windows is asked for {percent} %",
+                "the windows are to be right for a monitor at {:?}: Windows is asked for {percent} %",
                 self.focus_scale.get()
             ));
             self.request(Request::Scale { percent });
@@ -568,6 +584,19 @@ impl Sizer {
             Self::Not => {}
         }
     }
+}
+
+/// The scale of the largest monitor, for when no window is on a surface yet.
+fn largest_monitor_scale() -> Option<f64> {
+    let monitors = gdk::Display::default()?.monitors();
+    (0..monitors.n_items())
+        .filter_map(|index| monitors.item(index).and_then(|item| item.downcast::<gdk::Monitor>().ok()))
+        .max_by_key(|monitor| {
+            let geometry = monitor.geometry();
+            (f64::from(geometry.width()) * f64::from(geometry.height()) * monitor.scale() * monitor.scale())
+                as i64
+        })
+        .map(|monitor| monitor.scale())
 }
 
 /// The largest the screen is wanted (every monitor side by side, in its own pixels, within what the

@@ -4,6 +4,7 @@
 //! top edge brings it back: at once in fullscreen, where the pointer stops against the edge, and in a
 //! window only once the pointer has rested there, as it also crosses that edge on its way out.
 
+pub mod app_windows;
 mod capture;
 mod capture_state;
 mod clipboard;

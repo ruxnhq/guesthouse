@@ -145,7 +145,7 @@ enum Shown {
 }
 
 /// The machine of this name, or of this id.
-fn find_machine(context: &Context, wanted: &str) -> Result<Machine, String> {
+pub(super) fn find_machine(context: &Context, wanted: &str) -> Result<Machine, String> {
     let (machines, _) = load_all(context);
     machines
         .into_iter()

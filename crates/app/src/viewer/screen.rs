@@ -41,6 +41,9 @@ const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
 .performance-overlay { background: rgba(0, 0, 0, 0.65); color: white; padding: 6px 10px; border-radius: 6px;
   font-size: smaller; font-feature-settings: \"tnum\"; }";
 
+/// Who is handed each frame when the screen has no window of its own.
+pub(super) type TextureHandler = Box<dyn Fn(&gdk::Texture)>;
+
 pub(super) struct Inner {
     pub(super) root: gtk::Overlay,
     pub(super) picture: gtk::Picture,
@@ -117,6 +120,10 @@ pub(super) struct Inner {
     pub(super) followed_at: Cell<Instant>,
     /// Lab only: a press on the guest program's title bar that may move the window.
     pub(super) title_drag: RefCell<TitleDrag>,
+    /// App windows: this screen has no window of its own. It only owns the frames and the input, and
+    /// hands each frame to whoever asked for them.
+    pub(super) headless: Cell<bool>,
+    pub(super) on_texture: RefCell<Option<TextureHandler>>,
 }
 
 #[derive(Clone)]
@@ -216,6 +223,8 @@ impl Screen {
             on_own_surface: RefCell::default(),
             followed_at: Cell::new(Instant::now()),
             title_drag: RefCell::default(),
+            headless: Cell::new(false),
+            on_texture: RefCell::default(),
         }));
         this.add_input();
         this.connect_life();
@@ -455,6 +464,15 @@ impl Screen {
     }
 
     fn show(&self, texture: gdk::Texture) {
+        if self.0.headless.get() {
+            // Nothing draws here, so no frame waits to be drawn: each one is passed on at once.
+            self.0.frames.set(self.0.frames.get() + 1);
+            *self.0.latest.borrow_mut() = Some(texture.clone());
+            if let Some(passed_on) = self.0.on_texture.borrow().as_ref() {
+                passed_on(&texture);
+            }
+            return;
+        }
         self.0.picture.set_paintable(Some(&texture));
         self.0.aspect.set_frame(texture.width(), texture.height());
         self.0.spinner.set_visible(false);
@@ -463,6 +481,51 @@ impl Screen {
             self.0.frames.set(self.0.frames.get() + 1);
         }
         *self.0.latest.borrow_mut() = Some(texture);
+    }
+
+    /// App windows: makes this screen the owner of the machine's frames and input for windows of
+    /// other widgets. It is never in a window. Every frame goes to `passed_on` as it comes, and the
+    /// newest stays here for [`Screen::latest`], so a window opened later has a picture at once even
+    /// when the guest's screen is still. Frames are asked for in rows, as only the own surface has a
+    /// use for the card's tiles.
+    pub fn start_headless(&self, passed_on: impl Fn(&gdk::Texture) + 'static) {
+        self.0.headless.set(true);
+        self.0.own_impossible.set(true);
+        self.0.direct_frames.set(false);
+        *self.0.on_texture.borrow_mut() = Some(Box::new(passed_on));
+        if self.0.poll_source.borrow().is_some() {
+            return;
+        }
+        let this = self.clone();
+        let source = glib::timeout_add_local(POLL, move || {
+            this.poll();
+            glib::ControlFlow::Continue
+        });
+        *self.0.poll_source.borrow_mut() = Some(source);
+    }
+
+    /// The newest frame that has come, if one has.
+    pub fn latest(&self) -> Option<gdk::Texture> {
+        self.0.latest.borrow().clone()
+    }
+
+    /// The pointer the guest wants over its screen, for a window that shows part of it.
+    pub fn guest_pointer_cursor(&self) -> Option<gdk::Cursor> {
+        self.0.picture.cursor()
+    }
+
+    /// Lets go of what is held in the guest, and stops following the machine.
+    pub fn end_headless(&self) {
+        self.let_go();
+        if let Some(source) = self.0.poll_source.borrow_mut().take() {
+            source.remove();
+        }
+        *self.0.on_texture.borrow_mut() = None;
+        self.close_guest();
+        self.0.gpu.borrow_mut().take();
+        self.0.qemu.borrow_mut().take();
+        self.0.forwarded.borrow_mut().take();
+        self.0.latest.borrow_mut().take();
     }
 
     /// The newest frame as a small PNG, or `None` if nothing has been shown.

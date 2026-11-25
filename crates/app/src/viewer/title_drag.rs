@@ -13,8 +13,8 @@ use gtk::{gdk, graphene};
 
 /// How far the pointer goes with the button down, in the window's logical pixels, before a press on
 /// the title bar moves the window rather than clicks. A hand that clicks moves a pixel or two.
-const MOVE_AFTER: f64 = 4.0;
-const PRIMARY_BUTTON: u32 = 1;
+pub(super) const MOVE_AFTER: f64 = 4.0;
+pub(super) const PRIMARY_BUTTON: u32 = 1;
 
 /// The part of the rectangle that moves the window: this high from its top, short of this much at
 /// its right for the caption buttons. In the guest's pixels.
@@ -33,7 +33,7 @@ impl DragStrip {
 }
 
 /// Whether the pointer has gone far enough from the press to be a move.
-fn is_move((from_x, from_y): (f64, f64), (to_x, to_y): (f64, f64)) -> bool {
+pub(super) fn is_move((from_x, from_y): (f64, f64), (to_x, to_y): (f64, f64)) -> bool {
     (to_x - from_x).hypot(to_y - from_y) > MOVE_AFTER
 }
 

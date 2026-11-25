@@ -117,7 +117,47 @@ fn the_screen_mark_is_one_per_machine_and_goes_with_its_holder() {
     assert!(modes::screen_open(&rig.context, slot).unwrap());
     assert!(modes::mark_screen(&rig.context, slot).unwrap().is_none(), "a second screen is turned away");
     drop(mark);
-    assert!(!modes::screen_open(&rig.context, slot).unwrap());
+    // Another test's child, forked while the mark was held, keeps its copy of the lock until it has
+    // become its own program, so the mark is looked at until it is free.
+    let free = (0..200).any(|_| {
+        let open = modes::screen_open(&rig.context, slot).unwrap();
+        if open {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        !open
+    });
+    assert!(free);
+}
+
+#[test]
+fn a_look_at_the_locks_never_turns_away_the_one_that_takes_them() {
+    let scratch = Scratch::new();
+    let rig = rig(&scratch, Kind::Windows, true, &[]);
+    let slot = crate::slots::first();
+    let looking = std::sync::atomic::AtomicBool::new(true);
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            while looking.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = viewer_lock::held(&rig.context, slot);
+                let _ = modes::screen_open(&rig.context, slot);
+            }
+        });
+        // The looking ends however this ends, a failed assertion too, or the scope would wait for ever.
+        struct Stop<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for Stop<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _stop = Stop(&looking);
+        for _ in 0..50 {
+            let lock = viewer_lock::take(&rig.context, slot).unwrap();
+            assert!(lock.is_some(), "a viewer was turned away by a look");
+            drop(lock);
+            let mark = modes::mark_screen(&rig.context, slot).unwrap();
+            assert!(mark.is_some(), "a screen was turned away by a look");
+        }
+    });
 }
 
 #[test]

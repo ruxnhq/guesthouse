@@ -10,6 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const LOCK_FILE: &str = "app-windows-viewer.lock";
 const PRIVATE: u32 = 0o600;
@@ -44,23 +45,43 @@ pub fn take(context: &Context, slot: Slot) -> io::Result<Option<ViewerLock>> {
     take_in(&context.run_folder(Some(slot)))
 }
 
-/// The same for a run folder that is already made.
+/// The same for a run folder that is already made. A look by [`held_in`] holds the lock shared for an
+/// instant, which is not a viewer, so a lock found taken is tried again a few times before it counts.
 pub fn take_in(run_folder: &Path) -> io::Result<Option<ViewerLock>> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(PRIVATE)
-        .open(run_folder.join(LOCK_FILE))?;
-    Ok(flock(&file, FlockOperation::NonBlockingLockExclusive).is_ok().then_some(ViewerLock(file)))
+    let file = open(run_folder)?;
+    for time in 0..TRIES {
+        if time > 0 {
+            std::thread::sleep(TRY_AGAIN);
+        }
+        if flock(&file, FlockOperation::NonBlockingLockExclusive).is_ok() {
+            return Ok(Some(ViewerLock(file)));
+        }
+    }
+    Ok(None)
+}
+
+/// How often a lock found taken is tried again, and how long apart: longer than any look holds it.
+pub const TRIES: u32 = 5;
+pub const TRY_AGAIN: Duration = Duration::from_millis(60);
+
+fn open(run_folder: &Path) -> io::Result<File> {
+    OpenOptions::new().create(true).truncate(false).write(true).mode(PRIVATE).open(run_folder.join(LOCK_FILE))
+}
+
+/// Whether some process holds this lock now. The look takes it shared, and only for an instant: two
+/// looks at once both find it free, and a viewer that starts meanwhile tries again (see [`take_in`]).
+pub fn held_file(file: &Path) -> io::Result<bool> {
+    let file = OpenOptions::new().create(true).truncate(false).write(true).mode(PRIVATE).open(file)?;
+    Ok(flock(&file, FlockOperation::NonBlockingLockShared).is_err())
 }
 
 /// Whether a viewer has the lock in this run folder now.
 pub fn held_in(run_folder: &Path) -> io::Result<bool> {
-    Ok(take_in(run_folder)?.is_none())
+    held_file(&run_folder.join(LOCK_FILE))
 }
 
 /// Whether a viewer of the machine has the lock now.
 pub fn held(context: &Context, slot: Slot) -> io::Result<bool> {
-    Ok(take(context, slot)?.is_none())
+    context.make_run_folder(Some(slot))?;
+    held_in(&context.run_folder(Some(slot)))
 }

@@ -53,12 +53,14 @@ fn take_screen_in(run_folder: &Path) -> io::Result<Option<ScreenMark>> {
 /// Marks the machine's screen as open, or says `None` if it already is. The run folder is made.
 pub fn mark_screen(context: &Context, slot: Slot) -> io::Result<Option<ScreenMark>> {
     context.make_run_folder(Some(slot))?;
-    // Another look at the lock holds it for an instant, which is not a screen that is open.
-    for _ in 0..5 {
+    // A look at the lock holds it shared for an instant, which is not a screen that is open.
+    for time in 0..viewer_lock::TRIES {
+        if time > 0 {
+            std::thread::sleep(viewer_lock::TRY_AGAIN);
+        }
         if let Some(mark) = take_screen_in(&context.run_folder(Some(slot)))? {
             return Ok(Some(mark));
         }
-        std::thread::sleep(Duration::from_millis(60));
     }
     Ok(None)
 }
@@ -66,11 +68,12 @@ pub fn mark_screen(context: &Context, slot: Slot) -> io::Result<Option<ScreenMar
 /// Whether the machine's whole screen is open in the app now.
 pub fn screen_open(context: &Context, slot: Slot) -> io::Result<bool> {
     context.make_run_folder(Some(slot))?;
-    Ok(take_screen_in(&context.run_folder(Some(slot)))?.is_none())
+    viewer_lock::held_file(&context.run_folder(Some(slot)).join(SCREEN_FILE))
 }
 
-/// The same, asked again a moment later when it says yes. Looking takes the lock for an instant, and two
-/// looks at once each find it taken, so a yes that is to end something is not taken at the first look.
+/// The same, asked again a moment later when it says yes. A child this process forks holds a copy of
+/// the mark until it becomes its own program, so a yes that is to end something is not taken at the
+/// first look.
 pub fn screen_open_settled(context: &Context, slot: Slot) -> bool {
     (0..3).all(|time| {
         if time > 0 {

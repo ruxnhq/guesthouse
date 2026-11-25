@@ -42,7 +42,11 @@ const STYLE: &str = ".guest-screen { background: #000000; color: #ffffff; }
   font-size: smaller; font-feature-settings: \"tnum\"; }";
 
 /// Who is handed each frame when the screen has no window of its own.
-pub(super) type TextureHandler = Box<dyn Fn(&gdk::Texture)>;
+/// App windows: what is done with each frame, as its slot, and on each look whether one came or not.
+pub(super) struct TextureHandler {
+    pub frame: Box<dyn Fn(HeldFrame, Option<u32>)>,
+    pub tick: Box<dyn Fn()>,
+}
 
 pub(super) struct Inner {
     pub(super) root: gtk::Overlay,
@@ -352,7 +356,9 @@ impl Screen {
         if let Some(guest) = self.0.guest.borrow_mut().as_mut() {
             guest.flush();
         }
-        if !self.show_on_own_surface() {
+        if self.0.headless.get() {
+            self.pass_on_slot();
+        } else if !self.show_on_own_surface() {
             if !self.0.waiting.get() {
                 if let Some(texture) = self.next_texture() {
                     self.show(texture);
@@ -464,15 +470,6 @@ impl Screen {
     }
 
     fn show(&self, texture: gdk::Texture) {
-        if self.0.headless.get() {
-            // Nothing draws here, so no frame waits to be drawn: each one is passed on at once.
-            self.0.frames.set(self.0.frames.get() + 1);
-            *self.0.latest.borrow_mut() = Some(texture.clone());
-            if let Some(passed_on) = self.0.on_texture.borrow().as_ref() {
-                passed_on(&texture);
-            }
-            return;
-        }
         self.0.picture.set_paintable(Some(&texture));
         self.0.aspect.set_frame(texture.width(), texture.height());
         self.0.spinner.set_visible(false);
@@ -484,15 +481,19 @@ impl Screen {
     }
 
     /// App windows: makes this screen the owner of the machine's frames and input for windows of
-    /// other widgets. It is never in a window. Every frame goes to `passed_on` as it comes, and the
-    /// newest stays here for [`Screen::latest`], so a window opened later has a picture at once even
-    /// when the guest's screen is still. Frames are asked for in rows, as only the own surface has a
-    /// use for the card's tiles.
-    pub fn start_headless(&self, passed_on: impl Fn(&gdk::Texture) + 'static) {
+    /// other widgets. It is never in a window. Every frame goes to `frame` as its slot, as it comes,
+    /// for the windows to hand to the compositor themselves: nothing here draws it. `tick` is called
+    /// on every look, so what the compositor gave back is taken in soon.
+    pub fn start_headless(
+        &self,
+        frame: impl Fn(HeldFrame, Option<u32>) + 'static,
+        tick: impl Fn() + 'static,
+    ) {
         self.0.headless.set(true);
         self.0.own_impossible.set(true);
         self.0.direct_frames.set(false);
-        *self.0.on_texture.borrow_mut() = Some(Box::new(passed_on));
+        *self.0.on_texture.borrow_mut() =
+            Some(TextureHandler { frame: Box::new(frame), tick: Box::new(tick) });
         if self.0.poll_source.borrow().is_some() {
             return;
         }
@@ -504,9 +505,21 @@ impl Screen {
         *self.0.poll_source.borrow_mut() = Some(source);
     }
 
-    /// The newest frame that has come, if one has.
-    pub fn latest(&self) -> Option<gdk::Texture> {
-        self.0.latest.borrow().clone()
+    /// App windows: the newest frame as its slot, to whoever asked for them.
+    fn pass_on_slot(&self) {
+        let newest = {
+            let mut gpu = self.0.gpu.borrow_mut();
+            gpu.as_mut().map(|source| (source.newest_slot(), source.sdr_white_nits()))
+        };
+        self.follow_gpu_cursor();
+        let handler = self.0.on_texture.borrow();
+        let Some(handler) = handler.as_ref() else { return };
+        if let Some((Some(frame), sdr_white_nits)) = newest {
+            self.0.booting.set(false);
+            self.0.frames.set(self.0.frames.get() + 1);
+            (handler.frame)(HeldFrame::new(frame), sdr_white_nits);
+        }
+        (handler.tick)();
     }
 
     /// The pointer the guest wants over its screen, for a window that shows part of it.

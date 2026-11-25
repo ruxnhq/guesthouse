@@ -1,12 +1,13 @@
-//! A cell's part of the guest's frame, drawn at a ratio of guest pixels to logical units that follows
-//! the scale the compositor gives the surface it is on.
+//! The place of a cell's part of the guest's frame in a host window, at a ratio of guest pixels to
+//! logical units that follows the scale the compositor gives the surface it is on.
 //!
-//! A widget's size is in whole logical units, which at a scale of 1.3 is never a whole number of the
-//! monitor's pixels for most cells. So the picture is not a child widget at its own size: it is drawn
-//! here at `pixels / ratio` logical units, a fraction, from a corner that is on a pixel of the monitor.
-//! With the ratio at the surface's scale that is each guest pixel on one pixel of the monitor. The widget is the next whole
-//! logical size up, and the strip it has over (under one logical unit) is black.
+//! GTK draws nothing of the picture. The widget only holds the cell's size, the next whole logical
+//! size up from `pixels / ratio`, and says where the picture goes: the frame's buffer goes on a
+//! surface of the view's own over the window (`OwnSurface`), its viewport's source the cell and its
+//! destination the widget's size. The compositor does the scaling, so a source of the destination's
+//! size in the monitor's pixels is each guest pixel on one pixel of the monitor.
 
+use crate::viewer::crop::Crop;
 use gtk::gdk;
 use gtk::glib;
 use gtk::graphene;
@@ -38,7 +39,6 @@ mod imp {
 
     #[derive(Default)]
     pub struct CellPicture {
-        pub texture: RefCell<Option<gdk::Texture>>,
         /// The part of the frame shown, in guest pixels.
         pub source: Cell<Option<Rect>>,
         /// Where in the cell that part starts: nothing unless the cell hangs over the screen's edge.
@@ -50,7 +50,7 @@ mod imp {
         pub measured_at: Cell<f64>,
         pub watching: RefCell<Option<(gdk::Surface, glib::SignalHandlerId)>>,
         pub on_scale: RefCell<Option<ScaleSaid>>,
-        /// Lab only: what the last drawing went by, said once each time it changes.
+        /// Lab only: what the last place went by, said once each time it changes.
         pub traced: RefCell<String>,
     }
 
@@ -72,7 +72,6 @@ mod imp {
             let handler = surface.connect_scale_notify(move |surface| {
                 let Some(widget) = weak.upgrade() else { return };
                 widget.queue_resize();
-                widget.queue_draw();
                 if let Some(said) = widget.imp().on_scale.borrow().as_ref() {
                     said(surface.scale());
                 }
@@ -94,54 +93,6 @@ mod imp {
             let pixels = if orientation == gtk::Orientation::Horizontal { width } else { height };
             let length = logical_length(pixels, ratio);
             (length, length, -1, -1)
-        }
-
-        fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let widget = self.obj();
-            let (width, height) = (widget.width() as f32, widget.height() as f32);
-            snapshot.append_color(&gdk::RGBA::BLACK, &graphene::Rect::new(0.0, 0.0, width, height));
-            let (Some(texture), Some(source)) = (self.texture.borrow().clone(), self.source.get()) else {
-                return;
-            };
-            let scale = widget.surface_scale();
-            let ratio = widget.ratio();
-            // GTK draws at exactly the surface's scale; the buffer is the logical size times it,
-            // rounded, so what is drawn past the last whole pixel is cut. Measured: correcting for the
-            // rounding made every pixel a mix, drawing at the scale made them exact.
-            let per = 1.0 / ratio;
-            // The corner the picture starts at, moved onto a pixel of the buffer.
-            let (origin_x, origin_y) = widget.surface_origin();
-            let on_pixel = |origin: f64, at: f64| ((origin + at) * scale).round() / scale - origin;
-            let offset = self.offset.get();
-            let left = on_pixel(origin_x, f64::from(offset.x) * per);
-            let top = on_pixel(origin_y, f64::from(offset.y) * per);
-            let shown = graphene::Rect::new(
-                left as f32,
-                top as f32,
-                (f64::from(source.w) * per) as f32,
-                (f64::from(source.h) * per) as f32,
-            );
-            let whole = graphene::Rect::new(
-                (left - f64::from(source.x) * per) as f32,
-                (top - f64::from(source.y) * per) as f32,
-                (f64::from(texture.width()) * per) as f32,
-                (f64::from(texture.height()) * per) as f32,
-            );
-            if std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some() {
-                let said = format!(
-                    "{}x{} scale {scale} ratio {ratio} shown {shown:?} whole {whole:?}",
-                    widget.width(),
-                    widget.height()
-                );
-                if self.traced.replace(said.clone()) != said {
-                    eprintln!("app windows: cell picture {said}");
-                }
-            }
-            snapshot.push_clip(&shown);
-            // A plain texture node: drawn one texel on one pixel it is exact. A texture-scale node with
-            // the nearest filter was not: measured at 2.0 in a nested KWin, every pixel came out mixed.
-            snapshot.append_texture(&texture, &whole);
-            snapshot.pop();
         }
     }
 }
@@ -171,16 +122,49 @@ impl CellPicture {
     }
 
     /// Where this widget is on its surface, in logical units.
-    fn surface_origin(&self) -> (f64, f64) {
+    pub fn surface_origin(&self) -> (f64, f64) {
         let Some(native) = self.native() else { return (0.0, 0.0) };
         let corner = self.compute_point(&native, &graphene::Point::zero()).unwrap_or(graphene::Point::zero());
         let (shift_x, shift_y) = native.surface_transform();
         (f64::from(corner.x()) + shift_x, f64::from(corner.y()) + shift_y)
     }
 
-    pub fn set_texture(&self, texture: &gdk::Texture) {
-        self.imp().texture.replace(Some(texture.clone()));
-        self.queue_draw();
+    /// Where the picture goes on the widget's surface, in its logical units, as X, Y, width and
+    /// height, and the rectangle of the frame shown there, in the frame's pixels. The rectangle is as
+    /// many of the frame's pixels as the place covers of the monitor's at the surface's scale (the
+    /// compositor makes a destination of D logical units round(D * scale) pixels), so at a ratio of the
+    /// scale no pixel is stretched. It may reach a pixel or two past the cell; `None` until the cell is known.
+    pub fn picture_place(&self) -> Option<((i32, i32, i32, i32), Crop)> {
+        let imp = self.imp();
+        let source = imp.source.get()?;
+        let offset = imp.offset.get();
+        let scale = self.surface_scale();
+        let ratio = self.ratio();
+        let (origin_x, origin_y) = self.surface_origin();
+        let x = origin_x.round() as i32 + (f64::from(offset.x) / ratio).round() as i32;
+        let y = origin_y.round() as i32 + (f64::from(offset.y) / ratio).round() as i32;
+        let width = logical_length(source.w, ratio);
+        let height = logical_length(source.h, ratio);
+        let covered = |logical: i32, pixels: i32| {
+            if std::env::var_os("GUESTHOUSE_LAB_SOURCE_CELL").is_some() {
+                return pixels;
+            }
+            ((f64::from(logical) * scale).round() * ratio / scale).round() as i32
+        };
+        let crop = Crop {
+            x: source.x,
+            y: source.y,
+            width: covered(width, source.w),
+            height: covered(height, source.h),
+        };
+        let place = ((x, y, width, height), crop);
+        if std::env::var_os("GUESTHOUSE_APP_WINDOWS_TRACE").is_some() {
+            let said = format!("scale {scale} ratio {ratio} place {:?} source {crop:?}", place.0);
+            if imp.traced.replace(said.clone()) != said {
+                eprintln!("app windows: cell picture {said}");
+            }
+        }
+        Some(place)
     }
 
     /// The cell's size, the part of the frame shown and where in the cell it starts.
@@ -192,7 +176,6 @@ impl CellPicture {
         if resized {
             self.queue_resize();
         }
-        self.queue_draw();
     }
 
     pub fn set_guest(&self, guest: Guest) {
@@ -206,7 +189,6 @@ impl CellPicture {
         if (self.ratio() - self.imp().measured_at.get()).abs() > 1e-9 {
             self.queue_resize();
         }
-        self.queue_draw();
     }
 
     /// Called with the surface's new scale whenever the compositor changes it.

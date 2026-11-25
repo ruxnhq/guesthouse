@@ -6,6 +6,8 @@ use super::cell_picture::{CellPicture, Guest};
 use super::hub::Hub;
 use super::plan::{HostChange, Order, Presence, follow_guest_state, follow_host_state, point_for};
 use crate::viewer::input::button_name;
+use crate::viewer::own_surface::OwnSurface;
+use crate::viewer::slot_hold::HeldFrame;
 use crate::viewer::title_drag::{PRIMARY_BUTTON, is_move};
 use adw::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -17,10 +19,11 @@ use std::rc::{Rc, Weak};
 
 const BACK: u32 = 8;
 const FORWARD: u32 = 9;
-/// The window under a popup's picture has nothing of its own to draw, and neither has the popup.
+/// GTK draws nothing in a window or popup: the picture is on the view's own surface over it, and
+/// what the window has past the picture (under a logical unit at the right and bottom) is clear.
 const STYLE: &str = "window.app-window-view { background: #000000; }
 popover.app-window-popup, popover.app-window-popup > contents {
-  padding: 0; margin: 0; border: none; border-radius: 0; box-shadow: none; background: #000000; min-width: 0; min-height: 0; }
+  padding: 0; margin: 0; border: none; border-radius: 0; box-shadow: none; background: transparent; min-width: 0; min-height: 0; }
 popover.app-window-popup > arrow { min-width: 0; min-height: 0; }";
 
 /// A press on the title bar that the guest has not been told of: let go where it was, it is a click.
@@ -46,6 +49,13 @@ pub struct View {
     moved_window: Slot<bool>,
     /// The popups hosted against this one, as ids.
     pub children: RefCell<Vec<String>>,
+    /// The surface the frames go on, over GTK's surface it was made for.
+    own: RefCell<Option<(gdk::Surface, OwnSurface)>>,
+    /// The newest frame is still to be shown here: the surface wasn't there yet, the compositor
+    /// hadn't made its buffer, or the window was out of sight.
+    behind: Slot<bool>,
+    /// The picture was taken off while the window is out of sight, so it holds no slot.
+    hidden: Slot<bool>,
 }
 
 pub fn add_style(display: &gdk::Display) {
@@ -91,6 +101,9 @@ impl View {
             held: RefCell::default(),
             moved_window: Slot::new(false),
             children: RefCell::default(),
+            own: RefCell::default(),
+            behind: Slot::new(true),
+            hidden: Slot::new(false),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -104,9 +117,6 @@ impl View {
                     view.place_popup(parent);
                 }
             }
-        }
-        if let Some(texture) = hub.latest() {
-            view.set_texture(&texture);
         }
         match &view.host {
             Host::Window(window) => {
@@ -126,9 +136,89 @@ impl View {
         matches!(self.host, Host::Popup(_))
     }
 
-    /// A new frame, which every view shows.
-    pub fn set_texture(&self, texture: &gdk::Texture) {
-        self.frame.set_texture(texture);
+    /// A new frame, which every view shows: its buffer goes on the view's own surface, cut to the
+    /// cell. A window out of sight shows none and holds no slot.
+    pub fn show(&self, hub: &Hub, frame: &HeldFrame, sdr_white_nits: Option<u32>) {
+        let out_of_sight = matches!(&self.host, Host::Window(window) if window.is_suspended());
+        if out_of_sight {
+            self.behind.set(true);
+            if !self.hidden.replace(true)
+                && let Some((_, own)) = self.own.borrow_mut().as_mut()
+            {
+                own.hide();
+            }
+            return;
+        }
+        self.hidden.set(false);
+        let Some(place) = self.frame.picture_place() else {
+            self.behind.set(true);
+            return;
+        };
+        if !self.own_surface(hub) {
+            self.behind.set(true);
+            return;
+        }
+        let mut own = self.own.borrow_mut();
+        let Some((_, own)) = own.as_mut() else { return };
+        let ((x, y, width, height), crop) = place;
+        own.place(x, y, width, height);
+        own.set_crop(Some(crop));
+        match own.show(frame.for_reader(), sdr_white_nits) {
+            Ok(()) => self.behind.set(false),
+            Err(not_shown) => {
+                self.behind.set(not_shown.may_later());
+                if !not_shown.may_later() {
+                    hub.note(&format!("view {}: the frame isn't shown, as {}", self.id, not_shown.why()));
+                }
+            }
+        }
+        for note in own.take_notes() {
+            hub.trace(&format!("view {}: {note}", self.id));
+        }
+    }
+
+    /// Takes in what the compositor gave back, and shows `newest` if this view is behind.
+    pub fn tick(&self, hub: &Hub, newest: Option<&HeldFrame>, sdr_white_nits: Option<u32>) {
+        if let Some((_, own)) = self.own.borrow_mut().as_mut() {
+            own.catch_up();
+            // A new scale or a new cell moves the picture under a still guest too.
+            if !self.hidden.get()
+                && let Some(((x, y, width, height), crop)) = self.frame.picture_place()
+            {
+                own.place(x, y, width, height);
+                own.set_crop(Some(crop));
+            }
+        }
+        let back_in_sight =
+            self.hidden.get() && matches!(&self.host, Host::Window(window) if !window.is_suspended());
+        if (self.behind.get() || back_in_sight)
+            && let Some(frame) = newest
+        {
+            self.show(hub, frame, sdr_white_nits);
+        }
+    }
+
+    /// The view's own surface over GTK's, made when GTK's is there, and again if GTK made another.
+    fn own_surface(&self, hub: &Hub) -> bool {
+        let Some(surface) = self.frame.native().and_then(|native| native.surface()) else { return false };
+        if !surface.is_mapped() {
+            return false;
+        }
+        let mut own = self.own.borrow_mut();
+        if own.as_ref().is_some_and(|(made_for, _)| *made_for == surface) {
+            return true;
+        }
+        own.take();
+        match OwnSurface::new_above(&surface.display(), &surface) {
+            Some(made) => {
+                *own = Some((surface, made));
+                true
+            }
+            None => {
+                hub.note(&format!("view {}: the compositor can't take a surface of the view's own", self.id));
+                false
+            }
+        }
     }
 
     /// Windows' scale or the steps it offers changed.
@@ -228,6 +318,7 @@ impl View {
     /// Takes the host window away. A popup goes with its parent, so a parent's popups are the
     /// caller's to take first.
     pub fn destroy(&self) {
+        self.own.borrow_mut().take();
         match &self.host {
             Host::Window(window) => window.destroy(),
             Host::Popup(popover) => {

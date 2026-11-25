@@ -6,6 +6,7 @@ use super::cell_picture::Guest;
 use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, steps};
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
+use crate::viewer::slot_hold::HeldFrame;
 use crate::viewer::window_size::GuestSizer;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -50,6 +51,9 @@ pub struct Hub {
     screen_said: RefCell<Option<(Size, Size)>>,
     /// The scale of the surface of the window that last had the focus.
     focus_scale: Slot<Option<f64>>,
+    /// The newest frame and the guest's SDR white with it, kept so a window that opens or comes back
+    /// into sight shows it at once on a still guest. It holds its slot until the next frame.
+    newest: RefCell<Option<(HeldFrame, Option<u32>)>>,
 }
 
 use std::sync::Arc;
@@ -85,14 +89,22 @@ impl Hub {
             sizer,
             screen_said: RefCell::default(),
             focus_scale: Slot::new(None),
+            newest: RefCell::default(),
         });
         add_style(&gdk::Display::default().expect("a display"));
-        let weak = Rc::downgrade(&hub);
-        hub.screen.start_headless(move |texture| {
-            if let Some(hub) = weak.upgrade() {
-                hub.on_texture(texture);
-            }
-        });
+        let (weak, ticking) = (Rc::downgrade(&hub), Rc::downgrade(&hub));
+        hub.screen.start_headless(
+            move |frame, sdr_white_nits| {
+                if let Some(hub) = weak.upgrade() {
+                    hub.on_frame(frame, sdr_white_nits);
+                }
+            },
+            move || {
+                if let Some(hub) = ticking.upgrade() {
+                    hub.tick();
+                }
+            },
+        );
         let weak = Rc::downgrade(&hub);
         glib::timeout_add_local(LOOK, move || match weak.upgrade() {
             Some(hub) if !hub.ended.get() => {
@@ -230,10 +242,6 @@ impl Hub {
         link.as_ref().map_or(Size { w: 1920, h: 1080 }, |link| link.client.model().screen())
     }
 
-    pub fn latest(&self) -> Option<gdk::Texture> {
-        self.screen.latest()
-    }
-
     pub fn request(&self, request: Request) {
         let kind = request.kind();
         let sent = self.link.borrow_mut().as_mut().map(|link| link.client.request(request));
@@ -282,26 +290,36 @@ impl Hub {
         self.screen.scroll_controller(gtk::PropagationPhase::Bubble)
     }
 
-    /// Every view shows the new frame, so none holds an old one back from the producer.
-    fn on_texture(&self, texture: &gdk::Texture) {
+    /// Every view puts the new frame on its own surface, one after the other with nothing between,
+    /// so the windows of one program change together. None holds an old one back from the producer.
+    fn on_frame(&self, frame: HeldFrame, sdr_white_nits: Option<u32>) {
         let screen = self.screen_size();
-        if screen.w > 0
-            && (texture.width(), texture.height()) != (screen.w, screen.h)
-            && !self.mismatch_said.replace(true)
-        {
+        let size = frame.size();
+        if screen.w > 0 && size != (screen.w, screen.h) && !self.mismatch_said.replace(true) {
             self.note(&format!(
                 "the frames are {}x{} and the helper says the screen is {}x{}",
-                texture.width(),
-                texture.height(),
-                screen.w,
-                screen.h
+                size.0, size.1, screen.w, screen.h
             ));
         }
         let cursor = self.screen.guest_pointer_cursor();
         let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
-        for view in views {
-            view.set_texture(texture);
+        for view in &views {
+            view.show(self, &frame, sdr_white_nits);
             view.set_cursor(cursor.as_ref());
+        }
+        self.newest.replace(Some((frame, sdr_white_nits)));
+    }
+
+    /// Each view takes in what the compositor gave back, and one that is behind shows the newest frame.
+    fn tick(&self) {
+        let views: Vec<Rc<View>> = self.views.borrow().values().cloned().collect();
+        let newest = self.newest.borrow();
+        let (frame, sdr_white_nits) = match newest.as_ref() {
+            Some((frame, nits)) => (Some(frame), *nits),
+            None => (None, None),
+        };
+        for view in views {
+            view.tick(self, frame, sdr_white_nits);
         }
     }
 
@@ -442,6 +460,7 @@ impl Hub {
         }
         self.screen.release_everything();
         self.close_all();
+        self.newest.borrow_mut().take();
         self.screen.end_headless();
         self.link.borrow_mut().take();
         self.hold.borrow_mut().take();

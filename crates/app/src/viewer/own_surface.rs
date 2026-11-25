@@ -462,7 +462,8 @@ pub struct OwnSurface {
     place: Option<(i32, i32, i32, i32)>,
     /// Whether the frames sent reach the screen.
     stall: StallWatch,
-    /// Lab only: the rectangle of each frame to show, as it was asked for.
+    /// The rectangle of each frame to show, as it was asked for: a cell of the guest's screen for an app
+    /// window, or a lab crop.
     crop: Option<Crop>,
     /// The viewport's source now: the rectangle as it fits the buffer, or `None` for all of it.
     source: Option<Crop>,
@@ -474,6 +475,16 @@ impl OwnSurface {
     /// Under `parent`, which must be a Wayland toplevel. `None` if this isn't Wayland or the
     /// compositor lacks something this needs.
     pub fn new(display: &gdk::Display, parent: &gdk::Surface) -> Option<Self> {
+        Self::made(display, parent, false)
+    }
+
+    /// Over `parent`, a toplevel or a popup, for a window whose whole picture this is: GTK draws
+    /// nothing there that has to stay on top, so its surface needs no clear part over the picture.
+    pub fn new_above(display: &gdk::Display, parent: &gdk::Surface) -> Option<Self> {
+        Self::made(display, parent, true)
+    }
+
+    fn made(display: &gdk::Display, parent: &gdk::Surface, above: bool) -> Option<Self> {
         let display = display.downcast_ref::<WaylandDisplay>()?;
         let parent = parent.downcast_ref::<WaylandSurface>()?.wl_surface()?;
         let backend = display.wl_display()?.backend().upgrade()?;
@@ -497,7 +508,11 @@ impl OwnSurface {
         subsurface.set_desync();
         // Under the window, which leaves the picture's place clear while this shows frames. What GTK
         // draws over the screen, like the overlay, toasts and the captured cursor, stays on top.
-        subsurface.place_below(&parent);
+        if above {
+            subsurface.place_above(&parent);
+        } else {
+            subsurface.place_below(&parent);
+        }
         let viewport = viewporter.get_viewport(&surface, &handle, ());
         let dmabuf_feedback = (dmabuf.version() >= DMABUF_FEEDBACK_VERSION)
             .then(|| dmabuf.get_surface_feedback(&surface, &handle, ()));
@@ -594,7 +609,7 @@ impl OwnSurface {
         true
     }
 
-    /// Lab only: shows just this rectangle of each frame, or all of it with `None`. A frame already up
+    /// Shows just this rectangle of each frame, or all of it with `None`. A frame already up
     /// is cut to it at once, as a still guest may send no other for a long time.
     pub fn set_crop(&mut self, crop: Option<Crop>) {
         self.crop = crop;

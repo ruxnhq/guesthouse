@@ -10,6 +10,10 @@ use crate::viewer::slot_hold::HeldFrame;
 use gtk::gdk;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
+
+/// Lab only: how often what the compositor showed is said.
+const SAY_SHOWN: Duration = Duration::from_secs(5);
 
 pub struct Framed {
     /// For the log.
@@ -22,6 +26,8 @@ pub struct Framed {
     behind: Cell<bool>,
     /// The picture was taken off while the window is out of sight, so it holds no slot.
     hidden: Cell<bool>,
+    /// Lab only: when what the compositor showed was last said.
+    said_at: Cell<Option<Instant>>,
 }
 
 impl Framed {
@@ -32,6 +38,7 @@ impl Framed {
             own: RefCell::default(),
             behind: Cell::new(true),
             hidden: Cell::new(false),
+            said_at: Cell::new(None),
         }
     }
 
@@ -85,6 +92,11 @@ impl Framed {
     ) {
         if let Some((_, own)) = self.own.borrow_mut().as_mut() {
             own.catch_up();
+            let now = Instant::now();
+            if self.said_at.get().is_none_or(|at| now - at >= SAY_SHOWN) {
+                self.said_at.set(Some(now));
+                hub.trace(&format!("{}: shown so far {:?}", self.name, own.shown()));
+            }
             if !self.hidden.get()
                 && let Some(((x, y, width, height), crop)) = self.picture.picture_place()
             {

@@ -43,7 +43,7 @@ pub(super) fn apps(context: &Context, machine: &Machine, out: &mut dyn Write) ->
     let width = found.iter().map(|app| app.id.chars().count()).max().unwrap_or(0);
     for app in &found {
         let minor = if app.minor { "  (uninstaller or help)" } else { "" };
-        writeln!(out, "{:width$}  {}{minor}", app.id, app.name)?;
+        writeln!(out, "{:width$} {}{minor}", app.id, app.name)?;
     }
     writeln!(out, "launcher {} add takes an id from this list, or a program's path or name.", machine.id)?;
     Ok(())
@@ -124,7 +124,7 @@ pub(super) fn launcher(
             }
             for entry in entries {
                 let kind = if entry.start_menu { "Start menu program" } else { "program" };
-                writeln!(out, "{}  {}  {kind} {}", entry.app_id, entry.name, entry.program)?;
+                writeln!(out, "{} {} {kind} {}", entry.app_id, entry.name, entry.program)?;
             }
             Ok(())
         }

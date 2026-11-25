@@ -52,8 +52,8 @@ fn apps_lists_the_start_menu_a_line_each() {
     assert_eq!(result, Ok(()));
     assert_eq!(
         out,
-        "Accessories/Paint       Paint\n\
-         Accessories/Paint Help  Paint Help  (uninstaller or help)\n\
+        "Accessories/Paint      Paint\n\
+         Accessories/Paint Help Paint Help  (uninstaller or help)\n\
          launcher work add takes an id from this list, or a program's path or name.\n"
     );
     assert_eq!(rig.helper.requests()[0]["icons"], false, "no icons are fetched to be listed");
@@ -91,7 +91,7 @@ fn a_start_menu_program_becomes_an_entry_with_its_icon_and_the_exact_text() {
         )
     );
     let (out, _) = said(&rig.context, "launcher work list");
-    assert_eq!(out, "guesthouse-work-mspaint  Paint (Office PC)  Start menu program Accessories/Paint\n");
+    assert_eq!(out, "guesthouse-work-mspaint Paint (Office PC) Start menu program Accessories/Paint\n");
 }
 
 #[test]

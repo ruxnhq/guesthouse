@@ -266,7 +266,16 @@ fn the_viewer_lock_is_one_per_machine_and_goes_with_its_holder() {
     assert!(viewer_lock::take(&rig.context, slot).unwrap().is_none(), "a second viewer is turned away");
     assert!(viewer_lock::held(&rig.context, slot).unwrap());
     drop(first);
-    assert!(!viewer_lock::held(&rig.context, slot).unwrap());
+    // Another test's child, forked while the lock was held, keeps its copy of the lock until it has
+    // become its own program, so the lock is looked at until it is free.
+    let free = (0..200).any(|_| {
+        let held = viewer_lock::held(&rig.context, slot).unwrap();
+        if held {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        !held
+    });
+    assert!(free);
 }
 
 #[test]

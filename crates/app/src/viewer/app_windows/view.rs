@@ -386,6 +386,10 @@ impl View {
                 // A popup up is not always moved by a new place (measured on sway 1.12: it stayed where
                 // it was), so it is put up again there.
                 if popover.is_visible() {
+                    // GTK 4.24 keeps the popup's surface through this (measured), but a GTK that
+                    // takes it down would leave the picture's own surface on a dead one, so that
+                    // goes first and is made again.
+                    self.framed.end();
                     popover.popdown();
                     popover.popup();
                 }

@@ -91,6 +91,14 @@ impl Framed {
         sdr_white_nits: Option<u32>,
         out_of_sight: bool,
     ) {
+        // GTK made another surface for the picture, or has none now (the widget left its window):
+        // the own surface goes with the one it was made for, before anything is sent to it. A popup
+        // put down and up again keeps its surface (GTK 4.24 swaps only its xdg_popup, measured).
+        let current = self.picture.native().and_then(|native| native.surface());
+        let gone = self.own.borrow().as_ref().is_some_and(|(made_for, _)| current.as_ref() != Some(made_for));
+        if gone {
+            self.end();
+        }
         if let Some((_, own)) = self.own.borrow_mut().as_mut() {
             own.catch_up();
             if !self.hidden.get()
@@ -110,9 +118,12 @@ impl Framed {
         }
     }
 
-    /// Lets go of the own surface, before GTK's goes.
+    /// Lets go of the own surface, before GTK's goes or is taken down. The next frame or tick makes
+    /// another if GTK's is up again.
     pub fn end(&self) {
-        self.own.borrow_mut().take();
+        if self.own.borrow_mut().take().is_some() {
+            self.behind.set(true);
+        }
     }
 
     /// The own surface over GTK's, made when GTK's is there, and again if GTK made another.

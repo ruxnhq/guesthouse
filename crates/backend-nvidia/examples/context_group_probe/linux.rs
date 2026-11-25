@@ -108,10 +108,10 @@ fn make(
         };
         let channel = channel.unwrap_or_else(|error| panic!("{name}: {error}"));
         println!(
-            "{name}: channel {:#x}, token {:#x}, bound {:?}",
+            "{name}: channel {:#x}, token {:#x}, missing objects {:?}",
             channel.handle(),
             channel.token(),
-            channel.only_bound()
+            channel.missing_objects()
         );
         made.push(Probed { name, channel, put: 0, slots: 0 });
     }

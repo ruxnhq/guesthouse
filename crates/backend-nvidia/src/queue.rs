@@ -667,10 +667,10 @@ impl<R: Rm> NvidiaBackend<R> {
         else {
             return Ok(());
         };
-        let Some(bound) = channel.only_bound().filter(|_| work.may_run) else { return Ok(()) };
+        let Some(missing) = channel.missing_objects().filter(|_| work.may_run) else { return Ok(()) };
         let listing = Self::ring_listing(host, work.space, *ring_address, entries, end);
         let found = SubchannelUse::of_listing(host, work.space, &listing);
-        if found.leaves(bound) {
+        if found.needs(missing) {
             log::warn!(
                 "queue {:#x} stops: its channel only computes, and its commands use subchannels {:#04b}{}",
                 work.queue,
@@ -1816,8 +1816,8 @@ mod tests {
             assert!(matches!(lab.submit(3, CONTEXT, 3, &compute_work()), WorkStart::Started { .. }));
             assert_eq!(lab.groups_made() - before, 1);
             assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 3);
-            assert_eq!(lab.channel(1).only_bound(), None);
-            assert!(lab.channel(2).only_bound().is_some() && lab.channel(3).only_bound().is_some());
+            assert_eq!(lab.channel(1).missing_objects(), None);
+            assert!(lab.channel(2).missing_objects().is_some() && lab.channel(3).missing_objects().is_some());
             assert_eq!(lab.slices(), 0, "they wait inside the group, on the RM's own slice");
         }
 
@@ -1843,7 +1843,7 @@ mod tests {
             assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
             assert_eq!(lab.groups_made() - before, 2);
             assert!(lab.backend.device.context_groups.is_empty());
-            assert!(!lab.channel(1).in_context_group() && lab.channel(2).only_bound().is_none());
+            assert!(!lab.channel(1).in_context_group() && lab.channel(2).missing_objects().is_none());
             assert_eq!(lab.slices(), 2);
         }
 
@@ -1885,7 +1885,7 @@ mod tests {
             assert_eq!(lab.groups_made() - before, 1, "a group of its own");
             assert_eq!(lab.backend.device.context_groups.members(CONTEXT), 1);
             assert!(!lab.channel(2).in_context_group());
-            assert_eq!(lab.channel(2).only_bound(), None, "with every class, as before");
+            assert_eq!(lab.channel(2).missing_objects(), None, "with every class, as before");
             assert_eq!(lab.slices(), 2, "and the shared slice, as the group it left now has too");
             // A queue seated later in that context waits across groups as well.
             lab.queue(3, Some(COMPUTES + 1));
@@ -1902,6 +1902,9 @@ mod tests {
             lab.submit(1, CONTEXT, 2, &drawing_work());
             assert!(matches!(lab.submit(2, CONTEXT, 2, &compute_work()), WorkStart::Started { .. }));
             let doorbells = lab.backend.device.rm.doorbells().len();
+            // A subchannel no graphics channel has an object on is as it always was.
+            let software = [increasing(6, 0x100, 1), 0, increasing(7, 0x100, 1), 0];
+            assert!(matches!(lab.submit(2, CONTEXT, 2, &software), WorkStart::Started { .. }));
             assert_eq!(lab.submit(2, CONTEXT, 2, &copy_work()), WorkStart::QueueFailed);
             assert_eq!(lab.submit(2, CONTEXT, 2, &drawing_work()), WorkStart::QueueFailed);
             assert_eq!(lab.backend.device.rm.doorbells().len(), doorbells);

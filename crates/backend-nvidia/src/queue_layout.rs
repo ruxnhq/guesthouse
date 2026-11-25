@@ -146,9 +146,9 @@ impl SubchannelUse {
         found
     }
 
-    /// Whether the commands may use an object on a subchannel that isn't in `bound`.
-    pub(crate) fn leaves(self, bound: u8) -> bool {
-        self.unread || self.used & !bound != 0
+    /// Whether the commands may use an object on one of the `missing` subchannels.
+    pub(crate) fn needs(self, missing: u8) -> bool {
+        self.unread || self.used & missing != 0
     }
 }
 
@@ -285,14 +285,15 @@ mod tests {
     }
 
     #[test]
-    fn commands_that_stay_on_bound_subchannels_do_not_leave_them() {
-        let compute_and_deferred = 1 << 1 | 1 << 5;
-        assert!(!SubchannelUse { used: 1 << 1, unread: false }.leaves(compute_and_deferred));
-        assert!(!SubchannelUse::default().leaves(compute_and_deferred));
-        assert!(SubchannelUse { used: 1 << 1 | 1 << 4, unread: false }.leaves(compute_and_deferred));
+    fn only_commands_for_a_missing_object_or_unread_ones_need_it() {
+        let missing = 0b01_1101;
+        assert!(!SubchannelUse { used: 1 << 1 | 1 << 5, unread: false }.needs(missing));
         assert!(
-            SubchannelUse { used: 0, unread: true }.leaves(compute_and_deferred),
-            "unread may be anything"
+            !SubchannelUse { used: 1 << 6 | 1 << 7, unread: false }.needs(missing),
+            "never had an object"
         );
+        assert!(!SubchannelUse::default().needs(missing));
+        assert!(SubchannelUse { used: 1 << 1 | 1 << 4, unread: false }.needs(missing));
+        assert!(SubchannelUse { used: 0, unread: true }.needs(missing), "unread may be anything");
     }
 }

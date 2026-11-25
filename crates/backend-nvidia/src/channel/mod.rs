@@ -165,8 +165,8 @@ pub struct Channel {
     /// The guest context whose group this channel is in, and its subcontext there. `None` for a
     /// channel with a group of its own.
     seat: Option<(u32, u8)>,
-    /// A bit for each subchannel the prelude binds an object on.
-    bound: u8,
+    /// A bit for each subchannel a graphics channel has an object on and this one has not.
+    missing: u8,
     /// The object that runs deferred controls, which graphics channels have.
     deferred_api: Option<Handle>,
     /// The compute object, which graphics channels have. The RM maps it as a SKED page.
@@ -282,7 +282,7 @@ impl Channel {
             group,
             channel,
             seat: None,
-            bound: objects.bound(),
+            missing: 0,
             deferred_api: objects.deferred_api,
             compute: objects.compute,
             token: u32::from_le_bytes(token),
@@ -350,7 +350,7 @@ impl Channel {
             group: seated.group,
             channel: seated.channel,
             seat: Some((context, seat.slot())),
-            bound: objects.bound(),
+            missing: graphics_subchannels(generation) & !objects.bound(),
             deferred_api: objects.deferred_api,
             compute: objects.compute,
             token: seated.token,
@@ -374,10 +374,11 @@ impl Channel {
         self.seat.is_some()
     }
 
-    /// The subchannels with an object, as a bit each, for a channel that binds fewer classes than
-    /// the guest's driver has on its own. Commands for any other subchannel would fault there.
-    pub fn only_bound(&self) -> Option<u8> {
-        (self.seat.is_some_and(|(_, slot)| slot != 0)).then_some(self.bound)
+    /// The subchannels this channel has no object on though a graphics channel alone would, as a
+    /// bit each. None unless it sits on a compute seat. Commands for one would fault there, where
+    /// a subchannel that never has an object behaves as it always did.
+    pub fn missing_objects(&self) -> Option<u8> {
+        (self.seat.is_some_and(|(_, slot)| slot != 0)).then_some(self.missing)
     }
 
     /// The compute object, for a graphics channel.
@@ -607,6 +608,11 @@ impl Channel {
         device.unmap(space, self.memory, self.area_address, self.area.size() as u64)?;
         device.free(self.memory)
     }
+}
+
+/// A bit for each subchannel a graphics channel binds an object on.
+fn graphics_subchannels(generation: &Generation) -> u8 {
+    (0..generation.graphics_classes.len()).fold(0, |all, subchannel| all | 1 << subchannel)
 }
 
 /// A class for a channel, with the subchannel the guest's commands reach it on and its parameters.
@@ -1159,7 +1165,7 @@ mod tests {
         assert_eq!(words[1], BLACKWELL.compute_class);
         assert_eq!(words[2], increasing(5, SET_OBJECT, 1));
         assert_eq!(words.len(), 4);
-        assert_eq!(compute.only_bound(), Some(1 << COMPUTE_SUBCHANNEL | 1 << 5));
+        assert_eq!(compute.missing_objects(), Some(0b01_1101), "drawing, inline to memory, 2D and copy");
         assert!(compute.in_context_group());
     }
 
@@ -1171,8 +1177,8 @@ mod tests {
             Channel::new(&mut device, &BLACKWELL, &HOST_615, &space, place_at(1), Engine::Graphics).unwrap();
         let (seat, own) = (drawing.setup_words as usize, alone.setup_words as usize);
         assert_eq!(drawing.area().load_words(PRELUDE, seat), alone.area().load_words(PRELUDE, own));
-        assert_eq!(drawing.only_bound(), None);
-        assert_eq!(alone.only_bound(), None);
+        assert_eq!(drawing.missing_objects(), None);
+        assert_eq!(alone.missing_objects(), None);
         assert!(!alone.in_context_group());
     }
 

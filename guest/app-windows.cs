@@ -744,6 +744,7 @@ public class AppWindows : Form
         IntPtr t;
         if (DwmRegisterThumbnail(Handle, c.Src, out t) != 0) return false;
         c.Thumb = t; c.Active = true; c.ThumbDirty = true; c.ThumbApplied = false;
+        if (c.Popup && c.Placed && Collides(c, c.X, c.Y - Label, c.CellW, c.CellH + Label)) c.Placed = false;   // its place was given to another meanwhile: it is placed again
         return true;
     }
 
@@ -825,7 +826,7 @@ public class AppWindows : Form
     {
         foreach (Cell o in cells.Values)
         {
-            if (o == self || !o.Placed || o.Overflow) continue;
+            if (o == self || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;   // a menu that closed keeps its place only so it can come back, not against other windows
             if (Hit(x, y, bw, bh, o.X, o.Y - Label, o.CellW, o.CellH + Label)) return true;
         }
         return false;
@@ -881,7 +882,7 @@ public class AppWindows : Form
         xs.Add(packL); ys.Add(packT);
         foreach (Cell o in cells.Values)
         {
-            if (o == c || !o.Placed || o.Overflow) continue;
+            if (o == c || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;
             xs.Add(o.X + o.CellW);
             ys.Add(o.Y + o.CellH);
         }

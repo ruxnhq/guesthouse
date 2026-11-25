@@ -212,8 +212,10 @@ mod tests {
         let daemon = SharedProcessTable::open(&path).unwrap();
         let app = SharedProcessTable::open_to_read(&path).unwrap();
         assert_eq!(app.latest(), None, "nothing written yet");
-        daemon.publish(&measured());
-        assert_eq!(app.latest(), Some(measured()));
+        // One table, as a second would be taken a millisecond later when the clock moves between them.
+        let table = measured();
+        daemon.publish(&table);
+        assert_eq!(app.latest(), Some(table));
         fs::remove_file(path).unwrap();
     }
 

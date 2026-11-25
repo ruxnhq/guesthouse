@@ -48,6 +48,11 @@ These matter more than anything else here, because text inside code is something
 - The QEMU patch in `qemu/` keeps QEMU's licence, GPL-2.0-or-later.
 - No secrets, and no paths from your own machine.
 - Everything here is GPL-2.0-or-later, and that includes what you add. `THIRD-PARTY.md` lists the exceptions.
+- Send only what you wrote yourself, or open source code under a licence that fits GPL-2.0-or-later, with its line in `THIRD-PARTY.md`.
+- Nothing leaked or confidential, and nothing an NDA or an agreement with your employer covers.
+- If you aren't sure about something, open an issue and ask before you write it.
+
+By sending a pull request you confirm that you have the right to give your work under this licence.
 
 ## Recordings
 

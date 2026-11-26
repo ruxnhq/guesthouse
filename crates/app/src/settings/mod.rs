@@ -26,6 +26,7 @@ mod network;
 mod nvapi_wrapper;
 mod recipe;
 mod remote_access;
+pub mod remote_view;
 mod remove;
 mod scan_exclusions;
 mod sharing;
@@ -378,6 +379,17 @@ impl Pages {
     }
 }
 
+/// The Remote View group: a machine that exists and is Windows has it.
+fn remote_view_group(shared: &Shared, page: &adw::PreferencesPage) -> Option<remote_view::RemoteView> {
+    let machine = shared.machine.borrow().clone();
+    if shared.is_draft() || machine.kind != guesthouse_app_core::machine::Kind::Windows {
+        return None;
+    }
+    let window = shared.window.clone();
+    let backend = Arc::new(remote_view::CoreBackend::new(shared.window.context(), &machine.id));
+    Some(remote_view::RemoteView::new(page, backend, move |text| window.problem(text)))
+}
+
 /// Whether the VM is off, with nothing going on.
 fn is_off(status: &Status) -> bool {
     status.state == State::Off && !status.busy
@@ -404,6 +416,7 @@ struct Parts {
     sharing: sharing::Sharing,
     network: network::Network,
     remote_access: remote_access::RemoteAccess,
+    remote_view: Option<remote_view::RemoteView>,
     /// Only a machine made for a recipe has one.
     recipe: Option<recipe::Recipe>,
     /// Only a machine made lean has one.
@@ -479,6 +492,7 @@ impl SettingsDialog {
         let snapshots = snapshots::Snapshots::new(&shared, &pages.storage);
         let network = network::Network::new(&shared, &pages.network, &advanced.network);
         let remote_access = remote_access::RemoteAccess::new(&shared, &pages.network);
+        let remote_view = remote_view_group(&shared, &pages.network);
         let sharing = sharing::Sharing::new(&shared, &pages.devices);
         let usb = usb::Usb::new(&shared, &pages.devices);
         let apps = apps::Apps::new(&shared, &pages.apps);
@@ -524,6 +538,7 @@ impl SettingsDialog {
             apps,
             network,
             remote_access,
+            remote_view,
             sharing,
             usb,
             shared,
@@ -591,6 +606,9 @@ impl SettingsDialog {
         parts.sharing.set_status(status);
         parts.network.set_status(status);
         parts.remote_access.set_status(status);
+        if let Some(view) = &parts.remote_view {
+            view.set_running(status.state == State::Running);
+        }
         if let Some(lean) = &parts.lean {
             lean.set_status(status);
         }

@@ -393,6 +393,7 @@ impl VmHost for LocalHost<'_> {
             }
         }
         self.end_passt();
+        crate::remote_view::end(self.context, None);
         if machine.has_gpu() {
             self.release()?;
         }
@@ -405,6 +406,7 @@ impl VmHost for LocalHost<'_> {
         }
         if qemu_pid(self.context, None).is_none() {
             self.end_passt();
+            crate::remote_view::end(self.context, None);
         }
         for pid in self.daemons() {
             terminate(Some(pid));

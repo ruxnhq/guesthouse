@@ -147,6 +147,10 @@ pub struct VmPlan {
     /// Where the app reaches the app windows helper. Only a Windows machine that has app windows
     /// switched on has one: with it off, QEMU gets the same words it always did.
     pub app_windows_port: Option<u16>,
+    /// The loopback port QEMU forwards the guest's remoteman port to, for the remote view helper.
+    /// Every Windows machine has it from its start, so its remote view can be switched on while it
+    /// runs; nothing but this PC can reach it.
+    pub remote_view_port: Option<u16>,
     pub cores: u32,
     pub ram: String,
     pub screen: String,
@@ -248,6 +252,8 @@ impl VmPlan {
             files_port: (machine.kind == crate::machine::Kind::Windows).then(|| slot.files_port()),
             app_windows_port: crate::app_windows::is_on(context, machine)
                 .then(|| crate::app_windows::host_port(context, Some(slot))),
+            remote_view_port: (machine.kind == crate::machine::Kind::Windows)
+                .then(|| slot.remote_view_port()),
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
             // Its device takes any size, where the VGA only has the firmware's.

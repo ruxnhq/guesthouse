@@ -21,6 +21,8 @@ default-members = [
     "crates/jail",
     "crates/messages",
     "crates/p9",
+    "crates/relay",
+    "crates/remote-view",
     "crates/replay",
     "crates/sensors",
     "crates/share-windows",
@@ -54,7 +56,9 @@ guesthouse-jail = { path = "crates/jail" }
 guesthouse-card-check = { path = "tools/card-check" }
 guesthouse-control = { path = "crates/control" }
 guesthouse-hcs = { path = "crates/hcs" }
+guesthouse-relay = { path = "crates/relay" }
 guesthouse-host-windows = { path = "crates/host-windows" }
+guesthouse-remote-view-core = { path = "crates/remote-view" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

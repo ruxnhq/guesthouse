@@ -23,7 +23,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 21] = [
+const SETTINGS: [&str; 22] = [
     "cores",
     "ram",
     "vram",
@@ -42,6 +42,7 @@ const SETTINGS: [&str; 21] = [
     "remote-desktop",
     "ssh",
     "app-windows",
+    crate::remote_view::SETTING,
     "auto-snapshot",
     "throwaway",
     "vendor-id",
@@ -205,6 +206,17 @@ pub(super) fn set(
             said(out, key, switch(on))?;
             if status(context, &machine).state == State::Running {
                 writeln!(out, "A running machine gets the way in that it needs at its next start.")?;
+            }
+            return Ok(());
+        }
+        crate::remote_view::SETTING => {
+            only_for_windows(&machine, key)?;
+            let on = on_or_off(key, value)?;
+            // As the switch in the app: a running machine is shared or stops being shared at once.
+            let shown = crate::remote_view::share(context, &machine, on, false, None)?;
+            said(out, key, switch(on))?;
+            if let (true, Some(port)) = (on, shown.port) {
+                writeln!(out, "Its port on this PC's network is {port}.")?;
             }
             return Ok(());
         }
@@ -391,6 +403,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
             line(out, service.key(), &access.get(service).map_or("not set", switch))?;
         }
         line(out, crate::app_windows::SETTING, &switch(crate::app_windows::is_on(context, machine)))?;
+        line(out, crate::remote_view::SETTING, &switch(crate::remote_view::allowed(context, machine)))?;
         let lean = switch(crate::lean::is_lean(context, machine));
         match crate::lean::state_text(context, machine) {
             Some(done) if lean == "on" => line(out, "lean", &format!("on. {done}"))?,

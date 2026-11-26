@@ -13,7 +13,7 @@ mod display;
 mod driver_store;
 mod gpu_check;
 mod guest_files;
-mod guest_upload;
+pub(crate) mod guest_upload;
 mod hardware_desktop;
 mod identity;
 mod identity_restart;
@@ -344,7 +344,24 @@ fn finish_on_desktop(task: &mut Task) -> Result<()> {
     }
     apply_window_speed(task)?;
     apply_remote_access(task)?;
+    apply_remote_view(task);
     place_files_for_maker(task)
+}
+
+/// A machine with its remote view on gets remoteman's host when it needs it, and its helper. What goes
+/// wrong is said, and the machine runs on without it.
+fn apply_remote_view(task: &mut Task) {
+    if !crate::remote_view::allowed(task.context, &task.machine) {
+        return;
+    }
+    task.step("Opening the screen to other devices");
+    let ask = |script: &str, seconds: u64| task.ask_guest(script, seconds);
+    let slot = task.context.slot;
+    if let Err(failure) = crate::remote_view::bring_up(task.context, &task.machine, slot, &ask) {
+        let _ = crate::log::write_log(task.context, &format!("remote view: {}", failure.0));
+        let note = format!("The screen is not shared with other devices: {}", failure.0);
+        task.error = if task.error.is_empty() { note } else { format!("{} {note}", task.error) };
+    }
 }
 
 /// What the guest is given for its card, by the card's maker. Each maker's files and settings are for
@@ -507,11 +524,15 @@ fn force(task: &mut Task, other: Option<&str>) -> Result<()> {
     if task.pid().is_some() {
         return Err(Failure::new("QEMU will not stop, even when killed."));
     }
+    crate::remote_view::end(task.context, None);
     if task.machine.has_gpu() { task.host.release() } else { Ok(()) }
 }
 
 fn clean_up(task: &mut Task) -> Result<()> {
     task.step("Cleaning up after the VM");
+    if task.pid().is_none() {
+        crate::remote_view::end(task.context, None);
+    }
     task.host.release()
 }
 

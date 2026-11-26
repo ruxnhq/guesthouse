@@ -154,7 +154,8 @@ fn nothing_set_is_the_line_every_machine_had() {
     let arguments = plan.qemu_arguments();
     assert_eq!(
         value_after(&arguments, "-nic"),
-        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767"
+        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
+         hostfwd=udp:127.0.0.1:19065-:7791"
     );
     assert!(!has(&arguments, "-netdev"), "NAT has one adapter");
 }
@@ -186,7 +187,10 @@ fn bridged_goes_through_the_helper_and_adds_the_private_link_last() {
             crate::network::bridge_helper()
         )
     );
-    assert!(value_after(&arguments, "-netdev").ends_with("-:8767,hostfwd=udp:127.0.0.1:5000-:50"));
+    assert!(
+        value_after(&arguments, "-netdev")
+            .ends_with("-:8767,hostfwd=udp:127.0.0.1:19065-:7791,hostfwd=udp:127.0.0.1:5000-:50")
+    );
     assert_eq!(arguments.last().unwrap(), "e1000e,netdev=link,mac=52:54:00:67:68:01,bus=pcie.0,addr=0x1e");
 }
 
@@ -538,10 +542,13 @@ fn app_windows_on_adds_one_forward_for_its_helper_after_the_files_helpers() {
     assert_eq!(
         value_after(&plan.qemu_arguments(), "-nic"),
         "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
-         hostfwd=tcp:127.0.0.1:18965-:8769"
+         hostfwd=tcp:127.0.0.1:18965-:8769,hostfwd=udp:127.0.0.1:19065-:7791"
     );
     let second = VmPlan::new(&context, &windows(), Boot::Gpu, slots::number(2), 0);
-    assert!(value_after(&second.qemu_arguments(), "-nic").ends_with("hostfwd=tcp:127.0.0.1:18967-:8769"));
+    assert!(
+        value_after(&second.qemu_arguments(), "-nic")
+            .ends_with("hostfwd=tcp:127.0.0.1:18967-:8769,hostfwd=udp:127.0.0.1:19067-:7791")
+    );
 }
 
 #[test]
@@ -566,4 +573,26 @@ fn only_a_windows_machine_can_have_the_forward_whatever_a_file_says() {
     fs::create_dir_all(machine.folder(&context)).unwrap();
     fs::write(machine.folder(&context).join(crate::app_windows::SWITCH_FILE), "{\"on\":true}").unwrap();
     assert_eq!(VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0).app_windows_port, None);
+}
+
+#[test]
+fn every_windows_machine_forwards_remotemans_port_to_its_slots_loopback_port_once() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { forwards: vec![Forward::new(Protocol::Udp, 7791, 7791)], ..windows() };
+    let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::number(2), 0);
+    assert_eq!(plan.remote_view_port, Some(19067));
+    let nic = value_after(&plan.qemu_arguments(), "-nic");
+    assert_eq!(nic.matches("-:7791").count(), 1, "QEMU answers from the first forward to a port: {nic}");
+    assert!(nic.contains("hostfwd=udp:127.0.0.1:19067-:7791"));
+    assert!(!nic.contains(":7791-"), "nothing on this PC's own 7791, which remoteman's host may hold");
+}
+
+#[test]
+fn a_machine_that_is_not_windows_has_no_remote_view_forward() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let plan = VmPlan::new(&context, &plain_machine(), plain_boot(), slots::first(), 0);
+    assert_eq!(plan.remote_view_port, None);
+    assert!(!plan.qemu_arguments().join(" ").contains("7791"));
 }

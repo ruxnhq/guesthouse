@@ -7,6 +7,7 @@ use crate::network::{
     self, CONTROL_MAC, GUEST_AGENT_PORT, GUEST_APP_WINDOWS_PORT, GUEST_FILES_PORT, Mode, bridge_helper,
 };
 use crate::text::{qemu_value, shell_quote};
+use guesthouse_remote_view_core::PORT as REMOTEMAN_PORT;
 
 /// Passt copies the host's address by default, and these can't clash with the private link. Its
 /// default MTU is more than an e1000e takes. QEMU's passt network and passt itself take the same names.
@@ -143,11 +144,21 @@ impl VmPlan {
         if let Some(port) = self.app_windows_port {
             link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_APP_WINDOWS_PORT}");
         }
+        if let Some(port) = self.remote_view_port {
+            link += &format!(",hostfwd=udp:127.0.0.1:{port}-:{REMOTEMAN_PORT}");
+        }
         if self.share.is_some() {
             let program = shell_quote(&self.share_program.to_string_lossy());
             link += &format!(",guestfwd=tcp:{SHARE_ADDRESS}:80-cmd:{}", qemu_value(&program));
         }
-        for item in &self.network.forwards {
+        // QEMU answers a guest's UDP from the first forward to its port, so a second one to
+        // remoteman's port would take the remote view's replies: the remote view's is the one.
+        let taken = |item: &&crate::network::Forward| {
+            self.remote_view_port.is_some()
+                && item.protocol == crate::network::Protocol::Udp
+                && item.guest == u32::from(REMOTEMAN_PORT)
+        };
+        for item in self.network.forwards.iter().filter(|item| !taken(item)) {
             link += &format!(",hostfwd={}:127.0.0.1:{}-:{}", item.protocol.word(), item.host, item.guest);
         }
         link

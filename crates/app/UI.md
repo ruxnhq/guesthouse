@@ -32,4 +32,4 @@ styles in `data/style/own.css`.
 ## Checking
 
 `page-shots.sh` draws every page in software. Look at the pictures after any change to a page, and keep a
-check in `examples/page_shots` for what the page must say.
+check in `examples/page_shots` for what the page must say. `remote-view-shots.sh` draws the Network page's Remote View group in each of its states, from a fixture.

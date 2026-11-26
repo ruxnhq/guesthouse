@@ -31,6 +31,10 @@ path = "src/bin/vm.rs"
 name = "guesthouse-jail"
 path = "src/bin/jail.rs"
 
+[[bin]]
+name = "guesthouse-remote-view"
+path = "src/bin/remote_view.rs"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # The NVIDIA backend's driver profiles, so setup knows the daemon's branches. It opens nothing.
 guesthouse-backend-nvidia.workspace = true
@@ -42,6 +46,10 @@ guesthouse-daemon.workspace = true
 guesthouse-jail.workspace = true
 # The part of card-check that reads the NVIDIA driver's files without opening the card, for bug reports.
 guesthouse-card-check.workspace = true
+# The UDP relay that puts a machine's remote view on the network, which guesthouse-remote-view runs.
+guesthouse-relay.workspace = true
+# What a machine's remote view shows and how its pairing goes, which every host shares.
+guesthouse-remote-view-core.workspace = true
 # The host card's readings, which the daemon's sensor thread publishes and the overlay shows.
 guesthouse-sensors.workspace = true
 # Local time for the log and for snapshot dates. The standard library has no time zones.
@@ -57,6 +65,8 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 sha2 = "0.11"
 # Safe calls for statvfs, flock, kill, access, getxattr and a send that never waits, which keeps `unsafe` out of this crate.
 rustix = { version = "1", features = ["fs", "net", "process"] }
+# The helper's mDNS responder, which announces a shared machine as remoteman's viewers look for it.
+mdns-sd = { version = "0.22", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # ptrace, for a test that QEMU's jail refuses it.

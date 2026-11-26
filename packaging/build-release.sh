@@ -514,7 +514,7 @@ stage_app() {
     mkdir -p "$OUT/stage"
     stage_intel_probe
     for program in guesthouse guesthouse-check guesthouse-daemon guesthouse-jail guesthouse-share guesthouse-task guesthouse-vm \
-        guesthouse-report; do
+        guesthouse-report guesthouse-remote-view; do
         cp "$target_folder/release/$program" "$OUT/stage/"
     done
     # A build with HDR won't load on GTK older than 4.16, so a second one goes along for those, and

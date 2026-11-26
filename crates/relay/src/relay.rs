@@ -1,0 +1,143 @@
+//! The relay: one socket on the network, and a table of the devices using it.
+
+use crate::clients::{self, Table};
+use crate::sockets;
+use crate::stats::{ClientInfo, Counters, Stats};
+use std::io;
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+/// A UDP datagram never holds more than this.
+const LARGEST_DATAGRAM: usize = 65_535;
+/// How long a thread waits in the kernel before it looks at whether it should go on. It only bounds how
+/// long stopping and expiring take, and costs nothing while datagrams are arriving.
+pub(crate) const LOOK_AGAIN: Duration = Duration::from_millis(100);
+/// Plenty for a few devices, and few enough that a stranger on the network cannot fill the PC with
+/// sockets and threads.
+const DEFAULT_MAX_CLIENTS: usize = 16;
+/// Remoteman's transport sends a keep-alive every second and gives up on a connection after ten
+/// seconds of silence, so a device that has sent nothing for much longer than that is gone.
+const DEFAULT_IDLE: Duration = Duration::from_secs(60);
+const THREAD_STACK: usize = 128 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// The address and port that other devices send to. Port 0 takes any free one.
+    pub listen: SocketAddr,
+    /// The loopback port the datagrams go to.
+    pub upstream: SocketAddr,
+    /// A device that has sent nothing for this long is dropped, and gets a new socket if it comes back.
+    pub idle_timeout: Duration,
+    /// The most devices at once. A datagram from one more is dropped.
+    pub max_clients: usize,
+}
+
+impl Config {
+    pub fn new(listen: SocketAddr, upstream: SocketAddr) -> Self {
+        Self { listen, upstream, idle_timeout: DEFAULT_IDLE, max_clients: DEFAULT_MAX_CLIENTS }
+    }
+}
+
+/// What the threads of one relay share.
+pub(crate) struct Shared {
+    pub(crate) config: Config,
+    pub(crate) lan: UdpSocket,
+    pub(crate) clients: Table,
+    pub(crate) stats: Stats,
+    pub(crate) stop: AtomicBool,
+    pub(crate) started: Instant,
+}
+
+/// A running relay. Dropping it stops it and gives the port back.
+pub struct Relay {
+    shared: Arc<Shared>,
+    local: SocketAddr,
+    uplink: Option<JoinHandle<()>>,
+}
+
+impl Relay {
+    pub fn start(config: Config) -> io::Result<Self> {
+        let lan = sockets::bound(config.listen)?;
+        lan.set_read_timeout(Some(LOOK_AGAIN))?;
+        let local = lan.local_addr()?;
+        let shared = Arc::new(Shared {
+            config,
+            lan,
+            clients: Table::default(),
+            stats: Stats::default(),
+            stop: AtomicBool::new(false),
+            started: Instant::now(),
+        });
+        let uplink = {
+            let shared = Arc::clone(&shared);
+            thread::Builder::new()
+                .name("relay-in".into())
+                .stack_size(THREAD_STACK)
+                .spawn(move || carry_in(&shared))?
+        };
+        Ok(Self { shared, local, uplink: Some(uplink) })
+    }
+
+    /// The address devices send to, with the port filled in when 0 was asked for.
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local
+    }
+
+    pub fn counters(&self) -> Counters {
+        self.shared.stats.read()
+    }
+
+    /// The devices being carried now, oldest first.
+    pub fn clients(&self) -> Vec<ClientInfo> {
+        self.shared.clients.info(self.shared.started.elapsed())
+    }
+
+    /// Stops the relay and waits until every thread of it has gone, so the port is free again.
+    pub fn stop(mut self) {
+        self.stop_now();
+    }
+
+    fn stop_now(&mut self) {
+        self.shared.stop.store(true, Ordering::Release);
+        if let Some(uplink) = self.uplink.take() {
+            let _ = uplink.join();
+        }
+        self.shared.clients.join_all();
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.stop_now();
+    }
+}
+
+/// The thread that takes datagrams from the network and hands each to its device's socket.
+fn carry_in(shared: &Arc<Shared>) {
+    let mut buffer = vec![0u8; LARGEST_DATAGRAM];
+    while !shared.stop.load(Ordering::Acquire) {
+        let (length, from) = match shared.lan.recv_from(&mut buffer) {
+            Ok(got) => got,
+            Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                shared.stats.error();
+                continue;
+            }
+        };
+        let Some(client) = clients::for_peer(shared, from) else { continue };
+        client.heard(shared.started.elapsed());
+        match client.upstream.send_to(&buffer[..length], shared.config.upstream) {
+            Ok(_) => {
+                client.up();
+                shared.stats.up(length);
+            }
+            Err(_) => shared.stats.error(),
+        }
+    }
+}

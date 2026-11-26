@@ -27,6 +27,7 @@ mod own_screen;
 mod own_surface;
 mod pill;
 mod pointer_lock;
+mod remote_view_notice;
 mod ring;
 mod screen;
 mod screen_frame;
@@ -186,6 +187,10 @@ impl ScreenPage {
         let screen =
             Screen::new(self.run_folder(), route, self.memory_frames(), overlay, direct, on_capture, log);
         screen.ask_shortcuts_on_focus(move || shortcuts_on_focus(&read_prefs(&asking)));
+        let machine = self.0.machine.borrow().clone();
+        if machine.kind == guesthouse_app_core::machine::Kind::Windows {
+            remote_view_notice::attach(screen.widget(), self.0.window.context(), machine);
+        }
         self.0.toolbar.set_content(Some(screen.widget()));
         *self.0.screen.borrow_mut() = Some(screen);
     }

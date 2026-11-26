@@ -65,6 +65,7 @@ On Linux hosts, from 0.8.0.
 - **See how the card is shared.** The library shows each running machine's part of the card.
 - **Android, a preview.** From 0.9.0, an Android machine runs on the host's card, with Play services through microG if you want them and apps built only for ARM phones. [Android](docs/android.md).
 - **App windows, a preview.** Show the programs of a Windows machine as windows of their own on a Wayland desktop. Off unless you switch it on for a machine. [App windows](docs/app-windows.md).
+- **Remote view, a preview.** See and use a Windows machine from another device on your network with remoteman's viewer, after you accept it here. Off unless you switch it on for a machine. [Remote view](docs/remote-view.md).
 - **No window needed.** Everything above is in `guesthouse-vm` too. [The commands](docs/headless.md).
 
 ## Is it safe?

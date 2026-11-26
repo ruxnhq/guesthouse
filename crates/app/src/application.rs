@@ -47,6 +47,7 @@ pub fn application(
     let application = adw::Application::builder().application_id(APP_ID).build();
     let icons = context.paths.runtime.join("icons");
     let window: Rc<RefCell<Option<Window>>> = Rc::default();
+    let context_for_quit = context.clone();
     application.connect_activate(move |application| {
         let mut slot = window.borrow_mut();
         let window = slot.get_or_insert_with(|| {
@@ -65,12 +66,18 @@ pub fn application(
             let earlier = restart.clone();
             gpu_reset::when_lost(move || lost.start_over(earlier.as_ref()));
             started(&window);
+            // Pairing an earlier run left open is closed, and what it held given back.
+            let launched = context.clone();
+            std::thread::spawn(move || guesthouse_app_core::remote_view::launched(&launched));
             window
         });
         // Started again while it runs: that's someone asking for the window.
         window.present();
     });
     application.connect_startup(move |_| use_built_in_icons(&icons));
+    let quitting = context_for_quit;
+    // Pairing closes when the app quits, as nobody is left to answer a device.
+    application.connect_shutdown(move |_| guesthouse_app_core::remote_view::quitting(&quitting));
     application
 }
 

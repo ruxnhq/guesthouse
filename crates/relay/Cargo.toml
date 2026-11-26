@@ -1,0 +1,17 @@
+[package]
+name = "guesthouse-relay"
+description = "A UDP relay from a port on the network to a loopback port, with a socket of its own upstream for each client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Larger socket buffers, which the standard library does not set. Safe calls, so this crate's one `unsafe` stays in `signal.rs`.
+rustix = { version = "1", features = ["net"] }
+# sigaction, for ending on SIGTERM.
+libc = "0.2"
+
+[lints]
+workspace = true

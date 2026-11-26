@@ -17,10 +17,8 @@ path = "src/relay.rs"
 # The events it says what it does in, as the service sends them on to the app.
 guesthouse-control.workspace = true
 guesthouse-hcs.workspace = true
-# A Windows guest's screen: the remoteman viewer's identity, made as remoteman makes its own, and
-# fingerprints.
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
-sha2 = "0.11"
+# A Windows guest's screen, through remoteman: the part that no host differs in.
+guesthouse-remote-view-core.workspace = true
 # The record beside each disk, and events and settings as the service's pipe carries them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

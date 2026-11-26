@@ -1,0 +1,3 @@
+testclient (1111111111111111): can control this PC; clipboard not allowed, files allowed, sound allowed, microphone allowed, camera allowed
+exit=0
+

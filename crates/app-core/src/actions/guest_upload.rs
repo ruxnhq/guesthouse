@@ -47,6 +47,15 @@ fn finish_script(part: &str, guest: &str) -> String {
 
 /// Copies `local` to the path `guest` in the guest, and says whether all of it got there.
 pub(super) fn put_big_file(task: &Task, local: &Path, guest: &str) -> Result<bool> {
+    put_big_file_with(&|script, seconds| task.ask_guest(script, seconds), local, guest)
+}
+
+/// [`put_big_file`] through any way of asking the guest: `ask` runs a script and gives what it said.
+pub(crate) fn put_big_file_with(
+    ask: &dyn Fn(&str, u64) -> String,
+    local: &Path,
+    guest: &str,
+) -> Result<bool> {
     let part = format!("{guest}{PART}");
     let mut file = File::open(local)?;
     let size = file.metadata()?.len();
@@ -58,7 +67,7 @@ pub(super) fn put_big_file(task: &Task, local: &Path, guest: &str) -> Result<boo
         if read == 0 && offset > 0 {
             break;
         }
-        let said = task.ask_guest(&piece_script(&part, offset, &piece[..read]), PIECE_SECONDS);
+        let said = ask(&piece_script(&part, offset, &piece[..read]), PIECE_SECONDS);
         if !said.contains(PIECE_MARK) {
             return Ok(false);
         }
@@ -67,7 +76,7 @@ pub(super) fn put_big_file(task: &Task, local: &Path, guest: &str) -> Result<boo
             break;
         }
     }
-    let said = task.ask_guest(&finish_script(&part, guest), FINISH_SECONDS);
+    let said = ask(&finish_script(&part, guest), FINISH_SECONDS);
     let guest_size = said.split(SIZE_MARK).nth(1).and_then(|rest| rest.trim().parse::<u64>().ok());
     Ok(offset == size && guest_size == Some(size))
 }

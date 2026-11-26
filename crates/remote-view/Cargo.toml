@@ -1,0 +1,20 @@
+[package]
+name = "guesthouse-remote-view-core"
+description = "A guest's screen through remoteman, the part with no host in it: the installer's names, the guest's script, the viewer's identity, and the controls for other devices (the state they show, remoteman's `ctl` words and answers, pairing, the trust list, the switch and its wording)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The viewer's identity, made as remoteman makes its own, and fingerprints.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+sha2 = "0.11"
+
+# The state types and remoteman's `status` answer are JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

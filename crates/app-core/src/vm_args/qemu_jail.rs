@@ -123,7 +123,8 @@ impl VmPlan {
             return Network { tcp_bind, tcp_connect: Ports::Any, udp_bind: Ports::Any, udp_send: Ports::Any };
         }
         // A restricted user network only answers forwards, and asks the host's resolver for names.
-        let udp_forwards = self.forwarded_ports(Protocol::Udp);
+        let mut udp_forwards = self.forwarded_ports(Protocol::Udp);
+        udp_forwards.extend(self.remote_view_port);
         // A UDP forward answers to whatever port the program on this PC sent from, such as
         // Moonlight's for Sunshine's video, so its replies can go to any port. The guest still
         // can't start anything of its own: the restricted network drops it.

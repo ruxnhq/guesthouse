@@ -1,6 +1,7 @@
 # Sourced by setup-own.sh when the image is for an AMD card, after its own functions. It sets up a
 # Linux someone installed for the AMD card's GPU: the tools that check it, the scripts and their units,
-# the package manager's hook for Mesa updates, and Mesa built with native context, here and now.
+# the package manager's hook for Mesa updates, the power button's settings, and Mesa built with native
+# context, here and now.
 # shellcheck shell=bash disable=SC2154  # sourced by setup-own.sh, which sets these
 . "$here/amd/amd-common.sh"
 
@@ -39,7 +40,7 @@ install_amd_units() {
         semanage fcontext -a -t bin_t '/usr/lib/nvfwd(/.*)?' 2>/dev/null ||
             semanage fcontext -m -t bin_t '/usr/lib/nvfwd(/.*)?'
         restorecon -R "$installed" "$units/nvfwd-amd.service" "$units/nvfwd-mesa-build.service" \
-            "$root/etc/dnf" 2>/dev/null || true
+            "$root/etc/dnf" "$root/etc/systemd/logind.conf.d" 2>/dev/null || true
     fi
     systemctl daemon-reload
     systemctl enable nvfwd-amd.service
@@ -73,7 +74,10 @@ setup_amd() {
     install_amd_packages
     copy_scripts
     install_mesa_hook
+    install_power_button
     install_amd_units
+    # logind takes the power button's setting now, as this guest isn't told to reboot.
+    systemctl reload systemd-logind 2>/dev/null || true
     build_mesa_now
     touch "$own_done_marker"
     echo

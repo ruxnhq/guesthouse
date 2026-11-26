@@ -20,6 +20,8 @@ const NO_GPU: &str = "Windows started without its GPU, so the VM was turned off.
 const KEPT_WITHOUT_GPU: &str = "Windows started without its GPU. The VM was left running on Windows' basic display, as \
                                 Intel's support is experimental, so dxdiag can run and a bug report can be sent from it.";
 const DAEMON_ERROR_MARK: &str = "ERROR ";
+const STATE_ANSWER_SECONDS: u64 = 20;
+const STATE_MARK: &str = "render device ";
 
 /// The virtual render device, under any identity the QEMU patch can give it.
 pub(super) fn is_render_device() -> String {
@@ -38,6 +40,23 @@ fn working_devices(task: &Task) -> Option<u32> {
     );
     let said = task.ask_guest(&script, CHECK_ANSWER_SECONDS);
     said.split(WORKING_MARK).nth(1)?.trim().parse().ok()
+}
+
+/// What Windows says about the render device, for the log of a check that failed: the device as
+/// Plug and Play has it, with its problem code, and each display adapter Windows shows. A check
+/// that fails says only that no adapter was working, and the reason is in these.
+fn log_device_state(task: &Task) {
+    let script = format!(
+        "Get-CimInstance Win32_PnPEntity | Where-Object {{ {} }} | ForEach-Object {{ \
+         \"{STATE_MARK}$($_.PNPDeviceID) status $($_.Status) problem $($_.ConfigManagerErrorCode)\" }}; \
+         Get-CimInstance Win32_VideoController | ForEach-Object {{ \
+         \"adapter $($_.Name) at $($_.PNPDeviceID) problem $($_.ConfigManagerErrorCode)\" }}; \
+         \"up $([int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds) s\"",
+        is_render_device()
+    );
+    let said = task.ask_guest(&script, STATE_ANSWER_SECONDS);
+    let said = if said.trim().is_empty() { "Windows did not answer" } else { said.trim() };
+    let _ = write_log(task.context, &format!("gpu check: no working GPU. {said}"));
 }
 
 /// The daemon's last error, which is the most likely reason.
@@ -108,6 +127,7 @@ pub(super) fn confirm_gpu(task: &mut Task) -> Result<Gpu> {
     if gpu_found(task) {
         return Ok(Gpu::Working);
     }
+    log_device_state(task);
     if !runs_without_gpu(task.machine.windows_maker()) {
         return Err(after_failed_gpu(task, Failure(with_daemons_reason(task, NO_GPU))));
     }

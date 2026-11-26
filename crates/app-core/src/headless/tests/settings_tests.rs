@@ -337,3 +337,37 @@ fn a_running_machine_is_told_it_gets_the_way_in_at_its_next_start() {
         "app-windows is now on.\nA running machine gets the way in that it needs at its next start.\n"
     );
 }
+
+#[test]
+fn vendor_id_retry_gets_a_machine_kept_on_microsofts_number_tried_again() {
+    use crate::gpu_identity::{CHECK_TRIES, FELL_BACK, IdentityState, Shown, read_state, write_state};
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    make(&context, "win", "Win", Kind::Windows);
+    let machine = load(&context, "win").unwrap();
+    let stuck = IdentityState {
+        failed_script: "abc".into(),
+        reason: FELL_BACK.into(),
+        failed_checks: CHECK_TRIES,
+        ..IdentityState::default()
+    };
+    write_state(&context, &machine, &stuck).unwrap();
+    assert!(said(&context, "status win").0.contains("guesthouse-vm set win vendor-id retry"));
+    assert_eq!(
+        said(&context, "set win vendor-id retry"),
+        ("The next start tries NVIDIA's vendor ID again.\n".to_owned(), Ok(()))
+    );
+    assert_eq!(read_state(&context, &machine), IdentityState::default());
+    assert!(!said(&context, "status win").0.contains("vendor ID"));
+    assert_eq!(refused(&context, "set win vendor-id 10de"), "vendor-id takes retry.");
+    assert!(refused(&context, "set work vendor-id retry").contains("only for a Windows machine"));
+
+    let settled = IdentityState { shown: Shown::Maker, ..IdentityState::default() };
+    write_state(&context, &machine, &settled).unwrap();
+    assert_eq!(
+        said(&context, "set win vendor-id retry"),
+        ("Windows is already shown NVIDIA's vendor ID.\n".to_owned(), Ok(()))
+    );
+    assert_eq!(read_state(&context, &machine), settled);
+}

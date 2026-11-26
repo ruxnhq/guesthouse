@@ -152,7 +152,30 @@ fn a_gpu_gone_after_the_restart_goes_back_to_microsofts_number() {
     let rig = Rig::new(&scratch, switching(), true, &["restarting\r\n", DESKTOP_UP]);
     let (result, _) = rig.start();
     assert!(result.unwrap_err().0.contains("without its GPU"));
-    assert_eq!(rig.state().shown, Shown::Microsoft);
+    let state = rig.state();
+    assert_eq!(state.shown, Shown::Microsoft);
+    assert_eq!((state.failed_checks, state.failed_script.as_str()), (1, ""), "the next start tries again");
+    let asked = rig.asked();
+    assert!(asked.last().unwrap().contains("Win32_PnPEntity"), "the device's state is asked for the log");
+    let log = crate::log::read_log(&rig.context);
+    assert!(log.contains("gpu check: no working GPU. Windows did not answer"), "{log}");
+}
+
+#[test]
+fn a_failed_check_logs_what_windows_says_about_the_device() {
+    let scratch = Scratch::new();
+    let mut answers = vec!["restarting\r\n", DESKTOP_UP];
+    answers.extend(["gpu working 0\n"; 10]);
+    answers.push("render device PCI\\VEN_10DE&DEV_2BFE\\3&1 status Error problem 31\r\nup 40 s\r\n");
+    let rig = Rig::new(&scratch, switching(), true, &answers);
+    assert!(rig.start().0.is_err());
+    let log = crate::log::read_log(&rig.context);
+    assert!(
+        log.contains(
+            "gpu check: no working GPU. render device PCI\\VEN_10DE&DEV_2BFE\\3&1 status Error problem 31"
+        ),
+        "{log}"
+    );
 }
 
 #[test]

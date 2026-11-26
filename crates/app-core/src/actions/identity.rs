@@ -44,6 +44,14 @@ fn next_start(maker: &str) -> String {
     format!("Windows sees Microsoft's vendor ID until its next start, when it will see {maker}'s.")
 }
 
+fn tries_again(maker: &str) -> String {
+    format!("That start then tries {maker}'s once more.")
+}
+
+fn stays(maker: &str, failed: u32) -> String {
+    format!("It stays there, as {maker}'s has now failed {failed} times in a row.")
+}
+
 /// Tells one version of the guest script from another, so a failed one isn't run again.
 fn script_id(script: &str) -> String {
     let mut hasher = DefaultHasher::new();
@@ -55,14 +63,18 @@ fn script_id(script: &str) -> String {
 /// from what the state files and the scripts say now. The same checks `set_up` makes, in the same
 /// order, and the cheap ones first as this is asked at every start: the QEMU is only asked about a
 /// machine that has something to stage. It says which script would run, as a build with a new one
-/// tries again what an older one failed at.
+/// tries again what an older one failed at, and with it which try this is, as a machine that fell back
+/// has the same script run once more.
 pub(crate) fn will_stage(context: &Context, machine: &Machine) -> Option<String> {
     let state = read_state(context, machine);
     if state.shown == Shown::Maker {
         return None;
     }
     let id = script_id(&guest_script(context, SCRIPT).ok()?);
-    (state.failed_script != id && qemu_sets_identity(&context.paths.qemu)).then_some(id)
+    if state.failed_script == id || !qemu_sets_identity(&context.paths.qemu) {
+        return None;
+    }
+    Some(if state.failed_checks == 0 { id } else { format!("{id}:try-{}", state.failed_checks + 1) })
 }
 
 /// Has Windows write the package, and records what came of it.
@@ -74,6 +86,10 @@ fn stage(task: &Task, state: &mut IdentityState, script: &str) -> Result<()> {
     let said = task.ask_guest(&sent, STAGE_SECONDS);
     write_log(task.context, &format!("gpu identity: {}", said.trim()))?;
     if said.lines().any(|line| line.trim() == STAGED_MARK) {
+        if !state.failed_script.is_empty() {
+            // Another script than the one that was given up on, so it gets its own tries.
+            state.failed_checks = 0;
+        }
         state.shown = Shown::Maker;
         state.package_vendor = vendor;
         state.failed_script.clear();
@@ -95,6 +111,8 @@ fn set_up(task: &Task) -> Result<()> {
     let mut state = read_state(task.context, &task.machine);
     state.note.clear();
     if state.shown == Shown::Maker {
+        // This is asked once the GPU check has passed, so the maker's number works here.
+        state.failed_checks = 0;
         return write_state(task.context, &task.machine, &state);
     }
     let maker = maker_name(&task.machine);
@@ -126,6 +144,10 @@ pub(super) fn set_up_identity(task: &mut Task) {
 /// Windows started without its GPU. If it was shown its maker's number, that's the first suspect, and
 /// the next start goes back to the one that always works, unless the maker's card can't do without
 /// its number: see [`falls_back_after_failed_check`].
+///
+/// A check can fail once on a guest that is fine on the number, so the start after this one has
+/// Windows take the package again and tries the number once more. Only when that fails as well is
+/// the script named as failed, which keeps the machine on Microsoft's number: see [`crate::gpu_identity::CHECK_TRIES`].
 pub(super) fn after_failed_gpu(task: &Task, failure: Failure) -> Failure {
     let mut state = read_state(task.context, &task.machine);
     if state.shown != Shown::Maker {
@@ -138,10 +160,16 @@ pub(super) fn after_failed_gpu(task: &Task, failure: Failure) -> Failure {
     state.restart_due = false;
     state.note.clear();
     state.reason = FELL_BACK.to_owned();
-    // Staging the same package again would end the same way at every start, and no start would
-    // ever finish. A new build's script is tried afresh.
-    if let Ok(script) = guest_script(task.context, SCRIPT) {
-        state.failed_script = script_id(&script);
+    state.failed_checks += 1;
+    let maker = maker_name(&task.machine);
+    let mut next = tries_again(maker);
+    if state.out_of_tries() {
+        // Staging the same package at every start would end the same way each time, and no start
+        // would ever finish. A new build's script is tried afresh.
+        if let Ok(script) = guest_script(task.context, SCRIPT) {
+            state.failed_script = script_id(&script);
+        }
+        next = stays(maker, state.failed_checks);
     }
     if let Err(problem) = write_state(task.context, &task.machine, &state) {
         let _ = write_log(task.context, &format!("gpu identity: could not fall back: {}", problem.0));
@@ -150,7 +178,7 @@ pub(super) fn after_failed_gpu(task: &Task, failure: Failure) -> Failure {
         // The guest is still up, so it can have the name the next start's driver needs.
         let _ = give_display_its_name(task);
     }
-    Failure(format!("{} {FELL_BACK}", failure.0))
+    Failure(format!("{} {FELL_BACK} {next}", failure.0))
 }
 
 #[cfg(test)]

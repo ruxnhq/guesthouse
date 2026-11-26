@@ -26,6 +26,9 @@ jobs:
         run: |
           shellcheck --version
           git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
+      # Ubuntu's sh is dash, as Proxmox VE's is.
+      - name: Proxmox's check, on made-up hosts
+        run: bash tests/proxmox/run.sh
 
   psscriptanalyzer:
     name: PSScriptAnalyzer

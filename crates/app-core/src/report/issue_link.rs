@@ -153,7 +153,7 @@ mod tests {
         let link = issue_link("0123456789", &summary(), "It went black.", &["10:00 app: it failed".into()]);
         assert!(
             link.starts_with(
-                "https://github.com/ruxnhq/guesthouse/issues/new?title=Report%200123456789&body="
+                "https://github.com/ruxnlabs/guesthouse/issues/new?title=Report%200123456789&body="
             )
         );
         assert!(link.contains("RTX%204080"));

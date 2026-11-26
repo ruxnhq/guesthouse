@@ -6,8 +6,8 @@ use adw::prelude::*;
 use gtk::gio;
 use guesthouse_app_core::updates::VERSION;
 
-const WEBSITE: &str = "https://github.com/ruxnhq/guesthouse";
-const ISSUES: &str = "https://github.com/ruxnhq/guesthouse/issues";
+const WEBSITE: &str = "https://github.com/ruxnlabs/guesthouse";
+const ISSUES: &str = "https://github.com/ruxnlabs/guesthouse/issues";
 const DISCORD: &str = "https://discord.gg/rN3VARayZV";
 const WHAT_IT_IS: &str = "Runs VMs that use this PC's GPU while the PC keeps using it too: Windows, Linux, Android and \
                           macOS, on NVIDIA, AMD and Intel cards. Some of these are still previews.";

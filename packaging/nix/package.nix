@@ -66,7 +66,7 @@ let
   # So it comes with the package, patched like the rest, in the program folder where the app looks
   # first. Its number and hash are app-core's macos_part.rs.
   macosPart = fetchurl {
-    url = "https://github.com/ruxnhq/guesthouse/releases/download/macos-part-1/guesthouse-macos-part-1-x86_64.tar.xz";
+    url = "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-1/guesthouse-macos-part-1-x86_64.tar.xz";
     hash = "sha256-V4cQ5mL8dVsxBcw4AN411uroEs3XFmJKwCutMimBqLw=";
   };
 in
@@ -75,7 +75,7 @@ stdenvNoCC.mkDerivation {
   inherit version;
 
   src = fetchurl {
-    url = "https://github.com/ruxnhq/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
+    url = "https://github.com/ruxnlabs/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
     hash = "sha256-SqXyxMwv1Hf0j52Cag7F+16QIiJNfEN/1jentbIo5m4=";
   };
   sourceRoot = "guesthouse-${version}-x86_64";
@@ -172,7 +172,7 @@ stdenvNoCC.mkDerivation {
 
   meta = {
     description = "Windows and Linux machines on KVM, with the real GPU driver";
-    homepage = "https://github.com/ruxnhq/guesthouse";
+    homepage = "https://github.com/ruxnlabs/guesthouse";
     license = lib.licenses.gpl2Plus;
     platforms = [ "x86_64-linux" ];
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

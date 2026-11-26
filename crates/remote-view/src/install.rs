@@ -114,17 +114,17 @@ mod tests {
 
     #[test]
     fn the_installer_runs_with_no_trust_list_and_no_pairing() {
-        let script = install_script("0.1.7", "d3d12");
+        let script = install_script("0.1.8", "d3d12");
         assert!(script.contains("'--silent','--no-pair','--encoder','d3d12'"));
         assert!(!script.contains("--trust"), "a person's devices are never replaced by a trust list");
         assert!(script.contains("-RemoteAddress '10.0.2.2'"), "only this PC reaches the port");
-        assert!(script.contains("'0.1.7 d3d12'"));
+        assert!(script.contains("'0.1.8 d3d12'"));
     }
 
     #[test]
     fn the_check_wants_the_same_version_and_encoder_and_the_new_take_over() {
-        let script = check_script("0.1.7", "auto");
-        assert!(script.contains("'0.1.7 auto'"));
+        let script = check_script("0.1.8", "auto");
+        assert!(script.contains("'0.1.8 auto'"));
         assert!(script.contains(r"'MONITOR\GHS0001'"));
     }
 

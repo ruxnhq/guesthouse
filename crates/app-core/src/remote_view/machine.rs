@@ -55,9 +55,9 @@ const SHIPPED: &str = "remoteman/remoteman-host-setup.exe";
 /// The release of remoteman's host this host puts in a guest. 0.1.6 is the first whose `--no-pair`
 /// still lets `pair on` open pairing, which every pairing here needs. The Windows host carries its own
 /// release, pinned in `windows/remoteman.json`.
-const REMOTEMAN_VERSION: &str = "0.1.7";
+const REMOTEMAN_VERSION: &str = "0.1.8";
 const REMOTEMAN_BASE: &str = "https://files.ruxn.com/p/remoteman/";
-const REMOTEMAN_SHA256: &str = "17c9094524a4540b52ac7ae53c1e1bd0612e0b93eb8f9861b2cb9a2017ea9e57";
+const REMOTEMAN_SHA256: &str = "f50fb39fc69e46fcae7bb97419528809b8f6f145a935054fa8f936b72d593556";
 pub const TOO_OLD: &str = "This machine's display driver is older than viewing from other devices needs: its \
                            take-over script would take remoteman's screen for its own. Update the machine's \
                            display driver, then turn this on again.";

@@ -2026,6 +2026,18 @@ mod fences {
     }
 
     #[test]
+    fn a_queue_progress_fence_can_be_signalled_and_waited_on() {
+        let mut session = session();
+        let context = create_context(&mut session, 0);
+        let (_, progress, fence) = create_queue(&mut session, context);
+        send(&mut session, &signal_message(&[progress], &[context], &[5]));
+        assert_eq!(session.memory().read_u64(fence).unwrap(), 5);
+        send(&mut session, &wait_message(&[progress], &[5], false, 0xE));
+        let notices: Vec<_> = session.take_notices().collect();
+        assert_eq!(notices, [Notice::WakeEvent { event: 0xE, release: 1 }]);
+    }
+
+    #[test]
     fn a_wait_on_all_needs_every_fence() {
         let mut session = session();
         let (first, _, first_fence) = create_fence(&mut session, 0);

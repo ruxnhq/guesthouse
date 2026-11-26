@@ -135,15 +135,23 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// backwards.
     pub(crate) fn write_fence(&mut self, handle: u32, value: u64) {
         let handle = self.resolve_shared(handle);
-        let Some(&object) = self.sync_objects.get(handle) else {
-            return;
+        let fence = match self.sync_objects.get(handle) {
+            Some(&object) => {
+                if object.tokens.is_some() {
+                    self.sync_objects.give_token(handle);
+                    return;
+                }
+                if let Some(event) = object.event {
+                    self.notices.push(Notice::WakeEvent { event, release: 0 });
+                    return;
+                }
+                object.fence
+            }
+            // Hardware queue progress fences live in `queue_progress`, not `sync_objects`.
+            None => self.queue_progress.get(&handle).copied().unwrap_or(0),
         };
-        if object.tokens.is_some() {
-            self.sync_objects.give_token(handle);
-        } else if let Some(event) = object.event {
-            self.notices.push(Notice::WakeEvent { event, release: 0 });
-        } else if object.fence != 0 && value > self.fence_value(object.fence) {
-            self.store_fence(object.fence, value);
+        if fence != 0 && value > self.fence_value(fence) {
+            self.store_fence(fence, value);
         }
     }
 

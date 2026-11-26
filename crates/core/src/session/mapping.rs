@@ -93,7 +93,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             }
             let chosen = self.map_chosen(request.address, memory, first, length, space, handle);
             if let Err(error) = chosen {
-                log::warn!("mapping {handle:#x} at {:#x}: {error}", request.address);
+                let allocation = &self.allocations[&handle];
+                log::warn!(
+                    "mapping {handle:#x} at {:#x} ({first:#x} for {length:#x}, alloc {:#x}, mappings {}, guest_pages {guest_pages}): {error}",
+                    request.address,
+                    allocation.size,
+                    allocation.mappings.len()
+                );
                 map_answer(0, Status::UNSUCCESSFUL, out);
                 return Ok(());
             }

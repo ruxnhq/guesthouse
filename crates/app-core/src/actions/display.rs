@@ -244,21 +244,18 @@ fn mark_failed(state: &mut DisplayState, package: String) {
     state.failed_on = VERSION.to_owned();
 }
 
-/// An Intel machine's display driver that failed under an older app failed on a desktop the card
-/// couldn't draw, as no older app ran the guest's work on the card, so its failure says nothing of
-/// the driver. A start on the hardware desktop gives it its try again. One that fails on this
-/// version stays out until the next, as for any card.
+/// A driver that failed under an older app gets one try under this one, as the newer app may be what
+/// it needed: an Intel machine's failed on a desktop the card couldn't draw, and any card's could be
+/// taken out for a picture lost while it took a running driver's place. One that fails on this
+/// version stays out until the next.
 fn forgive_older_apps_failure(task: &Task, state: &mut DisplayState) -> Result<()> {
-    let intel = task.machine.windows_maker() == Some(GpuMaker::Intel);
-    if !intel || state.failed_package.is_empty() || state.failed_on == VERSION {
+    if state.failed_package.is_empty() || state.failed_on == VERSION {
         return Ok(());
     }
     let on = if state.failed_on.is_empty() { "an older version" } else { state.failed_on.as_str() };
     write_log(
         task.context,
-        &format!(
-            "display driver: it failed under {on} of the app, on a desktop the card couldn't draw; tried again on the hardware desktop"
-        ),
+        &format!("display driver: it failed under {on} of the app, so this one tries it again"),
     )?;
     state.failed_package.clear();
     state.failed_on.clear();

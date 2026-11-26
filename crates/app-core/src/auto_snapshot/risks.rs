@@ -79,7 +79,9 @@ pub fn pending(context: &Context, machine: &Machine) -> Vec<Pending> {
     }
     if let Some(package) = DriverPackage::find(context) {
         let state = read_display(context, machine);
-        if state.package != package.id && state.failed_package != package.id {
+        // A build an older app marked as failed is tried again under this one.
+        let kept_out = state.failed_package == package.id && state.failed_on == VERSION;
+        if state.package != package.id && !kept_out {
             found.push(due(Risk::DisplayDriver, format!("display:{}", package.id)));
         }
     }

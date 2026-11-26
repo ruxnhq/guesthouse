@@ -736,11 +736,30 @@ fn the_first_start_after_an_older_app_gives_an_intel_hardware_desktop_its_displa
 }
 
 #[test]
-fn an_older_apps_mark_on_another_card_is_kept() {
+fn an_older_apps_mark_gets_one_try_under_this_app_on_any_card() {
     let (rig, guest) = Rig::new().with(|context| Guest::new(context, "missing", INSTALLED, true));
     fake_package(&rig.scratch, "build 1");
     std::fs::create_dir_all(rig.machine.folder(&rig.context)).unwrap();
     fs::write(crate::display::state_file(&rig.context, &rig.machine), OLDER_APPS_STATE).unwrap();
+    guest.sends_frames.store(false, Ordering::Relaxed);
+    let state = rig.run(boot_display);
+    assert_eq!(guest.asked_for("sign-and-install.ps1 C:"), 1, "the older app's mark is not kept");
+    assert_eq!(
+        (state.failed_package.as_str(), state.failed_on.as_str()),
+        ("build 1", crate::updates::VERSION)
+    );
     rig.run(boot_display);
-    assert_eq!(guest.asked_for("sign-and-install"), 0);
+    assert_eq!(guest.asked_for("sign-and-install.ps1 C:"), 1, "once per version");
+}
+
+#[test]
+fn a_driver_an_older_app_took_out_comes_back_when_it_shows_a_picture() {
+    let (rig, guest) = Rig::new().with(|context| Guest::new(context, "missing", INSTALLED, true));
+    fake_package(&rig.scratch, "build 1");
+    std::fs::create_dir_all(rig.machine.folder(&rig.context)).unwrap();
+    fs::write(crate::display::state_file(&rig.context, &rig.machine), OLDER_APPS_STATE).unwrap();
+    let state = rig.run(boot_display);
+    assert_eq!((state.driver, state.shown_frames), (Driver::Installed, true));
+    assert_eq!((state.failed_package.as_str(), state.reason.as_str()), ("", ""));
+    assert_eq!(guest.asked_for("take it out"), 0);
 }

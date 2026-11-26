@@ -4,7 +4,9 @@
 //! with the compositor's colour management, which it turns down on KWin 6.8. Here the compositor gets
 //! the picture's size in logical pixels and does the rounding itself, and an HDR frame says it's PQ
 //! in BT.2020 through the colour management protocol. Each slot of the ring is made into a buffer
-//! once, and goes back to the producer when the compositor lets go of it.
+//! once, and goes back to the producer when the compositor lets go of it. A slot that is a file in
+//! memory, not a GPU's buffer (frames from a card other than the screen's), is made into a shared
+//! memory buffer instead: no compositor takes such a file as a dmabuf.
 //!
 //! Like the pointer lock, this lives on GTK's own connection with a queue of its own. GTK goes on
 //! reading the socket for everyone, and `catch_up` takes in what landed on this queue.
@@ -13,6 +15,7 @@ use super::buffer_holds::BufferHolds;
 use super::crop::Crop;
 use super::dmabuf_feedback::{self, Reading};
 use super::frames::SlotFrame;
+use super::ring::{file_size, is_dmabuf};
 pub use super::stall::Stall;
 use super::stall::StallWatch;
 use gdk_wayland::prelude::*;
@@ -27,6 +30,8 @@ use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
 use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::WlSurface;
@@ -152,6 +157,41 @@ fn pixel_bytes(fourcc: u32) -> Option<u32> {
 /// DRM's modifier for rows one after another, the only layout whose pixel's place is offset + y * stride
 /// + x * bytes.
 const LINEAR: u64 = 0;
+
+/// A buffer of shared memory as `wl_shm` is asked for it: the pool's size, then the buffer's offset,
+/// stride and format.
+type ShmLayout = (i32, i32, i32, wl_shm::Format);
+
+/// How a picture in a file in memory goes in a `wl_shm` buffer, or why it can't. `wl_shm` has no
+/// answer to refuse with: a wrong format, stride or size is a protocol error, which ends the
+/// connection GTK shares with this. So only the two formats every compositor takes are used, and the
+/// rest is checked here first. What a frame says can come from a guest.
+fn shm_layout(
+    fourcc: u32,
+    file_size: u64,
+    (offset, stride): (u32, u32),
+    (width, height): (i32, i32),
+) -> Result<ShmLayout, &'static str> {
+    let format = match &fourcc.to_le_bytes() {
+        b"AR24" => wl_shm::Format::Argb8888,
+        b"XR24" => wl_shm::Format::Xrgb8888,
+        _ => return Err("its format isn't one wl_shm is sure to take"),
+    };
+    let (Ok(width), Ok(height)) = (u64::try_from(width), u64::try_from(height)) else {
+        return Err("its size is wrong");
+    };
+    let end = u64::from(stride).checked_mul(height).and_then(|rows| rows.checked_add(u64::from(offset)));
+    let fits =
+        width > 0 && height > 0 && width * 4 <= u64::from(stride) && end.is_some_and(|end| end <= file_size);
+    if !fits {
+        return Err("its picture doesn't fit the file");
+    }
+    let too_large = "it is too large for wl_shm";
+    let size = i32::try_from(file_size).map_err(|_| too_large)?;
+    let offset = i32::try_from(offset).map_err(|_| too_large)?;
+    let stride = i32::try_from(stride).map_err(|_| too_large)?;
+    Ok((size, offset, stride, format))
+}
 /// The boundary a cut buffer's start is put on.
 const CUT_ALIGNMENT: u64 = 256;
 
@@ -220,6 +260,8 @@ quiet!(
     WpViewport,
     ZwpLinuxDmabufV1,
     WpPresentation,
+    WlShm,
+    WlShmPool,
     WpColorManagementSurfaceV1,
     WpImageDescriptionCreatorParamsV1
 );
@@ -463,6 +505,8 @@ pub struct OwnSurface {
     events: Events,
     dmabuf: ZwpLinuxDmabufV1,
     dmabuf_feedback: Option<ZwpLinuxDmabufFeedbackV1>,
+    /// For slots that are files in memory.
+    shm: Option<WlShm>,
     presentation: Option<WpPresentation>,
     surface: WlSurface,
     /// GTK's own surface, which this one sits under.
@@ -537,6 +581,7 @@ impl OwnSurface {
             .bind(&handle, DMABUF_VERSION..=DMABUF_FEEDBACK_VERSION, ())
             .map_err(|_| "the desktop doesn't offer linux-dmabuf version 3 or later")?;
         let presentation: Option<WpPresentation> = bind(&globals, &handle, 1);
+        let shm: Option<WlShm> = bind(&globals, &handle, 1);
         let manager: Option<WpColorManagerV1> = bind(&globals, &handle, COLOUR_VERSION);
 
         let surface = compositor.create_surface(&handle, ());
@@ -580,6 +625,7 @@ impl OwnSurface {
             events,
             dmabuf,
             dmabuf_feedback,
+            shm,
             presentation,
             surface,
             parent,
@@ -816,10 +862,12 @@ impl OwnSurface {
         if window.is_some() {
             self.drop_other_windows(window);
         }
+        if !self.buffers.contains_key(&key) && self.asked.insert(key) {
+            self.ask_for_buffer(&frame, key);
+            // A buffer of shared memory is there at once.
+            self.take_made_buffers();
+        }
         let Some(buffer) = self.buffers.get(&key) else {
-            if self.asked.insert(key) {
-                self.ask_for_buffer(&frame, key);
-            }
             // GTK shows the frame until the compositor has made its buffer, or said it can't.
             return Err(NotShown::BufferNotMade);
         };
@@ -890,6 +938,10 @@ impl OwnSurface {
             }
             None => (descriptor.offset as u32, descriptor.width as i32, descriptor.height as i32),
         };
+        if !is_dmabuf(&frame.file) {
+            self.make_shm_buffer(frame, key, (offset, width, height));
+            return;
+        }
         let params = self.dmabuf.create_params(&self.queue.handle(), key);
         params.add(
             frame.file.as_fd(),
@@ -900,6 +952,47 @@ impl OwnSurface {
             modifier as u32,
         );
         params.create(width, height, descriptor.format.fourcc, zwp_linux_buffer_params_v1::Flags::empty());
+        let _ = self.queue.flush();
+    }
+
+    /// Makes a buffer of a slot that is a file in memory, through `wl_shm`. Unlike a dmabuf's, it needs
+    /// no answer from the compositor: it is made, or the slot counts as refused.
+    fn make_shm_buffer(
+        &mut self,
+        frame: &SlotFrame,
+        key: BufferKey,
+        (offset, width, height): (u32, i32, i32),
+    ) {
+        let name = slot_name(key.0);
+        let layout = self.shm.as_ref().ok_or("the desktop offers no wl_shm").and_then(|shm| {
+            let file_size = file_size(frame.file.as_ref()).ok_or("its file can't be measured")?;
+            let descriptor = frame.descriptor;
+            let layout = shm_layout(
+                descriptor.format.fourcc,
+                file_size,
+                (offset, descriptor.stride),
+                (width, height),
+            )?;
+            Ok((shm.clone(), layout))
+        });
+        let (shm, (size, offset, stride, format)) = match layout {
+            Ok(made) => made,
+            Err(why) => {
+                self.events.notes.push(format!("own surface: no buffer of {name} in memory, as {why}"));
+                self.events.refused.push(key);
+                return;
+            }
+        };
+        let handle = self.queue.handle();
+        let pool = shm.create_pool(frame.file.as_fd(), size, &handle, ());
+        let buffer = pool.create_buffer(offset, width, height, stride, format, &handle, ());
+        // The buffer keeps the memory; the pool isn't needed past this.
+        pool.destroy();
+        self.events.notes.push(format!(
+            "own surface: {name} is in memory, so its buffer is shared memory, cut to {:?}",
+            key.1
+        ));
+        self.events.made.push((key, buffer));
         let _ = self.queue.flush();
     }
 
@@ -978,5 +1071,35 @@ impl Drop for OwnSurface {
         self.subsurface.destroy();
         self.surface.destroy();
         let _ = self.queue.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const XR24: u32 = u32::from_le_bytes(*b"XR24");
+    const AR24: u32 = u32::from_le_bytes(*b"AR24");
+    /// The tester's frame: 1900x988 in rows of 7680 bytes, in a slot of 8 MiB.
+    const SLOT: u64 = 0x80_0000;
+
+    #[test]
+    fn a_frame_in_memory_goes_in_shm_with_its_own_layout() {
+        let layout = shm_layout(XR24, SLOT, (0, 7680), (1900, 988));
+        assert_eq!(layout, Ok((SLOT as i32, 0, 7680, wl_shm::Format::Xrgb8888)));
+        let cut = shm_layout(AR24, SLOT, (7680 * 10 + 4 * 20, 7680), (800, 600));
+        assert_eq!(cut, Ok((SLOT as i32, 7680 * 10 + 80, 7680, wl_shm::Format::Argb8888)));
+    }
+
+    #[test]
+    fn what_would_end_the_connection_is_refused_here() {
+        let ab24 = u32::from_le_bytes(*b"AB24");
+        assert!(shm_layout(ab24, SLOT, (0, 7680), (1900, 988)).is_err());
+        // Rows shorter than the picture, a picture past the file's end, no picture at all.
+        assert!(shm_layout(XR24, SLOT, (0, 7000), (1900, 988)).is_err());
+        assert!(shm_layout(XR24, SLOT, (SLOT as u32 - 7680, 7680), (1900, 988)).is_err());
+        assert!(shm_layout(XR24, SLOT, (0, 7680), (0, 988)).is_err());
+        assert!(shm_layout(XR24, SLOT, (0, 7680), (1900, -1)).is_err());
+        assert!(shm_layout(XR24, 1 << 32, (0, 7680), (1900, 988)).is_err());
     }
 }

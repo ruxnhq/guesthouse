@@ -73,6 +73,8 @@ Recordings hold guest data. They never go in git. Keep them in `/captures/`, whi
 
 `core` must never know about a vendor, and a backend must never reach into `core`. If a backend needs something, add a method to `HostServices`, and if the core needs a vendor's answer, add one to `Backend`. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
+The hosts follow the same rule, whether it's Linux, Windows or the Mac host. Before you build a feature for one host, read how the other two do the same job, even if one's code lives outside this repository, and reuse their names and shapes. Logic with no OS or hypervisor calls belongs in a crate every host builds on, not in a host's own crate. Don't rewrite a working host to fit: move one piece at a time, in a commit that changes no behaviour. See "What the hosts share" in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Behaviour
 
 The prototype is the reference, bugs included, until the replay tool has proved the port. If you find a bug in its behaviour, keep the behaviour and write it down. Fixing it comes later, as a change of its own, once a recording can show what the fix changes.

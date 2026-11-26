@@ -437,7 +437,33 @@ impl CardWork {
         let (address, length) = (commands.address, u64::from(commands.length) * choices::COMMAND_LENGTH_UNIT);
         let not_mapped = Refused::NotMapped { address, length };
         let held = self.spaces.get(&space).ok_or(Refused::SpaceFailed)?;
-        if held.holding(address, length).is_none() || length == 0 {
+        if length == 0 {
+            return Err(not_mapped);
+        }
+        if held.holding(address, length).is_none() {
+            // Intel's Windows UMD occasionally reports a command length larger than the command
+            // buffer's mapping; if the mapped span itself ends or chains cleanly, the GPU will
+            // stop or jump before reaching the end.
+            if let Some(mapped) = held.mapped_from(address).filter(|&mapped| length > mapped && mapped >= 4) {
+                let scan_length = mapped.min(1 << 20) & !3;
+                if let Ok(bytes) = self.read_gpu(host, space, address, scan_length) {
+                    let found = batch::ending_at(&bytes, address);
+                    if matches!(found, Ending::Ends | Ending::Chains(_)) {
+                        log::debug!(
+                            "intel work: batch at {address:#x} claimed {length:#x} bytes, but {found:?} inside its {mapped:#x}-byte mapping"
+                        );
+                        return Ok(found);
+                    }
+                    log::warn!(
+                        "intel work: batch at {address:#x} for {length:#x} bytes has {mapped:#x} bytes mapped, ending={found:?}"
+                    );
+                }
+            } else {
+                log::warn!(
+                    "intel work: batch at {address:#x} for {length:#x} bytes has {:?} bytes mapped from {address:#x}",
+                    held.mapped_from(address)
+                );
+            }
             return Err(not_mapped);
         }
         let tail_length = length.min(batch::ENDING_BYTES as u64) & !3;
@@ -447,7 +473,32 @@ impl CardWork {
                 ReadError::NotMapped => Refused::NotMapped { address, length },
                 ReadError::Unreadable => Refused::Unreadable { address: address + skipped },
             })?;
-        Ok(batch::ending_at(&tail, address + skipped))
+        let found = batch::ending_at(&tail, address + skipped);
+        if found == Ending::RunsOn && length > tail_length {
+            let scan_length = length.min(1 << 20) & !3;
+            if let Ok(bytes) = self.read_gpu(host, space, address, scan_length) {
+                let full = batch::ending_at(&bytes, address);
+                if full != Ending::RunsOn {
+                    return Ok(full);
+                }
+            }
+        }
+        if found == Ending::RunsOn {
+            let dwords: Vec<u32> = tail
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| u32::from_le_bytes(*bytes))
+                .filter(|&dword| dword != 0)
+                .collect();
+            let last_eight: Vec<String> =
+                dwords.iter().rev().take(8).rev().map(|dword| format!("{dword:08x}")).collect();
+            log::warn!(
+                "intel work: batch at {address:#x} ({length:#x} bytes) tail non-zero dwords: [{}]",
+                last_eight.join(" ")
+            );
+        }
+        Ok(found)
     }
 
     /// Reads bytes of a space at a GPU address, all of which must lie in one mapping: of a buffer

@@ -726,6 +726,11 @@ impl Backend for IntelBackend {
         size: u64,
         _kind: MemoryKind,
     ) -> Result<(MemoryId, u64), BackendError> {
+        // Intel's Windows UMD maps GPU virtual addresses in 64 KiB pages even when xe's VRAM
+        // min_page_size is 4 KiB; pad discrete-card allocations so MapGpuAddresses does not reach
+        // past the end after LockForCpu fixes the allocation's guest_address.
+        const VRAM_MAP_PAGE: u64 = 0x1_0000;
+        let size = if self.card.config.has_vram() { size.next_multiple_of(VRAM_MAP_PAGE) } else { size };
         match &mut self.work {
             Some(work) => work.allocate(size, BufferUse::Card),
             None => Ok((self.books.new_memory(), size)),
@@ -1469,7 +1474,7 @@ mod tests {
         let (mut backend, _) = started((Stage::Everything, None), &xe);
         let before = xe.calls().len();
         let (batch, size) = backend.allocate_video_memory(0x1000, MemoryKind::PLAIN).unwrap();
-        assert_eq!(size, 0x1000);
+        assert_eq!(size, 0x1_0000);
         let pages = work::testing::Pages::new(0x1000);
         let fence = backend.adopt_host_pages(pages.address(), 0x1000).unwrap();
         let space = backend.create_address_space(&guesthouse_backend::GPU_RANGES).unwrap();

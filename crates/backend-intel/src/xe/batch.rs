@@ -397,10 +397,13 @@ pub fn ending(tail: &[u8]) -> Ending {
     let dwords: Vec<u32> = chunks.iter().map(|bytes| u32::from_le_bytes(*bytes)).collect();
     let padding_from = |at: usize| dwords[at..].iter().all(|&dword| is(dword, NOOP));
     // A chain's address can read as padding, so the chain is looked for before the padding is
-    // skipped: a start instruction, its two address dwords, and nothing but padding after.
-    let chain = (0..dwords.len().saturating_sub(BATCH_START_DWORDS - 1))
-        .rev()
-        .find(|&at| is(dwords[at], BATCH_START) && padding_from(at + BATCH_START_DWORDS));
+    // skipped: a start instruction, its two address dwords, and nothing but padding after (or a
+    // trailing copy of the two-dword target address emitted at the end of some OpenGL batches).
+    let chain = (0..dwords.len().saturating_sub(BATCH_START_DWORDS - 1)).rev().find(|&at| {
+        is(dwords[at], BATCH_START)
+            && (padding_from(at + BATCH_START_DWORDS)
+                || dwords[at + BATCH_START_DWORDS..] == dwords[at + 1..at + BATCH_START_DWORDS])
+    });
     if let Some(at) = chain {
         return Ending::Chains(u64::from(dwords[at + 2]) << 32 | u64::from(dwords[at + 1]));
     }
@@ -721,6 +724,10 @@ mod tests {
         let chain = batch_start(0x255_F13C_0000);
         assert_eq!(ending(&tail(&chain)), Ending::Chains(0x255_F13C_0000));
         assert_eq!(ending(&tail(&[chain[0], chain[1], chain[2], NOOP])), Ending::Chains(0x255_F13C_0000));
+        assert_eq!(
+            ending(&tail(&[chain[0], chain[1], chain[2], chain[1], chain[2]])),
+            Ending::Chains(0x255_F13C_0000)
+        );
     }
 
     /// `MI_SEMAPHORE_WAIT` in Linux 7.2's `xe_mi_commands.h`: `__MI_INSTR(0x1c) | XE_INSTR_NUM_DW(5)`.

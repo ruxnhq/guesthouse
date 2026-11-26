@@ -128,6 +128,43 @@ check_cluster() {
     fi
 }
 
+# The enabled sources that name Proxmox's enterprise repository, one file on each line. A .sources file
+# holds stanzas split by blank lines, and Enabled: no turns one off.
+enterprise_sources() {
+    for list in "$(file /etc/apt/sources.list)" "$(file /etc/apt/sources.list.d)"/*.list; do
+        [ -f "$list" ] || continue
+        grep -Eq '^[[:space:]]*deb[[:space:]].*enterprise\.proxmox\.com' "$list" && printf '%s\n' "${list#"$ROOT"}"
+    done
+    for sources in "$(file /etc/apt/sources.list.d)"/*.sources; do
+        [ -f "$sources" ] || continue
+        awk -v name="${sources#"$ROOT"}" '
+            function stanza() {
+                if (uris ~ /enterprise\.proxmox\.com/ && tolower(enabled) != "no")
+                    found = 1
+                uris = ""
+                enabled = ""
+            }
+            /^[[:space:]]*$/ { stanza(); next }
+            /^#/ { next }
+            tolower($1) == "uris:" { uris = $0 }
+            tolower($1) == "enabled:" { enabled = $2 }
+            END { stanza(); if (found) print name }
+        ' "$sources"
+    done
+}
+
+# A fresh Proxmox VE has its enterprise repositories on. Without a subscription apt update fails at them,
+# and nothing can be installed until they're off.
+check_sources() {
+    enterprise=$(enterprise_sources | tr '\n' ' ' | sed 's/ $//')
+    if [ -n "$enterprise" ]; then
+        warning "Package sources" "Proxmox's enterprise repository is on, in $enterprise." \
+            "Without a subscription apt update fails at it. Turn it off (Enabled: no) and add pve-no-subscription, as Proxmox's docs on package repositories say."
+    else
+        ok "Package sources" "No enterprise repository is on."
+    fi
+}
+
 check_kvm() {
     if [ -e "$(file /dev/kvm)" ]; then
         ok "Virtualization" "/dev/kvm is there."
@@ -536,6 +573,11 @@ check_windows_vm() {
         seen_slots="$seen_slots $run_uid:$slot:$vmid"
     fi
     [ "$problems" = 1 ] || ok "$title" "Windows with the GPU, $ram_size GiB, slot $slot."
+    # Guesthouse sets Windows' firewall up for its own NAT, where the host is 10.0.2.2. On a bridge that
+    # address isn't there, so what Guesthouse let in, Remote Desktop among it, stays shut from the LAN.
+    if printf '%s\n' "$config" | grep -Eq '^net[0-9]+: .*bridge='; then
+        note "$title" "It's on a bridge. If its Windows was made with Guesthouse, Windows' firewall lets Remote Desktop (3389) in only from 10.0.2.2, the host on Guesthouse's own network, so it's shut from the LAN until a rule in Windows lets it in. Proxmox's console stays black after the boot. Windows+P, Duplicate, put the desktop there for one tester."
+    fi
 }
 
 # What setup-vm.sh wrote for the VM, which Guesthouse's hookscript reads. The hookscript refuses to start
@@ -691,6 +733,7 @@ check() {
     [ -n "$ROOT" ] || [ "$(id -u)" = 0 ] || die "this runs as root, as /etc/pve and the users' homes are root's to read."
     check_proxmox
     check_cluster
+    check_sources
     check_kvm
     check_cards
     check_landlock

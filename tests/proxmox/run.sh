@@ -495,6 +495,46 @@ EOF
     said "ok       VM 144: A Linux guest on AMD's native context, with virglrenderer 1.3.0-1+amd1 and AMD's part."
 }
 
+test_an_enterprise_repository_that_is_on_is_a_warning() {
+    mkdir -p "$R/etc/apt/sources.list.d"
+    printf 'Types: deb\nURIs: https://enterprise.proxmox.com/debian/pve\nSuites: trixie\nComponents: pve-enterprise\n' \
+        >"$R/etc/apt/sources.list.d/pve-enterprise.sources"
+    printf 'Types: deb\nURIs: http://deb.debian.org/debian/\nSuites: trixie\n\nTypes: deb\nURIs: https://enterprise.proxmox.com/debian/ceph-squid\nSuites: trixie\nComponents: enterprise\n' \
+        >"$R/etc/apt/sources.list.d/ceph.sources"
+    run_check
+    exit_was 0
+    said "warning  Package sources: Proxmox's enterprise repository is on, in /etc/apt/sources.list.d/ceph.sources /etc/apt/sources.list.d/pve-enterprise.sources."
+}
+
+test_an_enterprise_repository_that_is_off_is_no_matter() {
+    mkdir -p "$R/etc/apt/sources.list.d"
+    printf 'Types: deb\nURIs: https://enterprise.proxmox.com/debian/pve\nSuites: trixie\nComponents: pve-enterprise\nEnabled: no\n' \
+        >"$R/etc/apt/sources.list.d/pve-enterprise.sources"
+    printf '# deb https://enterprise.proxmox.com/debian/pve trixie pve-enterprise\n' >"$R/etc/apt/sources.list.d/old.list"
+    run_check
+    said "ok       Package sources: No enterprise repository is on."
+}
+
+test_an_enterprise_line_in_a_list_file_is_seen() {
+    mkdir -p "$R/etc/apt/sources.list.d"
+    printf 'deb https://enterprise.proxmox.com/debian/pve trixie pve-enterprise\n' >"$R/etc/apt/sources.list.d/pve-enterprise.list"
+    run_check
+    said "Proxmox's enterprise repository is on, in /etc/apt/sources.list.d/pve-enterprise.list."
+}
+
+test_a_vm_on_a_bridge_is_told_about_remote_desktop() {
+    sed -i 's/^balloon: 0$/balloon: 0\nnet0: virtio=BC:24:11:00:00:01,bridge=vmbr0/' "$R/etc/pve/qemu-server/101.conf"
+    run_check
+    exit_was 0
+    said "note     VM 101: It's on a bridge."
+    said "only from 10.0.2.2"
+}
+
+test_a_vm_without_a_bridge_is_not_told() {
+    run_check
+    not_said "It's on a bridge."
+}
+
 test_a_cluster_is_a_warning() {
     touch "$R/etc/pve/corosync.conf"
     run_check

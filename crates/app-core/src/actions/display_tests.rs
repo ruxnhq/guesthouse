@@ -492,6 +492,35 @@ fn a_driver_that_has_shown_frames_only_goes_after_two_blank_boots_in_a_row() {
 }
 
 #[test]
+fn a_build_that_takes_a_running_drivers_place_gets_a_clean_start_before_its_judged() {
+    let (rig, guest) = Rig::new().with(|context| Guest::new(context, "working", INSTALLED, true));
+    rig.say_this_build_is_in("build 1");
+    fake_package(&rig.scratch, "build 2");
+    guest.sends_frames.store(false, Ordering::Relaxed);
+    let state = rig.run(boot_display);
+    assert_eq!(guest.asked_for("take it out"), 0, "the swap may be what lost the picture");
+    assert_eq!((state.driver, state.package.as_str()), (Driver::Installed, "build 2"));
+    assert!(state.note.contains("no picture"), "{}", state.note);
+    let state = rig.run(boot_display);
+    assert_eq!(guest.asked_for("take it out"), 1, "a build that's black from a clean start goes");
+    assert_eq!(state.driver, Driver::Failed);
+}
+
+#[test]
+fn a_build_that_lost_its_picture_in_the_swap_is_kept_once_it_shows_one() {
+    let (rig, guest) = Rig::new().with(|context| Guest::new(context, "working", INSTALLED, true));
+    rig.say_this_build_is_in("build 1");
+    fake_package(&rig.scratch, "build 2");
+    guest.sends_frames.store(false, Ordering::Relaxed);
+    rig.run(boot_display);
+    guest.sends_frames.store(true, Ordering::Relaxed);
+    let state = rig.run(boot_display);
+    assert_eq!((state.driver, state.shown_frames, state.blank_boots), (Driver::Installed, true, 0));
+    assert_eq!(state.note, "");
+    assert_eq!(guest.asked_for("take it out"), 0);
+}
+
+#[test]
 fn a_stopped_gpu_is_no_reason_to_give_up_on_the_driver() {
     let (rig, guest) = Rig::new().with(|context| Guest::new(context, "working", INSTALLED, false));
     guesthouse_daemon::gpu_note::write_note(&rig.context.run_folder(None), true).unwrap();

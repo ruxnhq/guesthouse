@@ -232,6 +232,7 @@ fn install(task: &Task, package: &DriverPackage, state: &mut DisplayState, found
     state.shown_frames = false;
     state.blank_boots = 0;
     state.restart_owed = said.contains(RESTART_MARK);
+    state.swapped_in = found == Device::Working;
     // The install put the shipped settings back in Windows.
     state.offered_hz = 0;
     Ok(())
@@ -446,7 +447,10 @@ fn no_picture(
         return Ok(());
     }
     state.blank_boots += 1;
-    if !state.shown_frames || state.blank_boots >= BLANK_BOOTS_ALLOWED {
+    // A picture lost while one driver took over from another says nothing of the new one. Its next
+    // boot is its first clean start, and that one decides.
+    let never_worked = !state.shown_frames && !state.swapped_in;
+    if never_worked || state.blank_boots >= BLANK_BOOTS_ALLOWED {
         return give_up(task, state, wanted, if screen.on_driver { NO_FRAMES } else { NOT_UP });
     }
     if !screen.on_driver {
@@ -548,6 +552,7 @@ pub(super) fn set_up_display(task: &mut Task) {
         let mut state = read_state(task.context, &task.machine);
         state.running = None;
         state.restart_owed = false;
+        state.swapped_in = false;
         save(task, &state)?;
         make_sure_of_driver(task, &mut state, false)?;
         save(task, &state)?;

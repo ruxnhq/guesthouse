@@ -182,6 +182,11 @@ fn counters_add_up_what_went_through() {
     let (_, source) = receive(&forward);
     forward.send_to(&[0u8; 1200], source).unwrap();
     receive(&device);
+    // A datagram is counted once it has been sent, so the device can have it a moment before that.
+    wait_until("the counters", || {
+        let counters = relay.counters();
+        counters.up_packets == 1 && counters.down_packets == 1
+    });
     let counters = relay.counters();
     assert_eq!((counters.up_packets, counters.up_bytes), (1, 64));
     assert_eq!((counters.down_packets, counters.down_bytes), (1, 1200));

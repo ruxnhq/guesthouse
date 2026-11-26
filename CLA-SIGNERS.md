@@ -6,4 +6,6 @@ Add your own line at the end, in a pull request from your own account, in this f
 
     - Your Name, @your-github-login, 2026-01-31, version 1
 
+- Sebastian Kopp, @s3k000, 2026-11-26, version 1
+- Andre-Simon Siebert, @a17t, 2026-11-26, version 1
 - Petru Mare, @Petru101, 2026-11-26, version 1

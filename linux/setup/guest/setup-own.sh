@@ -104,14 +104,19 @@ install_hook() {
     esac
 }
 
-install_settings() {
-    install -D -m 644 "$here/files/modprobe-nvfwd.conf" "$root/etc/modprobe.d/nvfwd.conf"
-    install -D -m 644 "$here/files/70-nvfwd-own.rules" "$root/etc/udev/rules.d/70-nvfwd.rules"
+# The app's Shut Down presses the VM's power button, whichever card the guest is on.
+install_power_button() {
     install -D -m 644 "$here/files/logind-nvfwd.conf" "$root/etc/systemd/logind.conf.d/90-nvfwd.conf"
     # Plasma's power manager asks before it shuts down, unless someone has set it up already.
     if [ -e "$root/usr/lib/systemd/user/plasma-powerdevil.service" ] && [ ! -e "$root/etc/xdg/powerdevilrc" ]; then
         install -D -m 644 "$here/files/powerdevilrc" "$root/etc/xdg/powerdevilrc"
     fi
+}
+
+install_settings() {
+    install -D -m 644 "$here/files/modprobe-nvfwd.conf" "$root/etc/modprobe.d/nvfwd.conf"
+    install -D -m 644 "$here/files/70-nvfwd-own.rules" "$root/etc/udev/rules.d/70-nvfwd.rules"
+    install_power_button
     install -D -m 644 "$here/units/nvfwd-gpu.service" "$units/nvfwd-gpu.service"
     install -D -m 644 "$here/units/nvfwd-desktop-watch.service" "$units/nvfwd-desktop-watch.service"
     mkdir -p "$root/usr/local/sbin"
@@ -183,10 +188,12 @@ if [ "${1:-}" = --refresh ]; then
     kernel=$(uname -r)
     copy_scripts
     # An AMD guest has no NVIDIA driver and keeps its own units, so it takes this image's AMD scripts,
-    # units and Mesa hook, not the forwarded GPU's settings, and needs no driver image to do it.
+    # units and Mesa hook and the power button's settings, not the forwarded GPU's, and needs no driver
+    # image to do it.
     if [ -e "$units/nvfwd-amd.service" ]; then
         . "$here/amd/setup-amd.sh"
         install_mesa_hook
+        install_power_button
         install_amd_units
     else
         install_settings

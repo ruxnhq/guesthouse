@@ -25,7 +25,7 @@ Set-Location $root
 $base = 'https://files.ruxn.com/p/guesthouse'
 $bucket = 'ruxn-files'
 $prefix = 'pub/guesthouse'
-$repo = 'ruxnhq/guesthouse'
+$repo = 'ruxnlabs/guesthouse'
 
 # Runs a native program and stops if it fails.
 function Invoke-Native([string]$What, [scriptblock]$Command) {

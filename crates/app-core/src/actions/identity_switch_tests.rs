@@ -244,3 +244,70 @@ impl VmHost for StartsOnce<'_> {
         self.host.release()
     }
 }
+
+/// A start whose new VM comes up on the maker's number with no GPU: the package goes in, the VM
+/// starts again, and every check there says none is working.
+fn failing_switch() -> Vec<&'static str> {
+    let mut answers = vec![DESKTOP_UP, GPU_UP, STAGED, DESKTOP_UP];
+    answers.extend([NO_GPU; 10]);
+    answers
+}
+
+fn answer(rig: &Rig, answers: &[&str]) {
+    *rig.guest.scripted.answers.lock().unwrap() = answers.iter().map(|text| (*text).to_owned()).collect();
+}
+
+const SWITCH_THAT_WORKS: [&str; 8] =
+    [DESKTOP_UP, GPU_UP, STAGED, DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP, GPU_UP];
+
+#[test]
+fn a_gpu_missing_once_after_windows_restart_is_tried_again_at_the_next_start_and_kept() {
+    // As it went on a first start after an install: the package was in from the install, the check
+    // passed on NVIDIA's number, Windows restarted, and then no GPU was working.
+    let scratch = Scratch::new();
+    let mut answers = vec![DESKTOP_UP, GPU_UP, RESTARTED, DESKTOP_UP];
+    answers.extend([NO_GPU; 10]);
+    let rig = Rig::new(&scratch, &answers);
+    write_state(&rig.context, &rig.machine, &staged()).unwrap();
+    let host = RecordingHost::default();
+    let said = rig.boot(&host).0.unwrap_err().0;
+    assert!(said.ends_with("That start then tries NVIDIA's once more."), "{said}");
+    assert_eq!(identities(&host), [NVIDIA_RENDER]);
+    let state = rig.state();
+    assert_eq!((state.shown, state.failed_checks, state.failed_script.as_str()), (Shown::Microsoft, 1, ""));
+
+    let rig = rig.keeps_running();
+    answer(&rig, &SWITCH_THAT_WORKS);
+    let host = RecordingHost::default();
+    assert_eq!(rig.boot(&host), (Ok(()), String::new()));
+    assert_eq!(host.said()[..3], ["start gpu", STOP_BY_CHOICE, "start gpu"]);
+    assert_eq!(identities(&host), [MICROSOFT_RENDER, NVIDIA_RENDER]);
+    assert_eq!(rig.state(), IdentityState { shown: Shown::Maker, ..IdentityState::default() });
+}
+
+#[test]
+fn a_guest_with_no_gpu_on_nvidias_number_fails_two_starts_and_then_starts_on_microsofts_for_good() {
+    let scratch = Scratch::new();
+    let rig = Rig::new(&scratch, &failing_switch());
+    for _ in 0..2 {
+        answer(&rig, &failing_switch());
+        let host = RecordingHost::default();
+        assert!(rig.boot(&host).0.is_err());
+        assert_eq!(identities(&host), [MICROSOFT_RENDER, NVIDIA_RENDER]);
+    }
+    let stuck = rig.state();
+    assert!(stuck.out_of_tries() && stuck.fell_back() && !stuck.failed_script.is_empty());
+
+    let rig = rig.keeps_running();
+    for _ in 0..3 {
+        let before = rig.asked().len();
+        // Were the package staged again, this guest would take it and the start would move.
+        answer(&rig, &SWITCH_THAT_WORKS[..2]);
+        let host = RecordingHost::default();
+        assert_eq!(rig.boot(&host).0, Ok(()));
+        assert_eq!(identities(&host), [MICROSOFT_RENDER], "one VM, on the number that works");
+        assert!(!host.said().contains(&STOP_BY_CHOICE.to_owned()));
+        assert!(!rig.asked()[before..].iter().any(|script| script.ends_with("make the package")));
+        assert_eq!(rig.state(), stuck);
+    }
+}

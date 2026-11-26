@@ -9,7 +9,7 @@ pub const LATEST_URL: &str = "https://files.ruxn.com/p/guesthouse/guesthouse-win
 /// Where an installer is published. A link anywhere else in the file is never offered.
 const INSTALLERS: &str = "https://files.ruxn.com/p/guesthouse/";
 /// Where a release's notes are.
-const NOTES: &str = "https://github.com/ruxnhq/guesthouse/releases/";
+const NOTES: &str = "https://github.com/ruxnlabs/guesthouse/releases/";
 /// The longest file taken. A real one is a few hundred bytes.
 pub const LONGEST: usize = 4096;
 
@@ -74,7 +74,7 @@ mod tests {
         let text = file(
             "0.10.0",
             "https://files.ruxn.com/p/guesthouse/guesthouse-setup-0.10.0.exe",
-            "https://github.com/ruxnhq/guesthouse/releases/tag/windows-v0.10.0",
+            "https://github.com/ruxnlabs/guesthouse/releases/tag/windows-v0.10.0",
         );
         let latest = parse(&text).unwrap();
         assert_eq!(latest.version, "0.10.0");

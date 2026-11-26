@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_own_install import OwnGuest
+
 GUEST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "guest")
 RADEONSI = "AMD Radeon 610M (radeonsi, gfx1036, LLVM 20.1.2, DRM 3.64, 7.0.0)"
 VIRGL = "virgl (AMD Radeon 610M (radeonsi, gfx1036))"
@@ -118,6 +120,43 @@ class AmdUp(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.guest.said(), [], "the AMD step does the talking")
         self.assertFalse(os.path.exists(os.path.join(self.guest.root, "run/nvfwd/state")))
+
+
+class SetupOwn(unittest.TestCase):
+    """setup-own.sh from an AMD card's image, in a guest whose Mesa has native context already."""
+
+    def guest(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        guest = OwnGuest(folder.name, "fedora")
+        write(os.path.join(guest.image, "manifest"), "gpu=amd\n")
+        write(os.path.join(guest.root, "sys/firmware/qemu_fw_cfg/by_name/opt/guesthouse/amd-mode/raw"), "native")
+        write(os.path.join(guest.root, "dev/ttyS0"), "")
+        guest.fake("modprobe", "exit 0")
+        guest.fake("rpm", "echo -n 26.2.3-1.guesthouse1.fc45")
+        guest.fake("eglinfo", f"echo 'OpenGL core profile renderer: {RADEONSI}'")
+        guest.fake("vulkaninfo", "echo '    deviceName         = AMD Radeon 610M (RADV GFX1036)'; "
+                                 "echo '    driverName         = radv'")
+        return guest
+
+    def test_the_power_button_shuts_down_as_on_the_forwarded_gpu(self):
+        guest = self.guest()
+        result = guest.run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PowerKeyIgnoreInhibited=yes", guest.read("etc/systemd/logind.conf.d/90-nvfwd.conf"))
+        self.assertIn("systemctl reload systemd-logind", guest.lines("systemctl"), "it isn't told to reboot")
+        self.assertFalse(guest.exists("etc/xdg/powerdevilrc"), "no Plasma here")
+        self.assertIn("systemctl enable nvfwd-amd.service", guest.lines("systemctl"))
+        self.assertFalse(guest.exists("etc/modprobe.d/nvfwd.conf"), "the forwarded GPU's settings stay out")
+
+    def test_plasmas_power_button_shuts_down_unless_someone_set_it(self):
+        guest = self.guest()
+        write(os.path.join(guest.root, "usr/lib/systemd/user/plasma-powerdevil.service"), "")
+        self.assertEqual(guest.run().returncode, 0)
+        self.assertIn("PowerButtonAction=8", guest.read("etc/xdg/powerdevilrc"))
+        write(os.path.join(guest.root, "etc/xdg/powerdevilrc"), "mine\n")
+        self.assertEqual(guest.run().returncode, 0)
+        self.assertEqual(guest.read("etc/xdg/powerdevilrc"), "mine\n")
 
 
 class MesaHook(unittest.TestCase):

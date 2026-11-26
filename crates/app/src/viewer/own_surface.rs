@@ -901,7 +901,12 @@ impl OwnSurface {
                 self.cut_to(frame_size);
             }
         }
-        self.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        // Only the part shown is new: a buffer of shared memory is uploaded as far as it is damaged, and an
+        // app window shows one window's part of a guest screen that may be several monitors wide.
+        match self.source {
+            Some(Crop { x, y, width, height }) => self.surface.damage_buffer(x, y, width, height),
+            None => self.surface.damage_buffer(0, 0, i32::MAX, i32::MAX),
+        }
         if let Some(presentation) = &self.presentation {
             presentation.feedback(&self.surface, &handle, ());
         }

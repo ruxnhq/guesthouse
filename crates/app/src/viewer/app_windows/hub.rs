@@ -395,11 +395,14 @@ impl Hub {
             match update {
                 Update::Status(status) => self.note(&format!("the link is {status:?}")),
                 Update::Note(text) => self.note(&text),
-                Update::Answered { n, result } => {
-                    if let Err(failure) = result {
-                        self.note(&format!("request {n} failed: {failure:?}"));
+                Update::Answered { n, result } => match result {
+                    Err(failure) => self.note(&format!("request {n} failed: {failure:?}")),
+                    // What the helper would not do, as a window that keeps its size, is in the log for a report.
+                    Ok(answer) if !answer.ok => {
+                        self.note(&format!("request {n} was refused: {}", answer.error))
                     }
-                }
+                    Ok(_) => {}
+                },
                 Update::Changes(changes) => {
                     let found = {
                         let link = self.link.borrow();
@@ -592,10 +595,11 @@ fn largest_monitor_scale() -> Option<f64> {
         .map(|monitor| monitor.scale())
 }
 
-/// The largest the screen is wanted (every monitor side by side, in its own pixels, within what the
-/// driver takes) and the smallest (the monitor of the window that has the focus, or the largest, in
-/// its own pixels): a window maximized in the guest is then one monitor's worth, and Windows offers
-/// the steps it would offer on that monitor.
+/// The largest the screen may be (what the driver takes) and the smallest (the monitor of the window
+/// that has the focus, or the largest, in its own pixels), so Windows offers the steps it would offer
+/// on that monitor. The helper packs every window beside the others at its own size, and asks for no
+/// more screen than they need, so the screen outgrows the monitors only to hold more windows than fit
+/// on them: two of a monitor's size need two monitors' worth, on a PC with one.
 fn screen_bounds(focused: Option<&View>) -> Option<(Size, Size)> {
     let display = gdk::Display::default()?;
     let monitors = display.monitors();
@@ -616,11 +620,7 @@ fn screen_bounds(focused: Option<&View>) -> Option<(Size, Size)> {
     };
     let largest = all.iter().map(device).max_by_key(|size| i64::from(size.w) * i64::from(size.h))?;
     let floor = focused.and_then(|view| view.monitor()).map_or(largest, |monitor| device(&monitor));
-    let ceiling = Size {
-        w: all.iter().map(|monitor| device(monitor).w).sum::<i32>().min(LARGEST_SCREEN.w),
-        h: all.iter().map(|monitor| device(monitor).h).max().unwrap_or(floor.h).min(LARGEST_SCREEN.h),
-    };
-    Some((floor, ceiling))
+    Some((floor, LARGEST_SCREEN))
 }
 
 /// What the display driver and Windows take at the most.

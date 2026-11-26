@@ -33,6 +33,7 @@ public class AppWindows : Form
 {
     // ================================================================ Win32
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential)] struct WINDOWPLACEMENT { public int length, flags, showCmd; public int minX, minY, maxX, maxY; public RECT normal; }
     [StructLayout(LayoutKind.Sequential)] struct SIZE { public int W, H; }
 
     // Native layout: DWORD flags; RECT dest; RECT src; BYTE opacity; BOOL visible; BOOL clientOnly  (48 bytes)
@@ -78,6 +79,8 @@ public class AppWindows : Form
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowPlacement(IntPtr h, ref WINDOWPLACEMENT wp);
+    [DllImport("user32.dll")] static extern bool SetWindowPlacement(IntPtr h, ref WINDOWPLACEMENT wp);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsHungAppWindow(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
@@ -149,7 +152,7 @@ public class AppWindows : Form
     const uint SPI_GETWORKAREA = 0x30;
     const int WM_DISPLAYCHANGE = 0x7E, WM_SETTINGCHANGE = 0x1A, WM_WTSSESSION_CHANGE = 0x2B1;
     const uint WM_CLOSE = 0x10;
-    const int SW_MINIMIZE = 6, SW_RESTORE = 9;
+    const int SW_MINIMIZE = 6, SW_RESTORE = 9, SW_SHOWNOACTIVATE = 4, SW_MAXIMIZE = 3;
     const int GUI_INMOVESIZE = 2;
     const int STATE_SYSTEM_INVISIBLE = 0x8000, STATE_SYSTEM_OFFSCREEN = 0x10000;
     const int WTS_SESSION_LOCK = 7, WTS_SESSION_UNLOCK = 8;
@@ -230,6 +233,7 @@ public class AppWindows : Form
         public long MoveAt;                     // when to move a cell that outgrew its slot (0 = not pending)
         public RECT Frame, Win;                 // last known real rectangles (screen coordinates)
         public bool Cured; public int CureTries;
+        public bool WasZoomed; public int UnzoomTries; public long UnzoomAt;   // maximized when the helper took it out of that, to be put back at the end
         public bool NameDirty, LocDirty, ThumbDirty, ThumbApplied;
         public long TitleAt;
         public int CaptionH, ButtonsW;          // what Windows says of the title bar; 0 when it cannot be known
@@ -446,7 +450,9 @@ public class AppWindows : Form
             try
             {
                 IntPtr h = c.Src;
-                if (!c.HasOrig || c.Popup || !IsWindow(h) || IsIconic(h) || IsZoomed(h) || IsHungAppWindow(h)) continue;
+                if (c.Popup || !IsWindow(h) || IsIconic(h) || IsZoomed(h) || IsHungAppWindow(h)) continue;
+                if (c.WasZoomed) { ShowWindowAsync(h, SW_MAXIMIZE); continue; }
+                if (!c.HasOrig) continue;
                 SetWindowPos(h, IntPtr.Zero, c.OrigL, c.OrigT, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
             }
             catch (Exception ex) { LogError(ex); }
@@ -681,6 +687,7 @@ public class AppWindows : Form
             if (now - c.TitleAt >= TitleMs) { c.Title = TextOf(h); c.TitleAt = now; c.NameDirty = false; }
             if (!c.IdSettled) Identify(c);
             if (!c.Popup) KeepCured(c);
+            if (!c.Popup) Unzoom(c);
         }
         // Cells whose window did not qualify this time.
         foreach (Cell c in new List<Cell>(cells.Values))
@@ -1077,6 +1084,51 @@ public class AppWindows : Form
         SetWindowLongPtr(h, GWL_EXSTYLE, new IntPtr(ex | WS_EX_LAYERED));
         SetLayeredWindowAttributes(h, 0, (byte)AlphaForCure, LWA_ALPHA);
         if ((GetWindowLongPtr(h, GWL_EXSTYLE).ToInt64() & WS_EX_LAYERED) != 0) { c.Cured = true; c.CureTries++; }
+    }
+
+    // A maximized window covers the whole guest screen, which hides every other cell, takes no size the host asks for, and grows
+    // with the screen. So it comes out of that as a window like the others, a monitor's work area at most (the host's floor), and is
+    // maximized again at the end. A borderless full screen window (a game) is left alone, and so is one that goes back to maximized
+    // at once 3 times; one the user maximizes again after a while is taken out of that again.
+    void Unzoom(Cell c)
+    {
+        long now = Now();
+        if (!IsZoomed(c.Src))
+        {
+            if (c.UnzoomTries > 0 && now - c.UnzoomAt > UnzoomForgetMs) c.UnzoomTries = 0;
+            return;
+        }
+        if (desktopKind != "normal" || c.UnzoomTries >= 3 || IsHungAppWindow(c.Src)) return;
+        if ((c.Style & WS_CAPTION) != WS_CAPTION) return;
+        c.UnzoomTries++; c.UnzoomAt = now;
+        int borderW = (c.Win.R - c.Win.L) - (c.Frame.R - c.Frame.L), borderH = (c.Win.B - c.Win.T) - (c.Frame.B - c.Frame.T);
+        int w = c.Frame.R - c.Frame.L, h = c.Frame.B - c.Frame.T;
+        if (floorW > 0 && floorH > 0)
+        {
+            int taskbarW = Math.Max(0, ovW - (packR - packL)), taskbarH = Math.Max(0, ovH - (packB - packT));
+            w = Math.Min(w, floorW - taskbarW); h = Math.Min(h, floorH - taskbarH);
+        }
+        if (w < MinCellSide || h < MinCellSide) return;
+        Unmaximize(c, w + borderW, h + borderH);
+    }
+
+    const long UnzoomForgetMs = 5000;
+
+    // Takes a maximized window out of that, at an outer size of w x h, without the focus. Its place is the helper's to set, as for any.
+    bool Unmaximize(Cell c, int w, int h)
+    {
+        WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+        wp.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+        if (!GetWindowPlacement(c.Src, ref wp)) return false;
+        wp.normal.R = wp.normal.L + w; wp.normal.B = wp.normal.T + h;
+        wp.showCmd = SW_SHOWNOACTIVATE;
+        wp.flags = 0;
+        if (!SetWindowPlacement(c.Src, ref wp)) return false;
+        // Some windows come back at a size they keep themselves (WinForms does, measured), so the size is set again.
+        SetWindowPos(c.Src, IntPtr.Zero, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        c.WasZoomed = true;
+        c.MoveAt = Now() + 1;
+        return true;
     }
 
     // Called on each scan: sets the cure on windows that qualified late, and again where an app cleared it (at most 3 times).
@@ -1737,13 +1789,15 @@ public class AppWindows : Form
             case "resize":
                 p.W = (int)Num(r, "w", 0); p.H = (int)Num(r, "h", 0);
                 if (c.Popup || (c.Style & WS_THICKFRAME) == 0) { Answer(link, n, false, "this window cannot be resized"); return; }
-                if (c.Iconic || IsZoomed(c.Src)) { Answer(link, n, false, "a minimized or maximized window cannot be resized"); return; }
+                if (c.Iconic) { Answer(link, n, false, "a minimized window cannot be resized"); return; }
                 if (p.W < MinCellSide || p.H < MinCellSide) { Answer(link, n, false, "the size is too small"); return; }
                 p.W = Math.Min(p.W, ovW); p.H = Math.Min(p.H, ovH);
                 p.Deadline = now + ResizeWaitMs;
                 // Windows' size includes the invisible border around the frame.
-                SetWindowPos(c.Src, IntPtr.Zero, 0, 0, p.W + (c.Win.R - c.Win.L) - (c.Frame.R - c.Frame.L), p.H + (c.Win.B - c.Win.T) - (c.Frame.B - c.Frame.T),
-                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+                int outerW = p.W + (c.Win.R - c.Win.L) - (c.Frame.R - c.Frame.L), outerH = p.H + (c.Win.B - c.Win.T) - (c.Frame.B - c.Frame.T);
+                // A maximized window takes no size: it comes out of that at the size asked for. A tiling desktop asks for one at once.
+                if (IsZoomed(c.Src)) { if (!Unmaximize(c, outerW, outerH)) { Answer(link, n, false, "the maximized window could not be restored"); return; } }
+                else SetWindowPos(c.Src, IntPtr.Zero, 0, 0, outerW, outerH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
                 // Its cell is placed anew at once, not after the wait a user's drag gets.
                 c.MoveAt = now + 1;
                 break;

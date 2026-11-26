@@ -21,7 +21,7 @@ pub const CREATED: u16 = 201;
 /// How many hex digits a report's ID has.
 pub const ID_LENGTH: usize = 10;
 /// Where new issues are opened, with the report's ID in them.
-pub const NEW_ISSUE: &str = "https://github.com/ruxnhq/guesthouse/issues/new";
+pub const NEW_ISSUE: &str = "https://github.com/ruxnlabs/guesthouse/issues/new";
 
 /// The address a report is sent to.
 pub fn report_address() -> String {

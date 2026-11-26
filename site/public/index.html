@@ -174,7 +174,7 @@
       <a href="#how">How it works</a>
       <a href="#cards">Cards</a>
       <a href="#download">Download</a>
-      <a href="https://github.com/ruxnhq/guesthouse">Source</a>
+      <a href="https://github.com/ruxnlabs/guesthouse">Source</a>
     </nav>
     <a class="button primary" href="#download">Download</a>
   </div>
@@ -263,12 +263,12 @@
         <article class="card">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>
           <h3>Android guests <small>Preview</small></h3>
-          <p>Android 17 on Linux hosts, on the real card: OpenGL ES and Vulkan, on NVIDIA, AMD and Intel. Play services through microG if you want them, and apps built only for ARM phones run. <a href="https://github.com/ruxnhq/guesthouse/blob/main/docs/android.md">More</a></p>
+          <p>Android 17 on Linux hosts, on the real card: OpenGL ES and Vulkan, on NVIDIA, AMD and Intel. Play services through microG if you want them, and apps built only for ARM phones run. <a href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/android.md">More</a></p>
         </article>
         <article class="card">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4.5" width="16" height="11" rx="1.5"/><path d="M2 19.5h20"/></svg>
           <h3>macOS guests <small>Preview</small></h3>
-          <p>macOS Tahoe on Linux hosts, drawn with Metal on your card through reims-vgpu, on NVIDIA and AMD. Apple's installer comes from Apple. <a href="https://github.com/ruxnhq/guesthouse/blob/main/docs/macos.md">More</a></p>
+          <p>macOS Tahoe on Linux hosts, drawn with Metal on your card through reims-vgpu, on NVIDIA and AMD. Apple's installer comes from Apple. <a href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/macos.md">More</a></p>
         </article>
         <article class="card">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2.5"/><path d="M8 21h8M12 17v4M9 10.5l2 2 4-4"/></svg>
@@ -315,7 +315,7 @@
           <li>Each program in a guest gets its own GPU page tables, and can't read another's memory.</li>
           <li>On Linux, QEMU and the daemon are jailed with Landlock and seccomp, and the daemon checks everything a guest sends.</li>
         </ul>
-        <a class="more" href="https://github.com/ruxnhq/guesthouse/blob/main/ARCHITECTURE.md">Read the architecture →</a>
+        <a class="more" href="https://github.com/ruxnlabs/guesthouse/blob/main/ARCHITECTURE.md">Read the architecture →</a>
       </div>
       <div class="stack" role="img" aria-label="Inside the Windows guest: your app and the vendor's driver. They talk over VMBus to Guesthouse's daemon on the Linux host, which runs their work on the card through the host's GPU driver.">
         <div class="side">
@@ -373,12 +373,12 @@
         <article class="platform">
           <header><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c-2.2 0-3.4 1.9-3.4 4.4 0 1.6-.6 2.6-1.6 4-1.3 1.8-2.5 3.8-2.5 6.1 0 .9.4 1.6 1.2 1.9M12 3c2.2 0 3.4 1.9 3.4 4.4 0 1.6.6 2.6 1.6 4 1.3 1.8 2.5 3.8 2.5 6.1 0 .9-.4 1.6-1.2 1.9"/><path d="M8.5 20.5c1-1 2.2-1.5 3.5-1.5s2.5.5 3.5 1.5"/><circle cx="10.5" cy="7.5" r=".6" fill="currentColor"/><circle cx="13.5" cy="7.5" r=".6" fill="currentColor"/></svg><h3>Linux</h3></header>
           <p class="req">x86_64 Linux with KVM. For the GPU: an NVIDIA card with the open kernel modules, or an AMD card on amdgpu, or as an experiment an Intel Arc on xe. Without one it still installs, for plain virtual machines.</p>
-          <div class="cmd">curl -fsSL https://raw.githubusercontent.com/ruxnhq/guesthouse/main/install.sh | sh</div>
+          <div class="cmd">curl -fsSL https://raw.githubusercontent.com/ruxnlabs/guesthouse/main/install.sh | sh</div>
           <div class="files">
             <a class="file" href="https://files.ruxn.com/p/guesthouse/guesthouse-installer-0.10.0.AppImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="name">Installer 0.9.0</span><span class="meta">AppImage · 164 MB</span></a>
-            <a class="file" href="https://github.com/ruxnhq/guesthouse/blob/main/docs/install.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">What the script does</span><span class="meta">Step by step</span></a>
-            <a class="file" href="https://github.com/ruxnhq/guesthouse/releases/tag/v0.10.0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="name">Release 0.9.0</span><span class="meta">x86_64 · 109 MB</span></a>
-            <a class="file" href="https://github.com/ruxnhq/guesthouse/blob/main/docs/nixos.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">NixOS</span><span class="meta">Flake</span></a>
+            <a class="file" href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/install.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">What the script does</span><span class="meta">Step by step</span></a>
+            <a class="file" href="https://github.com/ruxnlabs/guesthouse/releases/tag/v0.10.0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="name">Release 0.9.0</span><span class="meta">x86_64 · 109 MB</span></a>
+            <a class="file" href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/nixos.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">NixOS</span><span class="meta">Flake</span></a>
           </div>
           <p class="sums">The script is meant to be read before you run it. The AppImage shows the same plan in a window and does the same install. SHA-256: <a href="https://files.ruxn.com/p/guesthouse/guesthouse-installer-0.10.0.AppImage.sha256">AppImage</a>.</p>
         </article>
@@ -398,7 +398,7 @@
         <p>The biggest gap is how few cards have run Guesthouse. Run it on yours and say how it went, in the issues or on Discord.</p>
         <div class="actions">
           <a class="button primary" href="https://discord.gg/rN3VARayZV">Join the Discord</a>
-          <a class="button ghost" href="https://github.com/ruxnhq/guesthouse/issues">Open an issue</a>
+          <a class="button ghost" href="https://github.com/ruxnlabs/guesthouse/issues">Open an issue</a>
         </div>
       </div>
     </div>
@@ -408,7 +408,7 @@
 <footer class="foot">
   <div class="wrap">
     <a class="brand" href="/"><img src="/icon.svg" alt="">Guesthouse</a>
-    <span>© 2026 RUXN LLC and contributors · Free software, <a href="https://github.com/ruxnhq/guesthouse/blob/main/LICENSE">GPL-2.0-or-later</a> · <a href="https://github.com/ruxnhq/guesthouse">Source on GitHub</a></span>
+    <span>© 2026 RUXN LLC and contributors · Free software, <a href="https://github.com/ruxnlabs/guesthouse/blob/main/LICENSE">GPL-2.0-or-later</a> · <a href="https://github.com/ruxnlabs/guesthouse">Source on GitHub</a></span>
     <span class="right"><a href="https://discord.gg/rN3VARayZV">Discord</a> · <a href="mailto:x@ruxn.com">x@ruxn.com</a></span>
     <span class="marks">A RUXN LLC project, not made, endorsed or supported by NVIDIA, AMD, Intel, Microsoft, Apple, Google, the LineageOS project or Canonical. NVIDIA, GeForce and CUDA are trademarks of NVIDIA Corporation. AMD and Radeon are trademarks of Advanced Micro Devices, Inc. Intel and Arc are trademarks of Intel Corporation. Microsoft, Windows and Direct3D are trademarks of the Microsoft group of companies. Apple and macOS are trademarks of Apple Inc. Google, Android and Google Play are trademarks of Google LLC. LineageOS is a trademark of LineageOS. Ubuntu is a trademark of Canonical Ltd. Linux is the registered trademark of Linus Torvalds. Vulkan and OpenGL ES are trademarks of the Khronos Group Inc. Other names are trademarks of their owners.</span>
   </div>

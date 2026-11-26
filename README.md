@@ -11,10 +11,10 @@ with the card maker's own driver inside. Nothing is passed through, and your des
 
 [![Website](https://img.shields.io/badge/website-guesthouse.ruxn.com-6d5dfc?style=flat-square)](https://guesthouse.ruxn.com)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/rN3VARayZV)
-[![Release](https://img.shields.io/github/v/release/ruxnhq/guesthouse?style=flat-square&label=linux&color=2ea043)](https://github.com/ruxnhq/guesthouse/releases/latest)
+[![Release](https://img.shields.io/github/v/release/ruxnlabs/guesthouse?style=flat-square&label=linux&color=2ea043)](https://github.com/ruxnlabs/guesthouse/releases/latest)
 [![Windows](https://img.shields.io/badge/windows%2011-preview-0078D4?style=flat-square)](https://guesthouse.ruxn.com/#download)
-[![Checks](https://img.shields.io/github/actions/workflow/status/ruxnhq/guesthouse/checks.yml?branch=main&style=flat-square&label=checks)](https://github.com/ruxnhq/guesthouse/actions/workflows/checks.yml)
-[![Licence](https://img.shields.io/github/license/ruxnhq/guesthouse?style=flat-square&color=555)](LICENSE)
+[![Checks](https://img.shields.io/github/actions/workflow/status/ruxnlabs/guesthouse/checks.yml?branch=main&style=flat-square&label=checks)](https://github.com/ruxnlabs/guesthouse/actions/workflows/checks.yml)
+[![Licence](https://img.shields.io/github/license/ruxnlabs/guesthouse?style=flat-square&color=555)](LICENSE)
 
 **[Website](https://guesthouse.ruxn.com)** · **[Download](https://guesthouse.ruxn.com/#download)** · **[Cards](https://guesthouse.ruxn.com/#cards)** · **[How it works](ARCHITECTURE.md)** · **[Discord](https://discord.gg/rN3VARayZV)**
 
@@ -45,10 +45,10 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 **Linux** · x86_64 with KVM
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ruxnhq/guesthouse/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ruxnlabs/guesthouse/main/install.sh | sh
 ```
 
-The script is meant to be read first, and [what it does](docs/install.md) is written out step by step. Or download the AppImage from the [latest release](https://github.com/ruxnhq/guesthouse/releases/latest) and open it: it shows the same plan in a window, and does the same install. On NixOS there's a [flake](docs/nixos.md).
+The script is meant to be read first, and [what it does](docs/install.md) is written out step by step. Or download the AppImage from the [latest release](https://github.com/ruxnlabs/guesthouse/releases/latest) and open it: it shows the same plan in a window, and does the same install. On NixOS there's a [flake](docs/nixos.md).
 
 **Windows 11** · Home or Pro, x64
 
@@ -75,7 +75,7 @@ Programs in a VM can't read each other's memory, and the guest only ever talks t
 
 In the app, choose **Show Log** in the menu and press **Send Report**. If the app won't open, `guesthouse-report` does the same from a terminal. Nothing is sent until you say so. [What a report holds, and where it goes](docs/reporting.md).
 
-Questions and chat are on [Discord](https://discord.gg/rN3VARayZV). Bugs go in the [issues](https://github.com/ruxnhq/guesthouse/issues), so they don't get lost.
+Questions and chat are on [Discord](https://discord.gg/rN3VARayZV). Bugs go in the [issues](https://github.com/ruxnlabs/guesthouse/issues), so they don't get lost.
 
 ## Working on it
 

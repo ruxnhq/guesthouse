@@ -10,3 +10,4 @@ Add your own line at the end, in a pull request from your own account, in this f
 - Andre-Simon Siebert, @a17t, 2026-11-26, version 1
 - Petru Mare, @Petru101, 2026-11-26, version 1
 - Jason Stoltz, @svgop, 2026-11-26, version 1
+- Gabriel Evangelista, @alcgabriel, 2026-11-26, version 1

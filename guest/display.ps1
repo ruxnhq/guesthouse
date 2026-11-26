@@ -15,9 +15,12 @@ public class Disp {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool EnumDisplayDevices(string d, uint i, ref DD dd, uint f);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool EnumDisplaySettings(string d, int mode, ref DM dm);
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 '@
 Add-Type $src
+# Without this Windows answers in scaled units, and a 3840x2160 desktop at 150% reads as 2560x1440.
+[Disp]::SetProcessDPIAware() | Out-Null
 $out = @()
 $out += "session $((Get-Process -Id $PID).SessionId) user $env:USERNAME screen $([Disp]::GetSystemMetrics(0))x$([Disp]::GetSystemMetrics(1)) monitors $([Disp]::GetSystemMetrics(80))"
 for ($i = 0; $i -lt 12; $i++) {

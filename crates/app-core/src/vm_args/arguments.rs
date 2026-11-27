@@ -123,13 +123,27 @@ impl VmPlan {
             &self.in_run_folder("qemu.log"),
             "-drive",
             &format!(
-                "if=none,id=hd0,file={},format=qcow2,cache=unsafe,discard=unmap",
-                qemu_value(&self.disk)
+                "if=none,id=hd0,file={},format=qcow2,cache={},discard=unmap",
+                qemu_value(&self.disk),
+                self.disk_cache()
             ),
             "-device",
             if self.nvme { NVME_DISK } else { SATA_DISK },
         ]));
         arguments
+    }
+
+    /// How QEMU caches the disk. `writeback` passes the guest's flushes on to the host's disk, so
+    /// what Windows was told is written survives a power cut or a panic of the host. `unsafe` drops
+    /// them, which only suits a disk nothing is kept from: Windows setup, which flushes a lot and is
+    /// started over on a new disk if it is cut short, and a throwaway run's overlay, which goes when
+    /// the run ends.
+    pub(super) fn disk_cache(&self) -> &'static str {
+        if matches!(self.boot, Boot::Install { .. }) || self.throwaway.is_some() {
+            "unsafe"
+        } else {
+            "writeback"
+        }
     }
 
     /// The plain screen, or for a Linux on an AMD card, the GL screen in its place.

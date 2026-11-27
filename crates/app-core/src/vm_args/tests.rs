@@ -596,3 +596,29 @@ fn a_machine_that_is_not_windows_has_no_remote_view_forward() {
     assert_eq!(plan.remote_view_port, None);
     assert!(!plan.qemu_arguments().join(" ").contains("7791"));
 }
+
+fn disk_drive(plan: &VmPlan) -> String {
+    plan.qemu_arguments().into_iter().find(|word| word.starts_with("if=none,id=hd0,")).unwrap()
+}
+
+/// A machine in use keeps the guest's flushes, so a power cut of the host can't leave NTFS or the
+/// qcow2 damaged. Only a disk nothing is kept from drops them: Windows setup, and a throwaway run.
+#[test]
+fn only_a_disk_nothing_is_kept_from_drops_the_guests_flushes() {
+    for (machine, boot) in [(windows(), Boot::Gpu), (plain_machine(), plain_boot())] {
+        let (_scratch, plan) = plan(&machine, boot);
+        assert!(disk_drive(&plan).contains(",cache=writeback,"), "{}", disk_drive(&plan));
+    }
+    let install = Boot::Install { iso: "/iso/w.iso".into(), answer: "/m/answer.iso".into() };
+    let (_scratch, setup) = plan(&Machine { installing: true, ..windows() }, install);
+    assert!(disk_drive(&setup).contains(",cache=unsafe,"), "{}", disk_drive(&setup));
+    for (machine, boot) in [(windows(), Boot::Gpu), (plain_machine(), plain_boot())] {
+        let (_scratch, plan) = plan(&Machine { throwaway: true, ..machine.clone() }, boot);
+        let run = VmPlan { throwaway: Some(machine.disk.clone()), disk: throwaway_disk(), ..plan };
+        assert!(
+            disk_drive(&run).contains("file=/dev/fdset/50,format=qcow2,cache=unsafe,"),
+            "{}",
+            disk_drive(&run)
+        );
+    }
+}

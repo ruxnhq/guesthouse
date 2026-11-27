@@ -57,7 +57,7 @@ file:/x/run/serial.log
 -D
 /x/run/qemu.log
 -drive
-if=none,id=hd0,file=/m/disk.qcow2,format=qcow2,cache=unsafe,discard=unmap
+if=none,id=hd0,file=/m/disk.qcow2,format=qcow2,cache=writeback,discard=unmap
 -device
 ide-hd,bus=ahci.0,drive=hd0,bootindex=1
 -drive

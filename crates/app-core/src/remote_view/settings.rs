@@ -18,10 +18,11 @@ const IDLE_SECONDS: &str = "--idle-seconds";
 const MAX_CLIENTS: &str = "--max-clients";
 const NAME: &str = "--name";
 const FINGERPRINT: &str = "--fingerprint";
+const HOLD_CLOCKS: &str = "--hold-clocks";
 
 pub const USAGE: &str = "guesthouse-remote-view MACHINE --run-folder DIR --loopback-port PORT \
 [--listen ADDRESS:PORT] [--qemu PID:START] [--idle-seconds N] [--max-clients N] [--name NAME] \
-[--fingerprint HEX]";
+[--fingerprint HEX] [--hold-clocks PCI]";
 
 /// A process as `/proc` knows it: its pid, and the time it started in the kernel's ticks, so that a
 /// pid given to something else later is not taken for it.
@@ -69,6 +70,9 @@ pub struct Settings {
     pub name: Option<String>,
     /// The guest host's fingerprint. Nothing is announced until it is known.
     pub fingerprint: Option<String>,
+    /// The NVIDIA card whose memory clock is held up while a viewer streams, by its PCI address.
+    /// Left out, nothing is held.
+    pub hold_clocks: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -108,6 +112,7 @@ impl Settings {
             max_clients: None,
             name: None,
             fingerprint: None,
+            hold_clocks: None,
         })
     }
 
@@ -132,6 +137,9 @@ impl Settings {
         if let Some(fingerprint) = &self.fingerprint {
             words.extend([FINGERPRINT.to_owned(), fingerprint.clone()]);
         }
+        if let Some(card) = &self.hold_clocks {
+            words.extend([HOLD_CLOCKS.to_owned(), card.clone()]);
+        }
         words
     }
 
@@ -142,7 +150,7 @@ impl Settings {
             words.next().filter(|word| !word.starts_with("--")).ok_or_else(|| missing("MACHINE"))?;
         let (mut run_folder, mut loopback_port, mut listen) = (None, None, None);
         let (mut qemu, mut idle_timeout, mut max_clients) = (None, None, None);
-        let (mut name, mut fingerprint) = (None, None);
+        let (mut name, mut fingerprint, mut hold_clocks) = (None, None, None);
         while let Some(flag) = words.next() {
             let value = words.next().ok_or_else(|| UsageError(format!("{flag} needs a value")))?;
             let bad = || UsageError(format!("{flag} cannot be {value:?}"));
@@ -155,6 +163,7 @@ impl Settings {
                 MAX_CLIENTS => max_clients = Some(value.parse().map_err(|_| bad())?),
                 NAME => name = Some(value),
                 FINGERPRINT => fingerprint = Some(value),
+                HOLD_CLOCKS => hold_clocks = Some(value),
                 _ => return Err(UsageError(format!("unknown argument {flag}"))),
             }
         }
@@ -168,6 +177,7 @@ impl Settings {
             max_clients,
             name,
             fingerprint,
+            hold_clocks,
         })
     }
 }
@@ -193,6 +203,7 @@ mod tests {
             max_clients: Some(8),
             name: Some("Windows 11".into()),
             fingerprint: Some("ab".repeat(32)),
+            hold_clocks: Some("0000:01:00.0".into()),
         }
     }
 
@@ -207,6 +218,7 @@ mod tests {
             max_clients: None,
             name: None,
             fingerprint: None,
+            hold_clocks: None,
             ..full()
         };
         assert_eq!(Settings::parse(bare.arguments()), Ok(bare));

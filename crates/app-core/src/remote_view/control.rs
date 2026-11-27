@@ -43,6 +43,12 @@ pub enum Request {
     },
     /// Stops listening on the network, with the machine and the program still running.
     Close,
+    /// Holds this NVIDIA card's memory clock up while a viewer streams, by its PCI address, or with
+    /// none holds nothing from now on: the machine's setting, changed while it runs.
+    StreamClocks {
+        #[serde(default)]
+        card: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +207,14 @@ mod tests {
         let text = |request: &Request| serde_json::to_string(request).unwrap();
         assert_eq!(text(&Request::Status), r#"{"op":"status"}"#);
         assert_eq!(text(&Request::Close), r#"{"op":"close"}"#);
+        assert_eq!(
+            text(&Request::StreamClocks { card: Some("0000:01:00.0".into()) }),
+            r#"{"op":"stream_clocks","card":"0000:01:00.0"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"op":"stream_clocks"}"#).unwrap(),
+            Request::StreamClocks { card: None }
+        );
         assert_eq!(
             text(&Request::Open {
                 address: Some("0.0.0.0".parse().unwrap()),

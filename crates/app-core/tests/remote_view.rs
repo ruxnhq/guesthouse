@@ -64,6 +64,7 @@ fn start(name: &str, loopback_port: u16, listen: Option<&str>) -> Run {
         max_clients: None,
         name: None,
         fingerprint: None,
+        hold_clocks: None,
     };
     let program = program(&settings);
     let run = Run { folder, program, qemu };
@@ -166,6 +167,7 @@ fn a_second_program_for_the_same_run_folder_refuses_and_leaves_the_first_alone()
         max_clients: None,
         name: None,
         fingerprint: None,
+        hold_clocks: None,
     };
     let mut second = program(&settings);
     assert!(!wait_for_exit(&mut second).success());

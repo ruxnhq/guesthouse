@@ -230,6 +230,7 @@ pub fn open_helper(
         let mut settings = Settings::for_machine(context, &machine.id, slot, Some(listen))?;
         settings.name = Some(machine.name.clone());
         settings.fingerprint = fingerprint;
+        settings.hold_clocks = clock_card(context, machine, true);
         children().push(start(context, slot, &settings)?);
         return Ok(());
     }
@@ -244,6 +245,49 @@ pub fn open_helper(
         Ok(super::RelayReply::Error(reason)) => Err(Failure(reason)),
         Err(error) => Err(Failure(format!("The remote view helper did not answer: {error}"))),
     }
+}
+
+/// The NVIDIA card whose memory clock is held while a viewer streams the machine's screen, if the
+/// machine's setting has it held. `say` writes one line in the log when it isn't, and why.
+fn clock_card(context: &Context, machine: &Machine, say: bool) -> Option<String> {
+    let reason = if machine.windows_maker() != Some(GpuMaker::Nvidia) {
+        "the machine's card isn't NVIDIA's, so its clocks are left alone."
+    } else if !machine.stream_clocks() {
+        "turned off for this machine."
+    } else {
+        let card = crate::screen_gpu::machine_card(context, machine);
+        if !card.is_empty() {
+            return Some(card);
+        }
+        "the machine's NVIDIA card can't be found, so its clocks are left alone."
+    };
+    if say {
+        let _ = write_log(context, &format!("remote view: stream clocks: {reason}"));
+    }
+    None
+}
+
+/// After the machine's remote view has ended. Its clock helper ended with it and put the card's
+/// clock back; were both killed, this puts it back. A clock somebody locked by hand, or one another
+/// machine on the card still holds, stays.
+pub fn sweep_clocks(context: &Context, machine: &Machine) {
+    if machine.windows_maker() != Some(GpuMaker::Nvidia) {
+        return;
+    }
+    let card = crate::screen_gpu::machine_card(context, machine);
+    if !card.is_empty() {
+        super::sweep(super::clock_helper().as_deref(), &card);
+    }
+}
+
+/// The machine's stream clocks setting changed: a running machine's helper holds or lets go at once.
+pub fn stream_clocks_changed(context: &Context, machine: &Machine) {
+    let Some(slot) = running_slot(context, machine) else { return };
+    if pid(context, Some(slot)).is_none() {
+        return;
+    }
+    let card = clock_card(context, machine, false);
+    let _ = super::ask(&context.run_folder(Some(slot)), &Request::StreamClocks { card });
 }
 
 /// Closes the helper's network side, leaving it ready to open again while the machine runs.
@@ -577,6 +621,7 @@ pub fn quitting(context: &Context) {
 /// The machine stopped: its helper ends, and what was read of it goes.
 pub fn stopped(context: &Context, machine: &Machine, slot: Option<Slot>) {
     end(context, slot);
+    sweep_clocks(context, machine);
     sessions().remove(&machine.id);
 }
 

@@ -135,6 +135,7 @@ fn machine_from(
         window_speed_off: carried.window_speed_off,
         file_drop_off: carried.file_drop_off,
         nvapi_wrapper_off: carried.nvapi_wrapper_off,
+        stream_clocks_off: carried.stream_clocks_off,
         nvme: carried.nvme,
         opencore,
         android_data,

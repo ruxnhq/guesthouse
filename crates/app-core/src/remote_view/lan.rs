@@ -183,6 +183,8 @@ impl Lan {
                 }
             }
             Request::Close => self.close(),
+            // The card's clock is the program's loop's, which takes this before it comes here.
+            Request::StreamClocks { .. } => {}
         }
         RelayReply::Status(self.status())
     }
@@ -212,6 +214,7 @@ mod tests {
             max_clients: None,
             name: None,
             fingerprint: None,
+            hold_clocks: None,
         }
     }
 

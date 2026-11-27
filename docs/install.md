@@ -32,7 +32,7 @@ It never installs or changes a GPU driver, kernel arguments or services. On an i
 
 ## Packages
 
-There are signed repositories for Debian and Ubuntu, Fedora and Arch on pkg.ruxn.com. A package holds the same release `install.sh` installs, from the same file, checked against the same hash. One key signs all three. Its fingerprint is `<fingerprint>`, and its public half is in this repo too, as [`packaging/packages/ruxn-pkg.asc`](../packaging/packages/ruxn-pkg.asc).
+There are signed repositories for Debian and Ubuntu, Fedora and Arch on pkg.ruxn.com. A package holds the same release `install.sh` installs, from the same file, checked against the same hash. One key signs all three. Its fingerprint is `80BE19F31995110352B875E22425E7C41C3ACA45`, and its public half is in this repo too, as [`packaging/packages/ruxn-pkg.asc`](../packaging/packages/ruxn-pkg.asc).
 
 Debian 13, and Ubuntu 24.04 or newer:
 
@@ -59,7 +59,7 @@ Arch:
 
 ```sh
 curl -fsSL https://pkg.ruxn.com/ruxn-pkg.asc | sudo pacman-key --add -
-sudo pacman-key --lsign-key <fingerprint>
+sudo pacman-key --lsign-key 80BE19F31995110352B875E22425E7C41C3ACA45
 printf '%s\n' '' '[guesthouse]' 'SigLevel = Required' 'Server = https://pkg.ruxn.com/guesthouse/arch/$arch' |
   sudo tee -a /etc/pacman.conf >/dev/null
 sudo pacman -Syu guesthouse

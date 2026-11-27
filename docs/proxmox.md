@@ -36,7 +36,7 @@ For a VM without `vmbus-bridge` the six commits change nothing that runs. In `vm
 
 ## The repository
 
-The package is also in a signed apt repository, so there's nothing to build. It has two suites. `testing` gets a new build the night Proxmox puts out a new `pve-qemu-kvm`, so Proxmox's fixes aren't held back for long. A build reaches `stable` only after it has run with a GPU-PV VM on a real card. Each package has a build attestation, so `gh attestation verify FILE --repo ruxnlabs/guesthouse` checks it came from this repo's workflow. The key is the one Guesthouse's own packages use, with the fingerprint `<fingerprint>`, and its public half is in this repo as [`packaging/packages/ruxn-pkg.asc`](../packaging/packages/ruxn-pkg.asc).
+The package is also in a signed apt repository, so there's nothing to build. It has two suites. `testing` gets a new build the night Proxmox puts out a new `pve-qemu-kvm`, so Proxmox's fixes aren't held back for long. A build reaches `stable` only after it has run with a GPU-PV VM on a real card. Each package has a build attestation, so `gh attestation verify FILE --repo ruxnlabs/guesthouse` checks it came from this repo's workflow. The key is the one Guesthouse's own packages use, with the fingerprint `80BE19F31995110352B875E22425E7C41C3ACA45`, and its public half is in this repo as [`packaging/packages/ruxn-pkg.asc`](../packaging/packages/ruxn-pkg.asc).
 
 As root on the host, for `stable`:
 

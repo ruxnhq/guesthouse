@@ -461,3 +461,5 @@ pub fn pretend(info: &ShareInfo, ask: &Ask, now_ms: u64) -> Result<ShareInfo, St
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_words;

@@ -303,8 +303,12 @@ fn start_gpu_vm(task: &mut Task) -> Result<PciIdentity> {
 }
 
 fn start_gpu_vm_once(task: &mut Task) -> Result<PciIdentity> {
-    // What the last VM's wait found is about a Windows that's gone.
+    // What the last VM's wait found is about a Windows that's gone. So is the count of boots its
+    // desktop was set up on: the new VM's serial log counts from none, and the start notes the boot
+    // it sets up. Left there, a restart this start makes before anyone signs in would count as one
+    // nobody set up, and the wait for sign-in would end at once.
     task.desktop_owed = false;
+    let _ = std::fs::remove_file(task.run_file(desktop::BOOTS_FILE));
     let machine = task.machine_this_run();
     let plan = plan_for(task.context, &machine, Boot::Gpu);
     let started = task.host.start(&plan, &machine);

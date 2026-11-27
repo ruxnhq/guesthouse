@@ -258,3 +258,32 @@ fn no_task_in_the_user_s_session_opens_a_window() {
         }
     }
 }
+
+/// A window that fills the screen leaves no free spot beside it, and a menu, a drop-down or a tip of it is
+/// then shown where it really is over the window, not left out (Word's galleries were). A dialog with no room
+/// goes there too, not over its program's window, a dialog's own drop-down (an unowned tool window) is a
+/// popup of its program, and the focus for a window a dialog has disabled goes to the dialog.
+#[test]
+fn the_app_windows_helper_shows_popups_and_dialogs_of_a_window_that_fills_the_screen() {
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(helper.contains("if (c.Popup || c.Owner != IntPtr.Zero) { if (PlaceOnSite(c)) return; }"));
+    assert!(
+        helper.contains("if (vx + b.X != b.Frame.L || vy + b.Y != b.Frame.T) continue;"),
+        "over a parked window only"
+    );
+    assert!(helper.contains("(b.Pid != c.Pid && b.AppPid != c.Pid)"), "of its own program only");
+    assert!(helper.contains(
+        "if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c))) c.Placed = false;"
+    ));
+    assert!(helper.contains("o.OnSite ||"), "a cell on site takes no space of its own");
+    assert!(helper.contains("if (stray && (caption || (st & WS_POPUP) == 0)) return null;"));
+    assert!(helper.contains("if (c.Stray && b.Pid != c.Pid && b.AppPid != c.Pid) continue;"));
+    assert!(
+        helper.contains("if (cells.TryGetValue(o, out oc) && oc.Active) root = o;"),
+        "an owner with no cell is passed over"
+    );
+    assert!(helper.contains("else if (m.Msg == WM_SETTINGCHANGE) OnWorkAreaChange();"));
+    assert!(helper.contains("p.Win = FocusTarget(c.Src);"));
+    assert!(helper.contains("GetWindow(h, GW_ENABLEDPOPUP)"));
+    assert!(helper.contains("sb.Append(\",\\\"owner\\\":\\\"\")"), "the layout says a dialog's owner");
+}

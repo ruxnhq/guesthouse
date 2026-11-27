@@ -18,6 +18,7 @@ fn window(id: &str, title: &str) -> Cell {
         frame: rect(0, 0, 400, 300),
         popup: false,
         parent: String::new(),
+        owner: String::new(),
         rel: Point::default(),
         state: State::Shown,
         overflow: false,

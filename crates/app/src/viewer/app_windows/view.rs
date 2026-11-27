@@ -245,6 +245,18 @@ impl View {
         self.frame.set_can_target(on);
     }
 
+    /// Keeps this window over `owner`'s, as a dialog over its program's window, or lets it go.
+    pub fn keep_over(&self, owner: Option<&View>) {
+        let Host::Window(window) = &self.host else { return };
+        let owner = owner.and_then(|owner| match &owner.host {
+            Host::Window(owner) => Some(owner),
+            Host::Popup(_) => None,
+        });
+        if window.transient_for().as_ref() != owner {
+            window.set_transient_for(owner);
+        }
+    }
+
     /// Gives the host window the focus.
     pub fn bring_forward(&self) {
         if let Host::Window(window) = &self.host {

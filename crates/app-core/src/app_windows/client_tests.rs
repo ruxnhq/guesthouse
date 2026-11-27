@@ -76,6 +76,7 @@ fn cell(id: &str, popup_of: Option<&str>) -> Cell {
         frame: rect(0, 0, 300, 200),
         popup: popup_of.is_some(),
         parent: popup_of.unwrap_or_default().into(),
+        owner: String::new(),
         rel: Point { x: 4, y: 30 },
         state: State::Shown,
         overflow: false,

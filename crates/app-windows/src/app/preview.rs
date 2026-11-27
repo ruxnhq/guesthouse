@@ -26,11 +26,13 @@
 //! turning it on up), `net-ask` (the question before it's turned on), `net-turning`, `net-failed`,
 //! `net-restart`, `net-restart-ask` (the question before Windows restarts), `net-home` (Windows
 //! Home), `net-firmware`, `net-unknown` and `net-older` (a service from before it said), and
-//! `home-restart` is Home waiting for the restart. A preview counts as installed, reads and writes
-//! none of the person's settings, and never reaches the file drop, downloads or runs anything: its
-//! updater is `update::Fake`, whose look finds what its state did, whose download and check go well
-//! at once, and whose installer ends having done nothing. Nothing is sent to the service, whatever
-//! is pressed.
+//! `home-restart` is Home waiting for the restart. The command palette is open in `palette` (on a
+//! running machine's page), `palette-query` (with `st` typed), `palette-home` and `palette-away`
+//! (the service not answering). A preview counts as installed, reads and writes none of the
+//! person's settings, and never reaches the file drop, downloads or runs anything: its updater is
+//! `update::Fake`, whose look finds what its state did, whose download and check go well at once,
+//! and whose installer ends having done nothing. Nothing is sent to the service, whatever is
+//! pressed.
 
 use guesthouse_control::client::Unreached;
 use guesthouse_control::{
@@ -195,6 +197,20 @@ pub fn stage(main: &mut Main) {
             main.deleting = Some("ubuntu".to_owned());
         }
         net if net.starts_with("net-") || net == "home-restart" => hyper_v(main, net),
+        "palette" | "palette-query" | "palette-home" | "palette-away" => {
+            match state.as_str() {
+                "palette-home" => {
+                    for (name, state) in [("win11", State::Running), ("build-box", State::Starting)] {
+                        show(main, name, state);
+                    }
+                    main.page = Page::Home;
+                }
+                "palette-away" => main.seen = Err(Unreached::NoService.words().to_owned()),
+                _ => show(main, "win11", State::Running),
+            }
+            let query = if state == "palette-query" { "st" } else { "" };
+            main.palette = Some(super::Palette { query: query.to_owned(), at: 0 });
+        }
         remote if remote.starts_with("rv-") => {
             remote_view(main, remote);
             main.section = Section::RemoteView;

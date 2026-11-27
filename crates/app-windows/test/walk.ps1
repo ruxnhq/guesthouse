@@ -9,7 +9,9 @@
 # Back comes out, that the sections show what they hold, that the app's Settings opens from the gear
 # on every page that has it and Back comes out to where it was opened from, and that the title bar's
 # buttons are where the pointer would find them and not under the bar's drag region, wide and narrow,
-# and what the Network section says and asks in each case of Windows' Hyper-V feature.
+# what the Network section says and asks in each case of Windows' Hyper-V feature, and what the
+# command palette offers and does. Ctrl+K and the palette's keys can't be pressed through UI
+# Automation, so the palette is opened from the title bar's box and typed in through its value.
 # A preview never writes the person's settings or Windows' Run key, whatever is switched.
 param([Parameter(Mandatory)][string]$Exe)
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -49,6 +51,15 @@ function Find([string]$name) {
   $script:Root.FindFirst([Windows.Automation.TreeScope]::Descendants, $c)
 }
 function Has([string]$name) { [bool](Find $name) }
+# A control by its name and type, where controls of other types share the name.
+function FindOf([string]$name, $type) {
+  $c = New-Object Windows.Automation.AndCondition (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty), $name), (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), $type)
+  $script:Root.FindFirst([Windows.Automation.TreeScope]::Descendants, $c)
+}
+# Types into a box through its value, as UI Automation can't press keys.
+function Type-Into($box, [string]$text) { $o = $null; if ($box -and $box.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$o)) { $o.SetValue($text); Start-Sleep -Milliseconds 700; $true } else { $false } }
+# What has the keyboard's focus, by its name and type.
+function Focused { $f = [Windows.Automation.AutomationElement]::FocusedElement; "$($f.Current.ControlType.ProgrammaticName) $($f.Current.Name)" }
 # Whether any control's name has these words in it, for a line that names machines or a reason.
 function Says([string]$part) {
   foreach ($e in $script:Root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
@@ -93,23 +104,25 @@ function Reachable([string]$name) {
   $under -eq "content"
 }
 
-# Whether the title bar's empty space still drags the window: the middle of the widest gap between
-# what the bar holds, which is said, as a narrow window leaves little.
+# Whether the title bar's empty space still drags the window: the middle of the widest gap that no
+# control of the bar's covers, which is said, as a narrow window leaves little. A control's own
+# span is never a gap, however wide the words in it.
 function Drags {
   $c = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::TitleBar)
   $bar = $script:Root.FindFirst([Windows.Automation.TreeScope]::Descendants, $c)
   $r = $bar.Current.BoundingRectangle
-  $edges = @($r.X)
+  $spans = @()
   foreach ($e in $bar.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
     $b = $e.Current.BoundingRectangle
-    if ($b.Width -gt 0 -and $b.Width -lt $r.Width * 0.5) { $edges += $b.X; $edges += $b.X + $b.Width }
+    if ($b.Width -gt 0 -and $b.Width -lt $r.Width * 0.5) { $spans += , @($b.X, ($b.X + $b.Width)) }
   }
   # The caption buttons, which Windows keeps at the right, about 46 units each.
-  $edges += $r.X + $r.Width - 150 * ($r.Height / 48)
-  $edges = $edges | Sort-Object
-  $gap = 0; $at = 0
-  for ($i = 1; $i -lt $edges.Count; $i++) {
-    if ($edges[$i] - $edges[$i - 1] -gt $gap) { $gap = $edges[$i] - $edges[$i - 1]; $at = ($edges[$i] + $edges[$i - 1]) / 2 }
+  $spans += , @(($r.X + $r.Width - 150 * ($r.Height / 48)), ($r.X + $r.Width))
+  $spans = $spans | Sort-Object { $_[0] }
+  $gap = 0; $at = 0; $reached = $r.X
+  foreach ($span in $spans) {
+    if ($span[0] - $reached -gt $gap) { $gap = $span[0] - $reached; $at = ($span[0] + $reached) / 2 }
+    if ($span[1] -gt $reached) { $reached = $span[1] }
   }
   Write-Information "  the widest gap in the title bar is $([int]$gap) pixels" -InformationAction Continue
   $gap -gt 20 -and (Under $at ($r.Y + $r.Height / 2)) -ne "content"
@@ -275,6 +288,43 @@ Check (Has "Adapter to bridge onto") "Bridged offers the adapters"
 Check ((Find "Save").Current.IsEnabled) "and Save is there for it"
 Check (Choose "Shared") "Shared can be chosen again"
 Check (-not (Has "Adapter to bridge onto")) "and the adapters go"
+Stop-Preview $p
+
+# The command palette, from the title bar's box, as UI Automation can't press Ctrl+K: it's a dialog
+# named for what it does, its box has the focus, it offers only what can be done now, a query
+# narrows it, an entry does what its button does, and the focus goes back to where it was.
+$p = Start-Preview $Exe running
+$search = 'Search or run a command'
+$button = [Windows.Automation.ControlType]::Button
+Check (Reachable $search) "the title bar's palette box is outside its drag region"
+Check (Drags) "and the title bar still drags the window"
+Check (Press $search) "the palette box can be pressed"
+Check ([bool](FindOf $search ([Windows.Automation.ControlType]::Window))) "it opens the palette, a dialog named for it"
+Check ((Focused) -eq "ControlType.Edit $search") "whose box has the keyboard's focus"
+Check (Has "Stop, asks its guest to shut down, win11") "it offers the running machine's Stop"
+Check (-not (Has "Start, boots it, win11")) "and no Start for it"
+Check (Has "Start ubuntu, boots it") "and Start for a stopped machine"
+Check (-not (Says "Delete")) "and never Delete"
+Check (Type-Into (FindOf $search ([Windows.Automation.ControlType]::Edit)) "start ub") "a query can be typed"
+Check ((Has "Start ubuntu, boots it") -and -not (Has "Stop, asks its guest to shut down, win11")) "and narrows what's listed"
+Check (Press "Start ubuntu, boots it") "an entry can be pressed"
+Check (-not (FindOf $search ([Windows.Automation.ControlType]::Window))) "which closes the palette"
+Check (Has "Switch machine, ubuntu") "and goes to ubuntu's page, as its Start is there"
+Check (Press $search) "the palette opens again"
+Check (Type-Into (FindOf $search ([Windows.Automation.ControlType]::Edit)) "hard") "a section is typed"
+Check (Press "Hardware, section, ubuntu") "and pressed"
+Check (Has "Memory (MB)") "which shows the section"
+Check ((Focused) -eq "ControlType.Button $search") "and the focus is back on the box it was opened from"
+Set-Width 760
+Check (-not (FindOf $search $button)) "a narrow window's title bar has no palette box"
+Check (Drags) "and still drags the window"
+Stop-Preview $p
+
+# With the service away, the palette has only the app's own.
+$p = Start-Preview $Exe palette-away
+Check (Has "Settings, the app's own") "the palette offers Settings with the service away"
+Check (Has "Report a problem") "and Report a problem"
+Check (-not (Has "New machine")) "and no New machine"
 Stop-Preview $p
 
 # Bridging where Windows' Hyper-V feature is off: Turn on asks first and says what changes, Cancel

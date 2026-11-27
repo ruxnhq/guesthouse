@@ -1,10 +1,11 @@
 //! What the window shows. There's no sidebar: Home has the machines, a card each, and a machine's
-//! page is gone into from its card and out of with Back, in the title bar, or Alt+Left. The title
-//! bar holds what belongs to the whole page: on Home, New machine and Report a problem; on a
-//! machine's page, Back, a switcher to another machine, and what can be done to the machine. Under
-//! it, a machine's page has a bar of its sections: Overview, Remote View for a Windows guest,
-//! Hardware, Network and Storage. New machine and Report a problem are pages of their own, with
-//! Back to where they were opened from.
+//! page is gone into from its card and out of with Back, in the title bar, or Alt+Left. Ctrl+K, or
+//! the box in the middle of the title bar, opens the command palette. The title bar holds what
+//! belongs to the whole page: on Home, New machine and Report a problem; on a machine's page, Back,
+//! a switcher to another machine, and what can be done to the machine. Under it, a machine's page
+//! has a bar of its sections: Overview, Remote View for a Windows guest, Hardware, Network and
+//! Storage. New machine and Report a problem are pages of their own, with Back to where they were
+//! opened from.
 //!
 //! It's drawn from `Main` each time something changes, and holds nothing of its own. Mica is under
 //! everything, the title bar is drawn by the app, and every colour is one of WinUI's theme brushes,
@@ -12,13 +13,14 @@
 //!
 //! `home.rs` is Home, `machine.rs` a machine's page and its Overview, `settings.rs` its Hardware,
 //! Network and Storage, `remote_view.rs` its Remote View, `forms.rs` New machine and Report a
-//! problem, `app_settings.rs` the app's own Settings, from the gear in the title bar, and
-//! `parts.rs` the pieces they're all made of.
+//! problem, `app_settings.rs` the app's own Settings, from the gear in the title bar,
+//! `palette.rs` the command palette, Ctrl+K, and `parts.rs` the pieces they're all made of.
 
 mod app_settings;
 mod forms;
 mod home;
 mod machine;
+mod palette;
 mod parts;
 mod remote_view;
 mod settings;
@@ -92,7 +94,7 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
         // Draws nothing: it watches the window's width, and says when the layout changes.
         View::component::<Breakpoints>(context.callback(Message::Layout)),
     ));
-    let content = back_keys(main, context, content);
+    let content = keys(main, context, content);
     let removing = main.viewing.as_ref().and_then(|viewing| viewing.removing.as_ref());
     match (&main.deleting, &main.snapshot_ask) {
         (Some(name), _) => content.content_dialog(delete_dialog(name, context)),
@@ -101,6 +103,7 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
         (None, None) if main.install_ask => content.content_dialog(install_dialog(main, context)),
         (None, None) if main.hyper_v_ask => content.content_dialog(hyper_v_dialog(context)),
         (None, None) if main.restart_ask => content.content_dialog(restart_dialog(main, context)),
+        (None, None) if main.palette.is_some() => content.content_dialog(palette::dialog(main, context)),
         (None, None) if removing.is_some() => {
             let name = removing.map(|(_, name)| name.as_str()).unwrap_or_default();
             content.content_dialog(remove_dialog(name, context))
@@ -111,13 +114,7 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
 
 /// Whether Back goes anywhere now: from any page but Home, and not while a dialog asks something.
 fn can_go_back(main: &Main) -> bool {
-    let asking = main.deleting.is_some()
-        || main.snapshot_ask.is_some()
-        || main.bridge_ask
-        || main.install_ask
-        || main.hyper_v_ask
-        || main.restart_ask
-        || main.viewing.as_ref().is_some_and(|viewing| viewing.removing.is_some());
+    let asking = main.asking() || main.palette.is_some();
     let page = match main.seen {
         Ok(_) => main.page != Page::Home,
         // With the service away only the report page and the app's settings have somewhere to go
@@ -127,16 +124,26 @@ fn can_go_back(main: &Main) -> bool {
     page && !asking
 }
 
-/// Alt+Left, and the Back key some keyboards and mice have, go back, as the title bar's Back does.
-/// Escape is left alone: a list that's open, or a box being typed in, has it first.
-fn back_keys(main: &Main, context: &ViewContext<Main>, content: Grid) -> Border {
-    let border = Border::new().content(content);
-    if !can_go_back(main) {
-        return border;
-    }
+/// Alt+Left, and the Back key some keyboards and mice have, go back, as the title bar's Back does,
+/// and Ctrl+K opens the command palette, wherever the focus is, a box being typed in too: they're
+/// taken before the box has them, so Ctrl+K never reaches it. Escape is left alone: a list that's
+/// open, or a box being typed in, has it first. A dialog's keys never come here, as WinUI keeps a
+/// dialog's controls apart from the window's.
+fn keys(main: &Main, context: &ViewContext<Main>, content: Grid) -> Border {
     let sender = context.sender();
-    border.on_preview_key_down(RoutedCallback::new(move |key: KeyEventInfo| {
-        if is_back(key.key.0, key.modifiers.contains(InputModifiers::ALT)) {
+    let back = can_go_back(main);
+    Border::new().content(content).on_preview_key_down(RoutedCallback::new(move |key: KeyEventInfo| {
+        let held = |modifier| key.modifiers.contains(modifier);
+        if crate::palette::is_palette_key(
+            key.key.0,
+            held(InputModifiers::CONTROL),
+            held(InputModifiers::ALT),
+            held(InputModifiers::WINDOWS),
+        ) {
+            let _ = sender.send(Message::OpenPalette);
+            return true;
+        }
+        if back && is_back(key.key.0, held(InputModifiers::ALT)) {
             let _ = sender.send(Message::Back);
             return true;
         }
@@ -180,6 +187,10 @@ fn title_bar(main: &Main, context: &ViewContext<Main>) -> TitleBar {
         None => (None, None),
     };
     let mut bar = bar.margin(Thickness::new(0.0, 0.0, nudge(main), 0.0));
+    // The palette's box, in the middle, where there's room for it.
+    if !main.layout.narrow {
+        bar = bar.content(palette::title_box(main, context));
+    }
     if let Some(left) = left {
         bar = bar.left_header(left);
     }

@@ -51,7 +51,7 @@ struct GuesthouseApp: App {
         }
 
         // In the menu bar only while a machine runs (and the person has not turned it off).
-        MenuBarExtra("Guesthouse", systemImage: "house", isInserted: Binding(
+        MenuBarExtra("Guesthouse", image: "MenuBarIcon", isInserted: Binding(
             get: { menuBarItem && library.agent.anyAlive }, set: { _ in })
         ) {
             MenuBarContent()

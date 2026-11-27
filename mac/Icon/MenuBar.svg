@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- The brand's symbolic house, for the menu bar. It is drawn as a template image, so macOS colours it. -->
+  <path fill="#000000" fill-rule="evenodd" d="M8 1 15 7V15H1V7ZM8 3.65 13 7.93V13H3V7.93Z"/>
+  <path fill="#000000" d="M8 7.5 11 10V11.75H5V10Z"/>
+</svg>

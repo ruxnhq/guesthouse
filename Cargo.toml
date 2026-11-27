@@ -28,6 +28,7 @@ default-members = [
     "crates/share-windows",
     "crates/service-windows",
     "crates/transport",
+    "crates/update-check",
     "tools/card-check",
     "tools/hcs-boot",
 ]
@@ -55,6 +56,7 @@ guesthouse-sensors = { path = "crates/sensors" }
 guesthouse-jail = { path = "crates/jail" }
 guesthouse-card-check = { path = "tools/card-check" }
 guesthouse-control = { path = "crates/control" }
+guesthouse-update-check = { path = "crates/update-check" }
 guesthouse-hcs = { path = "crates/hcs" }
 guesthouse-relay = { path = "crates/relay" }
 guesthouse-host-windows = { path = "crates/host-windows" }

@@ -2,6 +2,7 @@
 //! `guesthouse-windows-latest.json`, as `scripts/windows-release.ps1` writes it. The app fetches it
 //! and offers the installer; this decides what it says, so it's tested anywhere.
 
+use guesthouse_update_check::is_version;
 use serde::Deserialize;
 
 /// Where a release publishes the file.
@@ -39,24 +40,10 @@ pub fn parse(text: &str) -> Option<Latest> {
         && plain(&latest.installer);
     let notes_ok = latest.notes.is_empty() || (latest.notes.starts_with(NOTES) && plain(&latest.notes));
     let sha_ok = latest.sha256.len() == 64 && latest.sha256.bytes().all(|b| b.is_ascii_hexdigit());
-    (numbers(&latest.version).is_some() && installer_ok && notes_ok && sha_ok).then_some(latest)
+    (is_version(&latest.version) && installer_ok && notes_ok && sha_ok).then_some(latest)
 }
 
-/// Whether `latest` is a newer version than `current`, each three numbers.
-pub fn newer(latest: &str, current: &str) -> bool {
-    match (numbers(latest), numbers(current)) {
-        (Some(latest), Some(current)) => latest > current,
-        _ => false,
-    }
-}
-
-fn numbers(version: &str) -> Option<[u64; 3]> {
-    let mut parts = version.trim().split('.').map(|part| {
-        (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())).then(|| part.parse().ok()).flatten()
-    });
-    let found = [parts.next()??, parts.next()??, parts.next()??];
-    parts.next().is_none().then_some(found)
-}
+pub use guesthouse_update_check::newer;
 
 #[cfg(test)]
 mod tests {

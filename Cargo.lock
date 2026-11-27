@@ -1008,6 +1008,7 @@ dependencies = [
 name = "guesthouse-control"
 version = "0.10.0"
 dependencies = [
+ "guesthouse-update-check",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
@@ -1177,6 +1178,14 @@ dependencies = [
 [[package]]
 name = "guesthouse-transport"
 version = "0.10.0"
+
+[[package]]
+name = "guesthouse-update-check"
+version = "0.10.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "hashbrown"

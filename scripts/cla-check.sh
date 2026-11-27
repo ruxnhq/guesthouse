@@ -27,7 +27,8 @@ case $login in
         ;;
 esac
 
-file=$signers/$(printf '%s' "$login" | tr 'A-Z' 'a-z').md
+name=$(printf '%s' "$login" | tr 'A-Z' 'a-z').md
+file=$signers/$name
 
 if [ -f "$file" ] && grep -Eiq "^- .+, @$login, [0-9]{4}-[0-9]{2}-[0-9]{2}, version $VERSION\$" "$file"; then
     echo "@$login has signed version $VERSION."
@@ -36,7 +37,7 @@ fi
 
 cat >&2 <<MESSAGE
 @$login hasn't signed the contributor licence agreement, version $VERSION.
-Read CLA.md, then add the file $file to this pull request, with this one line in it:
+Read CLA.md, then add the file CLA/signers/$name to this pull request, with this one line in it:
 
     - Your Name, @$login, $(date -u +%F), version $VERSION
 MESSAGE

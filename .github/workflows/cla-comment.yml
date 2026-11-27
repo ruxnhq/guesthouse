@@ -1,0 +1,38 @@
+# Tells a pull request's author what to add when the CLA check fails, in one comment that is
+# updated as they push and removed once the check passes. The CLA workflow's token can't write on
+# a pull request from a fork, so this one runs on pull_request_target, with the base branch's files.
+# It never checks out or runs the pull request's code. scripts/cla-comment.sh reads one file of it
+# through the API, and only searches that.
+name: CLA comment
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: cla-comment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    name: CLA comment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No ref, so this is the base branch, never the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Comment, or take the comment away
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LOGIN: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: sh scripts/cla-comment.sh

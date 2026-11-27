@@ -305,9 +305,13 @@ main() {
     find_engine
     mkdir -p "$OUT"
     OUT=$(CDPATH='' cd -- "$OUT" && pwd)
+    # A file's time in the packages, when it's set. rpmbuild refuses an empty one.
+    epoch=
+    [ -z "${SOURCE_DATE_EPOCH:-}" ] || epoch="-e SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
     for format in "$@"; do
+        # shellcheck disable=SC2086 # empty, or one flag with a number
         "$ENGINE" run --rm --security-opt label=disable -e "OWNER=$OWNER" -e "PACKAGER=$PACKAGER" \
-            -e "PACKAGE_RELEASE=$PACKAGE_RELEASE" -e "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-}" \
+            -e "PACKAGE_RELEASE=$PACKAGE_RELEASE" $epoch \
             -v "$payload:/payload.tar.xz:ro" -v "$REPO/packaging/packages:/script:ro" -v "$OUT:/out" \
             "$(image_for "$format")" sh /script/build-packages.sh --inside "$format" "$version"
     done

@@ -90,6 +90,8 @@ pub struct StandIn {
     pub refuse_exports: bool,
     /// Memory adopted from host pages: its size, and the file's ranges when it came with its file.
     pub adopted: Vec<(u64, Option<Vec<FileRange>>)>,
+    /// The memory of those that every space maps, which a real backend gives each space its own of.
+    pub adopted_for_every_space: Vec<MemoryId>,
     /// The tiles a viewer's frames can be laid out in, for a test to set. `None` is a card with none.
     pub ring_tiling: Option<RingTiling>,
     /// Set to refuse every allocation's, context's and queue's private data, as a vendor's driver
@@ -207,6 +209,7 @@ impl StandIn {
             memory_starts: HashMap::new(),
             refuse_exports: false,
             adopted: Vec::new(),
+            adopted_for_every_space: Vec::new(),
             ring_tiling: None,
             refuse_private_data: false,
             standard_data: None,
@@ -403,6 +406,17 @@ impl Backend for StandIn {
     ) -> Result<MemoryId, BackendError> {
         self.adopted.push((size, Some(pages.ranges.clone())));
         Ok(self.new_memory())
+    }
+
+    fn adopt_file_pages_for_every_space(
+        &mut self,
+        host_address: u64,
+        size: u64,
+        pages: &FilePages<'_>,
+    ) -> Result<MemoryId, BackendError> {
+        let memory = self.adopt_file_pages(host_address, size, pages)?;
+        self.adopted_for_every_space.push(memory);
+        Ok(memory)
     }
 
     fn release_memory(&mut self, memory: MemoryId) {

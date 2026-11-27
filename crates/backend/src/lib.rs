@@ -99,6 +99,18 @@ pub trait Backend: Sized {
         self.adopt_host_pages(host_address, size)
     }
 
+    /// The same, for pages every address space maps, such as the fence pages. A backend whose
+    /// buffers carry the kernel's implicit sync, where a buffer that two spaces share makes the work
+    /// of each wait for the other's, gives each space a buffer of its own over the same pages.
+    fn adopt_file_pages_for_every_space(
+        &mut self,
+        host_address: u64,
+        size: u64,
+        pages: &FilePages<'_>,
+    ) -> Result<MemoryId, BackendError> {
+        self.adopt_file_pages(host_address, size, pages)
+    }
+
     fn release_memory(&mut self, memory: MemoryId);
 
     /// Copies what the GPU may have written from one block to another, when an allocation moves.

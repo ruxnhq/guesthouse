@@ -21,7 +21,16 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let start = self.placed_io_space()?.start();
         let host_address = self.memory.host_address(start, crate::FENCE_AREA)?;
-        let memory = self.backend.adopt_host_pages(host_address, crate::FENCE_AREA)?;
+        // The block is listed in every submission of every process, so it goes to the card as the
+        // window file's pages where it can. By its address, amdgpu looks it up at each submission and
+        // refuses the submission while the kernel moves any page of it. Every space maps it, so each
+        // gets a buffer of its own, and one process's work never waits for another's through it.
+        let memory = match self.memory.file_pages(host_address, crate::FENCE_AREA) {
+            Some(pages) => {
+                self.backend.adopt_file_pages_for_every_space(host_address, crate::FENCE_AREA, &pages)?
+            }
+            None => self.backend.adopt_host_pages(host_address, crate::FENCE_AREA)?,
+        };
         let gpu_address = self.take_gpu_addresses(crate::FENCE_AREA, crate::ALLOCATION_ALIGN)?;
         let block = FenceBlock { memory, gpu_address };
         self.fences.block = Some(block);

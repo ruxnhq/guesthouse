@@ -704,13 +704,16 @@ impl SpaceVm {
         self.on_card = still_on_card;
     }
 
-    /// Maps `length` bytes of `buffer`, a handle on `device`, from `offset`, at `address`.
+    /// Maps `length` bytes of `buffer`, a handle on `device`, from `offset`, at `address`. A space
+    /// that doesn't have the buffer yet takes in `own`, a dma-buf of its pages made for this space
+    /// alone, when there is one.
     #[allow(clippy::too_many_arguments)]
     pub fn map(
         &mut self,
         device: &Device,
         buffer: GemHandle,
         origin: Origin,
+        own: Option<OwnedFd>,
         address: u64,
         offset: u64,
         length: u64,
@@ -719,6 +722,9 @@ impl SpaceVm {
         let fresh = self.books.handle_of(buffer).is_none();
         let handle = match (self.books.handle_of(buffer), origin) {
             (Some(handle), _) => handle,
+            (None, _) if let Some(own) = &own => {
+                memory::import(&self.file, own).map_err(|error| step("taking the buffer in", error))?
+            }
             (None, Origin::Made | Origin::HostPages { as_dma_buf: true, .. }) => {
                 let shared =
                     memory::export(device, buffer).map_err(|error| step("handing the buffer over", error))?;
@@ -738,6 +744,11 @@ impl SpaceVm {
         self.books.add(buffer, handle, address, offset, length);
         self.lists.mark_stale();
         Ok(())
+    }
+
+    /// Whether this space has taken `buffer`, a handle on the first open, in.
+    pub fn has_taken_in(&self, buffer: GemHandle) -> bool {
+        self.books.handle_of(buffer).is_some()
     }
 
     /// Takes back the mapping at `address`, if there is one.

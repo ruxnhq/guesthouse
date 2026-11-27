@@ -1,10 +1,13 @@
 //! A guest memory that stores only what was written to it.
 
-use guesthouse_backend::{GuestMemory, HostBuffer, MemoryError, PagesView, WINDOW_BASE, in_window};
+use guesthouse_backend::{
+    FilePages, FileRange, GuestMemory, HostBuffer, MemoryError, PagesView, WINDOW_BASE, in_window,
+};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
 use std::ops::Range;
+use std::os::fd::AsFd;
 
 /// Stands in for a window of many gigabytes without taking the memory.
 #[derive(Debug)]
@@ -16,6 +19,8 @@ pub struct SparseMemory {
     pub views: Vec<PagesView>,
     /// Host buffers still mapped, by (address, size), for the same reason.
     pub host_buffers: Vec<(u64, u64)>,
+    /// Stands in for the window's file, whose pages the core may hand over by their place in it.
+    window_file: File,
 }
 
 const FIRST_VIEW: u64 = 0x7000_0000_0000;
@@ -31,6 +36,7 @@ impl SparseMemory {
             next_view: FIRST_VIEW,
             views: Vec::new(),
             host_buffers: Vec::new(),
+            window_file: File::open("/dev/null").expect("/dev/null opens"),
         }
     }
 }
@@ -101,6 +107,15 @@ impl GuestMemory for SparseMemory {
     fn host_address(&self, address: u64, length: u64) -> Result<u64, MemoryError> {
         self.check(address, length, 1)?;
         Ok(address)
+    }
+
+    /// The window is a file, as the daemon's is, at the place its host addresses say. Views of RAM
+    /// aren't, which leaves them to go by their address.
+    fn file_pages(&self, host_address: u64, size: u64) -> Option<FilePages<'_>> {
+        in_window(&(WINDOW_BASE..self.window_end), host_address, size).then(|| FilePages {
+            file: self.window_file.as_fd(),
+            ranges: vec![FileRange { offset: host_address - WINDOW_BASE, length: size }],
+        })
     }
 
     fn map_pages(&mut self, pages: &[u64]) -> io::Result<PagesView> {

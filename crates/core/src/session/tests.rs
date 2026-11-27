@@ -1914,6 +1914,20 @@ mod io_space {
 
 mod fences {
     use super::*;
+    use guesthouse_backend::{FileRange, WINDOW_BASE};
+
+    #[test]
+    fn the_fence_block_goes_to_the_card_as_pages_of_the_window_file() {
+        let mut session = session();
+        let before = session.backend().adopted.len();
+        let (_, _, fence) = create_fence(&mut session, 0);
+        let adopted = &session.backend().adopted[before..];
+        let whole_block = [FileRange { offset: fence - WINDOW_BASE, length: FENCE_AREA }];
+        assert_eq!(adopted, [(FENCE_AREA, Some(whole_block.to_vec()))]);
+        // Every space maps it, so the backend may give each its own.
+        let block = session.fences.block.unwrap().memory;
+        assert_eq!(session.backend().adopted_for_every_space, [block]);
+    }
 
     #[test]
     fn monitored_fences_start_at_the_value_asked() {

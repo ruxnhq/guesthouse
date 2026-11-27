@@ -86,9 +86,9 @@ use copy_ib::CopyIb;
 use guest_dma::Reach;
 use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, CardLabel, Doorbell, DriverFound, DriverSurvey,
-    FilePages, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard, Refusal,
-    RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart, StandardSurface,
-    Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
+    FilePages, FileRange, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard,
+    Refusal, RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart,
+    StandardSurface, Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
 };
 use nodes::{Node, nodes};
 use run_wait::Patience;
@@ -97,7 +97,7 @@ use sdma_copy::{EngineForm, LinearCopy, TiledCopy};
 use space_vm::{GuestFence, Origin, Ran, SpaceVm};
 use std::collections::{BTreeMap, HashMap};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 /// How this backend names the host driver's branch. There is no Windows-style branch here: the host
@@ -161,6 +161,10 @@ pub struct AmdBackend {
     looked_at_runs: Option<Instant>,
     /// Makes dma-bufs of guest memory, where this user may.
     udmabuf: Udmabuf,
+    /// The file and its ranges behind each buffer on the first open that every space maps, such as
+    /// the fence pages. A dma-buf brings its reservation along, and amdgpu has each submission wait
+    /// for other spaces' work on every buffer it lists, so each space gets a dma-buf of its own.
+    pages_for_each_space: HashMap<GemHandle, (OwnedFd, Vec<FileRange>)>,
     /// Copies of the last command buffers, when the daemon was asked for them.
     ib_dump: Option<ib_dump::Keeper>,
     /// The copy of the video commands being run, kept for its room. See [`video_ib`].
@@ -275,6 +279,7 @@ impl AmdBackend {
             prepared: HashMap::new(),
             looked_at_runs: None,
             udmabuf: Udmabuf::open(),
+            pages_for_each_space: HashMap::new(),
             ib_dump: None,
             video_commands: video_ib::Copied::default(),
             prepared_video: HashMap::new(),
@@ -567,7 +572,7 @@ impl AmdBackend {
                 memory_type: MemoryType::Uncached,
             };
             space_vm
-                .map(&self.device, ib.handle(), Origin::Made, copy_ib::ADDRESS, 0, ib.size(), flags)
+                .map(&self.device, ib.handle(), Origin::Made, None, copy_ib::ADDRESS, 0, ib.size(), flags)
                 .map_err(|error| format!("mapping its commands: {error}"))?;
             ib.mapped_in = Some(space);
         }
@@ -847,10 +852,10 @@ impl AmdBackend {
             let space_vm = &mut self.spaces.get_mut(&space).ok_or("no such space")?.vm;
             let (source, target) = (moves::SOURCE_WINDOW, moves::TARGET_WINDOW);
             space_vm
-                .map(&self.device, from.handle, from.origin, source, piece.offset, piece.mapped, flags)
+                .map(&self.device, from.handle, from.origin, None, source, piece.offset, piece.mapped, flags)
                 .map_err(|error| format!("mapping what moves: {error}"))?;
             let copied = space_vm
-                .map(&self.device, to.handle, to.origin, target, piece.offset, piece.mapped, flags)
+                .map(&self.device, to.handle, to.origin, None, target, piece.offset, piece.mapped, flags)
                 .map_err(|error| format!("mapping where it goes: {error}"))
                 .and_then(|()| {
                     let copy =
@@ -1420,8 +1425,33 @@ impl Backend for AmdBackend {
         Ok(id)
     }
 
+    fn adopt_file_pages_for_every_space(
+        &mut self,
+        host_address: u64,
+        size: u64,
+        pages: &FilePages<'_>,
+    ) -> Result<MemoryId, BackendError> {
+        let id = self.adopt_file_pages(host_address, size, pages)?;
+        let bo = self.memory[&id];
+        if let Origin::HostPages { as_dma_buf: true, .. } = bo.origin {
+            match pages.file.try_clone_to_owned() {
+                Ok(file) => {
+                    self.pages_for_each_space.insert(bo.handle, (file, pages.ranges.clone()));
+                }
+                Err(error) => {
+                    // Shared, every space's work would wait for the others' through it.
+                    self.release_memory(id);
+                    log::debug!("the pages' file couldn't be kept ({error}), so they go by their address");
+                    return self.adopt_host_pages(host_address, size);
+                }
+            }
+        }
+        Ok(id)
+    }
+
     fn release_memory(&mut self, memory: MemoryId) {
         if let Some(bo) = self.memory.remove(&memory) {
+            self.pages_for_each_space.remove(&bo.handle);
             self.cpu_views.remove(&bo.handle);
             for space in self.spaces.values_mut() {
                 for address in space.vm.forget(bo.handle) {
@@ -1553,9 +1583,21 @@ impl Backend for AmdBackend {
             memory_type,
         };
         let (address, offset, length) = (request.address, request.offset, request.length);
+        // A space takes in a buffer every space maps through a dma-buf of its own, the first time.
+        let own = match self.pages_for_each_space.get(&bo.handle) {
+            Some((file, ranges)) if !space.vm.has_taken_in(bo.handle) => {
+                let pages = FilePages { file: file.as_fd(), ranges: ranges.clone() };
+                let made = self.udmabuf.wrap(&pages);
+                if made.is_none() {
+                    return Err(BackendError::new("udmabuf refused this space's own buffer of the pages"));
+                }
+                made
+            }
+            _ => None,
+        };
         space
             .vm
-            .map(&self.device, bo.handle, bo.origin, address, offset, length, flags)
+            .map(&self.device, bo.handle, bo.origin, own, address, offset, length, flags)
             .map_err(|error| BackendError::new(format!("GEM_VA map: {error}")))?;
         space.mappings.insert(address, length);
         log::debug!("mapped {address:#x} for {length:#x} in space {:?}", request.space);

@@ -1,9 +1,11 @@
 # Brings the guest's copy of NVIDIA's driver, in the host driver store, to the version on the driver
 # disc the app puts in the VM when the host's driver has changed. Programs load the driver from that
 # folder, so it is never written over while it is in use: the disc is copied beside it first, checked,
-# and then the two folders change places. If something has the driver loaded, the folder can't be
-# renamed, and the same change is queued for the next boot, when Windows makes it before anything
-# loads. A copy that fails or doesn't check out is removed, and the driver there stays as it was.
+# and then the two folders change places. On a Windows 11 guest with dwm running, the store folder
+# could be renamed with the driver loaded, and only the old copy could not be removed: that run says
+# "restart", so programs load the new copy only. If the rename is refused, the same change is queued
+# for the next boot, when Windows makes it before anything loads. A copy that fails or doesn't check
+# out is removed, and the driver there stays as it was.
 #
 # Usage: nv-store.ps1 [-Version VERSION] [-Source FOLDER] [-Status FILE]
 # Without -Version the disc's own version is the one wanted. Without -Source the disc is looked for
@@ -217,7 +219,7 @@ function Update-Store($Version, $Source, $StoreRoot, $StoreFolder) {
         try {
             Move-Item -LiteralPath $store -Destination $old -ErrorAction Stop
         } catch {
-            # Something has the driver loaded.
+            # Windows refused the rename: something has a file in it open.
             try {
                 Add-Pending $store $new $old
             } catch {

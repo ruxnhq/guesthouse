@@ -1,8 +1,10 @@
 //! A start that brings the guest's copy of NVIDIA's driver to this PC's version: see
 //! [`crate::guest_driver_store`]. The disc is in the VM from its first boot. Once the agent answers,
 //! and before anything here uses the GPU, `nv-store.ps1` copies it beside the guest's copy, checks
-//! it, and has the two change places. When something in Windows has the driver loaded, which by the
-//! time the agent answers is usual, the change is queued for the next boot and Windows restarts once.
+//! it, and has the two change places. By the time the agent answers, dwm has the driver loaded. On
+//! the lab's Windows 11 guest the folders still changed places, and the old copy could not be removed
+//! until a restart. Where Windows refuses the rename, the change is queued for the next boot. Either
+//! way Windows restarts once.
 //! The same script runs at each boot from a task the first such start leaves in the guest, so a
 //! boot that gets there before Windows loads the driver needs no restart.
 //!
@@ -140,6 +142,7 @@ pub(super) fn refresh_driver_store(task: &mut Task) -> Result<()> {
     }
     let mut answer = run_script(task, &version);
     if answer.as_ref().is_some_and(StoreAnswer::restart) {
+        write_log(task.context, &format!("driver store: before the restart the guest said {answer:?}"))?;
         task.step(&format!("Restarting Windows once for NVIDIA's driver {}", retail_version(&version)));
         if !restart_windows(task) {
             return kept(task, "Windows did not restart when asked");

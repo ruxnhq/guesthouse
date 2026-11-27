@@ -41,8 +41,17 @@ pub fn record_file(context: &Context, machine: &Machine) -> PathBuf {
     machine.folder(context).join(RECORD_FILE)
 }
 
+/// The version noted for the disk the machine's next run starts from. A throwaway's runs start from its
+/// clean disk, so its clean note is the one: the note beside its settings is the last run's, and its
+/// start only puts the clean one back once the VM's plan, with or without the disc, is made.
 pub fn recorded_version(context: &Context, machine: &Machine) -> Option<String> {
-    let text = fs::read_to_string(record_file(context, machine)).ok()?;
+    let clean = crate::throwaway::clean_folder(context, machine);
+    let file = if machine.throwaway && clean.is_dir() {
+        clean.join(RECORD_FILE)
+    } else {
+        record_file(context, machine)
+    };
+    let text = fs::read_to_string(file).ok()?;
     Some(text.trim().to_owned()).filter(|version| !version.is_empty())
 }
 
@@ -223,6 +232,25 @@ mod tests {
         intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");
         fs::remove_file(record_file(&context, &windows)).unwrap();
         assert_eq!(due(&context, &intel), None, "another maker's machine keeps its own driver");
+    }
+
+    /// A throwaway's last run noted the version it copied in, but its next run starts from the clean
+    /// disk, which has what the clean note says.
+    #[test]
+    fn a_throwaway_goes_by_its_clean_note() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let mut machine = Machine::new("w", "W", "/d", "/v");
+        machine.throwaway = true;
+        let clean = crate::throwaway::clean_folder(&context, &machine);
+        fs::create_dir_all(&clean).unwrap();
+        let folder = driver_folder(&context);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("nv_dispi.inf"), "[Version]\nDriverVer = 01/01/2026, 32.0.16.1800\n").unwrap();
+        record_version(&context, &machine, "32.0.16.1800").unwrap();
+        assert_eq!(due(&context, &machine).as_deref(), Some("32.0.16.1800"), "the clean disk has no note");
+        fs::write(clean.join(RECORD_FILE), "32.0.16.1800\n").unwrap();
+        assert_eq!(due(&context, &machine), None);
     }
 
     #[test]

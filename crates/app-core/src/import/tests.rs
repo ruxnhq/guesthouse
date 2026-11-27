@@ -328,6 +328,7 @@ fn only_files_the_app_knows_are_written_and_each_is_checked_or_made_again() {
     let files = [
         ("vars.fd", b"v".to_vec()),
         ("remote-access.json", br#"{"ssh": true, "remote_desktop": true}"#.to_vec()),
+        ("remote-view.json", br#"{"allow_remote_view": true, "remote_port": 7792}"#.to_vec()),
         ("throwaway-clean/display.json", b"{}".to_vec()),
         ("throwaway/vars.fd", b"a run's".to_vec()),
         ("thumbnail.png", b"\x89PNG crafted".to_vec()),
@@ -355,6 +356,7 @@ fn only_files_the_app_knows_are_written_and_each_is_checked_or_made_again() {
     let folder = made.machine.folder(&context);
     for never in [
         "remote-access.json",
+        "remote-view.json",
         "throwaway-clean",
         "throwaway",
         "thumbnail.png",
@@ -379,7 +381,7 @@ fn only_files_the_app_knows_are_written_and_each_is_checked_or_made_again() {
         r#"{"name":"Before"}"#
     );
     assert_eq!(fs::read_to_string(folder.join("tpm/tpm2-00.permall")).unwrap(), "sealed");
-    assert!(made.notes.iter().any(|note| note.starts_with("12 files")), "{:?}", made.notes);
+    assert!(made.notes.iter().any(|note| note.starts_with("13 files")), "{:?}", made.notes);
     let throwaway = Machine { throwaway: true, ..plain_settings() };
     let file = crafted(&scratch, &throwaway, &files);
     let made = imported(&context, &file, Some("Clean")).unwrap();

@@ -33,6 +33,8 @@
 //!   your own keys into the guest. They are chosen here.
 //! - `app-windows.json`: app windows opens a way into the guest and parks its windows, so it is chosen
 //!   here.
+//! - `remote-view.json`: viewing from other devices opens a port on this PC's network, which another
+//!   machine here may have. It is turned on here, and given a port then.
 //! - `scan-exclusions.json` and `scan-exclusions-look`: which folders Defender leaves out is set in
 //!   the guest, whatever a file says. A Windows import is marked for its first start here to ask the
 //!   guest, and its settings and `show` say what the guest answered.

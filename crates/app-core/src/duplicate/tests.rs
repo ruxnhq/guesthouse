@@ -4,10 +4,12 @@ use crate::library::{NewMachine, create};
 use crate::machine::{Drive, Kind, load, load_all};
 use crate::processes::stand_in::fake_process;
 use crate::remote_access::Access;
+use crate::remote_view;
 use crate::slots;
 use crate::testing::{Scratch, scratch_context};
 use crate::token_change::next_token_file;
 use crate::vm_host::stand_in::RecordingHost;
+use guesthouse_remote_view_core::switch::SWITCH_FILE;
 use std::io::Write as _;
 use std::process::Stdio;
 
@@ -385,4 +387,31 @@ fn a_copy_is_the_same_guest_so_it_keeps_lean_windows_and_what_defender_leaves_ou
         crate::scan_exclusions::state_text(&context, &copy),
         crate::scan_exclusions::state_text(&context, &source)
     );
+}
+
+/// Two machines can't listen on one port, so the remote view's switch and its port stay with the
+/// original. The copy starts with it off and gets a port of its own when it is turned on. What a
+/// pairing held off in the guest and owes back goes with the disk it was held off on.
+#[test]
+fn a_copy_starts_with_remote_view_off_and_gets_a_port_of_its_own() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let mut source = create(&context, &new_plain(&scratch, "Lab", "")).unwrap();
+    (source.kind, source.cores, source.ram_gib) = (Kind::Windows, 2, 4);
+    source.save(&context).unwrap();
+    let port = remote_view::set_allowed(&context, &source, true).unwrap().remote_port.unwrap();
+    let folder = source.folder(&context);
+    let switch = fs::read_to_string(folder.join(SWITCH_FILE)).unwrap();
+    scratch.write(&format!("{}/{}", folder.display(), remote_view::HELD_FILE), "held");
+
+    let copy = copy_called(&context, &source, "Lab Copy").unwrap();
+    assert!(!copy.folder(&context).join(SWITCH_FILE).exists());
+    assert!(!remote_view::allowed(&context, &copy));
+    assert_eq!(remote_view::port(&context, &copy), None);
+    assert_eq!(fs::read_to_string(folder.join(SWITCH_FILE)).unwrap(), switch, "the original keeps its own");
+    assert!(remote_view::allowed(&context, &source));
+    assert!(copy.folder(&context).join(remote_view::HELD_FILE).is_file());
+
+    let own = remote_view::set_allowed(&context, &copy, true).unwrap().remote_port.unwrap();
+    assert_ne!(own, port);
 }

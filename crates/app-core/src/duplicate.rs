@@ -4,7 +4,9 @@
 //! What the guest relies on stays the same: the disk with its snapshots, the firmware settings, and
 //! the TPM, which Windows may have sealed its disk's key in. What would clash with the original
 //! while both run is new: the id, the MAC, and the agent's token, which both are moved to at their
-//! next start. Host drives stay with the original, as two guests can't share a whole drive.
+//! next start. Host drives stay with the original, as two guests can't share a whole drive, and so
+//! does the remote view's switch with its port on the network: the copy starts with it off, and
+//! gets a port of its own when it is turned on.
 
 use crate::actions::Task;
 use crate::context::Context;
@@ -38,9 +40,10 @@ const LOCK_FILE: &str = "lock";
 const OTHER_DRIVE_NOTE: &str = "other-drive";
 /// A disk being built on another drive, beside where it goes.
 const OTHER_DRIVE_PREFIX: &str = ".duplicate-";
-/// What stays with the original: what an install or a report left, caches the guest makes again, and
-/// a token change that's the original's own.
-pub(crate) const NOT_COPIED: [&str; 12] = [
+/// What stays with the original: what an install or a report left, caches the guest makes again, a
+/// token change that's the original's own, and the remote view's switch, whose port two machines
+/// can't both listen on.
+pub(crate) const NOT_COPIED: [&str; 13] = [
     crate::token_change::LOCK_FILE,
     crate::token_change::REFUSED_FILE,
     crate::throwaway::DELETE_MARK,
@@ -53,6 +56,7 @@ pub(crate) const NOT_COPIED: [&str; 12] = [
     "gpu-cache",
     "intel-hardware-desktop-daemon.out",
     "thumbnail.png.new",
+    guesthouse_remote_view_core::switch::SWITCH_FILE,
 ];
 /// Larger files go through `cp`, which can share their blocks with the original's.
 const BIG_FILE_BYTES: u64 = 1 << 20;

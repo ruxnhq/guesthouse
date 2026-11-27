@@ -38,6 +38,10 @@ pub(crate) fn exportable(scratch: &Scratch, context: &Context) -> Machine {
     scratch.write(&format!("{}/guest.token", folder.display()), "0123456789abcdef0123456789abcdef\n");
     scratch.write(&format!("{}/windows-password", folder.display()), "hunter2\n");
     scratch.write(&format!("{}/answer.iso", folder.display()), "left behind");
+    scratch.write(
+        &format!("{}/remote-view.json", folder.display()),
+        r#"{"allow_remote_view":true,"remote_port":7792}"#,
+    );
     scratch.write(&format!("{}/throwaway/vars.fd", folder.display()), "a run's");
     let filled = Command::new("qemu-io")
         .args(["-f", "qcow2", "-c", "write -P 7 0 64k", &machine.disk])
@@ -94,6 +98,7 @@ fn an_export_carries_what_the_guest_needs_and_none_of_this_pcs_paths() {
         assert!(names.iter().any(|name| name == wanted), "{wanted} in {names:?}");
     }
     assert!(!names.iter().any(|name| name == "answer.iso" || name.starts_with("throwaway/")), "{names:?}");
+    assert!(!names.iter().any(|name| name == "remote-view.json"), "its port is this PC's: {names:?}");
     let whole = fs::read(&to).unwrap();
     let text = String::from_utf8_lossy(&whole);
     let home = scratch.root().display().to_string();

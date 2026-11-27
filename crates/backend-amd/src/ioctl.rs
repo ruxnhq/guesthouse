@@ -151,9 +151,10 @@ pub fn drm_ioctl(file: &impl AsRawFd, ioctl: u64, request: &mut [u8]) -> io::Res
     let tried = try_until_taken(call, TRY_AGAIN_FOR);
     match &tried.result {
         Ok(()) if tried.refusals > 0 => log::info!(
-            "amdgpu said try again {} times to {}, and took it on the next try",
+            "amdgpu said try again {} times to {} over {} ms, and took it on the next try",
             tried.refusals,
-            what(ioctl)
+            what(ioctl),
+            tried.refused_for.as_millis()
         ),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => log::warn!(
             "amdgpu said try again {} times to {} in {} ms, so it waits for later",
@@ -171,16 +172,19 @@ pub fn drm_ioctl(file: &impl AsRawFd, ioctl: u64, request: &mut [u8]) -> io::Res
 struct Tried {
     result: io::Result<()>,
     refusals: u32,
+    /// From the first refusal to the end, which is how long the call was held up.
+    refused_for: Duration,
 }
 
 /// Makes `call` until it goes through or fails for good. A signal cutting it short doesn't count,
 /// and a "try again" is tried again for up to `patience`.
 fn try_until_taken(mut call: impl FnMut() -> io::Result<()>, patience: Duration) -> Tried {
     let mut refusals = 0;
-    let mut first_refusal = None;
+    let mut first_refusal: Option<Instant> = None;
+    let held_up = |first: Option<Instant>| first.map_or(Duration::ZERO, |since| since.elapsed());
     loop {
         let error = match call() {
-            Ok(()) => return Tried { result: Ok(()), refusals },
+            Ok(()) => return Tried { result: Ok(()), refusals, refused_for: held_up(first_refusal) },
             Err(error) => error,
         };
         match error.kind() {
@@ -189,12 +193,12 @@ fn try_until_taken(mut call: impl FnMut() -> io::Result<()>, patience: Duration)
                 refusals += 1;
                 let since = *first_refusal.get_or_insert_with(Instant::now);
                 if since.elapsed() >= patience {
-                    return Tried { result: Err(error), refusals };
+                    return Tried { result: Err(error), refusals, refused_for: since.elapsed() };
                 }
                 // What amdgpu waits for is another thread finishing with the pages, so let it run.
                 thread::yield_now();
             }
-            _ => return Tried { result: Err(error), refusals },
+            _ => return Tried { result: Err(error), refusals, refused_for: held_up(first_refusal) },
         }
     }
 }
@@ -290,6 +294,7 @@ mod tests {
         let tried = try_until_taken(always, Duration::from_millis(20));
         assert_eq!(tried.result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
         assert!(tried.refusals > 1);
+        assert!(tried.refused_for >= Duration::from_millis(20), "{:?}", tried.refused_for);
     }
 
     #[test]
@@ -304,6 +309,7 @@ mod tests {
         let tried = try_until_taken(call, Duration::ZERO);
         assert!(tried.result.is_ok());
         assert_eq!(tried.refusals, 0);
+        assert_eq!(tried.refused_for, Duration::ZERO, "nothing held it up");
     }
 
     #[test]

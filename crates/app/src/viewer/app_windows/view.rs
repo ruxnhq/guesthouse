@@ -22,6 +22,11 @@ const SIZE_STILL: Duration = Duration::from_millis(250);
 /// How long after the compositor last gave the window a size of its own choosing the window is left at
 /// it, rather than made the cell's size again: a drag of the window's edge goes on for a while.
 const HOST_SIZE_HOLD: Duration = Duration::from_millis(800);
+/// Something run once a host window has painted for the first time.
+type Waiting = Box<dyn FnOnce()>;
+
+/// How long a dialog's host window waits for its program's first paint before it is shown anyway.
+const OWNER_MAP_WAIT: Duration = Duration::from_secs(2);
 /// How long the guest has to answer a size before the window goes back to its cell's.
 const GUEST_ANSWER: Duration = Duration::from_millis(3000);
 
@@ -133,6 +138,10 @@ pub struct View {
     popup_waiting: Slot<bool>,
     /// The parent's size when the popup was placed: a parent that changes size moves its picture.
     placed_against: Slot<Option<(i32, i32)>>,
+    /// The host window has painted once, so its first buffer has gone to the compositor.
+    painted: Rc<Slot<bool>>,
+    /// What waits for that (`when_painted`).
+    on_painted: Rc<RefCell<Vec<Waiting>>>,
     /// The guest's cursor, shown again when the pointer leaves an edge.
     guest_cursor: RefCell<Option<gdk::Cursor>>,
     /// The edge the pointer is on, while it is on one.
@@ -196,6 +205,8 @@ impl View {
             parent: RefCell::new(Weak::new()),
             popup_waiting: Slot::new(false),
             placed_against: Slot::new(None),
+            painted: Rc::default(),
+            on_painted: Rc::default(),
         });
         view.recrop(hub.screen_size());
         view.add_input(hub);
@@ -204,6 +215,7 @@ impl View {
         match &view.host {
             Host::Window(window) => {
                 view.watch_window(hub, window);
+                view.watch_paint(window);
                 if let Some(id) = super::identity::app_id_for(cell) {
                     super::identity::set_when_mapped(window, &id);
                 }
@@ -217,14 +229,13 @@ impl View {
             }
         }
         match &view.host {
-            Host::Window(window) => {
+            Host::Window(_) => {
                 // Before the first commit: sway decides at it whether a window floats, as one with a parent does.
                 view.keep_over(owner);
-                window.present();
-                // A window that is minimized in the guest from its first layout opens that way.
-                if cell.state == State::Minimized {
-                    view.presence.set(Presence::Minimizing);
-                    window.minimize();
+                let minimized = cell.state == State::Minimized;
+                match owner {
+                    Some(owner) if !owner.painted.get() => view.present_once_painted(hub, owner, minimized),
+                    _ => view.present(minimized),
                 }
             }
             // A popup is shown once its parent window has been given its size by the compositor, so
@@ -241,6 +252,69 @@ impl View {
             }
         }
         view
+    }
+
+    /// Shows the host window. A window that is minimized in the guest from its first layout opens that way.
+    fn present(&self, minimized: bool) {
+        let Host::Window(window) = &self.host else { return };
+        window.present();
+        if minimized {
+            self.presence.set(Presence::Minimizing);
+            window.minimize();
+        }
+    }
+
+    /// Notes the host window's first paint, after which the compositor has its first buffer and maps
+    /// it, and runs what waited for that. GDK commits the buffer in its own after-paint, which comes
+    /// first, and what waited runs at idle after the frame.
+    fn watch_paint(&self, window: &gtk::Window) {
+        let (painted, waiting) = (self.painted.clone(), self.on_painted.clone());
+        window.connect_realize(move |window| {
+            let Some(clock) = window.frame_clock() else { return };
+            let (painted, waiting) = (painted.clone(), waiting.clone());
+            let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
+            let own = handler.clone();
+            let id = clock.connect_after_paint(move |clock| {
+                if painted.replace(true) {
+                    return;
+                }
+                if let Some(id) = own.borrow_mut().take() {
+                    clock.disconnect(id);
+                }
+                let waiting: Vec<Waiting> = waiting.borrow_mut().drain(..).collect();
+                glib::idle_add_local_once(move || waiting.into_iter().for_each(|run| run()));
+            });
+            handler.replace(Some(id));
+        });
+    }
+
+    /// Shows a dialog's host window once its program's has painted, and gives it that parent again
+    /// first. wlroots drops a parent that is not mapped (wlr_xdg_toplevel_set_parent in 0.20.0 keeps
+    /// it only if `parent->base->surface->mapped`), so a dialog opened with its program's window had
+    /// no parent when sway looked at its first commit and was tiled beside it (measured with
+    /// WAYLAND_DEBUG: set_parent went out 8 ms before the parent's first buffer). One whose owner does
+    /// not paint within `OWNER_MAP_WAIT` is shown anyway.
+    fn present_once_painted(self: &Rc<Self>, hub: &Rc<Hub>, owner: &View, minimized: bool) {
+        let done = Rc::new(Slot::new(false));
+        let show = {
+            let (weak, hub, owner_id, done) =
+                (Rc::downgrade(self), Rc::downgrade(hub), owner.id.clone(), done.clone());
+            move || {
+                if done.replace(true) {
+                    return;
+                }
+                let (Some(view), Some(hub)) = (weak.upgrade(), hub.upgrade()) else { return };
+                hub.trace(&format!("view {}: its owner {owner_id} has painted, so it is shown", view.id));
+                if let Some(owner) = hub.view(&owner_id) {
+                    view.keep_over(Some(owner.as_ref()));
+                }
+                view.present(minimized);
+            }
+        };
+        let show = Rc::new(show);
+        let first = show.clone();
+        owner.on_painted.borrow_mut().push(Box::new(move || first()));
+        glib::timeout_add_local_once(OWNER_MAP_WAIT, move || show());
     }
 
     /// Whether the picture takes the pointer. Not while the guest's input desktop is not the normal one.

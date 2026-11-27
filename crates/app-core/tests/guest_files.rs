@@ -303,3 +303,58 @@ fn the_app_windows_helper_shows_popups_and_dialogs_of_a_window_that_fills_the_sc
     assert!(helper.contains("GetWindow(h, GW_ENABLEDPOPUP)"));
     assert!(helper.contains("sb.Append(\",\\\"owner\\\":\\\"\")"), "the layout says a dialog's owner");
 }
+
+#[test]
+fn the_app_windows_helper_holds_while_windows_shows_on_another_monitor() {
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(
+        helper.contains("if (ScreenAway()) { ArmWork(HeartbeatMs); return; }"),
+        "nothing is placed or sent while the driver's monitor is away"
+    );
+    assert!(
+        helper.contains("if (ScreenAway()) return;"),
+        "a change of mode on the other monitor is not taken"
+    );
+    assert!(
+        helper.contains("if (MonitorKey(paths[i]) == screenMonitor)"),
+        "the scale is the windows' monitor's"
+    );
+    assert!(helper.contains("PutSizesBack();"), "sizes Windows changed in that moment are given back");
+    assert!(
+        helper.contains("wa.R - wa.L != screenW && wa.B - wa.T != screenH"),
+        "a stale work area is waited out"
+    );
+}
+
+#[test]
+fn the_app_windows_helper_counts_windows_steps_from_the_smallest() {
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(helper.contains("recommendedIndex = -g.Min;"), "the step Windows was last set to is no base");
+    assert!(!helper.contains("current - g.Cur"));
+    assert!(
+        helper.contains("if (percent == DpiSteps[0]) set.Rel = -(DpiSteps.Length - 1);"),
+        "100 % stays 100 % at every resolution"
+    );
+    assert!(
+        helper.contains("if (wantedPercent == 0) wantedPercent = PercentNow();"),
+        "only the host changes it"
+    );
+}
+
+#[test]
+fn no_app_window_is_left_covering_or_overflowing() {
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(
+        helper.contains("foreach (Cell c in over) if (TrySpot(c)) c.ThumbDirty = true;"),
+        "overflow takes a free spot"
+    );
+    assert!(
+        helper.contains("if (c.UnzoomTries >= 3) { HoldZoomed(c); return; }"),
+        "kept maximized at a cell's size"
+    );
+    assert!(helper.contains("(IsZoomed(h) && !c.HeldZoomed) || CoversScreen(c)"), "and parked");
+    assert!(
+        helper.contains("if (!c.Popup && Waiting(c, Now()))"),
+        "a new window waits for the screen to grow"
+    );
+}

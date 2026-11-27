@@ -441,6 +441,11 @@ impl Hub {
         }
     }
 
+    /// The view of a cell, while it has one.
+    pub fn view(&self, id: &str) -> Option<Rc<View>> {
+        self.views.borrow().get(id).cloned()
+    }
+
     fn cell_now(&self, id: &str) -> Option<Cell> {
         self.link.borrow().as_ref()?.client.model().get(id).cloned()
     }

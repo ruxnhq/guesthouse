@@ -250,6 +250,21 @@ impl TestViewer {
     fn is_dropped(&self) -> bool {
         self.socket.receive().is_err_and(|error| error.kind() == ErrorKind::UnexpectedEof)
     }
+
+    /// Whether the daemon has closed this viewer, once the frames it sent before that, all of
+    /// `generation`, have been read.
+    fn is_dropped_after_frames_of(&self, generation: u32) -> bool {
+        loop {
+            let packet = match self.socket.receive() {
+                Ok(Some(packet)) => packet,
+                other => return other.is_err_and(|error| error.kind() == ErrorKind::UnexpectedEof),
+            };
+            let Message::Frame(frame) = packet.message else { return false };
+            if frame.generation != generation {
+                return false;
+            }
+        }
+    }
 }
 
 #[test]
@@ -370,7 +385,9 @@ fn a_new_viewer_takes_the_place_of_the_old_one() {
     assert!(new.ring.generation > old.ring.generation);
     rig.next_frame(&new);
     assert_eq!(rig.memory_blocks(), blocks + SLOTS as usize);
-    assert!(old.is_dropped());
+    // The old viewer may have had its picture already: a ring that opens once the screen has been
+    // still for a moment comes with a frame.
+    assert!(old.is_dropped_after_frames_of(old.ring.generation));
 }
 
 #[test]

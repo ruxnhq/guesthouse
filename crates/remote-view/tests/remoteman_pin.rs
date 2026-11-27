@@ -8,15 +8,15 @@ use std::path::{Path, PathBuf};
 
 /// The pin as it was when this test was written, the file's whole text.
 const PINNED: &str = r#"{
-  "version": "0.1.9",
+  "version": "0.1.10",
   "base": "https://files.ruxn.com/p/remoteman/",
   "host_setup": {
-    "file": "remoteman-host-setup-0.1.9.exe",
-    "sha256": "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e"
+    "file": "remoteman-host-setup-0.1.10.exe",
+    "sha256": "9e163215ed120d237bbbc30940360f273a61684a01ad1e23ca33a9872b3477f4"
   },
   "viewer_zip": {
-    "file": "remoteman-viewer-windows-0.1.9.zip",
-    "sha256": "e901522f81da15b8d5c818f575c0405355e7e7785cbd2d1068198c0f2e2db1fc"
+    "file": "remoteman-viewer-windows-0.1.10.zip",
+    "sha256": "9db08a962c45850553ad4440ece7f25d3d534d7d8959de6d85d5c6f8ad70c9cf"
   }
 }
 "#;

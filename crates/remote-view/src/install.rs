@@ -258,17 +258,17 @@ mod tests {
     }
 
     #[test]
-    fn the_pin_is_0_1_9_for_both_files() {
+    fn the_pin_is_0_1_10_for_both_files() {
         let release = pinned();
-        assert_eq!(release.version, "0.1.9");
+        assert_eq!(release.version, "0.1.10");
         assert_eq!(release.base, "https://files.ruxn.com/p/remoteman/");
         let host = ReleaseFile {
-            file: "remoteman-host-setup-0.1.9.exe".into(),
-            sha256: "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e".into(),
+            file: "remoteman-host-setup-0.1.10.exe".into(),
+            sha256: "9e163215ed120d237bbbc30940360f273a61684a01ad1e23ca33a9872b3477f4".into(),
         };
         let viewer = ReleaseFile {
-            file: "remoteman-viewer-windows-0.1.9.zip".into(),
-            sha256: "e901522f81da15b8d5c818f575c0405355e7e7785cbd2d1068198c0f2e2db1fc".into(),
+            file: "remoteman-viewer-windows-0.1.10.zip".into(),
+            sha256: "9db08a962c45850553ad4440ece7f25d3d534d7d8959de6d85d5c6f8ad70c9cf".into(),
         };
         assert_eq!(release.host_setup, host);
         assert_eq!(release.viewer_zip, viewer);
@@ -277,10 +277,10 @@ mod tests {
     #[test]
     fn the_host_pin_is_the_installer_at_the_base() {
         let pin = pinned().host_pin();
-        assert_eq!(pin.version, "0.1.9");
-        assert_eq!(pin.url, "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.9.exe");
-        assert_eq!(pin.file, "remoteman-host-setup-0.1.9.exe");
-        assert_eq!(pin.sha256, "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e");
+        assert_eq!(pin.version, "0.1.10");
+        assert_eq!(pin.url, "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.10.exe");
+        assert_eq!(pin.file, "remoteman-host-setup-0.1.10.exe");
+        assert_eq!(pin.sha256, "9e163215ed120d237bbbc30940360f273a61684a01ad1e23ca33a9872b3477f4");
     }
 
     /// The Linux host joins the base and a file's name as they are, and the Windows installer's

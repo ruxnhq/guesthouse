@@ -664,11 +664,17 @@ mod tests {
     }
 
     #[test]
-    fn the_pin_is_0_1_9_which_takes_set_updates_off() {
+    fn the_pin_is_at_least_0_1_9_which_takes_set_updates_off() {
         let pin = pin();
-        assert_eq!(pin.version, "0.1.9");
-        assert_eq!(pin.url, "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.9.exe");
-        assert_eq!(pin.sha256, "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e");
+        let numbers: Vec<u32> = pin.version.split('.').map(|part| part.parse().unwrap()).collect();
+        assert!(
+            numbers.as_slice() >= [0, 1, 9].as_slice(),
+            "remoteman {} doesn't take `set updates off`",
+            pin.version
+        );
+        assert_eq!(pin.version, "0.1.10");
+        assert_eq!(pin.url, "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.10.exe");
+        assert_eq!(pin.sha256, "9e163215ed120d237bbbc30940360f273a61684a01ad1e23ca33a9872b3477f4");
     }
 
     /// Every field of the installer this host fetches and checks, whole, so where the pin is kept can
@@ -676,10 +682,10 @@ mod tests {
     #[test]
     fn the_pin_is_the_installer_it_always_was() {
         let pin = Pin {
-            version: "0.1.9".into(),
-            url: "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.9.exe".into(),
-            file: "remoteman-host-setup-0.1.9.exe".into(),
-            sha256: "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e".into(),
+            version: "0.1.10".into(),
+            url: "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.10.exe".into(),
+            file: "remoteman-host-setup-0.1.10.exe".into(),
+            sha256: "9e163215ed120d237bbbc30940360f273a61684a01ad1e23ca33a9872b3477f4".into(),
         };
         assert_eq!(super::pin(), pin);
     }

@@ -246,6 +246,9 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
+          # The tests mount their own firmware list over QEMU's, and bubblewrap can't make the folder
+          # on a read-only root, so it has to be there. The runner has no QEMU of its own.
+          sudo mkdir -p /usr/share/qemu/firmware
           docker pull ubuntu:24.04
           docker pull debian:13
       - name: install.sh and uninstall.sh, with no network

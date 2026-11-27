@@ -1,0 +1,87 @@
+#!/bin/sh
+# What root does for a Guesthouse package once its files are in place, and takes back before they go.
+# The deb, rpm and pacman packages each run it from their own scripts, so all three do the same. It's
+# the part of install.sh's root work that a package can do: the bridge helper is in the package itself,
+# setuid, and packages come as the package's dependencies. A user's kvm group can't be a package's
+# business, as a package doesn't know who will use it.
+#
+# Usage: package-setup configure | remove
+set -eu
+
+PROGRAM=/usr/libexec/guesthouse
+# The deb serves Ubuntu 24.04, whose GTK is 4.14, and newer systems. The app with HDR needs 4.16, so
+# the link to the app is chosen here, and again when GTK changes. The rpm and pacman packages have
+# the app with HDR only, as every Fedora and Arch they're for has GTK 4.16.
+APP_LINK=$PROGRAM/guesthouse
+HDR_APP=guesthouse-hdr
+PLAIN_APP=guesthouse-no-hdr
+HDR_GTK=4.16
+
+# The same two rules as install.sh's, in the same file, so either install or both leave it one way.
+SECURITY_MODULES=/sys/kernel/security/lsm
+SWTPM_PROFILE=/etc/apparmor.d/usr.bin.swtpm
+SWTPM_LOCAL=/etc/apparmor.d/local/usr.bin.swtpm
+SWTPM_RULE='owner /run/user/[0-9]*/guesthouse/** rwk,'
+SWTPM_SOCKET_RULE='unix (send, receive) type=stream addr=none,'
+SWTPM_COMMENT='# Guesthouse: the virtual TPM keeps its log and socket in the run folder.'
+
+gtk_version() {
+    dpkg-query -W -f '${Version}' libgtk-4-1 2>/dev/null || true
+}
+
+choose_app() {
+    [ -f "$PROGRAM/$HDR_APP" ] && [ -f "$PROGRAM/$PLAIN_APP" ] || return 0
+    app=$PLAIN_APP
+    gtk=$(gtk_version)
+    if [ -n "$gtk" ] && dpkg --compare-versions "$gtk" ge "$HDR_GTK"; then
+        app=$HDR_APP
+    fi
+    ln -sfn "$app" "$APP_LINK.new"
+    mv -Tf "$APP_LINK.new" "$APP_LINK"
+}
+
+apparmor_on() {
+    grep -qw apparmor "$SECURITY_MODULES" 2>/dev/null
+}
+
+# A container or a chroot has the profile but no AppArmor to load it into, and that's no failure.
+reload_swtpm_profile() {
+    ! apparmor_on || ! command -v apparmor_parser >/dev/null 2>&1 || [ ! -f "$SWTPM_PROFILE" ] ||
+        apparmor_parser -r "$SWTPM_PROFILE" || true
+}
+
+add_swtpm_rules() {
+    [ -f "$SWTPM_PROFILE" ] || return 0
+    grep -qxF "$SWTPM_RULE" "$SWTPM_LOCAL" 2>/dev/null &&
+        grep -qxF "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" 2>/dev/null && return 0
+    mkdir -p "${SWTPM_LOCAL%/*}"
+    for line in "$SWTPM_COMMENT" "$SWTPM_RULE" "$SWTPM_SOCKET_RULE"; do
+        grep -qxF "$line" "$SWTPM_LOCAL" 2>/dev/null || printf '%s\n' "$line" >>"$SWTPM_LOCAL"
+    done
+    reload_swtpm_profile
+}
+
+remove_swtpm_rules() {
+    [ -f "$SWTPM_LOCAL" ] || return 0
+    grep -qxF -e "$SWTPM_RULE" -e "$SWTPM_SOCKET_RULE" "$SWTPM_LOCAL" || return 0
+    grep -vxF -e "$SWTPM_RULE" -e "$SWTPM_SOCKET_RULE" -e "$SWTPM_COMMENT" "$SWTPM_LOCAL" >"$SWTPM_LOCAL.new" || true
+    cat "$SWTPM_LOCAL.new" >"$SWTPM_LOCAL"
+    rm -f "$SWTPM_LOCAL.new"
+    reload_swtpm_profile
+}
+
+case ${1:-} in
+    configure)
+        choose_app
+        add_swtpm_rules
+        ;;
+    remove)
+        # The link isn't one of the package's files, so the package manager wouldn't take it away.
+        [ ! -L "$APP_LINK" ] || [ ! -f "$PROGRAM/$PLAIN_APP" ] || rm -f "$APP_LINK"
+        remove_swtpm_rules
+        ;;
+    *)
+        printf 'usage: package-setup configure | remove\n' >&2
+        exit 2
+        ;;
+esac

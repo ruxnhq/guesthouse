@@ -21,7 +21,7 @@ const MAPS_FIELDS: usize = 5;
 const INODE_FIELD: usize = 4;
 
 fn pids(context: &Context) -> Vec<u32> {
-    sorted_names(&context.processes).iter().filter_map(|name| name.parse().ok()).collect()
+    sorted_names(&context.memory_holders).iter().filter_map(|name| name.parse().ok()).collect()
 }
 
 /// What a `maps` line ends with when it maps this slot's memory, now or from an older version.
@@ -50,7 +50,7 @@ pub fn holders(context: &Context, slot: Slot) -> Vec<(u32, u64)> {
     let mut found = Vec::new();
     for pid in pids(context) {
         // It has gone, or belongs to another user.
-        let Ok(maps) = fs::read(context.processes.join(pid.to_string()).join("maps")) else { continue };
+        let Ok(maps) = fs::read(context.memory_holders.join(pid.to_string()).join("maps")) else { continue };
         let maps = String::from_utf8_lossy(&maps);
         if let Some(inode) = maps.lines().find_map(|line| mapped_inode(line, &names)) {
             found.push((pid, inode));
@@ -71,7 +71,7 @@ pub fn memory_used(context: &Context) -> BTreeMap<u8, u64> {
     let mut used = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for pid in pids(context) {
-        let folder = context.processes.join(pid.to_string()).join("fd");
+        let folder = context.memory_holders.join(pid.to_string()).join("fd");
         for name in sorted_names(&folder) {
             let link = folder.join(name);
             let Ok(target) = fs::read_link(&link) else { continue };
@@ -114,7 +114,7 @@ pub mod stand_in {
         let file = scratch.path(&format!("memfds/{pid}/{}", shown.trim_start_matches('/')));
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, vec![1; bytes]).unwrap();
-        let folder = context.processes.join(pid.to_string()).join("fd");
+        let folder = context.memory_holders.join(pid.to_string()).join("fd");
         fs::create_dir_all(&folder).unwrap();
         let number = fs::read_dir(&folder).unwrap().count() + 3;
         symlink(&file, folder.join(number.to_string())).unwrap();
@@ -154,9 +154,9 @@ mod tests {
         holds_memfd(&context, &scratch, 101, "/memfd:gpupv-ram (deleted)", 2 * MIB);
         holds_memfd(&context, &scratch, 102, "/memfd:something-else (deleted)", 4 * MIB);
         // The daemon has QEMU's memfd too, which must not count twice.
-        let fd = context.processes.join("103/fd");
+        let fd = context.memory_holders.join("103/fd");
         fs::create_dir_all(&fd).unwrap();
-        symlink(fs::read_link(context.processes.join("100/fd/3")).unwrap(), fd.join("12")).unwrap();
+        symlink(fs::read_link(context.memory_holders.join("100/fd/3")).unwrap(), fd.join("12")).unwrap();
         let used = memory_used(&context);
         let at_least = |slot: u8, bytes: usize| used.get(&slot).is_some_and(|found| *found >= bytes as u64);
         assert!(at_least(2, 2 * MIB) && used[&2] < 3 * MIB as u64, "{used:?}");

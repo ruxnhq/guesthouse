@@ -37,10 +37,11 @@ jobs:
           oldest_kept=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S)
           # The newest image is kept, whatever its age, so the nightly file never points at nothing.
           newest=$(s3 s3api list-objects-v2 --bucket "$FILES_BUCKET" --prefix "$PREFIX" \
-            --query "max_by(Contents[?ends_with(Key, \`.dmg\`)], &LastModified).Key" --output text)
+            --query "max_by(Contents[?starts_with(Key, \`pub/guesthouse/nightly/Guesthouse-nightly-\`) && ends_with(Key, \`.dmg\`)], &LastModified).Key" --output text)
           for key in $(s3 s3api list-objects-v2 --bucket "$FILES_BUCKET" --prefix "$PREFIX" \
               --query 'Contents[].Key' --output text | tr '\t' '\n'); do
             case $key in
+              */Guesthouse-nightly.dmg*) continue ;;
               *.dmg | *.sha256) ;;
               *) continue ;;
             esac

@@ -141,10 +141,15 @@ jobs:
           dmg=$(jq -r .file guesthouse-macos-nightly.json)
           [ -f "$dmg" ]
           [ "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(jq -r .sha256 guesthouse-macos-nightly.json)" ]
-      - name: Publish it, its hash, and the nightly file last
+      - name: Publish it, its hash, a copy under a fixed name, and the nightly file last
         working-directory: nightly
         run: |
           set -eu
           dmg=$(jq -r .file guesthouse-macos-nightly.json)
           ../scripts/files-publish.sh guesthouse/nightly "$dmg" "${dmg%.dmg}.sha256"
+          # The site's button can't read a file (it runs no script), so the newest image is also up under
+          # a name that never changes. Only these two, and the nightly file, are ever replaced.
+          cp "$dmg" Guesthouse-nightly.dmg
+          sha256sum Guesthouse-nightly.dmg >Guesthouse-nightly.dmg.sha256
+          ../scripts/files-publish.sh --replace guesthouse/nightly Guesthouse-nightly.dmg Guesthouse-nightly.dmg.sha256
           ../scripts/files-publish.sh --replace guesthouse/nightly guesthouse-macos-nightly.json

@@ -275,6 +275,37 @@ if [ -n "$helpers" ]; then
     fi
 fi
 
+# --- The notice: what is in the app, under what licence, and where its source is ----------------
+# It is inside the app, so it is sealed by the signature, and the disk image carries it too.
+mkdir -p "$app/Contents/Resources/licences"
+licence_file=$here/../LICENSE
+[ -f "$licence_file" ] || licence_file=$here/LICENSE
+cp "$licence_file" "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt"
+{
+    echo "Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse"
+    echo
+    echo "Guesthouse itself (the app, its agent and, if it is here, guesthouse-pvg-host) is free software"
+    echo "under GPL-2.0-or-later. That repository at that commit is its source: mac/, crates/host-mac,"
+    echo "crates/pvg-host and crates/pvg-sys. The licence is Contents/Resources/licences/Guesthouse-GPL-2.0.txt."
+    if [ -f "$app/Contents/Helpers/rmhost" ]; then
+        remoteman_version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
+        remoteman_commit=$(sed -n 's/^ *"commit": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
+        echo
+        echo "rmhost (Contents/Helpers/rmhost) is built from mac/rmhost, which is MIT, with remoteman's core,"
+        echo "version $remoteman_version at commit $remoteman_commit of https://github.com/ruxnlabs/remoteman,"
+        echo "which is GPL-3.0-or-later. The program as a whole is under GPL-3.0-or-later, and the licence is"
+        echo "Contents/Resources/licences/remoteman-GPL-3.0.txt. Its source is mac/rmhost of the repository above and remoteman at"
+        echo "that commit."
+    fi
+    if [ -f "$app/Contents/Helpers/qemu-system-aarch64" ]; then
+        echo
+        echo "QEMU (Contents/Helpers/qemu-system-aarch64), its firmware (Contents/Resources/qemu) and the"
+        echo "libraries in Contents/Frameworks: Contents/Resources/qemu/SOURCE.txt says what each is and where its"
+        echo "source is (QEMU at the commit it names, with the patches in qemu/mac/patches of the repository"
+        echo "above, built by qemu/mac/build.sh), and their licences are in Contents/Resources/qemu/licences."
+    fi
+} >"$app/Contents/Resources/NOTICE.txt"
+
 # --- Sign inside-out: every Mach-O file, deepest first, then the app ------------------------
 main_exec=$app/Contents/MacOS/Guesthouse
 find "$app" -type f ! -path "$main_exec" | while IFS= read -r file; do
@@ -316,12 +347,7 @@ assess execute "$app"
 mkdir "$work/dmg"
 ditto "$app" "$work/dmg/Guesthouse.app"
 ln -s /Applications "$work/dmg/Applications"
-cat >"$work/dmg/SOURCE.txt" <<TXT
-Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse
-(mac/ and crates/host-mac). Guesthouse is free software under GPL-2.0-or-later, and that
-repository is the source of this build, with the patch and the version of QEMU named in
-docs/mac-host.md if QEMU is inside (Contents/Helpers).
-TXT
+cp "$app/Contents/Resources/NOTICE.txt" "$work/dmg/SOURCE.txt"
 dmg=$out/$name.dmg
 rm -f "$dmg"
 hdiutil create -quiet -volname "Guesthouse nightly" -srcfolder "$work/dmg" -ov -format UDZO -fs HFS+ "$dmg"

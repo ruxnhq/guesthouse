@@ -98,5 +98,10 @@ fi
 if [ -n "$helpers" ]; then
     mkdir -p "$helpers"
     cp "$out/rmhost" "$helpers/rmhost"
+    if [ "$serve" = yes ]; then
+        # remoteman's licence, the GPL 3 an rmhost with serve in it is under, goes with it.
+        mkdir -p "$helpers/Resources/licences"
+        cp "$src/LICENSE" "$helpers/Resources/licences/remoteman-GPL-3.0.txt"
+    fi
     echo "put rmhost in $helpers"
 fi

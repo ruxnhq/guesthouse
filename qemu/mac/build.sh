@@ -191,7 +191,7 @@ cp "$src/COPYING" "$src/COPYING.LIB" "$src/pc-bios/edk2-licenses.txt" "$data/lic
 # like at the top of each package's folder, two above the library.
 while IFS="$(printf '\t')" read -r name real; do
     package=$(dirname "$(dirname "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$real")")")
-    for notice in "$package"/COPYING* "$package"/LICENSE* "$package"/LICENCE*; do
+    for notice in "$package"/COPYING* "$package"/LICENSE* "$package"/LICENCE* "$package"/LGPL* "$package"/GPL*; do
         [ -f "$notice" ] || continue
         mkdir -p "$data/licences/$name"
         cp "$notice" "$data/licences/$name/"
@@ -206,21 +206,30 @@ done <"$work/copied.txt"
     echo "The patches and the script that built it are in qemu/mac/ of Guesthouse's source."
     echo "edk2-aarch64-code.fd and edk2-aarch64-vars.fd are QEMU's edk2 firmware from that tree,"
     echo "under the licences in licences/edk2-licenses.txt."
-    echo "QEMU was built against these libraries, as pkg-config found them:"
-    for library in glib-2.0 pixman-1 slirp; do
-        if pkg-config --exists "$library"; then echo "  $library $(pkg-config --modversion "$library")"; fi
-    done
-    if [ "$slirp" = --enable-slirp ] && ! pkg-config --exists slirp; then
-        echo "  libslirp, QEMU's subproject at the commit QEMU's subprojects/slirp.wrap names, linked in"
+    echo "QEMU was built with glib $(pkg-config --modversion glib-2.0) and, for the network,"
+    if pkg-config --exists slirp; then
+        echo "libslirp $(pkg-config --modversion slirp), both linked as libraries that come with it (below)."
+    elif [ "$slirp" = --enable-slirp ]; then
+        echo "libslirp, QEMU's subproject at the commit QEMU's subprojects/slirp.wrap names, linked in."
+    else
+        echo "no network library."
     fi
-    echo "These came with it in Frameworks/, unchanged but for the names they load each other by,"
-    echo "with their licences in licences/ where the package that installed them had one:"
+    echo "These came with it in Frameworks/, unchanged but for the names they load each other by. Each is"
+    echo "named with the Homebrew package it was copied from and that package's version, and the licence"
+    echo "files that package had are in licences/NAME/. Their source is each project's own."
     while IFS="$(printf '\t')" read -r name real; do
+        package=$(dirname "$(dirname "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$real")")")
+        what="$(basename "$(dirname "$package")") $(basename "$package")"
         if [ -d "$data/licences/$name" ]; then
-            echo "  $name"
+            echo "  $name: $what, licence files $(ls "$data/licences/$name" | tr '\n' ' ')"
         else
-            echo "  $name (no licence file was beside it; its own project has it)"
+            echo "  $name: $what, with no licence file beside it"
         fi
     done <"$work/copied.txt"
+    if grep -q '^libintl' "$work/copied.txt"; then
+        echo "libintl is gettext's, under the GNU LGPL 2.1 or later, as the header libintl.h says; that"
+        echo "licence is licences/COPYING.LIB. The COPYING in licences/libintl.8.dylib is the GPL 3 of the"
+        echo "gettext package's other programs, which are not here."
+    fi
 } >"$data/SOURCE.txt"
 echo "done: $helpers"

@@ -4,7 +4,7 @@
 # It works from ~/.local/lib/guesthouse/manifest, so any copy of this file does the same job, and it
 # needs no network. A file goes only if it's still the one that was installed: it's left alone if its
 # hash has changed, a folder goes only once it's empty, and anything outside your own folders is refused
-# whatever the manifest says. The exceptions are QEMU's bridge helper, which root put in the folder
+# whatever the manifest says. The exceptions are QEMU's bridge helper and Guesthouse's clock helper, which root put in the folder
 # named below, and the rule root added to swtpm's AppArmor profile, which root takes away. Your machines and their disks stay, unless you pass
 # --delete-machines and then type the folder's name.
 set -eu
@@ -14,6 +14,7 @@ TAB=$(printf '\t')
 # The same as install.sh's. This path is never read from the manifest, which you can write.
 BRIDGE_HELPER_FOLDER=/usr/local/libexec/guesthouse
 BRIDGE_HELPER=$BRIDGE_HELPER_FOLDER/qemu-bridge-helper
+CLOCK_HELPER=$BRIDGE_HELPER_FOLDER/guesthouse-clock-helper
 SWTPM_PROFILE=/etc/apparmor.d/usr.bin.swtpm
 SWTPM_LOCAL=/etc/apparmor.d/local/usr.bin.swtpm
 SWTPM_RULE='owner /run/user/[0-9]*/guesthouse/** rwk,'
@@ -257,9 +258,13 @@ print_plan() {
         say "The install added you to the kvm group. This takes you out again, as root:"
         say "  sudo gpasswd -d $(id -un) kvm"
     fi
-    if helper_is_ours; then
+    if helper_is_ours "$BRIDGE_HELPER"; then
         say "The install put QEMU's bridge helper in $BRIDGE_HELPER_FOLDER. This removes it, as root:"
-        say "  sudo sh -c '$(helper_command)'"
+        say "  sudo sh -c '$(helper_command "$BRIDGE_HELPER")'"
+    fi
+    if helper_is_ours "$CLOCK_HELPER"; then
+        say "The install put Guesthouse's clock helper in $BRIDGE_HELPER_FOLDER. This removes it, as root:"
+        say "  sudo sh -c '$(helper_command "$CLOCK_HELPER")'"
     fi
     if swtpm_rule_is_ours; then
         say "The install added a rule to swtpm's AppArmor profile in $SWTPM_LOCAL. This takes it out, as root:"
@@ -267,16 +272,17 @@ print_plan() {
     fi
 }
 
-# Only while it's still the copy the install put there. Another install of Guesthouse on this PC may
-# have replaced it since, and then it's that one's.
+# The helper at $1, only while it's still the copy the install put there. Another install of Guesthouse
+# on this PC may have replaced it since, and then it's that one's.
 helper_is_ours() {
-    hash=$(awk -F "$TAB" -v path="$BRIDGE_HELPER" '$1 == "root-file" && $3 == path { found = $2 }
+    hash=$(awk -F "$TAB" -v path="$1" '$1 == "root-file" && $3 == path { found = $2 }
         END { print found }' "$MANIFEST")
-    [ -n "$hash" ] && [ -f "$BRIDGE_HELPER" ] && [ "$(sha256sum "$BRIDGE_HELPER" | cut -d ' ' -f 1)" = "$hash" ]
+    [ -n "$hash" ] && [ -f "$1" ] && [ "$(sha256sum "$1" | cut -d ' ' -f 1)" = "$hash" ]
 }
 
+# The folder goes with the last helper in it.
 helper_command() {
-    printf 'rm -f -- "%s" && { rmdir -- "%s" 2>/dev/null || true; }' "$BRIDGE_HELPER" "$BRIDGE_HELPER_FOLDER"
+    printf 'rm -f -- "%s" && { rmdir -- "%s" 2>/dev/null || true; }' "$1" "$BRIDGE_HELPER_FOLDER"
 }
 
 # Another install of Guesthouse on this PC may still need the rule, as it's the same for every user. It
@@ -391,8 +397,10 @@ leave_group() {
 }
 
 remove_helper() {
-    helper_is_ours || return 0
-    sudo sh -c "$(helper_command)" </dev/tty || warn "couldn't remove $BRIDGE_HELPER."
+    for helper in "$BRIDGE_HELPER" "$CLOCK_HELPER"; do
+        helper_is_ours "$helper" || continue
+        sudo sh -c "$(helper_command "$helper")" </dev/tty || warn "couldn't remove $helper."
+    done
 }
 
 remove_swtpm_rule() {

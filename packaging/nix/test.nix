@@ -29,6 +29,7 @@ self: {
     machine.wait_for_unit("multi-user.target")
 
     machine.succeed("test -u /run/wrappers/bin/guesthouse-bridge-helper")
+    machine.succeed("test -u /run/wrappers/bin/guesthouse-clock-helper")
     assert machine.succeed("cat /etc/qemu/bridge.conf") == "allow br0\n"
     machine.succeed("id -nG alice | grep -qw kvm")
 

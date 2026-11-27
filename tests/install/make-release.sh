@@ -32,6 +32,11 @@ done
 printf '#!/bin/sh\necho "qemu %s"\n' "$version" >"$tree/qemu/build/qemu-system-x86_64"
 # The same in every release unless a test says otherwise, as QEMU's helper rarely changes.
 printf '#!/bin/sh\necho "bridge helper %s"\n' "${HELPER_VERSION:-1}" >"$tree/qemu/build/qemu-bridge-helper"
+# Guesthouse's clock helper, only in a release a test makes with one.
+if [ -n "${CLOCK_HELPER_VERSION:-}" ]; then
+    printf '#!/bin/sh\necho "clock helper %s"\n' "$CLOCK_HELPER_VERSION" >"$tree/guesthouse-clock-helper"
+    chmod +x "$tree/guesthouse-clock-helper"
+fi
 echo bios >"$tree/qemu/pc-bios/bios.bin"
 cat >"$tree/guesthouse-check" <<'CHECK'
 #!/bin/sh

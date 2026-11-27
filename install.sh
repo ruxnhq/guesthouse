@@ -6,7 +6,7 @@
 # will do and every command that needs root, and waits for you to say yes.
 #
 # It never installs or changes a GPU driver, kernel arguments or services, and it never needs root for
-# anything but packages, QEMU's bridge helper and one AppArmor rule for swtpm. --dry-run shows the plan and stops. Everything it puts on this PC is listed in
+# anything but packages, QEMU's bridge helper, the card's clock helper and one AppArmor rule for swtpm. --dry-run shows the plan and stops. Everything it puts on this PC is listed in
 # ~/.local/lib/guesthouse/manifest, and uninstall.sh removes that and nothing else.
 #
 # The checksums below only prove that the download is the release this file names. They can't protect
@@ -33,6 +33,11 @@ QEMU_PROGRAM=qemu/build/qemu-system-x86_64
 BRIDGE_HELPER_SOURCE=qemu/build/qemu-bridge-helper
 BRIDGE_HELPER_FOLDER=/usr/local/libexec/guesthouse
 BRIDGE_HELPER=$BRIDGE_HELPER_FOLDER/qemu-bridge-helper
+# Holding an NVIDIA card's memory clock up while another device views a machine takes root too. This
+# helper does only that, for one card at a time, and goes in the same folder the same way. A release
+# without it leaves it out.
+CLOCK_HELPER_SOURCE=guesthouse-clock-helper
+CLOCK_HELPER=$BRIDGE_HELPER_FOLDER/guesthouse-clock-helper
 # Ubuntu's swtpm runs under an AppArmor profile that lets it write in your home folder and /tmp, but not
 # in /run/user, where a machine's run folder is, and it takes the data channel QEMU hands it only from
 # libvirt's QEMU, not from one in the jail. So a Windows machine's virtual TPM couldn't start. Root adds
@@ -78,6 +83,8 @@ PACKAGES_ADDED=""
 HELPER_PLACED=no
 SWTPM_RULE_ADDED=no
 HELPER_LEFT_OUT=no
+CLOCK_HELPER_PLACED=no
+CLOCK_HELPER_LEFT_OUT=no
 
 say() {
     printf '%s\n' "$*"
@@ -640,19 +647,26 @@ install_command() {
     esac
 }
 
-# Whether root has to put the helper in place: it isn't there, isn't setuid, or isn't this release's.
+# Whether root has to put a helper, from $1, in place at $2: it isn't there, isn't setuid, or isn't
+# this release's. A release without it has nothing to put there.
 helper_needs_work() {
     [ -f "$1" ] || return 1
-    [ -u "$BRIDGE_HELPER" ] || return 0
-    [ "$(hash_of "$1")" != "$(hash_of "$BRIDGE_HELPER")" ]
+    [ -u "$2" ] || return 0
+    [ "$(hash_of "$1")" != "$(hash_of "$2")" ]
 }
 
-# Root checks the copy against the hash taken here, before it makes it setuid, as the source is in a
-# folder you can write. A copy that fails goes.
+# Either helper of the release in folder $1.
+helpers_need_work() {
+    helper_needs_work "$1/$BRIDGE_HELPER_SOURCE" "$BRIDGE_HELPER" ||
+        helper_needs_work "$1/$CLOCK_HELPER_SOURCE" "$CLOCK_HELPER"
+}
+
+# Root checks the copy of $1 against the hash taken here, before it makes it setuid as $2, as the
+# source is in a folder you can write. A copy that fails goes.
 helper_command() {
     # shellcheck disable=SC2016 # $f and $n are for root's shell
     printf '{ f="%s"; n="$f/%s.new"; { mkdir -p "$f" && chmod 755 "$f" && cp "%s" "$n" && chown 0:0 "$n" && echo "%s  $n" | sha256sum -c --quiet && chmod 4755 "$n" && mv -f "$n" "$f/%s"; } || { rm -f "$n"; false; }; }' \
-        "$BRIDGE_HELPER_FOLDER" "${BRIDGE_HELPER##*/}" "$1" "$(hash_of "$1")" "${BRIDGE_HELPER##*/}"
+        "${2%/*}" "${2##*/}" "$1" "$(hash_of "$1")" "${2##*/}"
 }
 
 # With AppArmor on: swtpm's profile is there without the rule, or swtpm is about to be installed and its
@@ -687,13 +701,21 @@ plan_root_work() {
             ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }usermod -aG kvm $(id -un)"
         fi
     fi
-    if ! helper_needs_work "$TREE/$BRIDGE_HELPER_SOURCE"; then
+    if ! helper_needs_work "$TREE/$BRIDGE_HELPER_SOURCE" "$BRIDGE_HELPER"; then
         :
     elif [ -n "$FROM_APP" ] || command -v sudo >/dev/null 2>&1; then
         HELPER_PLACED=yes
-        ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }$(helper_command "$TREE/$BRIDGE_HELPER_SOURCE")"
+        ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }$(helper_command "$TREE/$BRIDGE_HELPER_SOURCE" "$BRIDGE_HELPER")"
     else
         HELPER_LEFT_OUT=yes
+    fi
+    if ! helper_needs_work "$TREE/$CLOCK_HELPER_SOURCE" "$CLOCK_HELPER"; then
+        :
+    elif [ -n "$FROM_APP" ] || command -v sudo >/dev/null 2>&1; then
+        CLOCK_HELPER_PLACED=yes
+        ROOT_COMMAND="${ROOT_COMMAND:+$ROOT_COMMAND && }$(helper_command "$TREE/$CLOCK_HELPER_SOURCE" "$CLOCK_HELPER")"
+    else
+        CLOCK_HELPER_LEFT_OUT=yes
     fi
     if swtpm_rule_needed; then
         SWTPM_RULE_ADDED=yes
@@ -812,10 +834,14 @@ print_root_plan() {
     [ -z "$PACKAGES" ] || [ "$IMMUTABLE" = yes ] || say "That adds the packages Guesthouse needs: $PACKAGES"
     [ "$HELPER_PLACED" = no ] ||
         say "That puts QEMU's bridge helper in $BRIDGE_HELPER_FOLDER, setuid root, for bridged networking."
+    [ "$CLOCK_HELPER_PLACED" = no ] ||
+        say "That puts Guesthouse's clock helper in $BRIDGE_HELPER_FOLDER, setuid root. It holds an NVIDIA card's memory clock up while another device views a machine, and does nothing else."
     [ "$SWTPM_RULE_ADDED" = no ] ||
         say "It lets swtpm, the virtual TPM a Windows machine needs, write in your run folder under /run/user and take the jailed QEMU's data channel. Its AppArmor profile doesn't."
     [ "$HELPER_LEFT_OUT" = no ] ||
         say "There's no sudo here, so QEMU's bridge helper is left out. Only bridged networking needs it, and once the rest is installed I'll show what root can run to put it in."
+    [ "$CLOCK_HELPER_LEFT_OUT" = no ] ||
+        say "There's no sudo here, so Guesthouse's clock helper is left out. Without it an NVIDIA card's clocks are left alone while another device views a machine, and once the rest is installed I'll show what root can run to put it in."
     [ -z "$ROOT_COMMAND" ] || [ "$ADD_TO_KVM" = no ] ||
         say "You'd join the kvm group to open /dev/kvm, and that takes a new login."
 }
@@ -939,6 +965,8 @@ list_root_work() {
     # A helper left for root is listed too, so that uninstall.sh takes it away if root did put it in.
     [ "$HELPER_PLACED" = no ] && [ "$HELPER_LEFT_OUT" = no ] ||
         manifest_line root-file "$(hash_of "$TREE/$BRIDGE_HELPER_SOURCE")" "$BRIDGE_HELPER"
+    [ "$CLOCK_HELPER_PLACED" = no ] && [ "$CLOCK_HELPER_LEFT_OUT" = no ] ||
+        manifest_line root-file "$(hash_of "$TREE/$CLOCK_HELPER_SOURCE")" "$CLOCK_HELPER"
     [ "$SWTPM_RULE_ADDED" = no ] || manifest_line apparmor-rule - "$SWTPM_LOCAL"
 }
 
@@ -1164,6 +1192,7 @@ say_done() {
     [ "$ADD_TO_KVM" = no ] || say "Log out and in again, so that you're in the kvm group."
     [ "$IMMUTABLE" = no ] || [ -z "$PACKAGES" ] || say "Add the packages listed above before you open it."
     [ "$HELPER_LEFT_OUT" = no ] || say_how_root_adds_the_helper
+    [ "$CLOCK_HELPER_LEFT_OUT" = no ] || say_how_root_adds_the_clock_helper
 }
 
 # The copy that's installed is the source, as staging is gone by the time root reads this. The line is
@@ -1171,7 +1200,13 @@ say_done() {
 say_how_root_adds_the_helper() {
     say ""
     say "There's no sudo here, so this release's bridge helper isn't in $BRIDGE_HELPER_FOLDER. Bridged networking needs it, and nothing else does. This puts it in, as root:"
-    say "  sh -c '$(helper_command "$CURRENT_LINK/$BRIDGE_HELPER_SOURCE" | sed "s/'/'\\\\''/g")'"
+    say "  sh -c '$(helper_command "$CURRENT_LINK/$BRIDGE_HELPER_SOURCE" "$BRIDGE_HELPER" | sed "s/'/'\\\\''/g")'"
+}
+
+say_how_root_adds_the_clock_helper() {
+    say ""
+    say "There's no sudo here, so this release's clock helper isn't in $BRIDGE_HELPER_FOLDER. Holding an NVIDIA card's memory clock up while another device views a machine needs it, and nothing else does. This puts it in, as root:"
+    say "  sh -c '$(helper_command "$CURRENT_LINK/$CLOCK_HELPER_SOURCE" "$CLOCK_HELPER" | sed "s/'/'\\\\''/g")'"
 }
 
 # Which release this run is about, and whether there's anything to do.
@@ -1186,9 +1221,9 @@ choose_release() {
         die "you have $installed, which is newer than $RELEASE_VERSION. I won't go backwards."
     fi
     # A plain install of this version goes on, as the GPU may be able to run now, and so does one whose
-    # bridge helper has gone wrong.
+    # bridge or clock helper has gone wrong.
     if [ "$installed" = "$RELEASE_VERSION" ] && { [ "$UPDATE" = yes ] || [ "$(manifest_value mode)" = gpu ]; } &&
-        ! helper_needs_work "$CURRENT_LINK/$BRIDGE_HELPER_SOURCE"; then
+        ! helpers_need_work "$CURRENT_LINK"; then
         say "Guesthouse $installed is the latest release."
         exit 0
     fi
@@ -1196,7 +1231,7 @@ choose_release() {
 
 stop_if_nothing_changes() {
     if [ "$(manifest_value version)" = "$RELEASE_VERSION" ] && [ "$(manifest_value mode)" = "$MODE" ] &&
-        ! helper_needs_work "$TREE/$BRIDGE_HELPER_SOURCE" && ! swtpm_rule_needed; then
+        ! helpers_need_work "$TREE" && ! swtpm_rule_needed; then
         say "Guesthouse $RELEASE_VERSION is the latest release, and it's installed the way this PC can run it."
         exit 0
     fi

@@ -326,6 +326,6 @@ mod tests {
         assert!(!holder.held());
         holder.tick(200, &[viewer(0, 7)]);
         assert_eq!(said(&log).matches("hold").count(), 1);
-        assert_eq!(why(Some(3)).contains("setuid"), true);
+        assert!(why(Some(3)).contains("setuid"));
     }
 }

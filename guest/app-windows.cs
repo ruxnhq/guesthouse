@@ -478,6 +478,7 @@ public class AppWindows : Form
     const long AwayMostMs = 3000;
     string screenMonitor;                       // the monitor the windows are laid out on, as DisplayConfig names its path
     long awaySince = -1;                        // since when Windows shows on another; -1 while it shows on that one
+    string takenShape;                          // a disagreeing screen taken as it is after AwayMostMs (ScreenAway)
 
     // The active path's adapter and target, which name the monitor for as long as Windows has it.
     static string MonitorKey(DcPath path) { return path.T.Adapter.High + ":" + path.T.Adapter.Low + ":" + path.T.Id; }
@@ -498,18 +499,21 @@ public class AppWindows : Form
         // Back on its own monitor, Windows has the mode a moment before the screen's metrics say it (inferred from a layout at the
         // other monitor's 1920x1080 that went out with the path ours again): until both agree, it is still away. The moment can be
         // so short that this is the first look that sees it.
-        int screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN), screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        int screenW = GetSystemMetrics(SM_CXSCREEN), screenH = GetSystemMetrics(SM_CYSCREEN);   // the main monitor's
         bool settled = sourceW <= 0 || sourceH <= 0 || (sourceW == screenW && sourceH == screenH);
         // The work area follows last: it was still the other monitor's 1920x1020 with the screen back at 6216x1300, and every window
         // packed into it hid the others (inferred from host windows closed at each change of mode). The taskbar takes one edge, so
         // a work area that is the screen's in neither direction is not this screen's yet.
         RECT wa;
-        if (settled && SystemParametersInfo(SPI_GETWORKAREA, 0, out wa, 0) && wa.R - wa.L != screenW && wa.B - wa.T != screenH) settled = false;
+        if (!SystemParametersInfo(SPI_GETWORKAREA, 0, out wa, 0)) wa = new RECT();
+        if (settled && wa.R > wa.L && wa.R - wa.L != screenW && wa.B - wa.T != screenH) settled = false;
+        // A screen that never agrees by these rules (bars on two edges, say) is taken as it is once it has stood AwayMostMs, and not
+        // held again while it stays so.
+        string shape = sourceW + "x" + sourceH + " " + screenW + "x" + screenH + " " + wa.L + "," + wa.T + "," + wa.R + "," + wa.B;
+        if (!settled && key == screenMonitor && shape == takenShape) settled = true;
         if (key == screenMonitor && settled)
         {
-            if (awaySince < 0) return false;
-            awaySince = -1;
-            Back();
+            if (awaySince >= 0) { awaySince = -1; Back(); }
             return false;
         }
         if (awaySince < 0) { awaySince = now; NoteSizes(); }
@@ -522,6 +526,7 @@ public class AppWindows : Form
             if (why != null) LogError(new Exception("scale " + wantedPercent + " on the other monitor: " + why));
         }
         if (now - awaySince < AwayMostMs) return true;
+        if (key == screenMonitor) takenShape = shape;
         screenMonitor = key;                    // it stayed: this is the windows' monitor now
         awaySince = -1;
         Back();
@@ -587,6 +592,7 @@ public class AppWindows : Form
         {
             wantedPercent = 0;
             if (originalPercent > 0 && PercentNow() != originalPercent) SetScale(originalPercent);
+            PutStepsBack();
         }
         catch (Exception ex) { LogError(ex); }
     }
@@ -1810,6 +1816,9 @@ public class AppWindows : Form
     static readonly int[] DpiSteps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
 
     int originalPercent;                        // the scale before the host first asked for another, put back when the helper ends
+    // Each monitor's relative step before the helper first set one (SetScale), written back when the helper ends. One that
+    // is not shown then (QEMU's display, set while it stood in) cannot be: DisplayConfig takes only a shown monitor.
+    readonly Dictionary<string, int> originalSteps = new Dictionary<string, int>();
     bool scaleTaken;                            // wantedPercent was taken from Windows, or from the host before that
     int wantedPercent;                          // the step the host asked for last, else the one Windows had when the helper
                                                 // started: set again after a change of mode
@@ -1890,8 +1899,33 @@ public class AppWindows : Form
         // smallest it offers and shows the smallest (measured: cur -10 with min -4, at 100 %), so the smallest is kept as the lowest
         // step there is, which stays 100 % at every resolution.
         if (percent == DpiSteps[0]) set.Rel = -(DpiSteps.Length - 1);
+        string key = MonitorKey(path);
+        if (!originalSteps.ContainsKey(key))
+        {
+            DcDpiGet g = new DcDpiGet();
+            g.H.Type = DC_GET_DPI_SCALE; g.H.Size = Marshal.SizeOf(typeof(DcDpiGet)); g.H.Adapter = path.S.Adapter; g.H.Id = path.S.Id;
+            if (DisplayConfigGetDeviceInfo(ref g) == 0) originalSteps[key] = g.Cur;
+        }
         int result = DisplayConfigSetDeviceInfo(ref set);
         return result == 0 ? null : "Windows refused the scale, error " + result;
+    }
+
+    // Writes back each shown monitor's relative step from before the helper set one.
+    void PutStepsBack()
+    {
+        uint np, nm;
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out np, out nm) != 0 || np == 0) return;
+        DcPath[] paths = new DcPath[np]; DcMode[] modes = new DcMode[nm];
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref np, paths, ref nm, modes, IntPtr.Zero) != 0) return;
+        for (int i = 0; i < np; i++)
+        {
+            int rel;
+            if (!originalSteps.TryGetValue(MonitorKey(paths[i]), out rel)) continue;
+            DcDpiSet set = new DcDpiSet();
+            set.H.Type = DC_SET_DPI_SCALE; set.H.Size = Marshal.SizeOf(typeof(DcDpiSet)); set.H.Adapter = paths[i].S.Adapter; set.H.Id = paths[i].S.Id;
+            set.Rel = rel;
+            DisplayConfigSetDeviceInfo(ref set);
+        }
     }
 
     // Whether boxes of these sizes, in this order, all find a spot in a pack area of w x h, by the same rule as TrySpot: the first
@@ -1994,8 +2028,11 @@ public class AppWindows : Form
         int percent = (int)Num(r, "percent", 0);
         if (ScreenAway()) { Answer(link, n, false, "Windows shows on another monitor for a moment"); return; }
         if (originalPercent == 0) originalPercent = PercentNow();
+        // Wanted first: Windows may send WM_DPICHANGED while the scale is set, and KeepScale there would set the old one back.
+        int before = wantedPercent;
+        wantedPercent = percent;
         string why = SetScale(percent);
-        if (why == null) wantedPercent = percent;
+        if (why != null) wantedPercent = before;
         Answer(link, n, why == null, why);
         scanDue = true; Kick();
         DisplayStep(true);

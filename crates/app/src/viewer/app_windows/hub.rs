@@ -459,7 +459,9 @@ impl Hub {
                 if cell.popup && parent.is_none() {
                     return;
                 }
-                let view = View::open(self, &cell, parent.as_ref());
+                let owner = owner_window(&cell, &self.hosted.borrow())
+                    .and_then(|id| self.views.borrow().get(id).cloned());
+                let view = View::open(self, &cell, parent.as_ref(), owner.as_deref());
                 self.note(&format!(
                     "opened {} {} at {:?} titled {:?}",
                     if cell.popup { "popup" } else { "window" },

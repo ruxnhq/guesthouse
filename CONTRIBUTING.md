@@ -54,7 +54,7 @@ These matter more than anything else here, because text inside code is something
 
 ## The contributor licence agreement
 
-Your first pull request goes in once you've signed the [contributor licence agreement](CLA.md), by adding your line to [CLA-SIGNERS.md](CLA-SIGNERS.md) in that pull request. You keep your copyright. The agreement gives RUXN LLC a licence to your work that isn't tied to the GPL, and RUXN LLC keeps publishing your work under GPL-2.0-or-later. A check on the pull request looks for your line.
+Your first pull request goes in once you've signed the [contributor licence agreement](CLA.md), by adding a file with your line to [CLA/signers](CLA/signers) in that pull request, as [CLA/README.md](CLA/README.md) says. You keep your copyright. The agreement gives RUXN LLC a licence to your work that isn't tied to the GPL, and RUXN LLC keeps publishing your work under GPL-2.0-or-later. A check on the pull request looks for your file.
 
 ## Recordings
 

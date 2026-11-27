@@ -260,6 +260,11 @@ mod tests {
 
         let RelayReply::Status(closed) = lan.handle(Request::Close) else { panic!("closing failed") };
         assert_eq!((closed.state, closed.port), (ShareState::Off, None));
+        // The relay lets go of its socket once its thread sees the close, which can be just after.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while UdpSocket::bind(("127.0.0.1", port)).is_err() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         UdpSocket::bind(("127.0.0.1", port)).expect("closing gives the port back");
     }
 

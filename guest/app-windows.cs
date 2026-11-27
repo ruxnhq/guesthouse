@@ -239,7 +239,9 @@ public class AppWindows : Form
         public long MoveAt;                     // when to move a cell that outgrew its slot (0 = not pending)
         public RECT Frame, Win;                 // last known real rectangles (screen coordinates)
         public bool Cured; public int CureTries;
-        public bool WasZoomed; public int UnzoomTries; public long UnzoomAt;   // maximized when the helper took it out of that, to be put back at the end
+        public long BornAt;                     // when the helper first saw it
+        public int AwayW, AwayH;                // its outer size when Windows went to another monitor for a moment (NoteSizes)
+        public bool WasZoomed, HeldZoomed; public int UnzoomTries; public long UnzoomAt;   // HeldZoomed: maximized at a cell's size (HoldZoomed)   // maximized when the helper took it out of that, to be put back at the end
         public bool NameDirty, LocDirty, ThumbDirty, ThumbApplied;
         public long TitleAt;
         public int CaptionH, ButtonsW;          // what Windows says of the title bar; 0 when it cannot be known
@@ -412,7 +414,9 @@ public class AppWindows : Form
         if (m.Msg == WM_DPICHANGED)
         {
             // The overlay keeps covering the screen in physical pixels: Windows' suggested rectangle is not taken.
+            if (ScreenAway()) { m.Result = IntPtr.Zero; return; }
             FitToScreen();
+            KeepScale();
             foreach (Cell c in cells.Values) { c.ThumbDirty = true; if (!c.Popup) ReadCaption(c); }
             scanDue = true; Kick();
             m.Result = IntPtr.Zero;
@@ -433,6 +437,7 @@ public class AppWindows : Form
     // The screen size changed: the overlay follows, and cells that no longer fit are placed again (the one time cells may jump).
     void OnDisplayChange()
     {
+        if (ScreenAway()) return;
         FitToScreen();
         KeepScale();
         PlaceAgain();
@@ -442,6 +447,7 @@ public class AppWindows : Form
     // the old screen's: a window that did not fit in it stayed an overflow cell over the others on a screen grown for it.
     void OnWorkAreaChange()
     {
+        if (ScreenAway()) return;
         int l = packL, t = packT, r = packR, b = packB;
         FitPackArea();
         if (l != packL || t != packT || r != packR || b != packB) PlaceAgain();
@@ -461,6 +467,103 @@ public class AppWindows : Form
         scanDue = true; Kick();
     }
 
+    // ================================================================ The monitor the windows are on
+    // A size the display driver does not list yet makes it take its monitor away and bring it back with the new list. For that
+    // moment (about a quarter of a second, measured) Windows shows on another monitor, QEMU's own display, at its mode and its
+    // scale, then comes back at the old size and then at the new one. Taken as real, that moment re-placed and re-measured every
+    // window at another size and scale, and the host closed and opened its windows. So while Windows shows on a monitor that is
+    // not the one the windows are laid out on, the helper holds: no layout goes out, nothing is placed, parked or un-maximized,
+    // and no scale is set. When the monitor comes back, every window is placed again on it. One that does not come back within
+    // AwayMostMs was really replaced, and the windows go to the new one.
+    const long AwayMostMs = 3000;
+    string screenMonitor;                       // the monitor the windows are laid out on, as DisplayConfig names its path
+    long awaySince = -1;                        // since when Windows shows on another; -1 while it shows on that one
+
+    // The active path's adapter and target, which name the monitor for as long as Windows has it.
+    static string MonitorKey(DcPath path) { return path.T.Adapter.High + ":" + path.T.Adapter.Low + ":" + path.T.Id; }
+
+    // Whether Windows shows on another monitor than the windows' own right now. Looks at Windows each time it is asked.
+    bool ScreenAway()
+    {
+        DcPath path;
+        int sourceW, sourceH;
+        if (!FirstPath(out path, out sourceW, out sourceH))
+        {
+            if (awaySince < 0) { awaySince = Now(); NoteSizes(); }     // no monitor at all: the same moment, as far as the windows go
+            return Now() - awaySince < AwayMostMs;
+        }
+        string key = MonitorKey(path);
+        if (screenMonitor == null) screenMonitor = key;
+        long now = Now();
+        // Back on its own monitor, Windows has the mode a moment before the screen's metrics say it (inferred from a layout at the
+        // other monitor's 1920x1080 that went out with the path ours again): until both agree, it is still away. The moment can be
+        // so short that this is the first look that sees it.
+        int screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN), screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        bool settled = sourceW <= 0 || sourceH <= 0 || (sourceW == screenW && sourceH == screenH);
+        // The work area follows last: it was still the other monitor's 1920x1020 with the screen back at 6216x1300, and every window
+        // packed into it hid the others (inferred from host windows closed at each change of mode). The taskbar takes one edge, so
+        // a work area that is the screen's in neither direction is not this screen's yet.
+        RECT wa;
+        if (settled && SystemParametersInfo(SPI_GETWORKAREA, 0, out wa, 0) && wa.R - wa.L != screenW && wa.B - wa.T != screenH) settled = false;
+        if (key == screenMonitor && settled)
+        {
+            if (awaySince < 0) return false;
+            awaySince = -1;
+            Back();
+            return false;
+        }
+        if (awaySince < 0) { awaySince = now; NoteSizes(); }
+        // The other monitor keeps a scale of its own, and every window was made to follow it there and back (measured: 125 % on
+        // QEMU's display, Paint smaller and a dialog larger after each change of mode). Given the windows' scale, which Windows
+        // keeps for that monitor too, the next moment there changes no window. DisplayConfig cannot set a monitor that is not shown.
+        if (key != screenMonitor && wantedPercent > 0 && PercentNow() != wantedPercent)
+        {
+            string why = SetScale(wantedPercent);
+            if (why != null) LogError(new Exception("scale " + wantedPercent + " on the other monitor: " + why));
+        }
+        if (now - awaySince < AwayMostMs) return true;
+        screenMonitor = key;                    // it stayed: this is the windows' monitor now
+        awaySince = -1;
+        Back();
+        return false;
+    }
+
+    // Windows fits every window into the other monitor for that moment and puts them back about, not exactly: Word came back 1 px
+    // taller than the work area and became an overflow cell that hid the others, until the screen grew for it (measured). So
+    // the size each window had before is noted, and given back to a window Windows left at another size. Parking does the place.
+    void NoteSizes()
+    {
+        foreach (Cell c in cells.Values)
+        {
+            c.AwayW = c.AwayH = 0;
+            if (c.Popup || !c.Active || c.Iconic || IsZoomed(c.Src)) continue;
+            c.AwayW = c.Win.R - c.Win.L; c.AwayH = c.Win.B - c.Win.T;
+        }
+    }
+
+    void PutSizesBack()
+    {
+        foreach (Cell c in cells.Values)
+        {
+            if (c.AwayW <= 0 || c.AwayH <= 0 || !IsWindow(c.Src) || IsIconic(c.Src) || IsZoomed(c.Src) || IsHungAppWindow(c.Src)) continue;
+            RECT w;
+            if (GetWindowRect(c.Src, out w) && (w.R - w.L != c.AwayW || w.B - w.T != c.AwayH))
+                SetWindowPos(c.Src, IntPtr.Zero, 0, 0, c.AwayW, c.AwayH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+            c.AwayW = c.AwayH = 0;
+        }
+    }
+
+    // Windows shows on the windows' monitor again, at whatever it is now: the overlay, the scale and every cell follow it.
+    // Windows moved windows onto the other monitor meanwhile; parking puts each back under its cell.
+    void Back()
+    {
+        PutSizesBack();
+        FitToScreen();
+        KeepScale();
+        foreach (Cell c in cells.Values) { c.ParkTries = 0; c.ParkAfter = 0; if (!c.Popup) ReadCaption(c); }
+        PlaceAgain();
+    }
+
     // What the helper changed in Windows, undone as far as it can be: each window it moved that is still there and is neither minimized
     // nor maximized goes back to where it was, and the scale goes back to the one before the host first asked for another.
     void PutBack()
@@ -470,6 +573,7 @@ public class AppWindows : Form
             try
             {
                 IntPtr h = c.Src;
+                if (c.HeldZoomed && IsZoomed(h) && !IsHungAppWindow(h)) { ShowWindowAsync(h, SW_RESTORE); ShowWindowAsync(h, SW_MAXIMIZE); continue; }
                 if (c.Popup || !IsWindow(h) || IsIconic(h) || IsZoomed(h) || IsHungAppWindow(h)) continue;
                 if (c.WasZoomed) { ShowWindowAsync(h, SW_MAXIMIZE); continue; }
                 if (!c.HasOrig) continue;
@@ -731,7 +835,7 @@ public class AppWindows : Form
         if (DwmQueryThumbnailSourceSize(t, out s) == 0 && s.W > 0 && s.H > 0) { sw = s.W; sh = s.H; }
         if (sw <= 0 || sh <= 0) { DwmUnregisterThumbnail(t); return null; }
         Cell c = new Cell();
-        c.Src = p.H; c.Thumb = t; c.Order = ++orderCounter; c.Stamp = c.Order; c.Pid = p.Pid;
+        c.Src = p.H; c.Thumb = t; c.Order = ++orderCounter; c.Stamp = c.Order; c.Pid = p.Pid; c.BornAt = now;
         c.Exe = ExeOf(p.Pid); Identify(c); c.Cls = p.Cls; c.Title = TextOf(p.H); c.TitleAt = now;
         c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup; c.Stray = p.Stray;
         c.Frame = p.Frame; c.Win = p.Frame;
@@ -917,9 +1021,17 @@ public class AppWindows : Form
         // A dialog comes up before the screen has grown for it. As an overflow cell it would hide its own program's window,
         // whose host window would go and come back over it. Where it really is, it hides nothing until the screen has grown.
         if (c.Popup || c.Owner != IntPtr.Zero) { if (PlaceOnSite(c)) return; }
+        // A window that just came gets the screen grown for it (NeedJson counts it) before it would hide the others: as an overflow
+        // cell it closed every host window it lay over for the second the screen took to grow, and they opened again after (measured).
+        if (!c.Popup && Waiting(c, Now())) { c.Placed = false; c.Overflow = false; return; }
         if (!c.Popup) { c.X = packL; c.Y = packT; c.Placed = true; c.Overflow = true; }
         else { c.Placed = false; c.Overflow = false; }
     }
+
+    const long NewcomerWaitMs = 3000;           // the host grows the screen after 0.5 s; the new mode takes about a second more
+
+    // Whether a window with no spot still waits for the screen to grow for it.
+    static bool Waiting(Cell c, long now) { return !c.Popup && now - c.BornAt < NewcomerWaitMs; }
 
     // Where a popup's picture goes in the overlay to be at the same point of its window's picture as the popup really is over
     // that window: its real place, moved as far as the window's cell lies from the window (nothing for a parked window). One
@@ -980,6 +1092,13 @@ public class AppWindows : Form
         // overflow dialog tries again on each pass rather than hide its program's window until the screen has grown.
         foreach (Cell c in cells.Values)
             if (c.Overflow && c.Placed && c.Active && !c.Popup && c.Owner != IntPtr.Zero && PlaceOnSite(c)) c.ThumbDirty = true;
+        // An overflow cell takes a free spot as soon as there is one: a window that closed, or a work area that grew after the
+        // change of mode had placed every cell (the taskbar settles after WM_DISPLAYCHANGE, measured), frees one without any change
+        // of mode, and the screen the windows need is then the one they have, so nothing else would place it again.
+        List<Cell> over = new List<Cell>();
+        foreach (Cell c in cells.Values) if (c.Overflow && c.Placed && c.Active && !c.Popup) over.Add(c);
+        over.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
+        foreach (Cell c in over) if (TrySpot(c)) c.ThumbDirty = true;
         List<Cell> todo = new List<Cell>();
         foreach (Cell c in cells.Values) if (!c.Placed && c.Active) todo.Add(c);
         if (todo.Count == 0) return;
@@ -1147,7 +1266,7 @@ public class AppWindows : Form
         if (!c.Active || c.Popup || !c.Placed || c.Iconic || c.Cloaked) return;
         if (now < c.ParkAfter) return;
         IntPtr h = c.Src;
-        if (IsZoomed(h) || CoversScreen(c) || IsHungAppWindow(h) || InMoveSize(h)) return;
+        if ((IsZoomed(h) && !c.HeldZoomed) || CoversScreen(c) || IsHungAppWindow(h) || InMoveSize(h)) return;
         ReadState(c, now);                              // the pass may have run before the window's last move was seen
         int wantL = vx + c.X, wantT = vy + c.Y;
         if (c.Frame.L == wantL && c.Frame.T == wantT) { c.ParkTries = 0; return; }
@@ -1178,31 +1297,55 @@ public class AppWindows : Form
 
     // A maximized window covers the whole guest screen, which hides every other cell, takes no size the host asks for, and grows
     // with the screen. So it comes out of that as a window like the others, a monitor's work area at most (the host's floor), and is
-    // maximized again at the end. A borderless full screen window (a game) is left alone, and so is one that goes back to maximized
-    // at once 3 times; one the user maximizes again after a while is taken out of that again.
+    // maximized again at the end. A borderless full screen window (a game) is left alone. One that goes back to maximized at once
+    // 3 times stays maximized, but at that same size and parked like any other (Windows keeps a maximized window maximized at a
+    // size and place it is given, measured with Word): left covering the screen, it hid every other window. One the user maximizes
+    // again after a while is taken out of that again.
     void Unzoom(Cell c)
     {
         long now = Now();
         if (!IsZoomed(c.Src))
         {
+            c.HeldZoomed = false;
             if (c.UnzoomTries > 0 && now - c.UnzoomAt > UnzoomForgetMs) c.UnzoomTries = 0;
             return;
         }
-        if (desktopKind != "normal" || c.UnzoomTries >= 3 || IsHungAppWindow(c.Src)) return;
+        if (desktopKind != "normal" || IsHungAppWindow(c.Src)) return;
         if ((c.Style & WS_CAPTION) != WS_CAPTION) return;
+        if (c.UnzoomTries >= 3) { HoldZoomed(c); return; }
         c.UnzoomTries++; c.UnzoomAt = now;
+        int w, h;
+        if (UnzoomSize(c, out w, out h)) Unmaximize(c, w, h);
+    }
+
+    const long UnzoomForgetMs = 5000;
+
+    // The size a window comes out of maximized at: its frame, a monitor's work area at most. False when it would be too small.
+    bool UnzoomSize(Cell c, out int w, out int h)
+    {
         int borderW = (c.Win.R - c.Win.L) - (c.Frame.R - c.Frame.L), borderH = (c.Win.B - c.Win.T) - (c.Frame.B - c.Frame.T);
-        int w = c.Frame.R - c.Frame.L, h = c.Frame.B - c.Frame.T;
+        w = c.Frame.R - c.Frame.L; h = c.Frame.B - c.Frame.T;
         if (floorW > 0 && floorH > 0)
         {
             int taskbarW = Math.Max(0, ovW - (packR - packL)), taskbarH = Math.Max(0, ovH - (packB - packT));
             w = Math.Min(w, floorW - taskbarW); h = Math.Min(h, floorH - taskbarH);
         }
-        if (w < MinCellSide || h < MinCellSide) return;
-        Unmaximize(c, w + borderW, h + borderH);
+        if (w < MinCellSide || h < MinCellSide) return false;
+        w += borderW; h += borderH;
+        return true;
     }
 
-    const long UnzoomForgetMs = 5000;
+    // A window that keeps going back to maximized is left maximized at the size it would come out at; Park then moves it like the
+    // others. Windows makes it cover the screen again at each change of the screen or the work area, and this sizes it again.
+    void HoldZoomed(Cell c)
+    {
+        c.HeldZoomed = true;
+        int w, h;
+        if (!UnzoomSize(c, out w, out h)) return;
+        if (c.Win.R - c.Win.L == w && c.Win.B - c.Win.T == h) return;
+        SetWindowPos(c.Src, IntPtr.Zero, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        c.MoveAt = Now() + 1;
+    }
 
     // Takes a maximized window out of that, at an outer size of w x h, without the focus. Its place is the helper's to set, as for any.
     bool Unmaximize(Cell c, int w, int h)
@@ -1247,6 +1390,16 @@ public class AppWindows : Form
     void Work()
     {
         if (shutDown) return;
+        if (ScreenAway()) { ArmWork(HeartbeatMs); return; }      // held until the windows' monitor is back (see ScreenAway)
+        // Windows keeps its scale as a step from the one it recommends, which grows with the resolution: a larger screen took
+        // Windows from 100 % to 150 % by itself (measured, 6144x1300). The scale changes only when the host asks, so the one it had
+        // when the helper started is kept until then.
+        if (!scaleTaken)
+        {
+            scaleTaken = true;
+            if (wantedPercent == 0) wantedPercent = PercentNow();
+            if (wantedPercent == DpiSteps[0]) SetScale(wantedPercent);        // kept as the lowest step (see SetScale)
+        }
         long now = Now();
         if (scanDue) { scanDue = false; Scan(now); }
         int next = FastPass(now);
@@ -1262,6 +1415,7 @@ public class AppWindows : Form
         {
             if (c.MoveAt != 0) { long r = c.MoveAt - now; if (r < 1) r = 1; if (r < next) next = (int)r; }
             if (c.ParkAfter > now) { long r = c.ParkAfter - now; if (r < next) next = (int)r; }
+            if (c.Active && !c.Placed && Waiting(c, now)) { long r = c.BornAt + NewcomerWaitMs - now; if (r < 1) r = 1; if (r < next) next = (int)r; }
             if (!c.InDone && c.Active && c.Popup && c.Placed && c.Thumb != IntPtr.Zero) { long r = c.InAt - now; if (r < 10) r = 10; if (r < next) next = (int)r; }   // never a timer of 1 ms for a popup that has no place
         }
         if (next != int.MaxValue) ArmWork(next);
@@ -1380,7 +1534,8 @@ public class AppWindows : Form
           .Append(",\"w\":").Append(I(w)).Append(",\"h\":").Append(I(h)).Append('}');
     }
 
-    static string StateOf(Cell c) { return c.Iconic ? "minimized" : (c.Hidden ? "covered" : "shown"); }
+    // A window with no place yet (one that waits for the screen to grow, see Waiting) has no picture: the host shows it as covered.
+    static string StateOf(Cell c) { return c.Iconic ? "minimized" : (c.Hidden || (!c.Popup && !c.Placed) ? "covered" : "shown"); }
 
     void AppendCell(StringBuilder sb, Cell c)
     {
@@ -1633,23 +1788,38 @@ public class AppWindows : Form
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
-    const int QDC_ONLY_ACTIVE_PATHS = 2, DC_GET_DPI_SCALE = -3, DC_SET_DPI_SCALE = -4, WM_DPICHANGED = 0x02E0;
+    const int DC_MODE_SOURCE = 1, QDC_ONLY_ACTIVE_PATHS = 2, DC_GET_DPI_SCALE = -3, DC_SET_DPI_SCALE = -4, WM_DPICHANGED = 0x02E0;
     static readonly int[] DpiSteps = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
 
     int originalPercent;                        // the scale before the host first asked for another, put back when the helper ends
-    int wantedPercent;                          // the step the host asked for last, set again after a change of mode
-    int modeW, modeH;                           // the screen's size when the scale was last looked after
+    bool scaleTaken;                            // wantedPercent was taken from Windows, or from the host before that
+    int wantedPercent;                          // the step the host asked for last, else the one Windows had when the helper
+                                                // started: set again after a change of mode
     int floorW, floorH, ceilW, ceilH;           // from the host's "screen": the smallest and largest screen it wants
     string lastDisplay = "";
 
-    static bool FirstPath(out DcPath path)
+    // The active path of the windows' monitor when Windows shows on it, else the first active path.
+    bool FirstPath(out DcPath path)
     {
-        path = new DcPath();
+        int w, h;
+        return FirstPath(out path, out w, out h);
+    }
+
+    // The same, with the size of its source mode (0 when DisplayConfig does not say).
+    bool FirstPath(out DcPath path, out int sourceW, out int sourceH)
+    {
+        path = new DcPath(); sourceW = sourceH = 0;
         uint np, nm;
         if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out np, out nm) != 0 || np == 0) return false;
         DcPath[] paths = new DcPath[np]; DcMode[] modes = new DcMode[nm];
         if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref np, paths, ref nm, modes, IntPtr.Zero) != 0 || np == 0) return false;
         path = paths[0];
+        for (int i = 0; i < np; i++) if (MonitorKey(paths[i]) == screenMonitor) { path = paths[i]; break; }
+        uint m = path.S.ModeIdx;
+        if (m < nm && modes[m].Type == DC_MODE_SOURCE && modes[m].Data != null)
+        {
+            sourceW = BitConverter.ToInt32(modes[m].Data, 0); sourceH = BitConverter.ToInt32(modes[m].Data, 4);
+        }
         return true;
     }
 
@@ -1672,9 +1842,11 @@ public class AppWindows : Form
         DcDpiGet g = new DcDpiGet();
         g.H.Type = DC_GET_DPI_SCALE; g.H.Size = Marshal.SizeOf(typeof(DcDpiGet)); g.H.Adapter = path.S.Adapter; g.H.Id = path.S.Id;
         if (DisplayConfigGetDeviceInfo(ref g) != 0) return offered;
-        int current = Array.IndexOf(DpiSteps, PercentNow());
-        if (current < 0) return offered;        // a custom percentage: no step to count from
-        recommendedIndex = current - g.Cur;
+        // The steps count from the one Windows recommends, and the smallest it offers is always 100 %, so the recommended one is
+        // as many steps above 100 % as the smallest lies below it. Cur is no base: Windows keeps the step it was last set to and
+        // clamps it (measured: cur -3 with min 0, at 100 %), so "the percentage now minus cur" offered 175 % and up at 100 %.
+        recommendedIndex = -g.Min;
+        if (recommendedIndex < 0 || recommendedIndex >= DpiSteps.Length) { recommendedIndex = -1; return offered; }
         for (int rel = g.Min; rel <= g.Max; rel++)
         {
             int i = recommendedIndex + rel;
@@ -1689,12 +1861,17 @@ public class AppWindows : Form
         int recommended;
         List<int> offered = OfferedSteps(out recommended);
         if (!offered.Contains(percent)) return "Windows does not offer " + percent + " % at this resolution (it offers " + string.Join(",", offered) + ")";
-        if (PercentNow() == percent) return null;
+        if (PercentNow() == percent && percent != DpiSteps[0]) return null;   // the smallest is written again as the lowest step
         DcPath path;
         if (!FirstPath(out path)) return "no display path";
         DcDpiSet set = new DcDpiSet();
         set.H.Type = DC_SET_DPI_SCALE; set.H.Size = Marshal.SizeOf(typeof(DcDpiSet)); set.H.Adapter = path.S.Adapter; set.H.Id = path.S.Id;
         set.Rel = Array.IndexOf(DpiSteps, percent) - recommended;
+        // Windows keeps the step relative to the one it recommends, which grows with the resolution: 100 % kept as "two below" became
+        // 150 % on a wider screen, by itself, and every window was scaled up and back (measured, 6128x1300). It takes a step below the
+        // smallest it offers and shows the smallest (measured: cur -10 with min -4, at 100 %), so the smallest is kept as the lowest
+        // step there is, which stays 100 % at every resolution.
+        if (percent == DpiSteps[0]) set.Rel = -(DpiSteps.Length - 1);
         int result = DisplayConfigSetDeviceInfo(ref set);
         return result == 0 ? null : "Windows refused the scale, error " + result;
     }
@@ -1741,7 +1918,7 @@ public class AppWindows : Form
             if (!c.Active || c.Popup || c.Iconic) continue;
             // A maximized or screen-sized window takes the screen it is given, and the floor is a monitor's worth:
             // counting it would make the screen grow to the ceiling and stay there.
-            if (IsZoomed(c.Src) || CoversScreen(c)) continue;
+            if ((IsZoomed(c.Src) && !c.HeldZoomed) || CoversScreen(c)) continue;
             if (c.SrcW - c.InL - c.InR <= 0 || c.SrcH - c.InT - c.InB <= 0) continue;
             order.Add(c);
         }
@@ -1783,12 +1960,10 @@ public class AppWindows : Form
         if (link != null) link.Send(line);
     }
 
-    // A change of mode can change the step Windows recommends, and with it the percentage a relative step means.
+    // A change of mode can change the step Windows recommends, and with it the percentage a relative step means. Windows may
+    // apply that after WM_DISPLAYCHANGE, so this runs at WM_DPICHANGED too; the host's own asks set wantedPercent first.
     void KeepScale()
     {
-        // A change of scale sends WM_DISPLAYCHANGE too: only a new size is a change of mode.
-        if (ovW == modeW && ovH == modeH) return;
-        modeW = ovW; modeH = ovH;
         if (wantedPercent <= 0 || PercentNow() == wantedPercent) return;
         string why = SetScale(wantedPercent);
         if (why != null) LogError(new Exception("scale " + wantedPercent + " after a change of mode: " + why));
@@ -1797,9 +1972,10 @@ public class AppWindows : Form
     void OnScaleRequest(Link link, long n, Dictionary<string, object> r)
     {
         int percent = (int)Num(r, "percent", 0);
+        if (ScreenAway()) { Answer(link, n, false, "Windows shows on another monitor for a moment"); return; }
         if (originalPercent == 0) originalPercent = PercentNow();
         string why = SetScale(percent);
-        if (why == null) { wantedPercent = percent; modeW = ovW; modeH = ovH; }
+        if (why == null) wantedPercent = percent;
         Answer(link, n, why == null, why);
         scanDue = true; Kick();
         DisplayStep(true);
@@ -1810,11 +1986,10 @@ public class AppWindows : Form
         Dictionary<string, object> floor = r.ContainsKey("floor") ? r["floor"] as Dictionary<string, object> : null;
         Dictionary<string, object> ceiling = r.ContainsKey("ceiling") ? r["ceiling"] as Dictionary<string, object> : null;
         if (floor == null) { Answer(link, n, false, "screen needs a floor"); return; }
-        modeW = ovW; modeH = ovH;
         floorW = (int)Num(floor, "w", 0); floorH = (int)Num(floor, "h", 0);
         ceilW = ceiling != null ? (int)Num(ceiling, "w", 0) : 0; ceilH = ceiling != null ? (int)Num(ceiling, "h", 0) : 0;
         Answer(link, n, true, null);
-        DisplayStep(true);
+        if (!ScreenAway()) DisplayStep(true);   // else the next pass after the monitor is back says it
     }
 
     // ================================================================ Requests

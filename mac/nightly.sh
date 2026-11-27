@@ -182,6 +182,12 @@ assess execute "$app"
 mkdir "$work/dmg"
 ditto "$app" "$work/dmg/Guesthouse.app"
 ln -s /Applications "$work/dmg/Applications"
+cat >"$work/dmg/SOURCE.txt" <<TXT
+Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse
+(mac/ and crates/host-mac). Guesthouse is free software under GPL-2.0-or-later, and that
+repository is the source of this build, with the patch and the version of QEMU named in
+docs/mac-host.md if QEMU is inside (Contents/Helpers).
+TXT
 dmg=$out/$name.dmg
 rm -f "$dmg"
 hdiutil create -quiet -volname "Guesthouse nightly" -srcfolder "$work/dmg" -ov -format UDZO -fs HFS+ "$dmg"

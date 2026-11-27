@@ -2,13 +2,23 @@
 
 The Linux host and the Windows host are released apart, each with a version of its own, so each goes out when it has something new. The Linux host's version is `version` in the workspace's `Cargo.toml`, and its tags are `vVERSION`. The Windows host's is `windows/version.txt`, and its tags are `windows-vVERSION`. A Linux release never changes `windows/version.txt`, and a Windows release never changes `Cargo.toml`'s version. Both start from `main`, so a release of either has what's merged by then, and the Windows host's installer carries what the Linux host shares with it, such as the NVAPI wrapper, as `main` has it.
 
+## The quick way, for either host
+
+1. **Run Release.** In the Actions tab, run `Release` (`.github/workflows/release.yml`) from `main` with the new `version`, like `0.11.0`, and the `host`, `linux` or `windows`. It checks that the version is well-formed and newer than the host's last tag, and that no tag or open release pull request for it exists. It opens the pull request `Release VERSION` (`Release Windows VERSION` for Windows) that changes only the version files, as `scripts/release-bump.sh` does, and turns on auto-merge. When the checks pass and it merges, the run tags that merge commit and pushes the tag. If a required check fails, or it hasn't merged in two hours, the run fails and says so, and nothing is tagged. Fix it, close the pull request, and run Release again. It needs the secret `RELEASE_PR_TOKEN`, as the pull request's checks and the tag's build don't start from `GITHUB_TOKEN`, and stops at once without it.
+
+2. **Read the draft and publish it.** The tag starts the build, which makes the draft, as the sections below say. Publish it by hand: for Linux as the latest release, for Windows with "Set as the latest release" unticked. Nothing publishes by itself.
+
+3. **The rest follows.** Publishing starts `Release files`, `Release credits` and, for Linux, `Point the installer`. With `RELEASE_PR_TOKEN` set, that one turns on auto-merge for its pull request, so `main` points at the release once the checks pass. If the AppImage wasn't on files.ruxn.com in time, that pull request is a draft and waits for a person, as step 7 says. A Windows release's site pull request (step 4 of its by-hand way) is still by hand.
+
+Everything below is what that does, and the fallback if a part of it fails.
+
 ## The Linux host
 
 CI builds it from the tag, and makes the GitHub release as a draft. I read the draft and publish it, and the rest follows by itself. Building by hand on my own PC, below that, is the fallback. `SHA256SUMS` isn't signed yet.
 
 ### From the tag, in CI
 
-1. **Set the version,** as step 1 of the by-hand way says.
+1. **Set the version,** as step 1 of the by-hand way says. The `Release` workflow does this and step 2 too.
 
 2. **Tag it and push the tag.** Tag the commit that pull request became on `main`.
 
@@ -39,7 +49,7 @@ The order matters. `install.sh` on `main` is what points people at a release, so
 
 Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is a new folder with about 10 GB free. Use a neutral one like `/var/tmp/guesthouse-release`, and never one under my home folder. Its path ends up in the binaries, as the compilers write down where each source file was. It has to be new because an old one keeps its QEMU tree, and the patch wouldn't get applied again.
 
-1. **Set the version.** Change `version` in `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that into `main` with a pull request. `main` takes nothing else, and the checks have to pass.
+1. **Set the version.** Change `version` in the workspace's `Cargo.toml`, run `cargo check` so `Cargo.lock` follows (or run `scripts/release-bump.sh linux VERSION`, which does both), and merge that into `main` with a pull request. `main` takes nothing else, and the checks have to pass.
 
 2. **Tag it.** Tag the commit that pull request became on `main`. The download URLs have a `v` in them, so the tag must too.
 
@@ -114,7 +124,7 @@ CI builds this from the tag too. Nothing in the installer is signed, and nothing
 
 ### From the tag, in CI
 
-1. **Set the version,** as step 1 of the by-hand way says.
+1. **Set the version,** as step 1 of the by-hand way says. The `Release` workflow does this and step 2 too.
 
 2. **Tag it and push the tag,** on the commit that pull request became on `main`.
 
@@ -133,7 +143,7 @@ CI builds this from the tag too. Nothing in the installer is signed, and nothing
 
 This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in. `scripts/windows-release.ps1` does steps 2 to 4.
 
-1. **Set the version.** Change `windows/version.txt` to the new version, three numbers and no `v`, and merge that into `main` with a pull request, `Windows VERSION`. It takes nothing else, and the checks have to pass. The service says this version to the app, the installer puts it in Settings > Apps, and the app compares it with the newest to offer the update.
+1. **Set the version.** Change `windows/version.txt` to the new version (`scripts/release-bump.sh windows VERSION` does it), three numbers and no `v`, and merge that into `main` with a pull request, `Windows VERSION`. It takes nothing else, and the checks have to pass. The service says this version to the app, the installer puts it in Settings > Apps, and the app compares it with the newest to offer the update.
 
 2. **Try it.** From a checkout of `main` at that merge, run `powershell -ExecutionPolicy Bypass -File scripts\windows-release.ps1 -DryRun`. It stops if the tree isn't clean, or if the tag or the installer of this version is published already, as a published file never changes. Then it builds the app and the installer into `target\windows-release\VERSION\`, with `guesthouse-setup-VERSION.exe`, its `.sha256` and `guesthouse-windows-latest.json`, and publishes nothing. Install it on this PC and see the new things work.
 

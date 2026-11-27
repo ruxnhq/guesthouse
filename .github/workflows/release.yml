@@ -1,0 +1,238 @@
+# One button for a release. From the Actions tab, run this with the version and the host.
+#
+# It checks the version, opens the pull request "Release X.Y.Z" that changes only the version files
+# (scripts/release-bump.sh), turns on auto-merge, waits for it to merge once the required checks
+# pass, then tags the merge commit and pushes the tag. The tag starts release-build.yml (Linux) or
+# release-windows.yml (Windows), which build everything and make the release as a draft. Nothing
+# here publishes it: reading the draft and publishing it is the one approval a release needs.
+# Publishing then starts release-files.yml, point-installer.yml and release-credits.yml.
+#
+# Secret, needed: RELEASE_PR_TOKEN, a fine-grained token for this repo with Contents and Pull
+# requests read and write. Pull requests and tags made with GITHUB_TOKEN start no workflows, so the
+# checks and the build would never run. The run stops at once without it.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New version, like 0.11.0 (no v)
+        required: true
+      host:
+        description: Which host to release
+        type: choice
+        options: [linux, windows]
+        default: linux
+
+permissions:
+  contents: read
+
+# One release at a time, and a run that's waiting for its merge is never cancelled.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+  HOST: ${{ inputs.host }}
+
+jobs:
+  pull-request:
+    name: open the pull request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      pr: ${{ steps.pr.outputs.pr }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: The token is there, and this is main
+        env:
+          TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::The secret RELEASE_PR_TOKEN isn't set. Without it the pull request's checks and the tag's build would never start. See the top of .github/workflows/release.yml."; exit 1; }
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::Run this on main, not on $GITHUB_REF. A release starts from main."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
+          persist-credentials: true
+
+      - name: The version is well-formed, newer than the last release, and not taken
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::'$VERSION' isn't a version like 0.11.0, three numbers and no v."
+            exit 1
+          fi
+          if [ "$HOST" = windows ]; then
+            PREFIX=windows-v
+            FILE_VERSION=$(tr -d '[:space:]' <windows/version.txt)
+            TITLE="Release Windows $VERSION"
+            BRANCH="release-windows-$VERSION"
+          else
+            PREFIX=v
+            FILE_VERSION=$(awk '/^\[workspace\.package\]/ {on=1; next} /^\[/ {on=0} on && /^version = "/ {gsub(/^version = "|"$/, ""); print; exit}' Cargo.toml)
+            TITLE="Release $VERSION"
+            BRANCH="release-$VERSION"
+          fi
+          TAG="$PREFIX$VERSION"
+          # The newest tag of this kind. A Linux tag is v and digits; windows-v tags don't match it.
+          LAST=$(git tag --list "${PREFIX}[0-9]*.[0-9]*.[0-9]*" | sed "s/^$PREFIX//" | sort -V | tail -n 1)
+          echo "Last $HOST tag: ${LAST:-none}. The version on main: $FILE_VERSION."
+          for OLDER in $LAST $FILE_VERSION; do
+            if [ "$(printf '%s\n%s\n' "$OLDER" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ] || [ "$OLDER" = "$VERSION" ]; then
+              echo "::error::$VERSION isn't newer than $OLDER, the $HOST host's last tag or the version on main."
+              exit 1
+            fi
+          done
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null ||
+            [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "::error::The tag $TAG exists already."
+            exit 1
+          fi
+          OPEN=$(gh pr list -R "$GITHUB_REPOSITORY" --state open --base main --head "$BRANCH" --json number -q '.[].number')
+          if [ -n "$OPEN" ]; then
+            echo "::error::Pull request #$OPEN is open for $VERSION already. Merge or close it first."
+            exit 1
+          fi
+          if [ -n "$(git ls-remote --heads origin "$BRANCH")" ]; then
+            echo "::error::The branch $BRANCH exists already. Delete it if its pull request is gone."
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "title=$TITLE"
+            echo "branch=$BRANCH"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Change the version files
+        env:
+          BRANCH: ${{ steps.check.outputs.branch }}
+          TITLE: ${{ steps.check.outputs.title }}
+        run: |
+          scripts/release-bump.sh "$HOST" "$VERSION"
+          git status --short
+          # Only the version files. Anything else means the script or main is not what this expects.
+          if [ "$HOST" = windows ]; then
+            ALLOWED='^ M windows/version.txt$'
+          else
+            ALLOWED='^ M (Cargo\.toml|Cargo\.lock)$'
+          fi
+          if git status --porcelain | grep -Evq "$ALLOWED" || [ -z "$(git status --porcelain)" ]; then
+            echo "::error::The bump changed something other than the version files, or nothing."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -a -m "$TITLE" -m "Only the version. Pushing the tag after this merges builds the release."
+          git push origin "$BRANCH"
+
+      - name: Open the pull request and turn on auto-merge
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          BRANCH: ${{ steps.check.outputs.branch }}
+          TITLE: ${{ steps.check.outputs.title }}
+        run: |
+          if [ "$HOST" = windows ]; then
+            WHAT="windows/version.txt"
+          else
+            WHAT="Cargo.toml's workspace version and Cargo.lock"
+          fi
+          {
+            echo "Sets the $HOST host's version to $VERSION in $WHAT, and nothing else."
+            echo
+            echo "It merges by itself once the required checks pass. Then the Release workflow tags the merge commit, and the tag builds the release as a draft."
+          } >"$RUNNER_TEMP/body.md"
+          URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md")
+          NUMBER=${URL##*/}
+          echo "Opened $URL"
+          gh pr merge "$NUMBER" --auto --squash
+          echo "pr=$NUMBER" >>"$GITHUB_OUTPUT"
+
+  tag:
+    name: wait for the merge, then tag it
+    needs: pull-request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+      PR: ${{ needs.pull-request.outputs.pr }}
+      TAG: ${{ needs.pull-request.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
+          persist-credentials: true
+
+      - name: Wait for the pull request to merge
+        id: merge
+        run: |
+          # Two hours. The checks take well under one.
+          END=$(( $(date +%s) + 7200 ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            STATE=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json state -q .state)
+            case "$STATE" in
+              MERGED)
+                SHA=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json mergeCommit -q .mergeCommit.oid)
+                echo "Pull request #$PR merged as $SHA."
+                echo "sha=$SHA" >>"$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              CLOSED)
+                echo "::error::Pull request #$PR was closed without merging. Nothing is tagged."
+                exit 1
+                ;;
+            esac
+            # A failed or cancelled required check means auto-merge will never fire.
+            BAD=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --required --json name,bucket \
+              -q '.[] | select(.bucket == "fail" or .bucket == "cancel") | .name' 2>/dev/null || true)
+            if [ -n "$BAD" ]; then
+              printf '%s\n' "$BAD" | while read -r N; do echo "::error::Required check failed on pull request #$PR: $N"; done
+              echo "::error::CI failed on pull request #$PR, so it won't merge and nothing is tagged. Fix main or the checks, close the pull request, and run Release again."
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "::error::Pull request #$PR didn't merge within two hours. Nothing is tagged. Look at it: a check may be stuck, or the branch may need updating."
+          exit 1
+
+      - name: Tag the merge commit and push the tag
+        env:
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$SHA" origin/main ||
+            { echo "::error::$SHA isn't on main."; exit 1; }
+          # The merge commit has the version the tag check wants.
+          if [ "$HOST" = windows ]; then
+            SAYS=$(git show "$SHA:windows/version.txt" | tr -d '[:space:]')
+          else
+            SAYS=$(git show "$SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          fi
+          [ "$SAYS" = "$VERSION" ] || { echo "::error::At $SHA the version is $SAYS, not $VERSION. Nothing is tagged."; exit 1; }
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "::error::The tag $TAG appeared meanwhile. Nothing is tagged."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$HOST" = windows ]; then
+            git tag -a "$TAG" -m "Windows host $VERSION" "$SHA"
+          else
+            git tag "$TAG" "$SHA"
+          fi
+          git push origin "refs/tags/$TAG"
+          {
+            echo "### $TAG"
+            echo
+            echo "Tagged $SHA. The tag starts the build, which makes the draft release. Read the draft and publish it."
+          } >>"$GITHUB_STEP_SUMMARY"

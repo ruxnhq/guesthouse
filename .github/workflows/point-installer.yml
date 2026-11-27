@@ -2,12 +2,13 @@
 # install.sh, the Nix package, the README and the site at it. It checks the release's downloads
 # against its SHA256SUMS first, and the AppImage on files.ruxn.com against it too. If the AppImage
 # isn't there within half an hour the pull request is a draft, to be marked ready once it is.
-# Merging is still a person's, and the site deploys itself from main (site-deploy.yml).
+# With RELEASE_PR_TOKEN it turns on auto-merge for a pull request that isn't a draft, so it merges
+# once the checks pass; a draft waits for a person. The site deploys itself from main (site-deploy.yml).
 #
 # Secret, optional: RELEASE_PR_TOKEN, a fine-grained token for this repo with Contents and Pull
 # requests read and write. Without it the pull request comes from GITHUB_TOKEN, which needs
 # "Allow GitHub Actions to create and approve pull requests" in the repo's Actions settings, and
-# whose pull requests don't start the checks.
+# whose pull requests don't start the checks, so auto-merge is left off.
 name: Point the installer
 
 on:
@@ -128,6 +129,7 @@ jobs:
           SOURCE: ${{ steps.point.outputs.source }}
           NIX: ${{ steps.point.outputs.nix }}
           FILES_UP: ${{ steps.files.outputs.up }}
+          HAVE_TOKEN: ${{ secrets.RELEASE_PR_TOKEN != '' }}
         run: |
           BRANCH="point-installer-$VERSION"
           TITLE="Point the installer at $VERSION"
@@ -156,4 +158,15 @@ jobs:
             gh pr edit "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
           else
             gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" "${DRAFT[@]}"
+          fi
+
+          # Only a pull request that's ready merges by itself, once the required checks pass. A draft
+          # (the AppImage isn't up) needs a person to look first, so it's left alone. Without the
+          # token the checks never start, so auto-merge would wait for nothing.
+          if [ "$FILES_UP" != "true" ]; then
+            echo "The pull request is a draft, so auto-merge is left off."
+          elif [ "$HAVE_TOKEN" != "true" ]; then
+            echo "::warning::RELEASE_PR_TOKEN isn't set, so auto-merge is left off."
+          else
+            gh pr merge "$BRANCH" --auto --squash
           fi

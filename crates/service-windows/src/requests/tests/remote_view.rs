@@ -80,6 +80,20 @@ pub(super) fn wait_view(service: &Arc<Service<Pretend>>, name: &str, state: Shar
     panic!("{name}'s view never became {state:?}: {:?}", service.machines().lock()[name].view);
 }
 
+/// Waits for `ready`, which looks only at what the service keeps and asks the guest nothing. A step
+/// of pairing keeps each reading as it takes it, but its pairing, which is what shows a device
+/// waiting, and the service's line in its log, only as it ends, so a view that listens says nothing
+/// of where the keeper's first step is.
+fn wait_until(service: &Arc<Service<Pretend>>, what: &str, ready: impl Fn() -> bool) {
+    for _ in 0..400 {
+        if ready() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!("never {what}: {:?}", service.work.remoteman.asked());
+}
+
 #[test]
 fn the_switch_is_kept_in_its_own_file_with_a_port_that_stays_through_off_and_on() {
     let setup = setup("view-switch", Pretend::default());
@@ -353,13 +367,9 @@ fn what_remoteman_says_is_read_as_it_starts_and_when_asked_with_guesthouses_own_
     start_and_run(service, "win");
     wait_view(service, "win", ShareState::Listening);
     // Read once by the service as the guest first answers, which closes a pairing found open, and
-    // then only when the app asks, while nothing is pairing.
-    for _ in 0..100 {
-        if !service.work.remoteman.asked().is_empty() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    // then only when the app asks, while nothing is pairing. The service's line goes in its log as
+    // that first step ends.
+    wait_until(service, "the guest answered", || !service.work.logged.lock().unwrap().is_empty());
 
     let idle = shown(service, "win");
     assert_eq!((idle.state, idle.port, idle.reason.as_deref()), (ShareState::Listening, Some(7792), None));
@@ -407,6 +417,11 @@ fn a_device_found_waiting_is_shown_and_nothing_it_said_reaches_a_log() {
     *service.work.remoteman.status.lock().unwrap() = status;
     start_and_run(service, "win");
     wait_view(service, "win", ShareState::Listening);
+    wait_until(service, "a device shown waiting", || {
+        service.sessions.with("win", |session| {
+            session.pairing.as_ref().is_some_and(|pairing| pairing.view().pending.is_some())
+        })
+    });
 
     let shown = shown(service, "win");
     let waiting =

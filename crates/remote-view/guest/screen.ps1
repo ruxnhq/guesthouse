@@ -99,6 +99,20 @@ function Enable-Sharing {
     }
 }
 
+# remoteman's host looks for a newer remoteman by itself from 0.1.9. Guesthouse pins the release it
+# gives the guest and updates it itself, so the guest shouldn't reach a download site on its own:
+# `set updates off` at every start, which the host keeps in updates.json in its state folder. When it
+# doesn't take, the guest says why and its screen goes on as it is.
+function Set-UpdatesOff {
+    $said = ''
+    for ($try = 0; $try -lt 10; $try += 1) {
+        $said = ((& $hostExe ctl --port 7791 set updates off 2>&1) | Out-String).Trim()
+        if ($said -eq 'ok') { break }
+        Start-Sleep -Seconds 3
+    }
+    Send-Line "screen: set updates off: $said"
+}
+
 # remoteman's installer is run again whenever the host brings a different one, a different viewer
 # to trust or a different encoder, and whenever its service isn't there, whatever the guest's note
 # of the last install says. Run again, it keeps the host's identity, so its fingerprint stays.
@@ -184,8 +198,13 @@ if ($fingerprint) {
     Send-Line "screen: remoteman's host didn't say its fingerprint"
 }
 
-# The host is up: files and the clipboard on in it as it runs (its file is read only at its start).
-if ($fingerprint) { Enable-Sharing }
+# The host is up: its own update check off, kept on the disk at once, then files and the clipboard
+# on in it as it runs (its file is read only at its start).
+if ($fingerprint) {
+    Set-UpdatesOff
+    Save-ToDisk
+    Enable-Sharing
+}
 
 # For a while after it starts, remoteman's own logs go to the serial port as they're written, with
 # whether anything listens on its port, so the host sees how it starts while it does: what it wrote

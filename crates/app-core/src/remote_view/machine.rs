@@ -24,7 +24,7 @@ use crate::tasks::{State, status};
 use guesthouse_daemon::slot::Slot;
 use guesthouse_remote_view_core::ctl::{self, Ack, Words, parse_ack};
 use guesthouse_remote_view_core::encoder_for;
-use guesthouse_remote_view_core::install::{self, CURRENT, INSTALLED, NEEDED, OLD_TAKE_OVER, Pin};
+use guesthouse_remote_view_core::install::{self, Check, INSTALLED, Pin};
 use guesthouse_remote_view_core::pairing::{Event, HostWide, Millis, Pairing};
 use guesthouse_remote_view_core::policy::Policy;
 use guesthouse_remote_view_core::share::{ShareInfo, ShareState, pairing_seconds};
@@ -46,6 +46,11 @@ const CTL_SECONDS: u64 = 20;
 const CHECK_SECONDS: u64 = 30;
 /// The installer took 18 s in a guest with Secure Boot on.
 const INSTALL_SECONDS: u64 = 180;
+/// How often `set updates off` is sent before it is given up on until the next start, and how long
+/// apart: right after the installer the host may not answer yet, and it first looks for an update a
+/// minute after its service starts.
+const UPDATES_OFF_TRIES: u32 = 6;
+const UPDATES_OFF_PAUSE: Duration = Duration::from_secs(3);
 /// How old a reading may be before [`info`] has another taken behind it.
 const STALE: Duration = Duration::from_secs(2);
 /// Where the downloaded installer is kept, in the fetched parts' folder.
@@ -54,10 +59,10 @@ const PARTS_FOLDER: &str = "remoteman";
 const SHIPPED: &str = "remoteman/remoteman-host-setup.exe";
 /// The release of remoteman's host this host puts in a guest. 0.1.6 is the first whose `--no-pair`
 /// still lets `pair on` open pairing, which every pairing here needs. The Windows host carries its own
-/// release, pinned in `windows/remoteman.json`.
-const REMOTEMAN_VERSION: &str = "0.1.8";
+/// release, pinned in `windows/remoteman.json`. 0.1.9 is the first that takes `set updates off`.
+const REMOTEMAN_VERSION: &str = "0.1.9";
 const REMOTEMAN_BASE: &str = "https://files.ruxn.com/p/remoteman/";
-const REMOTEMAN_SHA256: &str = "f50fb39fc69e46fcae7bb97419528809b8f6f145a935054fa8f936b72d593556";
+const REMOTEMAN_SHA256: &str = "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e";
 pub const TOO_OLD: &str = "This machine's display driver is older than viewing from other devices needs: its \
                            take-over script would take remoteman's screen for its own. Update the machine's \
                            display driver, then turn this on again.";
@@ -169,7 +174,11 @@ pub fn installer(context: &Context, pin: &Pin) -> Result<std::path::PathBuf> {
 
 /// Puts remoteman's host in the guest when the pin, the encoder or the host itself changed, and lets
 /// its port in from this PC only. `ask` runs a script in the guest. Gives the guest's fingerprint when
-/// it installed. Nothing is run when all is current, as each installer run blips the picture.
+/// it installed. The installer runs only when one of those changed, as each run blips the picture.
+///
+/// After an install, and whenever the host is current but still looks for updates by itself, the
+/// host is told `set updates off`: this host pins remoteman and updates it itself. If that doesn't
+/// take, it is logged and asked again at the next start; the remote view goes on without it.
 pub fn ensure_installed(
     context: &Context,
     machine: &Machine,
@@ -177,13 +186,16 @@ pub fn ensure_installed(
 ) -> Result<Option<String>> {
     let pin = pin();
     let encoder = encoder(machine);
-    let said = ask(&install::check_script(&pin.version, encoder), CHECK_SECONDS);
-    match said.trim() {
-        CURRENT => return Ok(None),
-        NEEDED => {}
-        OLD_TAKE_OVER => return Err(Failure::new(TOO_OLD)),
-        "" => return Err(Failure::new("Windows did not answer. Try again once it is up.")),
-        other => return Err(Failure(format!("Windows said: {other}"))),
+    match install::read_check(&ask(&install::check_script(&pin.version, encoder), CHECK_SECONDS)) {
+        Check::Current => return Ok(None),
+        Check::UpdatesOn => {
+            updates_off(context, machine, ask, UPDATES_OFF_PAUSE);
+            return Ok(None);
+        }
+        Check::Needed => {}
+        Check::OldTakeOver => return Err(Failure::new(TOO_OLD)),
+        Check::Silent => return Err(Failure::new("Windows did not answer. Try again once it is up.")),
+        Check::Other(other) => return Err(Failure(format!("Windows said: {other}"))),
     }
     let local = installer(context, &pin)?;
     if !put_big_file_with(ask, &local, install::GUEST_INSTALLER)? {
@@ -194,7 +206,37 @@ pub fn ensure_installed(
     if !said.contains(INSTALLED) {
         return Err(Failure(format!("remoteman's host could not be installed: {}", said.trim())));
     }
+    updates_off(context, machine, ask, UPDATES_OFF_PAUSE);
     Ok(install::fingerprint_after(&said))
+}
+
+/// Tells the guest's host never to look for updates by itself, a few times until it takes. Gives
+/// whether it took; when it didn't, the host's last words are logged.
+fn updates_off(
+    context: &Context,
+    machine: &Machine,
+    ask: &dyn Fn(&str, u64) -> String,
+    pause: Duration,
+) -> bool {
+    let script = install::ctl_script(&ctl::updates_off());
+    let mut why = String::new();
+    for attempt in 0..UPDATES_OFF_TRIES {
+        if attempt > 0 {
+            thread::sleep(pause);
+        }
+        match ctl::updates_off_took(&ask(&script, CTL_SECONDS)) {
+            Ok(()) => return true,
+            Err(said) => why = said,
+        }
+    }
+    let _ = write_log(
+        context,
+        &format!(
+            "remote view: {}: remoteman's own update check could not be switched off: {why}",
+            machine.id
+        ),
+    );
+    false
 }
 
 /// Runs one `ctl` command in the guest, and gives what the host printed.
@@ -584,6 +626,7 @@ pub fn stopped(context: &Context, machine: &Machine, slot: Option<Slot>) {
 mod tests {
     use super::*;
     use crate::testing::{Scratch, scratch_context};
+    use std::cell::RefCell;
 
     fn machine(context: &Context, id: &str, kind: Kind) -> Machine {
         let machine = Machine { kind, ..Machine::new(id, id, "/d", "/v") };
@@ -609,6 +652,76 @@ mod tests {
         assert!(
             pin.sha256.len() == 64
                 && pin.sha256.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        );
+    }
+
+    #[test]
+    fn the_pin_is_0_1_9_which_takes_set_updates_off() {
+        let pin = pin();
+        assert_eq!(pin.version, "0.1.9");
+        assert_eq!(pin.url, "https://files.ruxn.com/p/remoteman/remoteman-host-setup-0.1.9.exe");
+        assert_eq!(pin.sha256, "15ed3cef0097fcddf90497997834d1511f35cbcba0279e90a4cb0dc1e1c2f37e");
+    }
+
+    /// What a guest is asked, and answers from a table: the first answer whose key the script holds.
+    fn guest<'a>(
+        answers: &'a [(&'a str, &'a str)],
+        asked: &'a RefCell<Vec<String>>,
+    ) -> impl Fn(&str, u64) -> String + 'a {
+        move |script: &str, _| {
+            asked.borrow_mut().push(script.to_string());
+            answers
+                .iter()
+                .find(|(key, _)| script.contains(key))
+                .map(|(_, said)| (*said).to_string())
+                .unwrap_or_default()
+        }
+    }
+
+    /// A machine installed at 0.1.8 has a different version noted, so it is installed again and told
+    /// `set updates off` after. One installed at the pin whose host still looks for updates gets only
+    /// `set updates off`, and no installer runs, so the picture doesn't blip.
+    #[test]
+    fn the_right_host_with_updates_on_gets_only_the_ctl_call() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let windows = machine(&context, "win", Kind::Windows);
+        let asked = RefCell::new(Vec::new());
+        let answers = [("updates.json", install::UPDATES_ON), ("'set' 'updates' 'off'", "ok\r\n")];
+        assert_eq!(ensure_installed(&context, &windows, &guest(&answers, &asked)).unwrap(), None);
+        let asked = asked.into_inner();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(asked[1].ends_with("ctl --port 7791 'set' 'updates' 'off'\n"), "{}", asked[1]);
+        assert!(asked.iter().all(|script| !script.contains("remoteman-host-setup.exe")), "no installer runs");
+    }
+
+    #[test]
+    fn a_current_host_with_updates_off_is_asked_nothing_more() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let windows = machine(&context, "win", Kind::Windows);
+        let asked = RefCell::new(Vec::new());
+        let answers = [("updates.json", install::CURRENT)];
+        assert_eq!(ensure_installed(&context, &windows, &guest(&answers, &asked)).unwrap(), None);
+        assert_eq!(asked.into_inner().len(), 1);
+    }
+
+    /// An older host, or one that won't, is logged and asked again at the next start; the remote
+    /// view goes on.
+    #[test]
+    fn updates_that_wont_go_off_are_logged_and_nothing_fails() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let windows = machine(&context, "win", Kind::Windows);
+        let asked = RefCell::new(Vec::new());
+        let answers =
+            [("'set' 'updates' 'off'", "this host was started with --updates check, which decides this")];
+        assert!(!updates_off(&context, &windows, &guest(&answers, &asked), Duration::ZERO));
+        assert_eq!(asked.borrow().len(), UPDATES_OFF_TRIES as usize);
+        let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
+        assert!(
+            log.contains("could not be switched off: this host was started with --updates check"),
+            "{log}"
         );
     }
 

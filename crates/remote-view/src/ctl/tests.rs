@@ -17,9 +17,27 @@ fn the_commands_with_no_device_in_them() {
         (device_drop(), "drop"),
         (share(true), "sharing on"),
         (share(false), "sharing off"),
+        (updates_off(), "set updates off"),
     ] {
         assert_eq!(line(&words), want);
     }
+}
+
+#[test]
+fn updates_are_off_only_when_the_host_said_ok() {
+    assert_eq!(updates_off_took("ok\r\n"), Ok(()));
+    for answer in [
+        "",
+        "the host is stopping",
+        "done, but it won't be remembered: access denied",
+        "this host was started with --updates check, which decides this",
+        "this host doesn't look for updates",
+        // What 0.1.8 answers to words it doesn't know.
+        "status | pair on|off|accept|decline | set lock|speakers|notify on|off",
+    ] {
+        assert!(updates_off_took(answer).is_err(), "{answer:?}");
+    }
+    assert_eq!(updates_off_took(""), Err("the host said nothing".into()));
 }
 
 #[test]

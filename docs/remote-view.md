@@ -11,7 +11,7 @@ The machine's own window stays as it is. remoteman's host runs in Windows beside
 
 ## Switching it on
 
-Open the machine's settings, go to the Network page and turn on Allow viewing from other devices, or run `guesthouse-vm set NAME remote-view on`. A running machine gets remoteman's host at once, and a stopped one at its next start. The first time, Guesthouse downloads remoteman's host installer, checked against the version it was built for, and installs it in Windows. That makes the machine's picture blink for about two seconds. It is only installed again when that version changes.
+Open the machine's settings, go to the Network page and turn on Allow viewing from other devices, or run `guesthouse-vm set NAME remote-view on`. A running machine gets remoteman's host at once, and a stopped one at its next start. The first time, Guesthouse downloads remoteman's host installer, checked against the version it was built for, and installs it in Windows. That makes the machine's picture blink for about two seconds. It is only installed again when that version changes. From remoteman 0.1.9 its host looks for updates by itself. Guesthouse switches that off in Windows (`set updates off`) and brings a newer remoteman itself, when Guesthouse is updated. If that doesn't take, it's written in the log and tried again at the next start, and viewing works anyway.
 
 The machine gets a port of its own on this PC, from 7792 to 7899, which stays the same. Guesthouse announces the machine on the network under its name, so remoteman's viewer lists it.
 

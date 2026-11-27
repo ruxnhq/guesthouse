@@ -41,6 +41,17 @@ pub struct Status {
     /// What the host serves every device, before each device's own choice. `None`: not said.
     pub clipboard: Option<bool>,
     pub files: Option<bool>,
+    /// How the host looks for a newer remoteman by itself, from 0.1.9. `None`: an older host, or one
+    /// the service didn't start, which says `null`.
+    pub update: Option<Update>,
+}
+
+/// What the host says of looking for updates by itself.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct Update {
+    /// `off`, `check` or `install`.
+    pub mode: Option<String>,
 }
 
 /// What came back from asking for the status.
@@ -77,6 +88,11 @@ impl Status {
     /// The device with this fingerprint.
     pub fn device(&self, fingerprint: &str) -> Option<&DeviceInfo> {
         self.devices.iter().find(|device| device.fingerprint.eq_ignore_ascii_case(fingerprint))
+    }
+
+    /// The host said it never looks for updates by itself.
+    pub fn updates_off(&self) -> bool {
+        self.update.as_ref().and_then(|update| update.mode.as_deref()) == Some("off")
     }
 }
 

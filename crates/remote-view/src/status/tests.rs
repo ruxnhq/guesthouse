@@ -70,6 +70,22 @@ fn a_line_that_is_not_json_or_has_the_wrong_kind_of_value_is_an_error() {
 }
 
 #[test]
+fn the_update_mode_is_read_when_said_and_none_when_not() {
+    let off = status(
+        r#"{"pairing":false,"update":{"version":"0.1.9","mode":"off","said":false,"state":"not-yet","words":"not looked for yet","newer":null,"checked":null,"can_install":true,"why_not":null}}"#,
+    );
+    assert_eq!(off.update.as_ref().and_then(|update| update.mode.as_deref()), Some("off"));
+    assert!(off.updates_off());
+    assert!(!status(r#"{"update":{"mode":"check"}}"#).updates_off());
+    // 0.1.8 has no such field, and a host the service didn't start says null.
+    for older in [r#"{"pairing":false,"devices":[]}"#, r#"{"update":null}"#, r#"{"update":{}}"#] {
+        let parsed = status(older);
+        assert!(!parsed.updates_off(), "{older}");
+    }
+    assert_eq!(status(r#"{"update":null}"#).update, None);
+}
+
+#[test]
 fn a_device_is_found_by_its_fingerprint_in_either_case() {
     let parsed = status(r#"{"devices":[{"fingerprint":"abcd","name":"A"}]}"#);
     assert_eq!(parsed.device("ABCD").unwrap().name, "A");

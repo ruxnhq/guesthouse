@@ -44,6 +44,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const HELD_FILE: &str = "remote-view-held.json";
 /// One `ctl` command in the guest. The agent answers in about 40 ms.
 const CTL_SECONDS: u64 = 20;
+/// The last line of every `ctl` script [`run_ctl`] sends. The agent closes the connection once a
+/// script ends, and says nothing at all for a token it doesn't take, for a guest whose agent isn't
+/// up behind QEMU's forward, or for a script that printed nothing, and an answer cut off by the
+/// time reads as a whole one. This line tells an answer, empty or not, from none.
+const CTL_END: &str = "guesthouse-ctl-end";
 const CHECK_SECONDS: u64 = 30;
 /// The installer took 18 s in a guest with Secure Boot on.
 const INSTALL_SECONDS: u64 = 180;
@@ -238,9 +243,32 @@ fn updates_off(
     false
 }
 
-/// Runs one `ctl` command in the guest, and gives what the host printed.
-fn run_ctl(context: &Context, machine: &Machine, slot: Slot, words: &Words) -> String {
-    context.ask_guest(machine, &install::ctl_script(words), CTL_SECONDS, Some(slot))
+/// Runs one `ctl` command in the guest, and gives what the host printed, or that no whole answer came.
+fn run_ctl(
+    context: &Context,
+    machine: &Machine,
+    slot: Slot,
+    words: &Words,
+) -> std::result::Result<String, Unanswered> {
+    ctl_answer(&context.ask_guest(machine, &ctl_script(words), CTL_SECONDS, Some(slot)))
+}
+
+/// The `ctl` command as the agent runs it, with [`CTL_END`] printed after it. A command the guest
+/// can't run is an answer too, in the words the agent would have given for it.
+fn ctl_script(words: &Words) -> String {
+    let command = install::ctl_script(words);
+    format!("try {{ {} }} catch {{ \"ERROR: $_\" }}\n'{CTL_END}'\n", command.trim_end())
+}
+
+/// What the guest printed before [`CTL_END`], which may be nothing. With no end line the guest gave
+/// no answer, or not all of one, and the command may or may not have run.
+fn ctl_answer(said: &str) -> std::result::Result<String, Unanswered> {
+    let all = said.trim_end();
+    match all.strip_suffix(CTL_END) {
+        Some(before) if before.is_empty() || before.ends_with('\n') => Ok(before.to_string()),
+        _ if all.is_empty() => Err(Unanswered("no answer came from the guest's agent".into())),
+        _ => Err(Unanswered("only part of the answer came".into())),
+    }
 }
 
 // ---- The helper ----
@@ -392,10 +420,10 @@ struct AgentGuest<'a> {
 }
 
 impl Guest for AgentGuest<'_> {
-    /// The agent gives nothing for a guest that did not answer, which reads as the host saying
-    /// nothing, as it always has.
+    /// A script that ran to its end is an answer, whatever it printed. Anything else is
+    /// [`Unanswered`], so the driver reads the status again before it sends anything more.
     fn ctl(&self, words: &Words) -> std::result::Result<String, Unanswered> {
-        Ok(run_ctl(self.context, self.machine, self.slot, words))
+        run_ctl(self.context, self.machine, self.slot, words)
     }
 
     fn log(&self, line: &str) {
@@ -503,7 +531,7 @@ pub fn share(
     let Some(slot) = running_slot(context, machine) else { return Ok(info(context, machine)) };
     if !on {
         step(context, machine, slot, StepEvent::Plain(Event::SwitchOff));
-        run_ctl(context, machine, slot, &ctl::share(false));
+        let _ = run_ctl(context, machine, slot, &ctl::share(false));
         close_helper(context, slot);
         return Ok(info(context, machine));
     }
@@ -615,11 +643,13 @@ pub fn stopped(context: &Context, machine: &Machine, slot: Option<Slot>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::stand_in::ScriptedAgent;
     use crate::testing::{Scratch, scratch_context};
     use guesthouse_remote_view_core::pairing::Pairing;
     use guesthouse_remote_view_core::session::fresh_pairing;
     use guesthouse_remote_view_core::status::Status;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     /// A pairing for a run of the app, as [`AgentGuest`] gives the driver one: from the held file.
     fn fresh(context: &Context, machine: &Machine) -> Pairing {
@@ -807,5 +837,112 @@ mod tests {
         assert_eq!(next.pairing.held(), None);
         write_held(&context, &windows, next.pairing.held());
         assert!(!held_file(&context, &windows).exists());
+    }
+
+    #[test]
+    fn a_ctl_script_runs_the_command_and_then_prints_its_end_line() {
+        let script = ctl_script(&ctl::status());
+        assert!(script.starts_with("try { & "), "{script}");
+        assert!(script.contains("ctl --port 7791 'status' } catch { \"ERROR: $_\" }\n"), "{script}");
+        assert!(script.ends_with("\n'guesthouse-ctl-end'\n"), "{script}");
+    }
+
+    /// The agent's answer as it comes: Windows ends lines with CRLF. Whatever the script printed
+    /// before its end line is the answer, even nothing. No end line is no answer.
+    #[test]
+    fn only_an_answer_with_its_end_line_is_one() {
+        let answered = [
+            ("ok\r\nguesthouse-ctl-end\r\n", "ok\r\n"),
+            ("{\"pairing\":false}\r\nguesthouse-ctl-end\r\n", "{\"pairing\":false}\r\n"),
+            ("guesthouse-ctl-end\r\n", ""),
+            ("\r\nguesthouse-ctl-end\r\n", "\r\n"),
+            (
+                "ERROR: The term 'remoteman-host.exe' is not recognized\r\nguesthouse-ctl-end\r\n",
+                "ERROR: The term 'remoteman-host.exe' is not recognized\r\n",
+            ),
+        ];
+        for (said, answer) in answered {
+            assert_eq!(ctl_answer(said), Ok(answer.to_string()), "{said:?}");
+        }
+        let none = Unanswered("no answer came from the guest's agent".into());
+        let part = Unanswered("only part of the answer came".into());
+        let unanswered = [
+            ("", &none),
+            ("\r\n", &none),
+            ("{\"pairing\":fal", &part),
+            ("ok\r\n", &part),
+            ("not the guesthouse-ctl-end\r\n", &part),
+        ];
+        for (said, why) in unanswered {
+            assert_eq!(ctl_answer(said).as_ref(), Err(why), "{said:?}");
+        }
+    }
+
+    fn agent_guest(scratch: &Scratch, answers: &[&str]) -> (Context, Machine, Arc<ScriptedAgent>) {
+        let mut context = scratch_context(scratch);
+        let agent = Arc::new(ScriptedAgent::answering(answers));
+        context.agent = agent.clone();
+        let windows = machine(&context, "win", Kind::Windows);
+        crate::agent::make_token(&context, &windows).unwrap();
+        (context, windows, agent)
+    }
+
+    const IDLE: &str =
+        "{\"pairing\":false,\"clipboard\":true,\"files\":true,\"devices\":[]}\r\nguesthouse-ctl-end\r\n";
+    const DONE: &str = "ok\r\nguesthouse-ctl-end\r\n";
+
+    /// A guest that says nothing to `allow clipboard off` is a guest that did not answer: the step
+    /// stops before the rest, and the next one reads first. Before, it read as the host refusing with
+    /// no words, and pairing went on to the next command.
+    #[test]
+    fn a_silent_guest_stops_the_step_and_the_next_one_reads_first() {
+        let scratch = Scratch::new();
+        let (context, windows, agent) = agent_guest(&scratch, &[IDLE, ""]);
+        let (sessions, policy) = (Sessions::default(), Policy::linux());
+        let guest = AgentGuest { context: &context, machine: &windows, slot: crate::slots::number(0) };
+        let clock = || 1_000_000;
+        let driver =
+            Driver { sessions: &sessions, machine: &windows.id, policy: &policy, guest: &guest, now: &clock };
+        let why = driver.open_pairing(120).expect("the step says why it stopped");
+        assert_eq!(
+            why,
+            "The guest did not answer allow clipboard off: no answer came from the guest's agent. It is read \
+             again before anything more is sent."
+        );
+        assert_eq!(agent.requests.lock().unwrap().len(), 2, "nothing more was sent");
+        assert!(sessions.with(&windows.id, |session| session.unsure));
+        let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
+        assert!(log.contains(&format!("remote view: {why}")), "{log}");
+    }
+
+    /// A guest that answers, even with nothing, goes on as before.
+    #[test]
+    fn a_guest_that_answers_opens_pairing_as_before() {
+        let scratch = Scratch::new();
+        let open =
+            "{\"pairing\":true,\"clipboard\":false,\"files\":false,\"devices\":[]}\r\nguesthouse-ctl-end\r\n";
+        let quiet = "guesthouse-ctl-end\r\n";
+        let (context, windows, agent) = agent_guest(&scratch, &[IDLE, DONE, quiet, DONE, open]);
+        let (sessions, policy) = (Sessions::default(), Policy::linux());
+        let guest = AgentGuest { context: &context, machine: &windows, slot: crate::slots::number(0) };
+        let clock = || 1_000_000;
+        let driver =
+            Driver { sessions: &sessions, machine: &windows.id, policy: &policy, guest: &guest, now: &clock };
+        assert_eq!(driver.open_pairing(120), None);
+        let scripts: Vec<String> =
+            agent.requests.lock().unwrap().iter().map(|(_, _, script)| script.clone()).collect();
+        let words =
+            ["'status'", "'allow' 'clipboard' 'off'", "'allow' 'files' 'off'", "'pair' 'on'", "'status'"];
+        assert_eq!(scripts.len(), words.len(), "{scripts:?}");
+        for (script, words) in scripts.iter().zip(words) {
+            assert!(script.contains(&format!("ctl --port 7791 {words} }}")), "{words} in {script}");
+        }
+        assert!(!sessions.with(&windows.id, |session| session.unsure));
+        assert!(sessions.with(&windows.id, |session| session.pairing.as_ref().unwrap().view().open));
+        let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
+        assert!(
+            log.contains("remote view: ctl allow files off:"),
+            "an empty answer is a refusal with no words, as before: {log}"
+        );
     }
 }

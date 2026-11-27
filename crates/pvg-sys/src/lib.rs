@@ -18,11 +18,15 @@
 //! - `profile`: one build's registers, commands and limits, as far as the guard reads them.
 //! - `memory`: [`GuestMemory`], the guest's memory as ranges of this process's own.
 //! - `guard`: [`Guard`], which judges every word a guest says. It needs no framework and builds
-//!   everywhere, as its tests do.
+//!   on any Unix, as its tests do.
 //! - `framework`: the calls into Apple's framework, through an Objective-C file that `build.rs`
 //!   compiles. macOS only.
 //! - `device`: [`Device`], the guard and the framework together, which is what a host program
 //!   uses. macOS only.
+//!
+//! The guest's memory is mappings made with `mmap`, so the crate builds on Unix only, and on
+//! Windows it is empty, as the Mac host's core is off macOS.
+#![cfg(unix)]
 
 #[cfg(target_os = "macos")]
 mod device;

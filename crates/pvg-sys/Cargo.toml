@@ -7,9 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
-[dependencies]
 # mmap, which the standard library does not offer: the framework takes a guest's memory only as
-# mappings of their own.
+# mappings of their own. Unix only, as the crate is.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [lints]

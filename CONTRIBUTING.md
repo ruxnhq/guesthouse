@@ -47,7 +47,7 @@ cargo clippy -p guesthouse-host-mac --all-targets -- -D warnings
 mac/build.sh
 ```
 
-The graphics process, `crates/pvg-host`, and the guard in front of the framework's device, `crates/pvg-sys`, aren't default members either. Their calls into Apple's framework build on a Mac only. The guard builds everywhere, so its tests run on Linux as well. A few tests make the framework's real device (`tests/picture.rs` in pvg-sys, `tests/serve.rs` and `tests/export.rs` in pvg-host). They need a Mac on a macOS build the guard has a profile for, and on any other build they say so and pass without running. `qemu/mac/build.sh` builds the QEMU they run with. A pull request that changes any of this is also built on a GitHub-hosted Mac (`.github/workflows/mac-graphics.yml`).
+The graphics process, `crates/pvg-host`, and the guard in front of the framework's device, `crates/pvg-sys`, aren't default members either. Their calls into Apple's framework build on a Mac only. The guard builds on Linux too, so its tests run there as well. On Windows `pvg-sys` is an empty crate, as it maps the guest's memory with `mmap`. A few tests make the framework's real device (`tests/picture.rs` in pvg-sys, `tests/serve.rs` and `tests/export.rs` in pvg-host). They need a Mac on a macOS build the guard has a profile for, and on any other build they say so and pass without running. `qemu/mac/build.sh` builds the QEMU they run with. A pull request that changes any of this is also built on a GitHub-hosted Mac (`.github/workflows/mac-graphics.yml`).
 
 ```sh
 cargo test -p guesthouse-pvg-sys -p guesthouse-pvg-host

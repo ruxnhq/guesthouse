@@ -121,6 +121,17 @@ fn run(
     }
 }
 
+/// A throwaway's clean state, started once with its changes kept: see
+/// [`crate::actions::clean_state`].
+pub(super) fn refresh_clean(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
+    can_change(context, machine)?;
+    if !machine.throwaway {
+        return Err(Failure::new("Only a throwaway has a clean state to refresh."));
+    }
+    run(context, machine, crate::actions::clean_state::REFRESH_CLEAN_TASK, "", out)?;
+    Ok(writeln!(out, "{} starts from its refreshed clean state now.", machine.name)?)
+}
+
 pub(super) fn take(context: &Context, machine: &Machine, name: &str, out: &mut dyn Write) -> Result<()> {
     can_change(context, machine)?;
     run(context, machine, "take_snapshot", name, out)?;

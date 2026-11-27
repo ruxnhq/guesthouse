@@ -16,7 +16,9 @@ use super::desktop::{GUEST_FOLDER, put_file};
 use super::identity_restart::restart_windows;
 use crate::agent::QUICK_SECONDS;
 use crate::failure::Result;
-use crate::guest_driver_store::{StoreAnswer, disc_path, due, make_disc, read_answer, record_version};
+use crate::guest_driver_store::{
+    BEHIND, StoreAnswer, disc_path, due, make_disc, read_answer, record_clean_version, record_version,
+};
 use crate::log::write_log;
 use crate::settings::driver_folder;
 use crate::setup::inf::retail_version;
@@ -125,6 +127,21 @@ fn kept(task: &mut Task, why: &str) -> Result<()> {
     Ok(())
 }
 
+/// A throwaway's run starts from its clean state. One whose clean disk had the version already gets it
+/// noted there, so its next start asks nothing. One that copied it in will copy it again next run, so
+/// the start says how to make that the clean state.
+fn for_a_throwaway(task: &mut Task, had_it: bool) -> Result<()> {
+    if had_it {
+        return record_clean_version(task.context, &task.machine);
+    }
+    let note = format!(
+        "{BEHIND} Refresh Clean State in its settings, or guesthouse-vm refresh-clean {}, does it once.",
+        task.machine.id
+    );
+    task.error = if task.error.is_empty() { note } else { format!("{} {note}", task.error) };
+    Ok(())
+}
+
 /// Brings the guest's copy to this PC's version, if it is due and the disc is in the VM. Only the
 /// agent is needed, so a Windows at its sign-in screen gets it as well.
 pub(super) fn refresh_driver_store(task: &mut Task) -> Result<()> {
@@ -141,6 +158,9 @@ pub(super) fn refresh_driver_store(task: &mut Task) -> Result<()> {
         return kept(task, "the script that copies it did not reach Windows");
     }
     let mut answer = run_script(task, &version);
+    // Nothing was copied: the disk the run started from has the version already.
+    let had_it =
+        matches!(&answer, Some(StoreAnswer::Current { version: had, restart: false }) if *had == version);
     if answer.as_ref().is_some_and(StoreAnswer::restart) {
         write_log(task.context, &format!("driver store: before the restart the guest said {answer:?}"))?;
         task.step(&format!("Restarting Windows once for NVIDIA's driver {}", retail_version(&version)));
@@ -157,7 +177,11 @@ pub(super) fn refresh_driver_store(task: &mut Task) -> Result<()> {
             if had == version =>
         {
             write_log(task.context, &format!("driver store: Windows has NVIDIA's driver {version}"))?;
-            record_version(task.context, &task.machine, &version)
+            record_version(task.context, &task.machine, &version)?;
+            if task.machine.throwaway {
+                for_a_throwaway(task, had_it)?;
+            }
+            Ok(())
         }
         Some(StoreAnswer::Queued) => kept(task, "the change is still waiting for Windows to restart"),
         Some(StoreAnswer::NoDisc) => kept(task, "Windows did not find the driver's disc"),

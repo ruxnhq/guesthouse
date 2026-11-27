@@ -6,6 +6,7 @@ mod amd_package;
 mod amd_start;
 pub mod android;
 mod api_stage;
+pub mod clean_state;
 pub(crate) mod copy_identity;
 mod desktop;
 mod diagnose;
@@ -228,6 +229,9 @@ pub fn start(task: &mut Task) -> Result<()> {
     }
     if task.machine.android() {
         return android::start(task);
+    }
+    if task.machine.throwaway {
+        clean_state::put_back_cut_short(task)?;
     }
     let machine = task.machine.clone();
     if machine.has_gpu() {
@@ -640,6 +644,7 @@ fn run_action(task: &mut Task, arguments: &[String]) -> Result<()> {
         "install" if task.machine.kind == Kind::Linux => ubuntu::install(task),
         "install" => install(task),
         "take_snapshot" => take_snapshot(task, text),
+        clean_state::REFRESH_CLEAN_TASK => clean_state::refresh_clean_state(task),
         "go_back" => go_back(task, text),
         "delete_snapshot" => delete_snapshot(task, text),
         crate::export::EXPORT_TASK => crate::export::export(task, text),

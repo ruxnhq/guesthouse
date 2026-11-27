@@ -60,6 +60,27 @@ pub fn record_version(context: &Context, machine: &Machine, version: &str) -> Re
     Ok(())
 }
 
+/// What a throwaway whose clean state has an older driver than this PC's is told, in its settings and
+/// at a start.
+pub const BEHIND: &str = "Its clean state has an older NVIDIA driver than this PC's, so each start copies the new one in \
+                          and restarts Windows.";
+
+/// Notes the machine's version in its clean state too, for a throwaway whose clean disk has it.
+pub fn record_clean_version(context: &Context, machine: &Machine) -> Result<()> {
+    let clean = crate::throwaway::clean_folder(context, machine);
+    let Some(version) = fs::read_to_string(record_file(context, machine)).ok() else { return Ok(()) };
+    if machine.throwaway && clean.is_dir() {
+        fs::write(clean.join(RECORD_FILE), version)?;
+    }
+    Ok(())
+}
+
+/// Whether a throwaway's clean state has another driver than the one this PC gives, so that
+/// refreshing its clean state would save each start a copy.
+pub fn clean_state_behind(context: &Context, machine: &Machine) -> bool {
+    machine.throwaway && due(context, machine).is_some()
+}
+
 /// The version to bring the guest to, when it is not the one noted. Another version, older or newer,
 /// counts, as the driver this PC has is the one the daemon serves. No note counts too.
 pub fn version_due<'a>(offered: Option<&'a str>, recorded: Option<&str>) -> Option<&'a str> {

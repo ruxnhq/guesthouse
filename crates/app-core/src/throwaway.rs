@@ -259,7 +259,7 @@ pub(crate) fn is_guest_note(name: &str) -> bool {
 }
 
 /// The notes as they were when it became a throwaway: each kept one back, and any other gone.
-fn restore_notes(context: &Context, machine: &Machine) -> Result<()> {
+pub(crate) fn restore_notes(context: &Context, machine: &Machine) -> Result<()> {
     let clean = clean_folder(context, machine);
     if !clean.is_dir() {
         return Err(Failure::new("Its clean state is missing. Turn Throwaway off and on again."));

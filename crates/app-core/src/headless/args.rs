@@ -97,6 +97,7 @@ pub(super) enum Command<'a> {
         wait: bool,
     },
     Stop(&'a str),
+    RefreshClean(&'a str),
     Off(&'a str),
     Log(&'a str),
     Standalone(&'a str),
@@ -242,7 +243,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
             Split::new(command, rest, &[], &[])?.exactly(command, "", 0)?;
             Ok(if command == "list" { Command::List } else { Command::Share })
         }
-        "status" | "show" | "stop" | "off" | "log" | "command" => {
+        "status" | "show" | "stop" | "off" | "log" | "command" | "refresh-clean" => {
             let split = Split::new(command, rest, &[], &[])?;
             let name = split.exactly(command, machine, 1)?[0];
             Ok(match command {
@@ -251,6 +252,7 @@ pub(super) fn parse(arguments: &[String]) -> std::result::Result<Command<'_>, Pr
                 "stop" => Command::Stop(name),
                 "off" => Command::Off(name),
                 "command" => Command::Standalone(name),
+                "refresh-clean" => Command::RefreshClean(name),
                 _ => Command::Log(name),
             })
         }

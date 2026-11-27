@@ -6,12 +6,15 @@ use crate::common::{chosen_path, in_background};
 use crate::rows::{boxed_rows, explain, on_yes, question, row_button};
 use adw::prelude::*;
 use gtk::gio;
+use guesthouse_app_core::actions::clean_state::REFRESH_CLEAN_TASK;
 use guesthouse_app_core::duplicate::{
     DELETE_WORD, DUPLICATE_TASK, THROWAWAY_WORD, copy_name, plan_duplicate,
 };
 use guesthouse_app_core::export::{EXPORT_TASK, EXTENSION, plan_export};
+use guesthouse_app_core::guest_driver_store::{BEHIND, clean_state_behind};
 use guesthouse_app_core::tasks::Status;
 use guesthouse_app_core::throwaway::set_throwaway;
+use std::cell::Cell;
 
 const NOT_INSTALLED: &str = "It has not finished installing.";
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
@@ -29,6 +32,12 @@ pub struct Copies {
     duplicate: gtk::Button,
     export: gtk::Button,
     throwaway: adw::SwitchRow,
+    /// For a throwaway whose clean state has an older NVIDIA driver than this PC's.
+    refresh_row: adw::ActionRow,
+    refresh: gtk::Button,
+    /// Whether the machine was off at the last look, so the driver's version is read again only when
+    /// it turns off, and not at every status.
+    was_off: Cell<Option<bool>>,
 }
 
 impl Copies {
@@ -57,6 +66,19 @@ impl Copies {
             row.set_active(changing.machine.borrow().throwaway);
         });
         group.add(&throwaway);
+        let refresh_row = adw::ActionRow::builder().title("Clean State").subtitle(BEHIND).build();
+        let refresh = row_button("Refresh Clean State");
+        refresh.set_tooltip_text(Some(
+            "Starts it once with its changes kept, so NVIDIA's driver in it is brought up to this PC's, shuts \
+             it down, and makes that its clean state. If that fails, the old one stays.",
+        ));
+        let refreshing = shared.clone();
+        refresh.connect_clicked(move |_| {
+            refreshing.window.launch(REFRESH_CLEAN_TASK, &refreshing.machine.borrow(), &[], None);
+        });
+        refresh_row.add_suffix(&refresh);
+        refresh_row.set_visible(false);
+        group.add(&refresh_row);
         let export_row =
             adw::ActionRow::builder().title("Export").subtitle("One file, with its password inside").build();
         explain(&export_row, EXPORT_NOTE);
@@ -70,7 +92,16 @@ impl Copies {
         for row in [row.upcast_ref::<gtk::Widget>(), throwaway.upcast_ref(), export_row.upcast_ref()] {
             row.set_visible(shown);
         }
-        Self { shown, shared: shared.clone(), duplicate, export, throwaway }
+        Self {
+            shown,
+            shared: shared.clone(),
+            duplicate,
+            export,
+            throwaway,
+            refresh_row,
+            refresh,
+            was_off: Cell::new(None),
+        }
     }
 
     pub fn set_status(&self, status: &Status) {
@@ -85,6 +116,17 @@ impl Copies {
         self.throwaway.set_sensitive(can);
         self.export.set_sensitive(can);
         self.export.set_tooltip_text((!can).then_some(why));
+        self.refresh.set_sensitive(can);
+        if self.was_off.replace(Some(can)) != Some(can) {
+            let machine = self.shared.machine.borrow();
+            // Read when it turns off, as a start or a refresh changes it. While it runs the row stays.
+            let shown = if can {
+                clean_state_behind(&self.shared.window.context(), &machine)
+            } else {
+                self.refresh_row.is_visible() && machine.throwaway
+            };
+            self.refresh_row.set_visible(shown);
+        }
     }
 }
 

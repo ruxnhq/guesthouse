@@ -99,6 +99,9 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
                              a copy of a machine that is off, with its own disk.
                              A throwaway starts clean each time, and one made with
                              --delete-when-stopped is deleted once it has run and stopped
+  refresh-clean MACHINE      for a throwaway that is off: start it once with its changes kept, so
+                             the start brings NVIDIA's driver in it up to this PC's, shut it down,
+                             and make that its clean state. If that fails, the old one stays
   export MACHINE FILE [--no-wait]
                              the machine in one file, for Guesthouse on another PC
   import FILE [--name NAME]  a machine from such a file
@@ -166,6 +169,7 @@ pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std:
         Command::Lean { name, wait } => recipes::lean_again(context, &find(context, name)?, wait, out)?,
         Command::ScanAll { name, wait } => recipes::scan_all(context, &find(context, name)?, wait, out)?,
         Command::Stop(name) => stop(context, &find(context, name)?, "stop", out)?,
+        Command::RefreshClean(name) => snapshots::refresh_clean(context, &find(context, name)?, out)?,
         Command::Off(name) => stop(context, &find(context, name)?, "force", out)?,
         Command::Log(name) => show_log(context, &find(context, name)?, out)?,
         Command::Idle { name, minutes } => idle::run(context, &find(context, name)?, minutes, out)?,

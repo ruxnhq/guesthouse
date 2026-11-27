@@ -125,7 +125,13 @@ fn the_network_side_opens_carries_both_ways_and_closes_while_the_program_runs() 
     assert_eq!(&buffer[..length], b"input");
     forward.send_to(b"video", from).unwrap();
     assert_eq!(device.recv_from(&mut buffer).unwrap().0, 5);
-    let busy = status(&run, Request::Status);
+    // The relay counts a datagram once its send has returned, which can be just after it arrives.
+    let end = Instant::now() + WAIT;
+    let mut busy = status(&run, Request::Status);
+    while (busy.counters.up_packets == 0 || busy.counters.down_packets == 0) && Instant::now() < end {
+        thread::sleep(Duration::from_millis(5));
+        busy = status(&run, Request::Status);
+    }
     assert_eq!((busy.clients.len(), busy.counters.up_packets, busy.counters.down_packets), (1, 1, 1));
 
     assert_eq!(status(&run, Request::Close).state, ShareState::Off);

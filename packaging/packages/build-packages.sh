@@ -222,7 +222,8 @@ build_pacman() {
     stage pacman pacman
     useradd -m builder 2>/dev/null || true
     mkdir -p /work/pkg
-    # makepkg won't run as root. fakeroot gives the package's files to root, and the helper its bit.
+    # makepkg won't run as root. fakeroot gives the package's files to root, and the helper its bit. Its
+    # options keep every file and folder of the payload as it is: nothing stripped, compressed or purged.
     cat >/work/pkg/PKGBUILD <<EOF
 pkgname=guesthouse
 pkgver=$VERSION
@@ -233,7 +234,7 @@ url='$HOMEPAGE'
 license=('$LICENSE_NAME')
 depends=($PACMAN_DEPENDS)
 optdepends=($PACMAN_OPTIONAL)
-options=(!strip !debug !lto !emptydirs)
+options=(!strip !debug !lto !zipman !purge libtool staticlibs emptydirs docs)
 install=guesthouse.install
 
 package() {

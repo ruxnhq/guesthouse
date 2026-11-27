@@ -7,7 +7,8 @@
 # The PR's code runs in the build job only, with a read-only token and no secrets. The upload job never
 # checks out or runs anything of the PR's: it takes a few files of known names and kinds from the build,
 # and writes only under test/PR/, with a bucket token that lives in the test-builds environment, which
-# only main may use. A fork's PR is built, but nothing of it is uploaded.
+# only main may use. A fork's PR isn't built: under pull_request_target its code would run in main's
+# context, where it could fill main's Actions cache.
 name: Test build
 
 on:
@@ -59,7 +60,7 @@ jobs:
   build:
     name: build the PR
     needs: check
-    if: needs.check.outputs.allowed == 'true'
+    if: needs.check.outputs.allowed == 'true' && needs.check.outputs.same-repo == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     permissions:
@@ -184,14 +185,14 @@ jobs:
           body=$RUNNER_TEMP/comment.md
           if [ "$UPLOADED" = success ]; then
             {
-              echo "Test build of ${SHA%"${SHA#???????}"}, at https://pkg.ruxn.com/test/$PR/ :"
+              echo "Test build of ${SHA%"${SHA#???????}"}. Check what you download against https://pkg.ruxn.com/test/$PR/SHA256SUMS"
               echo
               for file in $FILES; do echo "- https://pkg.ruxn.com/test/$PR/$file"; done
               echo
               echo "Install a package with your package manager, such as \`sudo apt install ./FILE\`, or unpack the payload and run \`sh guesthouse-VERSION-x86_64/install.sh --payload guesthouse-VERSION-x86_64\`. A test build has no Windows display driver and isn't signed: check it against SHA256SUMS. It's removed after 14 days or once this is closed. Adding the label again builds again."
             } >"$body"
           elif [ "$SAME_REPO" = false ]; then
-            echo "This PR is from a fork, so its test build stays with the run and isn't uploaded: $RUN" >"$body"
+            echo "This PR is from a fork, so there's no test build of it. A maintainer can build it from a branch of this repository." >"$body"
           else
             echo "The test build didn't finish: $RUN" >"$body"
           fi

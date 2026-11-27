@@ -134,7 +134,8 @@ publish_apt() {
         dpkg-deb -f "$package" Package | grep -Eqx "$package_pattern" || die "${package##*/} isn't a package of this repository."
     done
     add_to_pool "/tree/pool/$suite" "$@"
-    for name in $(for package in "$@"; do dpkg-deb -f "$package" Package; done | sort -u); do
+    # shellcheck disable=SC2010 # names of our own making, with no spaces
+    for name in $(ls "/tree/pool/$suite" | grep '\.deb$' | sed 's/_.*//' | sort -u); do
         prune_pool "/tree/pool/$suite" "^${name}_.*\\.deb\$"
     done
     apt_release "$suite" "$label"

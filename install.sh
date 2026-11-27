@@ -400,7 +400,7 @@ download_verified() {
         rm -f "$STAGING/$name"
         say "Downloading $url"
         if ! fetch -# -o "$STAGING/$name" "$url"; then
-            warn "couldn't download $url"
+            say "It isn't there."
             continue
         fi
         found=$(sha256sum "$STAGING/$name" | cut -d ' ' -f 1)

@@ -133,16 +133,12 @@ jobs:
           [ $# -eq 1 ] && [ -f "$1" ] || { echo "::error::expected one package, found: $*"; exit 1; }
           echo "file=dist/$1" >>"$GITHUB_OUTPUT"
           echo "version=$(dpkg-deb -f "$1" Version)" >>"$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ steps.package.outputs.file }}
       - name: Take the signing key
         env:
           SIGNING_KEY_SECRET: ${{ secrets.PKG_SIGNING_KEY }}
         run: sh packaging/packages/signing-key.sh "$RUNNER_TEMP"
-      - name: Add it to testing
+      - name: Check it isn't published already
         env:
-          FILE: ${{ steps.package.outputs.file }}
           VERSION: ${{ steps.package.outputs.version }}
         run: |
           sh packaging/packages/bucket.sh pull proxmox repo
@@ -151,6 +147,14 @@ jobs:
             echo "::error::$VERSION is published already, and what's published never changes."
             exit 1
           fi
+      # Signing the index leaves the package as it is, so this is the file as published.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.package.outputs.file }}
+      - name: Add it to testing
+        env:
+          FILE: ${{ steps.package.outputs.file }}
+        run: |
           sh packaging/packages/publish-repo.sh proxmox repo testing "$FILE"
           sh packaging/packages/bucket.sh push repo proxmox
       - name: Forget the key

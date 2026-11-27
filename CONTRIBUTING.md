@@ -91,9 +91,9 @@ Each handler has tests in `core/src/session/tests.rs`, which send whole messages
 
 ## Test builds
 
-A maintainer can have CI build a pull request for a tester to try. Add the label `test-build` to it. The Test build workflow builds the payload and the three packages from the PR, which takes a few hours, puts them in `https://pkg.ruxn.com/test/PR/` with `SHA256SUMS`, comments the links on the PR and takes the label off. Add the label again to build again, which replaces what's there. Builds are removed 14 days after the last one, or once the PR is closed. A test build isn't signed and has no Windows display driver.
+A maintainer can have CI build a pull request for a tester to try. Add the label `test-build` to it. The Test build workflow builds the payload and the three packages from the PR, which takes a few hours, puts them under `https://pkg.ruxn.com/test/PR/`, comments the links and `https://pkg.ruxn.com/test/PR/SHA256SUMS` on the PR and takes the label off. Add the label again to build again, which replaces what's there. Builds are removed 14 days after the last one, or once the PR is closed. A test build isn't signed and has no Windows display driver.
 
-Only a label from someone who can push to the repo starts it. A PR from a fork is built, but nothing of it is uploaded: the files stay with the workflow's run. The PR's code runs with no secrets, and the upload never runs any of it.
+Only a label from someone who can push to the repo starts it, and only for a PR from a branch of this repo. A PR from a fork isn't built, as its code would run in the repo's own context: push its branch here to build it. The PR's code runs with no secrets, and the upload never runs any of it.
 
 ## Commits
 

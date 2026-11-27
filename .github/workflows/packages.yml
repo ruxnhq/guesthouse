@@ -27,12 +27,15 @@ jobs:
     timeout-minutes: 60
     outputs:
       version: ${{ steps.release.outputs.version }}
+      packages: ${{ steps.release.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Read the release install.sh names
         id: release
+        env:
+          LAST_WITHOUT_PACKAGES: 0.10.0
         run: |
           constant() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" install.sh | head -n 1; }
           version=$(constant RELEASE_VERSION)
@@ -41,8 +44,13 @@ jobs:
             exit 0
           fi
           printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::$version isn't three numbers"; exit 1; }
+          # 0.10.0's app predates the packages: it doesn't know their bridge helper or their updates.
+          # Its files are still copied, and latest.json still names it.
+          packages=true
+          [ "$(printf '%s\n%s\n' "$version" "$LAST_WITHOUT_PACKAGES" | sort -V | tail -n 1)" != "$LAST_WITHOUT_PACKAGES" ] || packages=false
           {
             echo "version=$version"
+            echo "packages=$packages"
             echo "payload=$(constant PAYLOAD_SHA256)"
             echo "source=$(constant SOURCE_SHA256)"
           } >>"$GITHUB_OUTPUT"
@@ -64,7 +72,7 @@ jobs:
           echo "$SOURCE_SHA256  guesthouse-$VERSION-source.tar.xz" | sha256sum -c
           sha256sum -c SHA256SUMS
       - name: Build the packages
-        if: steps.release.outputs.version != ''
+        if: steps.release.outputs.packages == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: sh packaging/packages/build-packages.sh --out dist/packages "dist/release/guesthouse-$VERSION-x86_64.tar.xz"
@@ -101,10 +109,6 @@ jobs:
         with:
           name: release-${{ needs.build.outputs.version }}
           path: dist
-      # Anyone can check a package came from this workflow: gh attestation verify FILE --repo ruxnlabs/guesthouse
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/packages/*
       - name: Take the signing key
         env:
           SIGNING_KEY_SECRET: ${{ secrets.PKG_SIGNING_KEY }}
@@ -127,20 +131,30 @@ jobs:
               sh packaging/packages/bucket.sh put "$file" "$prefix/$name"
             fi
           done
-      - name: The apt repository
+      # Each repository is copied down and signed first, so the attestations are of the files as published:
+      # signing an rpm changes it.
+      - name: Sign the packages into the repositories
+        if: needs.build.outputs.packages == 'true'
         run: |
           sh packaging/packages/bucket.sh pull guesthouse/apt repo/apt
           sh packaging/packages/publish-repo.sh apt repo/apt stable dist/packages/guesthouse_"$VERSION"-*_amd64.deb
-          sh packaging/packages/bucket.sh push repo/apt guesthouse/apt
-      - name: The rpm repository
-        run: |
           sh packaging/packages/bucket.sh pull guesthouse/rpm repo/rpm
           sh packaging/packages/publish-repo.sh rpm repo/rpm dist/packages/guesthouse-"$VERSION"-*.x86_64.rpm
-          sh packaging/packages/bucket.sh push repo/rpm guesthouse/rpm
-      - name: The pacman repository
-        run: |
           sh packaging/packages/bucket.sh pull guesthouse/arch repo/arch
           sh packaging/packages/publish-repo.sh pacman repo/arch dist/packages/guesthouse-"$VERSION"-*-x86_64.pkg.tar.zst
+      # Anyone can check a package came from this workflow: gh attestation verify FILE --repo ruxnlabs/guesthouse
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: needs.build.outputs.packages == 'true'
+        with:
+          subject-path: |
+            repo/apt/pool/stable/guesthouse_${{ needs.build.outputs.version }}-*_amd64.deb
+            repo/rpm/packages/guesthouse-${{ needs.build.outputs.version }}-*.x86_64.rpm
+            repo/arch/x86_64/guesthouse-${{ needs.build.outputs.version }}-*-x86_64.pkg.tar.zst
+      - name: Publish the repositories
+        if: needs.build.outputs.packages == 'true'
+        run: |
+          sh packaging/packages/bucket.sh push repo/apt guesthouse/apt
+          sh packaging/packages/bucket.sh push repo/rpm guesthouse/rpm
           sh packaging/packages/bucket.sh push repo/arch guesthouse/arch
       # Last of all, so nothing offers the version before everything it needs is up.
       - name: Say this is the latest release

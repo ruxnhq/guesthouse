@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 const ICON_SIZE: i32 = 36;
-const FALLBACK_ICON: &str = "application-x-executable-symbolic";
+const FALLBACK_ICON: &str = crate::application::own_icon::APP;
 /// How long after an Open the windows are counted again, as a window takes a moment to show.
 const COUNT_AFTER_OPEN: Duration = Duration::from_secs(3);
 const RETRY_FIRST: u64 = 3;

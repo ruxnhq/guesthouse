@@ -91,12 +91,12 @@ fn card_button(label: &str) -> gtk::Button {
 /// The icon a machine shows until it has a picture of its screen: what it runs, as New Machine names it.
 pub fn kind_icon(machine: &Machine) -> &'static str {
     match machine.kind {
-        Kind::Windows => "preferences-desktop-apps-symbolic",
-        Kind::Linux => "utilities-terminal-symbolic",
-        Kind::Plain if machine.android() => "phone-symbolic",
-        Kind::Plain if machine.macos() => "video-display-symbolic",
-        Kind::Plain if machine.linux_gpu => "utilities-terminal-symbolic",
-        Kind::Plain => "media-optical-symbolic",
+        Kind::Windows => crate::application::own_icon::WINDOW,
+        Kind::Linux => crate::application::own_icon::TERMINAL,
+        Kind::Plain if machine.android() => crate::application::own_icon::PHONE,
+        Kind::Plain if machine.macos() => crate::application::own_icon::DISPLAY,
+        Kind::Plain if machine.linux_gpu => crate::application::own_icon::TERMINAL,
+        Kind::Plain => crate::application::own_icon::DISC,
     }
 }
 
@@ -420,7 +420,7 @@ pub(super) fn chip(program: &OpenProgram) -> gtk::FlowBoxChild {
     let texture = program.icon.as_ref().and_then(|file| gtk::gdk::Texture::from_filename(file).ok());
     let icon = match texture {
         Some(texture) => gtk::Image::from_paintable(Some(&texture)),
-        None => gtk::Image::from_icon_name("application-x-executable-symbolic"),
+        None => gtk::Image::from_icon_name(crate::application::own_icon::APP),
     };
     icon.set_pixel_size(CHIP_ICON);
     holder.append(&icon);

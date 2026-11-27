@@ -53,7 +53,7 @@ pub fn show(window: &Window) {
     column.append(&centred(VERSION, "dim-label"));
     column.append(&centred(WHAT_IT_IS, "body"));
     let links = gtk::Box::builder().spacing(LINK_SPACING).halign(gtk::Align::Center).build();
-    links.append(&link_button(window, "Website", "web-browser-symbolic", WEBSITE));
+    links.append(&link_button(window, "Website", crate::application::own_icon::WEB, WEBSITE));
     links.append(&link_button(window, "Report a Problem", "dialog-warning-symbolic", ISSUES));
     links.append(&link_button(window, "Discord", "user-available-symbolic", DISCORD));
     column.append(&links);

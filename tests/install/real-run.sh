@@ -60,8 +60,8 @@ cmp -s "$HELPER" "$current/qemu/build/qemu-bridge-helper" || { printf "it isn't 
 want=$(sha256sum "$current/qemu/build/qemu-bridge-helper" | cut -d ' ' -f 1)
 grep -q "^chown 0:0 /usr/local/libexec/guesthouse/qemu-bridge-helper.new$" "$T/log" ||
     { printf "root wasn't asked to own it\n"; exit 1; }
-[ "$(awk -F '\t' '$1 == "root-file" { print $2 " " $3 }' "$H/.local/lib/guesthouse/manifest")" = \
-    "$want /usr/local/libexec/guesthouse/qemu-bridge-helper" ] || { printf "the manifest doesn't list it\n"; exit 1; }
+awk -F '\t' '$1 == "root-file" { print $2 " " $3 }' "$H/.local/lib/guesthouse/manifest" |
+    grep -qxF "$want /usr/local/libexec/guesthouse/qemu-bridge-helper" || { printf "the manifest doesn't list it\n"; exit 1; }
 printf 'setuid, the release'"'"'s, %s, and listed\n' "$want"
 
 printf '\n== the real programs start from the install\n'

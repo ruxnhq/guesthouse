@@ -2,6 +2,7 @@
 //! adds the description, the summary and the manifest, and says what is missing. The app writes the
 //! result into a folder and packs it. Nothing here touches a file, so all of it is tested anywhere.
 
+use super::host::Host;
 use super::kind::ProblemKind;
 use super::manifest::{MANIFEST_FILE, manifest};
 use super::parts::Parts;
@@ -73,7 +74,7 @@ pub fn os_line(windows: &str) -> Option<String> {
 pub fn build_summary(facts: &Facts, description: &str) -> Summary {
     let mut summary = Summary::default();
     summary.set(summary::VERSION, facts.version);
-    summary.set(summary::HOST, summary::HOST_WINDOWS);
+    summary.set_host(Host::WINDOWS);
     if let Some(os) = facts.windows.and_then(os_line) {
         summary.set(summary::OS, &os);
     }

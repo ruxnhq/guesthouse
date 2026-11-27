@@ -10,7 +10,8 @@ use super::scrub::Scrubber;
 use super::summary::{self, Summary};
 use super::trim::trim;
 use crate::failure::{Failure, Result};
-use guesthouse_report_core::manifest::{DESCRIPTION_FILE, MANIFEST_FILE, SUMMARY_FILE, manifest_from};
+use guesthouse_report_core::host::Host;
+use guesthouse_report_core::manifest::{DESCRIPTION_FILE, MANIFEST_FILE, SUMMARY_FILE, manifest_for};
 use jiff::ZonedDateTime;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -116,7 +117,7 @@ fn summary_of(collection: &Collection, words: &Words, scrubber: &Scrubber) -> Su
 }
 
 fn manifest(collection: &Collection, files: &[(String, usize)]) -> String {
-    manifest_from(None, files, &collection.missing, &collection.notes)
+    manifest_for(Host::LINUX, files, &collection.missing, &collection.notes)
 }
 
 fn pack(staging: &Path, name: &str, archive: &Path) -> Result<()> {

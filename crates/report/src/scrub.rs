@@ -10,6 +10,12 @@
 //! This is the Windows host's scrubber. The Linux host has its own in app-core, which takes out a
 //! different list in different marks, and the two are kept apart until it's decided which one every
 //! host should use.
+//!
+//! A host that takes out more than this list gives its own pass with [`Scrubber::with_extra`]
+//! instead of keeping a copy of the scrubber. The order is fixed here, not by the host: this list
+//! first, so the host's pass only ever sees text that is already scrubbed; then the host's passes, in
+//! the order given; then this list again, so whatever a host's pass puts in, it can't put back
+//! anything this list takes out. A scrubber with no pass of the host's scrubs as it always has.
 
 const HOME_MARK: &str = "~";
 const USER_MARK: &str = "<user>";
@@ -66,6 +72,10 @@ const FIXED_UUIDS: [&str; 3] = [
 /// A match: how many bytes of the text it takes, and what stands in for them.
 type Found = Option<(usize, String)>;
 
+/// A host's own scrubbing pass: text in, the same text with more taken out. A plain function, so it
+/// holds nothing of its own (not the names this scrubber takes out) and can go to any thread.
+pub type Extra = fn(&str) -> String;
+
 #[derive(Debug, Clone)]
 pub struct Scrubber {
     user: String,
@@ -73,6 +83,8 @@ pub struct Scrubber {
     computer: String,
     /// Each machine's name and the word that stands for it, the longest name first.
     machines: Vec<(String, String)>,
+    /// The host's own passes, in the order they run.
+    extra: Vec<Extra>,
 }
 
 impl Scrubber {
@@ -98,10 +110,30 @@ impl Scrubber {
             profile: profile.trim().trim_end_matches(['\\', '/']).to_owned(),
             computer: computer.trim().to_owned(),
             machines: named,
+            extra: Vec::new(),
         }
     }
 
+    /// The same scrubber with `extra`, a host's own pass, run after this list and before it runs once
+    /// more. A second call adds a second pass after the first; none is ever dropped.
+    #[must_use]
+    pub fn with_extra(mut self, extra: Extra) -> Self {
+        self.extra.push(extra);
+        self
+    }
+
+    /// `text` with this list taken out, and then whatever the host's passes take out as well.
     pub fn scrub(&self, text: &str) -> String {
+        let scrubbed = self.shared(text);
+        if self.extra.is_empty() {
+            return scrubbed;
+        }
+        let more = self.extra.iter().fold(scrubbed, |text, extra| extra(&text));
+        self.shared(&more)
+    }
+
+    /// This list alone, as every host takes it out.
+    fn shared(&self, text: &str) -> String {
         let text = replace_all(text, |text, at| self.profile_at(text, at));
         let text = replace_all(&text, email_at);
         let text = replace_all(&text, uuid_at);

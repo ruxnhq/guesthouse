@@ -6,7 +6,8 @@
 //! the names it had:
 //!
 //! - `contract` is what the server and every host agree on, and `answer` reads its answer.
-//! - `kind` and `summary` are what sorts a report before anyone opens it.
+//! - `kind` and `summary` are what sorts a report before anyone opens it, and `host` says which host
+//!   made it.
 //! - `send` is how a report is posted, and `issue` the link that opens an issue about a sent one.
 //! - `clock` writes times in UTC.
 //! - `scrub` and `trim` make each file fit to send, and `manifest` says what the bundle holds.
@@ -21,7 +22,7 @@ pub mod stage;
 
 // The pieces every host shares, under the names they had here.
 pub use guesthouse_report_core::{
-    answer, clock, contract, issue, kind, manifest, scrub, send, summary, trim,
+    answer, clock, contract, host, issue, kind, manifest, scrub, send, summary, trim,
 };
 
 pub use answer::read_answer;

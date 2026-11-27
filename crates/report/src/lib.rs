@@ -3,8 +3,8 @@
 //! facts that sort a report (`summary`), and how it's posted with `curl` and the server's answer
 //! read (`send`, `answer`), times
 //! written in UTC (`clock`) a long file cut to its end (`trim`), the
-//! note that says what a bundle holds (`manifest`) the link that opens an issue about a sent
-//! report (`issue`), the Windows host's scrubber (`scrub`), and
+//! note that says what a bundle holds (`manifest`), which host made it (`host`), the link that opens an issue about a sent
+//! report (`issue`), the Windows host's scrubber (`scrub`), which a host can add its own pass to, and
 //! what to say before a thin report is sent (`warning`).
 //!
 //! Each host gathers its own files and facts, packs them and runs `curl` its own way. Where the
@@ -16,6 +16,7 @@
 pub mod answer;
 pub mod clock;
 pub mod contract;
+pub mod host;
 pub mod issue;
 pub mod kind;
 pub mod manifest;

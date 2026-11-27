@@ -3,6 +3,7 @@
 //! missing part by hand and adds notes.
 
 use super::contract::KEPT_DAYS;
+use super::host::Host;
 
 /// The manifest's own name inside the bundle.
 pub const MANIFEST_FILE: &str = "manifest.txt";
@@ -27,7 +28,13 @@ pub fn manifest(files: &[(String, usize)], missing: &[(String, String)]) -> Stri
         .iter()
         .map(|(name, reason)| Missing { name: name.clone(), reason: reason.clone(), how: None })
         .collect();
-    manifest_from(Some("a Windows host"), files, &missing, &[])
+    manifest_for(Host::WINDOWS, files, &missing, &[])
+}
+
+/// The manifest's text, for a report from `host`, which says who it is from as that host does.
+/// `files`, `missing` and `notes` are as in [`manifest_from`].
+pub fn manifest_for(host: Host, files: &[(String, usize)], missing: &[Missing], notes: &[String]) -> String {
+    manifest_from(host.phrase(), files, missing, notes)
 }
 
 /// The manifest's text, for a report from `from`, or from no host named, as the Linux host's says.

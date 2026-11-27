@@ -5,6 +5,7 @@
 //! The server takes a flat object of strings, at most 20 of them, none longer than 2000 characters,
 //! and a header of at most 6000 characters once it's base64url.
 
+use super::host::Host;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
@@ -50,6 +51,13 @@ impl Summary {
         }
         let most = if key == DESCRIPTION { DESCRIPTION_CHARS } else { MOST_VALUE_CHARS };
         self.0.insert(key.to_owned(), first_chars(value, most).to_owned());
+    }
+
+    /// Sets `host` to what `host` calls itself, or leaves it out for a host that names none.
+    pub fn set_host(&mut self, host: Host) {
+        if let Some(word) = host.word() {
+            self.set(HOST, word);
+        }
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {

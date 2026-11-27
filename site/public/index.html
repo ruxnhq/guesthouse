@@ -190,7 +190,7 @@
         <a class="button primary" href="#download">Get Guesthouse</a>
         <a class="button ghost" href="#how">See how it works</a>
       </div>
-      <p class="platforms-line">On Linux with KVM, and on Windows 11 with Virtual Machine Platform. NVIDIA and AMD cards, and Intel Arc as an experiment. A Mac host, for Apple silicon, is in development.</p>
+      <p class="platforms-line">On Linux with KVM, and on Windows 11 with Virtual Machine Platform. NVIDIA and AMD cards, and Intel Arc as an experiment. A Mac host, for Apple silicon, is in development, with nightly builds.</p>
 
       <div class="stage">
         <div class="window">
@@ -398,8 +398,10 @@
         </article>
         <article class="platform">
           <header><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2.5 19.5h19"/></svg><h3>Mac<small>In development</small></h3></header>
-          <p class="req">A Mac with Apple silicon and macOS 27. There's nothing to download yet. The source is in the repository, and it can't start a machine until the graphics process and a patched QEMU, which come in later pull requests, are in too. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.</p>
+          <p class="req">A Mac with Apple silicon and macOS 27. The nightly build is made from the newest source each night, for trying what is new, and it may be broken. It can't start a machine until the graphics process and a patched QEMU, which come in later pull requests, are in too. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.</p>
           <div class="files">
+            <a class="file" href="https://files.ruxn.com/p/guesthouse-nightly/Guesthouse-nightly.dmg"><img src="/mac-icon.svg" width="24" height="24" alt=""><span class="name">Nightly build</span><span class="meta">Disk image, notarised</span></a>
+            <a class="file" href="https://files.ruxn.com/p/guesthouse-nightly/guesthouse-macos-nightly.json"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">Which build it is</span><span class="meta">Version, commit, date, SHA-256</span></a>
             <a class="file" href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/mac-host.md"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">The Mac host</span><span class="meta">What it does, and what it needs</span></a>
             <a class="file" href="https://github.com/ruxnlabs/guesthouse/tree/main/mac"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg><span class="name">The source</span><span class="meta">mac/ and crates/host-mac</span></a>
           </div>

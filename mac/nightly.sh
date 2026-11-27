@@ -178,10 +178,13 @@ if [ -n "${GUESTHOUSE_SIGN_P12:-}" ]; then
     import_p12 "$keychain"
     security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$keychain" >/dev/null
     if [ -z "$identity" ]; then
-        identity=$(security find-identity -p codesigning "$keychain" | awk '/^ *1\)/ { print $2 }')
+        # find-identity lists an identity twice, under "Matching" and again under "Valid", so the
+        # first line is taken and no more: two lines here made codesign look for a name with a
+        # line break in it.
+        identity=$(security find-identity -p codesigning "$keychain" | awk '/^ *1\)/ { print $2; exit }')
     fi
     # Which certificate signs, by its name only, so a log shows it and nothing else.
-    names=$(security find-identity -p codesigning "$keychain" | sed -n 's/^ *[0-9]*) [0-9A-F]* "\(.*\)".*/\1/p')
+    names=$(security find-identity -p codesigning "$keychain" | sed -n 's/^ *[0-9]*) [0-9A-F]* "\(.*\)".*/\1/p' | sort -u)
     say "identity: $names"
     case $names in
         "Developer ID Application"*) developer_id_chain "$keychain" ;;

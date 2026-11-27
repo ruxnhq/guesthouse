@@ -1,18 +1,23 @@
+# One pull request a week for each of Cargo and the Actions, holding every minor and patch update.
+# A major update is opened alone, because it can break a build or move the licences. That is how
+# a zbus 6 (see the advisories in deny.toml) would arrive, with ksni, in a pull request of its own.
+# cargo-deny checks every one of these pull requests like any other. Dependabot is used because
+# it needs no app installed and already labels the pull requests, as dependencies, rust and github_actions.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 3
     groups:
-      cargo:
-        patterns: ["*"]
+      cargo-minor-patch:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 2
     groups:
-      actions:
-        patterns: ["*"]
+      actions-minor-patch:
+        update-types: [minor, patch]

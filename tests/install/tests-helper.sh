@@ -162,3 +162,59 @@ t_uninstall_never_lets_the_manifest_aim_root() {
     check_there "$T/precious"
     check_not_log "sudo"
 }
+
+# Guesthouse's clock helper goes in beside the bridge helper, the same way.
+clock_helper_path() {
+    printf '%s' "$T/system/libexec/guesthouse/guesthouse-clock-helper"
+}
+
+t_the_clock_helper_goes_in_setuid_and_is_listed() {
+    CLOCK_HELPER_VERSION=1 release 1.0
+    give_everything
+    install_version 1.0
+    check_exit 0
+    check_said "Guesthouse's clock helper in $T/system/libexec/guesthouse, setuid root"
+    [ -u "$(clock_helper_path)" ] || fail "the clock helper isn't setuid"
+    check_same "$(clock_helper_path)" "$H/.local/lib/guesthouse/current/guesthouse-clock-helper" "it isn't the release's"
+    helper_line | cut -f 3 | grep -qxF "$(clock_helper_path)" || fail "the manifest doesn't list it"
+    : >"$T/log"
+    install_version 1.0
+    check_said "is the latest release"
+    check_not_log "sudo"
+}
+
+t_an_update_with_a_new_clock_helper_puts_it_in() {
+    CLOCK_HELPER_VERSION=1 release 1.0
+    CLOCK_HELPER_VERSION=2 release 1.1
+    give_everything
+    install_version 1.0
+    install_version 1.1
+    check_exit 0
+    check_same "$(clock_helper_path)" "$H/.local/lib/guesthouse/current/guesthouse-clock-helper" "it's still the old one"
+    [ "$(helper_line | grep -c guesthouse-clock-helper)" -eq 1 ] || fail "the manifest lists it more than once"
+}
+
+t_without_sudo_root_can_add_the_clock_helper() {
+    CLOCK_HELPER_VERSION=1 release 1.0
+    give_everything
+    rm "$T/bin/sudo"
+    install_version 1.0
+    check_exit 0
+    check_said "There's no sudo here, so Guesthouse's clock helper is left out."
+    check_gone "$(clock_helper_path)"
+    root_runs_what_was_shown
+    [ -u "$(clock_helper_path)" ] || fail "the clock helper isn't setuid"
+}
+
+t_uninstall_takes_both_helpers_away_as_root() {
+    CLOCK_HELPER_VERSION=1 release 1.0
+    give_everything
+    rm -rf "$T/system"
+    install_version 1.0
+    answering 'yes\n' "$SHELL_UNDER_TEST" "$(uninstaller)"
+    check_exit 0
+    check_log "sudo sh -c rm -f -- \"$(clock_helper_path)\""
+    check_gone "$(clock_helper_path)"
+    check_gone "$(helper_path)"
+    check_gone "$T/system/libexec/guesthouse"
+}

@@ -183,6 +183,8 @@ impl Lan {
                 }
             }
             Request::Close => self.close(),
+            // The card's clock is the program's loop's, which takes this before it comes here.
+            Request::StreamClocks { .. } => {}
         }
         RelayReply::Status(self.status())
     }
@@ -199,7 +201,7 @@ mod tests {
     use super::*;
     use std::net::UdpSocket;
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn settings(loopback_port: u16, listen: Option<SocketAddr>) -> Settings {
         Settings {
@@ -212,6 +214,7 @@ mod tests {
             max_clients: None,
             name: None,
             fingerprint: None,
+            hold_clocks: None,
         }
     }
 
@@ -248,6 +251,11 @@ mod tests {
         let mut buffer = [0u8; 16];
         assert_eq!(forward.recv_from(&mut buffer).unwrap().0, 5);
         assert_eq!(lan.status().clients.len(), 1);
+        // The relay counts a datagram once its send has returned, which can be just after it arrives.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while lan.status().counters.up_packets == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(lan.status().counters.up_packets, 1);
 
         let RelayReply::Status(closed) = lan.handle(Request::Close) else { panic!("closing failed") };

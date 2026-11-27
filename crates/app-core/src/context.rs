@@ -49,6 +49,10 @@ pub struct Context {
     /// This process's slot. A task has its VM's. The window has the first, and names others.
     pub slot: Slot,
     pub processes: PathBuf,
+    /// The processes looked through for who holds each slot's memory: `/proc`, as for `processes`. A
+    /// test that watches its own task in `/proc` keeps this in its scratch folder, as the memory's
+    /// names are the whole PC's and the PC's own VMs would take its slots.
+    pub memory_holders: PathBuf,
     pub cpus: PathBuf,
     pub usb_devices: PathBuf,
     pub usb_nodes: PathBuf,
@@ -111,6 +115,7 @@ impl Context {
             paths,
             slot,
             processes: "/proc".into(),
+            memory_holders: "/proc".into(),
             cpus: "/sys/devices/system/cpu".into(),
             usb_devices: "/sys/bus/usb/devices".into(),
             usb_nodes: "/dev/bus/usb".into(),

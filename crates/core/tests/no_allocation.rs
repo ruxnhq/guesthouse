@@ -8,17 +8,27 @@ use guesthouse_core::{Config, MemoryLimits, ReplyTicket, Session};
 use guesthouse_messages::wire::{set_u32, set_u64, u32_at, u64_at};
 use guesthouse_messages::{Command, HEADER_SIZE};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 use std::time::Instant;
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Each thread counts its own. The test harness's main thread allocates its bookkeeping just after
+    // it starts the test's thread, which can land in a window being measured. The message path runs
+    // on the calling thread and starts no other, so its own count is the whole of it. A const value
+    // with no destructor is never allocated and is never gone while the thread runs.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn allocations() -> usize {
+    ALLOCATIONS.with(Cell::get)
+}
 
 // SAFETY: passes everything to the system allocator and only counts.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         // SAFETY: the caller's promises are the ones the system allocator needs.
         unsafe { System.alloc(layout) }
     }
@@ -44,9 +54,9 @@ fn message(command: Command, size: usize) -> Vec<u8> {
 
 fn allocations_during(mut run: impl FnMut(u64)) -> usize {
     (0..WARM_UP).for_each(&mut run);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     (WARM_UP..WARM_UP + ROUNDS).for_each(&mut run);
-    ALLOCATIONS.load(Ordering::Relaxed) - before
+    allocations() - before
 }
 
 struct Prepared {
@@ -75,7 +85,6 @@ fn prepared() -> Prepared {
     Prepared { queue, fence, sync: u32_at(&out, 0).unwrap(), session }
 }
 
-// One test, as the counter is shared and tests run side by side.
 #[test]
 fn the_message_path_does_not_allocate() {
     let Prepared { mut session, queue, sync, fence } = prepared();

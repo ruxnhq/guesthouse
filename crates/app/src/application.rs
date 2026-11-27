@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 pub const APP_ID: &str = "io.github.xnixy.Guesthouse";
 /// Built in, so the app has its icon however it was started. GTK only reads icons from a folder.
-const ICONS: [(&str, &[u8]); 2] = [
+const ICONS: [(&str, &[u8]); 10] = [
     (
         "hicolor/scalable/apps/io.github.xnixy.Guesthouse.svg",
         include_bytes!("../data/icons/hicolor/scalable/apps/io.github.xnixy.Guesthouse.svg"),
@@ -24,7 +24,53 @@ const ICONS: [(&str, &[u8]); 2] = [
         "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-symbolic.svg",
         include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-symbolic.svg"),
     ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-window-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-window-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-terminal-symbolic.svg",
+        include_bytes!(
+            "../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-terminal-symbolic.svg"
+        ),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-phone-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-phone-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-display-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-display-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-disc-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-disc-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-import-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-import-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-web-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-web-symbolic.svg"),
+    ),
+    (
+        "hicolor/symbolic/apps/io.github.xnixy.Guesthouse-app-symbolic.svg",
+        include_bytes!("../data/icons/hicolor/symbolic/apps/io.github.xnixy.Guesthouse-app-symbolic.svg"),
+    ),
 ];
+
+/// The app's own symbolic icons, so nothing the app draws depends on the user's icon theme.
+pub mod own_icon {
+    pub const WINDOW: &str = "io.github.xnixy.Guesthouse-window-symbolic";
+    pub const TERMINAL: &str = "io.github.xnixy.Guesthouse-terminal-symbolic";
+    pub const PHONE: &str = "io.github.xnixy.Guesthouse-phone-symbolic";
+    pub const DISPLAY: &str = "io.github.xnixy.Guesthouse-display-symbolic";
+    pub const DISC: &str = "io.github.xnixy.Guesthouse-disc-symbolic";
+    pub const IMPORT: &str = "io.github.xnixy.Guesthouse-import-symbolic";
+    pub const WEB: &str = "io.github.xnixy.Guesthouse-web-symbolic";
+    pub const APP: &str = "io.github.xnixy.Guesthouse-app-symbolic";
+}
 
 fn write_icons(folder: &Path) -> io::Result<()> {
     for (name, data) in ICONS {

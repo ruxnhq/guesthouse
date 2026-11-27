@@ -1,0 +1,46 @@
+# Labels a bug report by the card it names, and asks once for a report ID when it has none.
+# The decisions are in scripts/issue-triage.py. This only fetches the issue and carries them out.
+name: Issue triage
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: label and ask
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Label, and ask for a report ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # The issue is read fresh, so a run for an edit sees the comment a run for the opening made.
+          gh issue view "$NUMBER" -R "$REPO" --json number,body,labels,comments >"$RUNNER_TEMP/issue.json"
+          labels=$(gh label list -R "$REPO" --limit 200 --json name --jq '.[].name')
+          # Word splitting is wanted, for the names to go in as separate arguments. None has a space.
+          # shellcheck disable=SC2086
+          python3 scripts/issue-triage.py "$RUNNER_TEMP/issue.json" $labels >"$RUNNER_TEMP/actions"
+          while read -r action name; do
+            case $action in
+              label) gh issue edit "$NUMBER" -R "$REPO" --add-label "$name" ;;
+              comment)
+                python3 scripts/issue-triage.py --comment >"$RUNNER_TEMP/comment.md"
+                gh issue comment "$NUMBER" -R "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+                ;;
+            esac
+          done <"$RUNNER_TEMP/actions"

@@ -30,3 +30,4 @@ Turning the switch off closes pairing, turns every device away and stops listeni
 - Only devices you accepted here can connect. Anyone on the same network can ask to pair while pairing is open.
 - While a device shows the machine on its screen only (remoteman's "only" placement), the machine's own window here has no picture until that device leaves.
 - Windows in the machine doesn't lock when a device connects. A paired device lands on the open desktop.
+- On an NVIDIA card, the card's memory clock is held up while a device streams, so pictures arrive sooner. It costs the card's idle power. [The card's memory clock](nvidia.md#the-cards-memory-clock-while-a-device-views-the-machine) says how to turn it off.

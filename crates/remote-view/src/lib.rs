@@ -12,7 +12,8 @@
 //! state a screen shows (`share`), the words remoteman's host takes and how it answers (`ctl`,
 //! `status`), pairing as a state machine (`pairing`, `policy`), what a screen makes of them
 //! (`view`), the trust list across the installer's runs (`trust`), the switch and its port
-//! (`switch`) and the sentences (`wording`).
+//! (`switch`), when the host card's clock is held for a viewer (`stream_clocks`) and the sentences
+//! (`wording`).
 //!
 //! Nothing here calls the system or a hypervisor, so every host can build on it.
 
@@ -23,6 +24,7 @@ pub mod pairing;
 pub mod policy;
 pub mod share;
 pub mod status;
+pub mod stream_clocks;
 pub mod switch;
 pub mod trust;
 pub mod view;

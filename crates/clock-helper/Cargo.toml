@@ -1,0 +1,19 @@
+[package]
+name = "guesthouse-clock-helper"
+description = "Holds one NVIDIA card's memory clock up while a guest's desktop streams, and puts it back. Runs setuid root, so it takes nothing but a word and a card."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "guesthouse-clock-helper"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# dlopen, flock, poll, sigaction and the uid calls. Nothing else, as this runs as root.
+libc = "0.2"
+
+[lints]
+workspace = true

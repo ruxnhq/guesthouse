@@ -256,12 +256,12 @@ impl Pick {
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Windows => "preferences-desktop-apps-symbolic",
-            Self::Ubuntu => "utilities-terminal-symbolic",
-            Self::Android => "phone-symbolic",
-            Self::Macos => "video-display-symbolic",
-            Self::Other => "media-optical-symbolic",
-            Self::Import => "document-open-symbolic",
+            Self::Windows => crate::application::own_icon::WINDOW,
+            Self::Ubuntu => crate::application::own_icon::TERMINAL,
+            Self::Android => crate::application::own_icon::PHONE,
+            Self::Macos => crate::application::own_icon::DISPLAY,
+            Self::Other => crate::application::own_icon::DISC,
+            Self::Import => crate::application::own_icon::IMPORT,
         }
     }
 

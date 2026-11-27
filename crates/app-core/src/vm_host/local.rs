@@ -394,6 +394,7 @@ impl VmHost for LocalHost<'_> {
         }
         self.end_passt();
         crate::remote_view::end(self.context, None);
+        crate::remote_view::sweep_clocks(self.context, machine);
         if machine.has_gpu() {
             self.release()?;
         }

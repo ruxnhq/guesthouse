@@ -4,7 +4,36 @@ The Linux host and the Windows host are released apart, each with a version of i
 
 ## The Linux host
 
-I build and upload this by hand on my own PC. Pointing `main` at the release, the credits in its notes and the site's deploy follow by themselves from the release being published, as steps 6 to 8 say. `SHA256SUMS` isn't signed yet.
+CI builds it from the tag, and makes the GitHub release as a draft. I read the draft and publish it, and the rest follows by itself. Building by hand on my own PC, below that, is the fallback. `SHA256SUMS` isn't signed yet.
+
+### From the tag, in CI
+
+1. **Set the version,** as step 1 of the by-hand way says.
+
+2. **Tag it and push the tag.** Tag the commit that pull request became on `main`.
+
+   ```sh
+   git tag vVERSION
+   git push origin vVERSION
+   ```
+
+3. **CI builds it.** The tag starts the `Release build` workflow (`.github/workflows/release-build.yml`). It does steps 3 to 6 of the by-hand way:
+   - It stops if the tag isn't on `main`, or isn't the version in `Cargo.toml`.
+   - The display driver follows step 3's rule. If nothing compiled in `drivers/windows-display` changed since the release before, that release's DLL and INF go in again, checked against its `SHA256SUMS`. Otherwise a Windows runner builds it, with Visual Studio's WDK rather than the Enterprise WDK ISO. Then try the new driver in a guest before publishing.
+   - It runs `packaging/build-in-images.sh` in `/var/tmp/guesthouse-release`, then step 5's three tests on what it built.
+   - It makes the release as a draft, with the five files and notes drafted by `scripts/release-notes.py`. The notes come from the pull requests merged since the release before, under the area each title starts with. A comment at the top says whether the tests passed.
+
+   Nobody sees a draft, and nothing points at it. If the workflow fails, fix it and run it again from the Actions tab, with the tag and "release" ticked. That replaces a draft's files, and never touches a published release. With "release" unticked it only builds and tests.
+
+4. **Read the draft and publish it.** Write the opening, sort the lines, and drop what nobody using it would notice. Check that the comment says the tests passed. Then publish it, as the latest release.
+
+5. **Publishing starts the rest.** `Release files` puts the AppImage and its `.sha256` on files.ruxn.com. `Point the installer` opens the pull request of step 7, and `Release credits` writes the Thanks into the notes. Then go on from step 7.
+
+`Release files` needs the publish address on files.ruxn.com's Worker. Until that's there, publish the AppImage by hand, as the end of step 6 says.
+
+### By hand
+
+The same release, built on my own PC. Pointing `main` at the release, the credits in its notes and the site's deploy follow by themselves from the release being published, as steps 6 to 8 say.
 
 The order matters. `install.sh` on `main` is what points people at a release, so it changes last, once everything it names is really there.
 
@@ -54,7 +83,7 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
 
    The two sources are there for the GPL and the LGPL, so a release doesn't go out without them. They have to stay up for as long as the payload does.
 
-   The site's download button points at the AppImage on files.ruxn.com, not at GitHub. So publish it there too, with its hash beside it, using the file drop's `files` tool:
+   The site's download button points at the AppImage on files.ruxn.com, not at GitHub. Publishing the release starts the `Release files` workflow, which puts it there with its hash. If it can't, publish them by hand with the file drop's `files` tool:
 
    ```sh
    cd BUILD_FOLDER
@@ -72,6 +101,27 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
 If something's wrong after step 7, revert that one commit, and everyone goes back to the release before. A file on a release must never change once `main` names it: fix it with a new version.
 
 ## The Windows host
+
+CI builds this from the tag too. Nothing in the installer is signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+
+### From the tag, in CI
+
+1. **Set the version,** as step 1 of the by-hand way says.
+
+2. **Tag it and push the tag,** on the commit that pull request became on `main`.
+
+   ```sh
+   git tag -a windows-vVERSION -m "Windows host VERSION"
+   git push origin windows-vVERSION
+   ```
+
+3. **CI builds it.** The tag starts `Release build, Windows host` (`.github/workflows/release-windows.yml`). It stops if the tag isn't on `main` or isn't `windows/version.txt`'s version, and runs `scripts/windows-release.ps1 -BuildOnly` on a Windows runner. That's `-DryRun` without the check that the tag isn't on GitHub yet, so it still stops if this version's installer is on files.ruxn.com. Then it makes the release `Windows VERSION` as a draft, not marked latest, with the installer, its `.sha256`, WinFsp's source and `guesthouse-windows-latest.json`. Run it again from the Actions tab with the tag if it fails.
+
+4. **Try it, then publish it.** Download the installer from the draft, install it on this PC and see the new things work. Publish the draft, and leave "Set as the latest release" unticked, as that's the Linux host's. Publishing starts `Release files`. It puts WinFsp's source, the installer and its `.sha256` on files.ruxn.com, then `guesthouse-windows-latest.json` last of all. From that moment every app offers the new version.
+
+5. **Point the site at it,** as step 4 of the by-hand way says.
+
+### By hand
 
 This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in. `scripts/windows-release.ps1` does steps 2 to 4.
 

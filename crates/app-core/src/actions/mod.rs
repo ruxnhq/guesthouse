@@ -561,6 +561,7 @@ fn force(task: &mut Task, other: Option<&str>) -> Result<()> {
         return Err(Failure::new("QEMU will not stop, even when killed."));
     }
     crate::remote_view::end(task.context, None);
+    crate::remote_view::sweep_clocks(task.context, &task.machine);
     if task.machine.has_gpu() { task.host.release() } else { Ok(()) }
 }
 
@@ -568,6 +569,7 @@ fn clean_up(task: &mut Task) -> Result<()> {
     task.step("Cleaning up after the VM");
     if task.pid().is_none() {
         crate::remote_view::end(task.context, None);
+        crate::remote_view::sweep_clocks(task.context, &task.machine);
     }
     task.host.release()
 }

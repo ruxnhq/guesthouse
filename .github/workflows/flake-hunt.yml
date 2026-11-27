@@ -1,0 +1,133 @@
+# The flake hunt: every night the workspace's tests run ten times on main, each run on a runner of its
+# own with extra CPU load beside it. scripts/flake-report.py files an issue, labelled flaky-test, for
+# each test that failed in some runs and passed in others, or comments on its open issue. A test that
+# fails every time is a broken main, which Checks shows, and gets no issue. A pull request that changes
+# the hunt runs it twice and only says what it would file.
+name: Flake hunt
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/flake-hunt.yml"
+      - "scripts/flake-report.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flake-hunt-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# As Checks has them: the cache's key is made with them.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  run:
+    name: run ${{ matrix.run }}
+    if: github.repository == 'ruxnlabs/guesthouse'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # As Checks' tests job runs, for the same reasons.
+    container:
+      image: registry.fedoraproject.org/fedora:44
+      options: --security-opt seccomp=unconfined
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(github.event_name == 'pull_request' && '[1, 2]' || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]') }}
+    steps:
+      - name: Install what the build and the tests need
+        run: |
+          dnf -y install gcc git xz findutils which binutils pkgconf-pkg-config rust cargo gtk4-devel \
+            libadwaita-devel tar zstd qemu-img p7zip p7zip-plugins genisoimage swtpm openssl \
+            openssh-clients bubblewrap util-linux shadow-utils
+          useradd --create-home tester
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Checks' cache, read and never written: ten jobs saving it would only push it out.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: fedora-44-tests
+          cache-directories: /home/tester/.cargo
+          save-if: false
+      - name: Build the tests
+        run: |
+          chown -R tester:tester "$GITHUB_WORKSPACE" /home/tester
+          runuser -u tester -- env HOME=/home/tester cargo test --locked --workspace --no-run
+      # A busy loop for each CPU, and twice as many test threads as CPUs, so tests that race show it.
+      # Only the loops started here are stopped. The last line says cargo finished: a log without it was
+      # cut off by the step's time limit, and its last test binary hung.
+      - name: Run the tests under load
+        timeout-minutes: 40
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          mkdir -p /flake
+          hogs=()
+          for _ in $(seq "$(nproc)"); do
+            sh -c 'while :; do :; done' &
+            hogs+=("$!")
+          done
+          trap 'kill "${hogs[@]}" 2>/dev/null' EXIT
+          echo "Busy loops ${hogs[*]} on $(nproc) CPUs, $(( $(nproc) * 2 )) test threads."
+          set +e
+          runuser -u tester -- env HOME=/home/tester RUST_TEST_THREADS="$(( $(nproc) * 2 ))" \
+            cargo test --locked --workspace --no-fail-fast -- --color never 2>&1 | tee /flake/test.log
+          code=${PIPESTATUS[0]}
+          echo "flake-hunt: cargo test exited with $code" | tee -a /flake/test.log
+          echo "::group::What failed in this run"
+          grep -E '^test .* \.\.\. FAILED$|process didn.t exit successfully' /flake/test.log || echo "nothing"
+          echo "::endgroup::"
+          exit "$code"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: flake-run-${{ matrix.run }}
+          path: /flake/test.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  report:
+    name: report
+    needs: run
+    if: ${{ !cancelled() && github.repository == 'ruxnlabs/guesthouse' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # the jobs, to link each run's log
+      issues: write # the flaky-test issues and their label
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: flake-run-*
+          path: flake-logs
+      - name: Find each run's log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '.jobs[] | {name, html_url}' > jobs.jsonl
+          cat jobs.jsonl
+      # Issues are filed from main only. A pull request, or a run started by hand on a branch, says
+      # what it would file.
+      - name: Report the flaky tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          options=(--jobs jobs.jsonl --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --commit "$GITHUB_SHA")
+          if [ "$APPLY" = true ]; then options+=(--apply); fi
+          python3 scripts/flake-report.py --repo "$GITHUB_REPOSITORY" "${options[@]}" flake-logs

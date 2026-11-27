@@ -160,7 +160,8 @@ stdenvNoCC.mkDerivation {
     autoPatchelf $host_files
     autoPatchelf $qemu
     autoPatchelf $macos/qemu $macos/reims-util
-    # The bridge helper runs setuid root, so it keeps to libraries in the store.
+    # The bridge helper runs setuid root, so it keeps to libraries in the store. The clock helper runs
+    # setuid root too, and gets the driver's folder, which only root can change, for NVIDIA's library.
     addDriverRunpath $host_files $(find $qemu -type f ! -name qemu-bridge-helper) $macos/qemu/bin/qemu-system-x86_64
 
     makeWrapper ${home}/guesthouse $out/bin/guesthouse \
@@ -168,7 +169,11 @@ stdenvNoCC.mkDerivation {
       --prefix PATH : ${toolPath}
   '';
 
-  passthru = { inherit toolPath; };
+  passthru = {
+    inherit toolPath;
+    # The card's clock helper comes in the releases after 0.10.0, and the module wraps it only then.
+    hasClockHelper = lib.versionOlder "0.10.0" version;
+  };
 
   meta = {
     description = "Windows and Linux machines on KVM, with the real GPU driver";

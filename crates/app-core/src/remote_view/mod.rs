@@ -14,9 +14,13 @@
 //!   While the program runs, the LAN side comes and goes with these; the loopback side is QEMU's.
 //! - [`pid`] to tell whether it is running, as the app may have been closed and opened again since.
 //!
+//! While a viewer streams, the program holds the card's memory clock up through a setuid helper:
+//! `clocks.rs`.
+//!
 //! The machine's side of it (the switch, remoteman's host in the guest, pairing and the devices) is
 //! `machine.rs`, which the settings page and the start and stop paths call.
 
+mod clocks;
 mod control;
 mod lan;
 mod machine;
@@ -24,6 +28,7 @@ mod mdns;
 mod process;
 mod settings;
 
+pub use clocks::{ClockHolder, NIXOS_CLOCK_HELPER, OWN_CLOCK_HELPER, Said, clock_helper, sweep};
 pub use control::{
     Counters, RelayClient, RelayReply, RelayStatus, Request, ShareState, ask, listener, serve, socket_path,
 };
@@ -34,7 +39,7 @@ pub use lan::Lan;
 pub use machine::{
     HELD_FILE, TOO_OLD, allowed, bring_up, device_allow, device_drop, device_revoke, encoder,
     ensure_installed, info, installer, lan_address, launched, pair_accept, pair_close, pair_decline, port,
-    quitting, reap, set_allowed, share, stopped,
+    quitting, reap, set_allowed, share, stopped, stream_clocks_changed, sweep_clocks,
 };
 pub use mdns::Mdns;
 pub use process::{end, pid, start, write_pid_file};

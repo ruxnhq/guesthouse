@@ -50,8 +50,7 @@ fn duplicate_is_checked_like_the_other_commands() {
 fn duplicate_says_what_it_costs_and_hands_the_name_to_the_task() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
-    context.processes = "/proc".into();
-    context.slot = slot_free_on_this_pc(&context);
+    watching_real_tasks(&mut context);
     small_plain(&scratch, &context);
     let asked = scratch.path("asked");
     scratch.program("program/guesthouse-task", &format!("#!/bin/sh\necho \"$@\" > '{}'\n", asked.display()));
@@ -84,8 +83,7 @@ fn a_running_machine_is_not_duplicated() {
 fn a_throwaway_copy_is_asked_for_by_name_and_a_machine_made_one_by_set() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
-    context.processes = "/proc".into();
-    context.slot = slot_free_on_this_pc(&context);
+    watching_real_tasks(&mut context);
     small_plain(&scratch, &context);
     let asked = scratch.path("asked");
     scratch.program("program/guesthouse-task", &format!("#!/bin/sh\necho \"$@\" > '{}'\n", asked.display()));
@@ -125,8 +123,7 @@ fn a_copy_deleted_when_it_stops_must_be_a_throwaway_and_is_handed_on() {
     assert!(usage_of("duplicate a --delete-when-stopped").contains("is for a --throwaway copy"));
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
-    context.processes = "/proc".into();
-    context.slot = slot_free_on_this_pc(&context);
+    watching_real_tasks(&mut context);
     small_plain(&scratch, &context);
     let asked = scratch.path("asked");
     scratch.program("program/guesthouse-task", &format!("#!/bin/sh\necho \"$@\" > '{}'\n", asked.display()));

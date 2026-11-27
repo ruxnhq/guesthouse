@@ -259,6 +259,12 @@ pub struct Machine {
     /// off for such a game. Left out of the file until then, so an older build can still read it.
     #[serde(default, skip_serializing_if = "is_off")]
     pub nvapi_wrapper_off: bool,
+    /// An NVIDIA machine's card holds its memory clock up while a viewer streams the machine's screen
+    /// to another device, which takes each picture's encoding from tens of milliseconds to under ten,
+    /// at the card's idle power. The user turns it off to save that. Left out of the file until then,
+    /// so an older build can still read it.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub stream_clocks_off: bool,
     /// The folder made for its disk on another drive, which goes when the machine is deleted. Empty
     /// is a disk in the machine's own folder. Left out of the file when empty, so an older build
     /// can still read it.
@@ -344,6 +350,7 @@ impl Machine {
             window_speed_off: false,
             file_drop_off: false,
             nvapi_wrapper_off: false,
+            stream_clocks_off: false,
             disk_folder: String::new(),
             nvme: false,
             opencore: String::new(),
@@ -422,6 +429,12 @@ impl Machine {
     /// Whether an NVIDIA guest gets the NVAPI wrapper in place of NVIDIA's NVAPI.
     pub fn nvapi_wrapper(&self) -> bool {
         !self.nvapi_wrapper_off
+    }
+
+    /// Whether the card's memory clock is held up while a viewer streams the screen. Only an NVIDIA
+    /// card's can be.
+    pub fn stream_clocks(&self) -> bool {
+        self.windows_maker() == Some(GpuMaker::Nvidia) && !self.stream_clocks_off
     }
 
     /// Whether a start of this machine takes a snapshot first when it has a risky change to make.
@@ -949,6 +962,17 @@ mod tests {
         assert!(serde_json::from_str::<Machine>(&text).unwrap().nvapi_wrapper());
         let turned_off = serde_json::to_string(&Machine { nvapi_wrapper_off: true, ..sample() }).unwrap();
         assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().nvapi_wrapper());
+    }
+
+    #[test]
+    fn an_nvidia_card_s_clock_is_held_for_a_viewer_unless_turned_off() {
+        let nvidia = Machine { gpu_maker: Some(GpuMaker::Nvidia), ..sample() };
+        let text = serde_json::to_string(&nvidia).unwrap();
+        assert!(!text.contains("stream_clocks"), "an older build can't read this: {text}");
+        assert!(serde_json::from_str::<Machine>(&text).unwrap().stream_clocks());
+        let turned_off = serde_json::to_string(&Machine { stream_clocks_off: true, ..nvidia }).unwrap();
+        assert!(!serde_json::from_str::<Machine>(&turned_off).unwrap().stream_clocks());
+        assert!(!Machine { amd_gpu: "0000:03:00.0".into(), ..sample() }.stream_clocks());
     }
 
     #[test]

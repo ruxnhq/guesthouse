@@ -25,6 +25,7 @@ mod late_watch;
 mod lean;
 mod macos;
 mod macos_install;
+mod nv_store;
 mod nvme_move;
 mod own_linux;
 mod recipe;
@@ -272,7 +273,8 @@ fn boot(task: &mut Task) -> Result<()> {
     task.step("Starting the VM");
     let shown = start_gpu_vm(task)?;
     crate::token_change::finish_token_change(task.context, &task.machine, task.context.agent_port(None));
-    let ready = get_ready(task, shown);
+    // Before anything here uses the GPU, as it may restart Windows.
+    let ready = nv_store::refresh_driver_store(task).and_then(|()| get_ready(task, shown));
     if ready.is_err() {
         turn_off_after_failed_start(task);
     }
@@ -303,10 +305,15 @@ fn start_gpu_vm(task: &mut Task) -> Result<PciIdentity> {
 }
 
 fn start_gpu_vm_once(task: &mut Task) -> Result<PciIdentity> {
-    // What the last VM's wait found is about a Windows that's gone.
+    // What the last VM's wait found is about a Windows that's gone. So is the count of boots its
+    // desktop was set up on: the new VM's serial log counts from none, and the start notes the boot
+    // it sets up. Left there, a restart this start makes before anyone signs in would count as one
+    // nobody set up, and the wait for sign-in would end at once.
     task.desktop_owed = false;
+    let _ = std::fs::remove_file(task.run_file(desktop::BOOTS_FILE));
     let machine = task.machine_this_run();
-    let plan = plan_for(task.context, &machine, Boot::Gpu);
+    let mut plan = plan_for(task.context, &machine, Boot::Gpu);
+    plan.driver_disc = nv_store::driver_disc_for_start(task);
     let started = task.host.start(&plan, &machine);
     if started.is_err() && task.pid().is_none() {
         // The daemon and shared memory are still there.
@@ -550,6 +557,7 @@ fn force(task: &mut Task, other: Option<&str>) -> Result<()> {
         return Err(Failure::new("QEMU will not stop, even when killed."));
     }
     crate::remote_view::end(task.context, None);
+    crate::remote_view::sweep_clocks(task.context, &task.machine);
     if task.machine.has_gpu() { task.host.release() } else { Ok(()) }
 }
 
@@ -557,6 +565,7 @@ fn clean_up(task: &mut Task) -> Result<()> {
     task.step("Cleaning up after the VM");
     if task.pid().is_none() {
         crate::remote_view::end(task.context, None);
+        crate::remote_view::sweep_clocks(task.context, &task.machine);
     }
     task.host.release()
 }

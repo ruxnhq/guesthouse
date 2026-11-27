@@ -179,7 +179,7 @@ impl VmPlan {
             plan.grant(Grant::Write, &self.disk);
         }
         if self.is_gpu()
-            && let Some(disc) = &self.tools_disc
+            && let Some(disc) = self.driver_disc.as_ref().or(self.tools_disc.as_ref())
         {
             plan.grant(Grant::Read, disc);
         }

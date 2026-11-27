@@ -101,6 +101,7 @@ pub fn scratch_paths(scratch: &Scratch) -> Paths {
 pub fn scratch_context(scratch: &Scratch) -> Context {
     let mut context = Context::new(scratch_paths(scratch), crate::slots::first());
     context.processes = scratch.path("proc");
+    context.memory_holders = context.processes.clone();
     fs::create_dir_all(&context.processes).unwrap();
     // Nor does it have drives, or use any, unless a test says so.
     context.block_devices = scratch.path("block");

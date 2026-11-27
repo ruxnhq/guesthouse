@@ -32,6 +32,7 @@ mod scan_exclusions;
 mod sharing;
 mod snapshots;
 mod starting;
+mod stream_clocks;
 mod token;
 mod usb;
 mod windows_card;
@@ -408,6 +409,7 @@ struct Parts {
     _account: account::Account,
     _gpu_preview: gpu_preview::GpuPreview,
     _nvapi_wrapper: nvapi_wrapper::NvapiWrapper,
+    _stream_clocks: stream_clocks::StreamClocks,
     _jail: jail::Jail,
     linux_gpu: linux_gpu::LinuxGpu,
     macos: macos::Macos,
@@ -488,6 +490,7 @@ impl SettingsDialog {
         let remove = remove::Remove::new(&shared, &overview.actions);
         let display = display::Display::new(&shared, &pages.display, &advanced.graphics);
         let nvapi_wrapper = nvapi_wrapper::NvapiWrapper::new(&shared, &advanced.graphics);
+        let stream_clocks = stream_clocks::StreamClocks::new(&shared, &advanced.graphics);
         let drives = drives::Drives::new(&shared, &pages.storage);
         let snapshots = snapshots::Snapshots::new(&shared, &pages.storage);
         let network = network::Network::new(&shared, &pages.network, &advanced.network);
@@ -519,6 +522,7 @@ impl SettingsDialog {
             _starting: starting,
             windows_card,
             _nvapi_wrapper: nvapi_wrapper,
+            _stream_clocks: stream_clocks,
             _gpu_preview: gpu_preview,
             linux_gpu,
             macos,

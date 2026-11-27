@@ -45,6 +45,7 @@ They're in `crates/`, listed here from the bottom up. Each depends only on crate
 | `service-windows` | The Guesthouse service on a Windows host. It runs as the system, as HCS needs, keeps the machines in a folder of its own, does `host-windows`'s work for the app, and keeps every rule itself, as the app runs as a user who isn't an administrator. |
 | `app-windows` | The app on a Windows host: a WinUI 3 window, through the vendored windows-reactor, that lists the machines and starts, stops, makes, changes and deletes them. It only asks the Guesthouse service, in `control`'s words on the service's pipe, and holds no rule of its own. Off Windows it's a stub. |
 | `installer-windows` | The installer and uninstaller for a Windows host, `guesthouse-setup-VERSION.exe`: one file with the files to install and the Windows App Runtime its own pages need packed into it. It asks for an administrator once, shows its steps in WinUI 3 pages, and leaves the system's work (Virtual Machine Platform, the service) to `windows/installer/setup.ps1`. |
+| `guest-scripts` | Tests only: the guest's PowerShell scripts run for real against folders that stand in for Windows' own. It depends on nothing, so CI runs it on Windows under Windows PowerShell 5.1 and pwsh. |
 
 To follow one message, start at `Server::read_channel` in `daemon`, go through `Router::handle_frame`, and land in `Session::dispatch` in `core/src/session/mod.rs`. The handlers are grouped by subject in that folder.
 

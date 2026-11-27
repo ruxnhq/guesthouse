@@ -61,6 +61,19 @@ fn a_layout_has_its_popup_with_its_parent_and_where_it_lies_against_it() {
 }
 
 #[test]
+fn a_dialog_says_which_window_owns_it_and_a_helper_that_does_not_say_leaves_it_empty() {
+    let owned =
+        LAYOUT.replace(r#""id":"262000","pid":6001,"#, r#""id":"262000","owner":"65814","pid":6001,"#);
+    let GuestMessage::Layout(layout) = parse_guest_line(&owned.replace('\n', ""), MOST_LINE_BYTES).unwrap()
+    else {
+        panic!("not a layout")
+    };
+    assert_eq!(layout.cells[3].owner, "65814");
+    assert!(layout.cells.iter().take(3).all(|cell| cell.owner.is_empty()));
+    assert!(self::layout().cells.iter().all(|cell| cell.owner.is_empty()), "the line has no owner at all");
+}
+
+#[test]
 fn a_minimized_window_and_an_overflow_cell_are_read_for_what_they_are() {
     let layout = layout();
     assert_eq!(layout.cells[2].state, State::Minimized);

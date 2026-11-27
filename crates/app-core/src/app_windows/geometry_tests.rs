@@ -14,6 +14,7 @@ fn cell(cell: Rect, frame: Rect) -> Cell {
         frame,
         popup: false,
         parent: String::new(),
+        owner: String::new(),
         rel: Point::default(),
         state: State::Shown,
         overflow: false,

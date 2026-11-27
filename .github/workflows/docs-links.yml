@@ -1,0 +1,44 @@
+# Links in the docs. A link inside the repo, and its #anchor, has to point at something, and a pull
+# request that breaks one fails. A link to another site is only reported, as a warning, because a
+# site that is down for an hour is no reason to hold a pull request.
+name: Docs links
+
+on:
+  pull_request:
+    paths:
+      - docs/**
+      - README.md
+      - site/**
+      - scripts/check-links.py
+      - .github/workflows/docs-links.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-links-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  internal:
+    name: internal links
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every link and anchor inside the repo
+        run: python3 scripts/check-links.py docs README.md site
+
+  external:
+    name: external links, a warning only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every link to another site
+        run: python3 scripts/check-links.py --external docs README.md site

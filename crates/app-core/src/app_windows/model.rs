@@ -33,7 +33,7 @@ pub struct Fields {
     pub title: bool,
     pub state: bool,
     pub focus: bool,
-    /// Whether it is a popup, whose, and where against it.
+    /// Whether it is a popup, whose, and where against it; for a window, the window that owns it.
     pub popup_link: bool,
     pub caption: bool,
     /// The program, the class, the overflow and resizable marks.
@@ -52,7 +52,8 @@ impl Fields {
             title: old.title != new.title,
             state: old.state != new.state,
             focus: old.focus != new.focus,
-            popup_link: (old.popup, &old.parent, old.rel) != (new.popup, &new.parent, new.rel),
+            popup_link: (old.popup, &old.parent, old.rel, &old.owner)
+                != (new.popup, &new.parent, new.rel, &new.owner),
             caption: old.caption != new.caption,
             other: (
                 old.pid,

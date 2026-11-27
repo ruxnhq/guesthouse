@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 35] = [
+const SENT_TO_THE_GUEST: [&str; 36] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "app-windows-start.ps1",
@@ -32,6 +32,7 @@ const SENT_TO_THE_GUEST: [&str; 35] = [
     "nv-files.ps1",
     "nv-media-foundation.ps1",
     "nv-profiles.ps1",
+    "nv-store.ps1",
     "nvme-ready.ps1",
     "scan-exclusions.ps1",
     "setmode.ps1",
@@ -257,4 +258,48 @@ fn no_task_in_the_user_s_session_opens_a_window() {
             assert!(!line.contains("WindowStyle"), "{name}: {line}");
         }
     }
+}
+
+/// A window that fills the screen leaves no free spot beside it, and a menu, a drop-down or a tip of it is
+/// then shown where it really is over the window, not left out (Word's galleries were). A dialog with no room
+/// goes there too, not over its program's window, a dialog's own drop-down (an unowned tool window) is a
+/// popup of its program, and the focus for a window a dialog has disabled goes to the dialog.
+#[test]
+fn the_app_windows_helper_shows_popups_and_dialogs_of_a_window_that_fills_the_screen() {
+    let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(helper.contains("if (c.Popup || c.Owner != IntPtr.Zero) { if (PlaceOnSite(c)) return; }"));
+    assert!(
+        helper.contains("c.SiteDX = vx + under.X - under.Frame.L; c.SiteDY = vy + under.Y - under.Frame.T;"),
+        "at the same point of its window's picture, parked or not"
+    );
+    assert!(helper.contains("(b.Pid == c.Pid || b.AppPid == c.Pid)"), "of its own program only");
+    assert!(helper.contains("(c.X != SiteX(c) || c.Y != SiteY(c) || !SiteHolds(c))) c.Placed = false;"));
+    assert!(helper.contains("o.OnSite ||"), "a cell on site takes no space of its own");
+    assert!(helper.contains("(o.Overflow && !self.Popup)"), "a popup never goes under an overflow cell");
+    assert!(
+        helper.contains("if (a.Active && a.Placed && !a.OnSite)"),
+        "nor is one on site hidden by its own window"
+    );
+    assert!(
+        helper.contains(
+            "int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy + c.SiteDY, ovH - c.CellH)); }"
+        ),
+        "a dialog a little above the screen is on it"
+    );
+    assert!(
+        helper.contains(
+            "c.Overflow && c.Placed && c.Active && !c.Popup && c.Owner != IntPtr.Zero && PlaceOnSite(c)"
+        ),
+        "a dialog does not stay over its program's window"
+    );
+    assert!(helper.contains("if (stray && (caption || (st & WS_POPUP) == 0)) return null;"));
+    assert!(helper.contains("if (c.Stray && b.Pid != c.Pid && b.AppPid != c.Pid) continue;"));
+    assert!(
+        helper.contains("if (cells.TryGetValue(o, out oc) && oc.Active) root = o;"),
+        "an owner with no cell is passed over"
+    );
+    assert!(helper.contains("else if (m.Msg == WM_SETTINGCHANGE) OnWorkAreaChange();"));
+    assert!(helper.contains("p.Win = FocusTarget(c.Src);"));
+    assert!(helper.contains("GetWindow(h, GW_ENABLEDPOPUP)"));
+    assert!(helper.contains("sb.Append(\",\\\"owner\\\":\\\"\")"), "the layout says a dialog's owner");
 }

@@ -99,6 +99,7 @@ pub fn count_text(programs: &[OpenProgram]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::testing::Scratch;
+    use std::time::{Duration, Instant};
 
     fn program(key: &str, name: &str, windows: u32) -> OpenProgram {
         OpenProgram { key: key.to_owned(), name: name.to_owned(), windows, icon: None }
@@ -130,6 +131,12 @@ mod tests {
         write_to(&folder, &[program("notepad.exe", "Notepad", 1)]).unwrap();
         drop(lock);
         assert!(file_in(&folder).is_file());
+        // A lock belongs to the open file, and a child that another test forks has a copy of every file
+        // this process has open until it runs its program, so the lock can outlive the drop by that much.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !read_from(&folder).is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(read_from(&folder).is_empty());
     }
 

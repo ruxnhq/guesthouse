@@ -4,7 +4,36 @@ The Linux host and the Windows host are released apart, each with a version of i
 
 ## The Linux host
 
-I do this by hand on my own PC. Nothing is automated yet, and `SHA256SUMS` isn't signed yet.
+CI builds it from the tag, and makes the GitHub release as a draft. I read the draft and publish it, and the rest follows by itself. Building by hand on my own PC, below that, is the fallback. `SHA256SUMS` isn't signed yet.
+
+### From the tag, in CI
+
+1. **Set the version,** as step 1 of the by-hand way says.
+
+2. **Tag it and push the tag.** Tag the commit that pull request became on `main`.
+
+   ```sh
+   git tag vVERSION
+   git push origin vVERSION
+   ```
+
+3. **CI builds it.** The tag starts the `Release build` workflow (`.github/workflows/release-build.yml`). It does steps 3 to 6 of the by-hand way:
+   - It stops if the tag isn't on `main`, or isn't the version in `Cargo.toml`.
+   - The display driver follows step 3's rule. If nothing compiled in `drivers/windows-display` changed since the release before, that release's DLL and INF go in again, checked against its `SHA256SUMS`. Otherwise a Windows runner builds it, with Visual Studio's WDK rather than the Enterprise WDK ISO. Then try the new driver in a guest before publishing.
+   - It runs `packaging/build-in-images.sh` in `/var/tmp/guesthouse-release`, then step 5's three tests on what it built.
+   - It makes the release as a draft, with the five files and notes drafted by `scripts/release-notes.py`. The notes come from the pull requests merged since the release before, under the area each title starts with. A comment at the top says whether the tests passed.
+
+   Nobody sees a draft, and nothing points at it. If the workflow fails, fix it and run it again from the Actions tab, with the tag and "release" ticked. That replaces a draft's files, and never touches a published release. With "release" unticked it only builds and tests.
+
+4. **Read the draft and publish it.** Write the opening, sort the lines, and drop what nobody using it would notice. Check that the comment says the tests passed. Then publish it, as the latest release.
+
+5. **Publishing starts the rest.** `Release files` puts the AppImage and its `.sha256` on files.ruxn.com. `Point the installer` opens the pull request of step 7, and `Release credits` writes the Thanks into the notes. Then go on from step 7.
+
+`Release files` needs the publish address on files.ruxn.com's Worker. Until that's there, publish the AppImage by hand, as the end of step 6 says.
+
+### By hand
+
+The same release, built on my own PC. Pointing `main` at the release, the credits in its notes and the site's deploy follow by themselves from the release being published, as steps 6 to 8 say.
 
 The order matters. `install.sh` on `main` is what points people at a release, so it changes last, once everything it names is really there.
 
@@ -50,9 +79,11 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
      BUILD_FOLDER/SHA256SUMS
    ```
 
+   Write `NOTES` without a credits section. Once the release is published, the `Release credits` workflow adds one to the notes: a line for each pull request of someone outside the project that was merged since the release before, as `scripts/release-credits.py` finds them. To see it first, run `scripts/release-credits.py TAG`. If the workflow didn't run, run it from the Actions tab with the tag. The README's Thanks list names projects, not people.
+
    The two sources are there for the GPL and the LGPL, so a release doesn't go out without them. They have to stay up for as long as the payload does.
 
-   The site's download button points at the AppImage on files.ruxn.com, not at GitHub. So publish it there too, with its hash beside it, using the file drop's `files` tool:
+   The site's download button points at the AppImage on files.ruxn.com, not at GitHub. Publishing the release starts the `Release files` workflow, which puts it there with its hash. If it can't, publish them by hand with the file drop's `files` tool:
 
    ```sh
    cd BUILD_FOLDER
@@ -61,11 +92,11 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    files publish guesthouse /tmp/guesthouse-installer-VERSION.AppImage.sha256
    ```
 
-7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed. In `packaging/nix/package.nix`, set `version` too, and `hash` to the payload's SHA-256 as Nix writes it, which `nix hash convert --hash-algo sha256 --to sri PAYLOAD_SHA256` prints. In the same pull request, set the version in the README's note and in `site/public/index.html`: the Linux version at the top, the AppImage's two links and the release's link. Merge it all with one pull request. From that moment the one line installs this release, `--update` offers it to everyone, and the flake gives it to NixOS.
+7. **Point `main` at it, last of all.** Publishing the release starts the `Point the installer` workflow. It downloads the payload and the source again and checks them against `SHA256SUMS`, waits for the AppImage's `.sha256` on files.ruxn.com, and opens the pull request `Point the installer at VERSION`. That one sets `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` in `install.sh`, `version` and `hash` in `packaging/nix/package.nix`, the version in the README's note, and in `site/public/index.html` the Linux version at the top, the AppImage's links, name and size, and the release's link, name and size, all by `scripts/point-installer.py`. If the AppImage isn't on files.ruxn.com within half an hour, the pull request is a draft: publish it, then mark it ready. Read the pull request, and merge it once the checks pass. From that moment the one line installs this release, `--update` and `--check-update` offer it to everyone, and the flake gives it to NixOS. If the workflow didn't run, run it from the Actions tab with the tag, or do the same by hand with `scripts/point-installer.py VERSION SHA256SUMS PAYLOAD_BYTES APPIMAGE_BYTES`.
 
    The merge starts the Packages workflow, as it changes `install.sh`. It downloads the release, checks it against the two hashes, and puts a copy of its files on pkg.ruxn.com, the deb, rpm and pacman packages in their signed repositories with an attestation each, and last of all `guesthouse/latest.json`. From that moment `--check-update` and the app in a package offer it too. Watch the run. If it fails, run it again from the Actions tab: what it published already stays as it is.
 
-8. **Deploy the site.** Nothing deploys it by itself, so until this step guesthouse.ruxn.com still names the release before. From a checkout of `main` at that merge, in `site`, run `cf deploy public`. Then open the page and see that it names the new version.
+8. **The site deploys itself.** A change to `site/` on `main` runs the `Site deploy` workflow, which does what `cf deploy public` in `site` did. Open the page after the merge and see that it names the new version. If the workflow fails, run it again from the Actions tab, or deploy by hand as before.
 
 9. **Check it from the outside.** Run `install.sh --dry-run` from the raw URL, in a fake HOME. It should download, verify and show the plan.
 
@@ -79,6 +110,27 @@ Once a build in `testing` has run with a GPU-PV VM on a real card, run the Proxm
 
 ## The Windows host
 
+CI builds this from the tag too. Nothing in the installer is signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+
+### From the tag, in CI
+
+1. **Set the version,** as step 1 of the by-hand way says.
+
+2. **Tag it and push the tag,** on the commit that pull request became on `main`.
+
+   ```sh
+   git tag -a windows-vVERSION -m "Windows host VERSION"
+   git push origin windows-vVERSION
+   ```
+
+3. **CI builds it.** The tag starts `Release build, Windows host` (`.github/workflows/release-windows.yml`). It stops if the tag isn't on `main` or isn't `windows/version.txt`'s version, and runs `scripts/windows-release.ps1 -BuildOnly` on a Windows runner. That's `-DryRun` without the check that the tag isn't on GitHub yet, so it still stops if this version's installer is on files.ruxn.com. Then it makes the release `Windows VERSION` as a draft, not marked latest, with the installer, its `.sha256`, WinFsp's source and `guesthouse-windows-latest.json`. Run it again from the Actions tab with the tag if it fails.
+
+4. **Try it, then publish it.** Download the installer from the draft, install it on this PC and see the new things work. Publish the draft, and leave "Set as the latest release" unticked, as that's the Linux host's. Publishing starts `Release files`. It puts WinFsp's source, the installer and its `.sha256` on files.ruxn.com, then `guesthouse-windows-latest.json` last of all. From that moment every app offers the new version.
+
+5. **Point the site at it,** as step 4 of the by-hand way says.
+
+### By hand
+
 This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in. `scripts/windows-release.ps1` does steps 2 to 4.
 
 1. **Set the version.** Change `windows/version.txt` to the new version, three numbers and no `v`, and merge that into `main` with a pull request, `Windows VERSION`. It takes nothing else, and the checks have to pass. The service says this version to the app, the installer puts it in Settings > Apps, and the app compares it with the newest to offer the update.
@@ -87,6 +139,6 @@ This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the
 
 3. **Release it.** Run the script again without `-DryRun`. It builds again, tags the commit `windows-vVERSION` and pushes the tag, and makes the GitHub release `Windows VERSION` with the installer and its `.sha256`, which isn't marked latest, as that's the Linux host's. Then it publishes the installer, its `.sha256` and, last of all, `guesthouse-windows-latest.json` to the file drop with `cf r2 objects put`: the bucket `ruxn-files`, at `pub/guesthouse/`, which files.ruxn.com serves as `/p/guesthouse/`. It downloads the installer back to check it. From the moment the latest file is up, every app offers the new version.
 
-4. **Point the site at it.** In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and from a checkout of `main` at that merge, in `site`, run `cf deploy public`. Then open the page and see that it names the new version.
+4. **Point the site at it.** In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and the `Site deploy` workflow puts it up. Then open the page and see that it names the new version.
 
 If the release is wrong, publish a new version: a file on the file drop never changes once it's up. To stop apps offering a broken one meanwhile, put the previous version's `guesthouse-windows-latest.json` back.

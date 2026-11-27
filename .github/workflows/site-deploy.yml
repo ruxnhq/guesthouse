@@ -1,0 +1,45 @@
+# Deploys guesthouse.ruxn.com when the site changes on main. It's what `cf deploy public` in site/ did
+# by hand (RELEASING.md). It only uploads site/public as the Worker the config names, so the token
+# needs nothing but that Worker and, for its custom domain, its zone's Workers Routes.
+# Secrets: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+name: Site deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two deploys at once, and never cancel one halfway.
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CF_SEND_TELEMETRY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned, as the site has no package.json and so no copy of its own.
+      - name: Deploy site/public
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::The CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets aren't set."
+            exit 1
+          fi
+          npx --yes cf@1.0.0-rc.2 deploy public --message "$GITHUB_SHA"

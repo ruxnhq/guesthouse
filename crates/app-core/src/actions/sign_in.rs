@@ -121,6 +121,27 @@ mod tests {
         assert!(!context.run_folder(None).join(BOOTS_FILE).exists(), "the boot is noted once it's set up");
     }
 
+    /// The last run set up its desktop and noted its boot. This start restarts Windows before anyone
+    /// signs in, as a refresh of the driver or the first start on the maker's vendor ID does: that
+    /// boot is the start's own, not one for the app to set up.
+    #[test]
+    fn a_count_of_boots_from_the_last_run_does_not_end_the_wait() {
+        let scratch = Scratch::new();
+        let (context, _) = context_after_a_wait(&scratch, &[NOBODY, "gpu working 1\n"]);
+        let folder = context.run_folder(None);
+        fs::write(folder.join(BOOTS_FILE), "1").unwrap();
+        let vm = machine(&context);
+        crate::agent::make_token(&context, &vm).unwrap();
+        let host = RecordingHost::default();
+        let mut task = Task::new(&context, &host, "start", vm);
+        assert_eq!(boot(&mut task), Ok(()));
+        assert!(task.desktop_owed);
+        let mut serial = BOOT_LINE.to_vec();
+        serial.extend(BOOT_LINE);
+        fs::write(folder.join(SERIAL_FILE), serial).unwrap();
+        assert!(!crate::actions::desktop::rebooted(&context, None), "no restart for the app to set up");
+    }
+
     #[test]
     fn someone_signed_in_with_no_desktop_still_fails_the_start_and_turns_off() {
         let scratch = Scratch::new();

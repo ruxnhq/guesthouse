@@ -3,7 +3,9 @@
 //! keeps one view for each cell that is shown, and hands every frame to all of them.
 
 use super::cell_picture::Guest;
-use super::plan::{ScaleFollow, SizeFollow, Step, focus_request, scale_to_follow, steps};
+use super::plan::{
+    ScaleFollow, SizeFollow, Step, focus_request, owned_windows, owner_window, scale_to_follow, steps,
+};
 use super::secure::SecureWindow;
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
@@ -417,6 +419,28 @@ impl Hub {
         }
     }
 
+    /// Keeps a window's host window over that of the window that owns it in the guest, if any.
+    fn keep_over_owner(&self, view: &View, cell: &Cell) {
+        let owner =
+            owner_window(cell, &self.hosted.borrow()).and_then(|id| self.views.borrow().get(id).cloned());
+        view.keep_over(owner.as_deref());
+    }
+
+    /// A window's host window came: it is kept over its owner's, and the windows it owns over it.
+    fn keep_owned_over(&self, id: &str) {
+        let cells: Vec<Cell> = {
+            let link = self.link.borrow();
+            let Some(model) = link.as_ref().map(|link| link.client.model()) else { return };
+            let mut ids = owned_windows(id, model, &self.hosted.borrow());
+            ids.push(id.to_string());
+            ids.iter().filter_map(|id| model.get(id).cloned()).collect()
+        };
+        for cell in cells {
+            let Some(view) = self.views.borrow().get(&cell.id).cloned() else { continue };
+            self.keep_over_owner(&view, &cell);
+        }
+    }
+
     fn cell_now(&self, id: &str) -> Option<Cell> {
         self.link.borrow().as_ref()?.client.model().get(id).cloned()
     }
@@ -435,7 +459,9 @@ impl Hub {
                 if cell.popup && parent.is_none() {
                     return;
                 }
-                let view = View::open(self, &cell, parent.as_ref());
+                let owner = owner_window(&cell, &self.hosted.borrow())
+                    .and_then(|id| self.views.borrow().get(id).cloned());
+                let view = View::open(self, &cell, parent.as_ref(), owner.as_deref());
                 self.note(&format!(
                     "opened {} {} at {:?} titled {:?}",
                     if cell.popup { "popup" } else { "window" },
@@ -444,7 +470,10 @@ impl Hub {
                     cell.title
                 ));
                 view.take_pointer(self.secure.borrow().is_none());
-                self.views.borrow_mut().insert(id, view);
+                self.views.borrow_mut().insert(id.clone(), view);
+                if !cell.popup {
+                    self.keep_owned_over(&id);
+                }
             }
             Step::Close(id) => self.close(&id),
             Step::Update { id, what } => {
@@ -454,6 +483,9 @@ impl Hub {
                 };
                 let parent = self.views.borrow().get(&cell.parent).cloned().filter(|_| cell.popup);
                 view.update(self, &cell, what, parent.as_ref());
+                if what.popup_link {
+                    self.keep_over_owner(&view, &cell);
+                }
             }
             Step::Screen(size) => {
                 self.note(&format!("the guest's screen is {}x{}", size.w, size.h));

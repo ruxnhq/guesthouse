@@ -125,7 +125,7 @@ new_test() {
     for library in libepoxy.so.0 libgbm.so.1 libEGL.so.1 libdrm.so.2; do printf 'gl' >"$T/libraries/$library"; done
     printf 'amdgpu_device_initialize2' >"$T/libraries/libdrm_amdgpu.so.1"
     printf 'capng' >"$T/libraries/libcap-ng.so.0"
-    unset LIBRARIES_PRESENT SUDO_FAILS FAKE_GPU_REFUSED FAKE_GTK FAKE_AMD FAKE_INTEL HELPER_VERSION
+    unset LIBRARIES_PRESENT SUDO_FAILS FAKE_GPU_REFUSED FAKE_GTK FAKE_AMD FAKE_INTEL HELPER_VERSION CLOCK_HELPER_VERSION
     FIRMWARE_HERE=no
     OSTREE=no
     KVM_CLOSED=no

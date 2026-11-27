@@ -506,7 +506,7 @@ stage_app() {
     target_folder=${CARGO_TARGET_DIR:-$REPO/target}
     # shellcheck disable=SC2046 # empty, or the flag and its value
     (cd "$REPO" && cargo build --release --locked -p guesthouse-app -p guesthouse-app-core \
-        -p guesthouse-daemon $(daemon_features))
+        -p guesthouse-clock-helper -p guesthouse-daemon $(daemon_features))
     # The lab's stand-in card is never in a build for people. Its switch's name is only in a daemon
     # built with it.
     ! grep -q -a GUESTHOUSE_INTEL_LAB_FAKE_CARD "$target_folder/release/guesthouse-daemon" ||
@@ -514,9 +514,11 @@ stage_app() {
     mkdir -p "$OUT/stage"
     stage_intel_probe
     for program in guesthouse guesthouse-check guesthouse-daemon guesthouse-jail guesthouse-share guesthouse-task guesthouse-vm \
-        guesthouse-report guesthouse-remote-view; do
+        guesthouse-report guesthouse-remote-view guesthouse-clock-helper; do
         cp "$target_folder/release/$program" "$OUT/stage/"
     done
+    # install.sh makes the clock helper setuid root, and a setuid program ignores $ORIGIN.
+    ! readelf -d "$OUT/stage/guesthouse-clock-helper" | grep -Eq 'RPATH|RUNPATH' || die "the clock helper has an rpath."
     # A build with HDR won't load on GTK older than 4.16, so a second one goes along for those, and
     # install.sh keeps the one that fits. It's the lower floor, so it's what the symbols are read from.
     (cd "$REPO" && cargo build --release --locked -p guesthouse-app --no-default-features)

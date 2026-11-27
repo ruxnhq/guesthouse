@@ -216,6 +216,7 @@ mod tests {
             max_clients: None,
             name: None,
             fingerprint: None,
+            hold_clocks: None,
         };
         let mut child = start(&context, slots::first(), &settings).unwrap();
         assert!(child.wait().unwrap().success());

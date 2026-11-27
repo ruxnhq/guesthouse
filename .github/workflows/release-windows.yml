@@ -1,0 +1,142 @@
+# Steps 2 and 3 of RELEASING.md's Windows host, from its tag: pushing windows-vX.Y.Z builds the
+# installer on a Windows runner with scripts/windows-release.ps1 -BuildOnly, and makes the GitHub
+# release "Windows X.Y.Z" as a draft, not marked latest, with the installer, its .sha256, WinFsp's
+# source and guesthouse-windows-latest.json. Nothing is public until someone publishes the draft.
+# Publishing starts release-files.yml, which puts the files on files.ruxn.com with the latest file
+# last, and from then on every app offers the new version. Step 4, the site, stays a pull request.
+#
+# Nothing in the installer is signed, and nothing in its build needs a card, so a runner can build
+# it. From the Actions tab it runs for a tag that's pushed already; with "release" off it only builds.
+name: Release build, Windows host
+
+on:
+  push:
+    tags: ["windows-v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Windows host tag to build, like windows-v0.12.0
+        required: true
+      release:
+        description: Make the draft release (off builds only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: build the installer
+    runs-on: windows-2025
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The tag is a release of main's, at windows/version.txt's version
+        id: tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG -notmatch '^windows-v(\d+\.\d+\.\d+)$') { throw "$env:TAG isn't a Windows host tag." }
+          $version = $Matches[1]
+          $says = (Get-Content -Raw -LiteralPath 'windows\version.txt').Trim()
+          if ($says -ne $version) { throw "windows\version.txt says $says at $env:TAG, not $version." }
+          & git merge-base --is-ancestor "$env:TAG^{commit}" origin/main
+          if ($LASTEXITCODE -ne 0) { throw "$env:TAG isn't on main. A release is tagged on the version's merge." }
+          "version=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # It stops if the installer of this version is on files.ruxn.com already.
+      - name: Build the app and the installer
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-release.ps1 -BuildOnly
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-${{ steps.tag.outputs.version }}
+          path: |
+            target/windows-release/${{ steps.tag.outputs.version }}/guesthouse-setup-${{ steps.tag.outputs.version }}.exe
+            target/windows-release/${{ steps.tag.outputs.version }}/guesthouse-setup-${{ steps.tag.outputs.version }}.exe.sha256
+            target/windows-release/${{ steps.tag.outputs.version }}/guesthouse-windows-latest.json
+            target/windows-release/${{ steps.tag.outputs.version }}/winfsp-*-source.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: the draft release
+    needs: build
+    if: github.event_name == 'push' || inputs.release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-${{ needs.build.outputs.version }}
+          path: ${{ runner.temp }}/windows
+
+      - name: Check the files against each other
+        run: |
+          cd "$RUNNER_TEMP/windows"
+          SETUP="guesthouse-setup-$VERSION.exe"
+          # Written on Windows, so its line may end in a carriage return.
+          SAID=$(tr -d '\r' <"$SETUP.sha256" | cut -d ' ' -f 1)
+          [ "$(sha256sum "$SETUP" | cut -d ' ' -f 1)" = "$SAID" ] || { echo "::error::$SETUP isn't its .sha256."; exit 1; }
+          WINFSP=$(jq -r .source.file "$GITHUB_WORKSPACE/windows/winfsp.json")
+          echo "$(jq -r .source.sha256 "$GITHUB_WORKSPACE/windows/winfsp.json")  $WINFSP" | sha256sum -c -
+          [ "$(jq -r .version guesthouse-windows-latest.json)" = "$VERSION" ]
+          [ "$(jq -r .sha256 guesthouse-windows-latest.json)" = "$SAID" ]
+          [ "$(jq -r .installer guesthouse-windows-latest.json)" = "https://files.ruxn.com/p/guesthouse/$SETUP" ]
+
+      - name: Draft the notes
+        run: |
+          SETUP="guesthouse-setup-$VERSION.exe"
+          BASE=https://files.ruxn.com/p/guesthouse
+          SHA=$(tr -d '\r' <"$RUNNER_TEMP/windows/$SETUP.sha256" | cut -d ' ' -f 1)
+          WINFSP=$(jq -r .source.file windows/winfsp.json)
+          INTRO="The Windows host's installer, $SETUP. Its SHA-256 is $SHA. It's also at $BASE/$SETUP. It carries WinFsp, under the GPLv3, whose source is $WINFSP, here and at $BASE/$WINFSP."
+          git show "$GITHUB_SHA:scripts/release-notes.py" >"$RUNNER_TEMP/release-notes.py"
+          python3 "$RUNNER_TEMP/release-notes.py" --intro "$INTRO" "$TAG" >"$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      # A run again for the same tag replaces the draft's files. A published release is never touched.
+      - name: Make the draft, or refresh it
+        run: |
+          cd "$RUNNER_TEMP/windows"
+          WINFSP=$(jq -r .source.file "$GITHUB_WORKSPACE/windows/winfsp.json")
+          FILES=("guesthouse-setup-$VERSION.exe" "guesthouse-setup-$VERSION.exe.sha256" "$WINFSP"
+            guesthouse-windows-latest.json)
+          if DRAFT=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$DRAFT" != true ]; then
+              echo "::error::$TAG is published already, and a published release's files never change."
+              exit 1
+            fi
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag --latest=false \
+              --title "Windows $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${FILES[@]}"
+          fi
+          echo "The draft of $TAG is ready to read and publish: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases"

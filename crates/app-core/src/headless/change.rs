@@ -23,7 +23,7 @@ use std::fmt::Display;
 use std::io::Write;
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 22] = [
+const SETTINGS: [&str; 23] = [
     "cores",
     "ram",
     "vram",
@@ -43,10 +43,12 @@ const SETTINGS: [&str; 22] = [
     "ssh",
     "app-windows",
     crate::remote_view::SETTING,
+    STREAM_CLOCKS,
     "auto-snapshot",
     "throwaway",
     "vendor-id",
 ];
+use guesthouse_remote_view_core::stream_clocks::SETTING as STREAM_CLOCKS;
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
 
 fn whole_number(key: &str, text: &str) -> Result<u32> {
@@ -183,6 +185,14 @@ pub(super) fn set(
         "dlss" => {
             only_for_nvidia(&machine, key)?;
             machine.nvapi_wrapper_off = !on_or_off(key, value)?;
+        }
+        STREAM_CLOCKS => {
+            only_for_nvidia(&machine, key)?;
+            machine.stream_clocks_off = !on_or_off(key, value)?;
+            machine.save(context)?;
+            // As the switch in the app: a running machine's remote view holds or lets go at once.
+            crate::remote_view::stream_clocks_changed(context, &machine);
+            return said(out, key, switch(machine.stream_clocks()));
         }
         "auto-snapshot" => {
             only_for_windows(&machine, key)?;
@@ -393,6 +403,7 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         line(out, "auto-snapshot", &auto)?;
         if machine.windows_maker() == Some(GpuMaker::Nvidia) {
             line(out, "dlss", &switch(machine.nvapi_wrapper()))?;
+            line(out, STREAM_CLOCKS, &switch(machine.stream_clocks()))?;
         }
         if machine.has_gpu() {
             line(out, "display-driver", &driver_text(context, machine))?;

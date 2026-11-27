@@ -98,8 +98,7 @@ fn going_back_needs_a_start_that_failed_after_a_snapshot_and_a_yes() {
 /// record that names it first, as the real one's first words come long after: whoever started it writes
 /// that record once it is running, and a record written before that one would be lost under it.
 fn recording_tasks(scratch: &Scratch, context: &mut Context) -> std::path::PathBuf {
-    context.processes = "/proc".into();
-    context.slot = slot_free_on_this_pc(context);
+    watching_real_tasks(context);
     context.make_run_folder(None).unwrap();
     let record = context.run_folder(None).join("guesthouse-task.json");
     let asked = scratch.path("asked");

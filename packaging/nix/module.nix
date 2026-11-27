@@ -124,6 +124,16 @@ in
       source = "${cfg.package}/lib/guesthouse/qemu/build/qemu-bridge-helper";
     };
 
+    # While another device views a machine on an NVIDIA card, Guesthouse holds the card's memory clock
+    # up through this helper, which needs root for that and does nothing else.
+    # A release from before the helper has none, and NixOS refuses a wrapper of a file that isn't there.
+    security.wrappers.guesthouse-clock-helper = lib.mkIf (cfg.package.hasClockHelper or false) {
+      setuid = true;
+      owner = "root";
+      group = "root";
+      source = "${cfg.package}/lib/guesthouse/guesthouse-clock-helper";
+    };
+
     environment.etc = {
       "qemu/bridge.conf" = lib.mkIf (cfg.bridges != [ ]) {
         text = lib.concatMapStrings (name: "allow ${name}\n") cfg.bridges;

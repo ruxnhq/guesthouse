@@ -40,4 +40,4 @@ You give your contributions as they are, with no warranty of any kind. RUXN LLC 
 
 ## 9. Signing
 
-You sign by adding your line to [CLA-SIGNERS.md](CLA-SIGNERS.md) in a pull request sent from your own GitHub account. One signature covers everything you have sent and will send to this project. A later version of this agreement applies to you only once you sign it.
+You sign by adding a file with your line to [CLA/signers](CLA/signers), named after your GitHub login, in a pull request sent from your own GitHub account. One signature covers everything you have sent and will send to this project. A later version of this agreement applies to you only once you sign it.

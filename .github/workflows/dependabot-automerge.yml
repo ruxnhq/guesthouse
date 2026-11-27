@@ -1,0 +1,33 @@
+# Dependabot's minor and patch updates merge by themselves once every required check passes.
+# A major update is left for a person. The job only turns on auto-merge, so CI still decides.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'ruxnlabs/guesthouse'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read what the update is
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Turn on auto-merge for a minor or patch update
+        if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR"
+
+      - name: Say a major update waits
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: echo "A major update. It waits for a person."

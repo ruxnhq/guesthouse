@@ -173,7 +173,8 @@ impl VmPlan {
     }
 
     fn gpu_arguments(&self) -> Vec<String> {
-        let tools = self.tools_disc.as_ref().map_or_else(String::new, |path| path.display().to_string());
+        let disc = self.driver_disc.as_ref().or(self.tools_disc.as_ref());
+        let tools = disc.map_or_else(String::new, |path| path.display().to_string());
         words(&[
             "-drive",
             &Self::cdrom("cd1", &tools),

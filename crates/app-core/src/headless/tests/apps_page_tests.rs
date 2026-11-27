@@ -38,6 +38,7 @@ fn a_look_gets_the_programs_with_their_icons_and_the_windows_that_are_open() {
         frame: crate::app_windows::Rect { x: 0, y: 0, w: 9, h: 9 },
         popup,
         parent: String::new(),
+        owner: String::new(),
         rel: crate::app_windows::Point::default(),
         state: crate::app_windows::State::Shown,
         overflow: false,

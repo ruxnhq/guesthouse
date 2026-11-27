@@ -43,6 +43,7 @@ fn cell_of(region: Rect) -> Cell {
         frame: region,
         popup: false,
         parent: String::new(),
+        owner: String::new(),
         rel: Point::default(),
         state: State::Shown,
         overflow: false,

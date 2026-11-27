@@ -78,6 +78,10 @@ pub struct Cell {
     pub popup: bool,
     /// For a popup, the cell it belongs to. Empty for a window.
     pub parent: String,
+    /// For a window that another window here owns (a program's dialog), that window, which the host
+    /// keeps it over. Empty for a popup, a window nothing owns, and from a helper that does not say.
+    #[serde(default)]
+    pub owner: String,
     /// For a popup, its frame's origin less its parent's frame's origin.
     pub rel: Point,
     pub state: State,

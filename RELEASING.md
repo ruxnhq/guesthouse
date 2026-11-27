@@ -8,7 +8,7 @@ The Linux host and the Windows host are released apart, each with a version of i
 
 2. **Read the draft and publish it.** The tag starts the build, which makes the draft, as the sections below say. Publish it by hand: for Linux as the latest release, for Windows with "Set as the latest release" unticked. Nothing publishes by itself.
 
-3. **The rest follows.** Publishing starts `Release files`, `Release credits` and, for Linux, `Point the installer`. With `RELEASE_PR_TOKEN` set, that one turns on auto-merge for its pull request, so `main` points at the release once the checks pass. If the AppImage wasn't on files.ruxn.com in time, that pull request is a draft and waits for a person, as step 7 says. A Windows release's site pull request (step 4 of its by-hand way) is still by hand.
+3. **The rest follows.** Publishing starts `Release files`, `Release credits` and `Point the installer`. With `RELEASE_PR_TOKEN` set, that one turns on auto-merge for its pull request, so `main` points at the release once the checks pass. If the AppImage wasn't on files.ruxn.com in time, that pull request is a draft and waits for a person, as step 7 says. A Windows release's site pull request (step 5 of the Windows host's steps) comes from the same workflow.
 
 Everything below is what that does, and the fallback if a part of it fails.
 
@@ -137,7 +137,7 @@ CI builds this from the tag too. Nothing in the installer is signed, and nothing
 
 4. **Try it, then publish it.** Download the installer from the draft, install it on this PC and see the new things work. Publish the draft, and leave "Set as the latest release" unticked, as that's the Linux host's. Publishing starts `Release files`. It puts WinFsp's source, the installer and its `.sha256` on files.ruxn.com, then `guesthouse-windows-latest.json` last of all. From that moment every app offers the new version.
 
-5. **Point the site at it,** as step 4 of the by-hand way says.
+5. **Point the site at it. This is automatic.** Publishing the draft also starts `Point the installer`, the same workflow as Linux's. For a `windows-vVERSION` release it downloads the installer and checks it against its `.sha256`, waits up to half an hour for that `.sha256` on files.ruxn.com to show the same hash, then opens `Point the site at Windows VERSION`. That changes only the Windows version in the line at the top and the installer's link, name, size and hash link in `site/public/index.html`, and nothing else, and it stops if any of those places isn't found exactly once. With `RELEASE_PR_TOKEN` set it turns on auto-merge, so the site follows once the checks pass, and `Site deploy` puts it up. If the hash never shows, the pull request is a draft and waits for a person. If the workflow fails, run `Point the installer` again from the Actions tab with the tag, like `windows-v0.12.0`, or do it by hand as step 4 of the by-hand way says.
 
 ### By hand
 
@@ -149,6 +149,6 @@ This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the
 
 3. **Release it.** Run the script again without `-DryRun`. It builds again, tags the commit `windows-vVERSION` and pushes the tag, and makes the GitHub release `Windows VERSION` with the installer and its `.sha256`, which isn't marked latest, as that's the Linux host's. Then it publishes the installer, its `.sha256` and, last of all, `guesthouse-windows-latest.json` to the file drop with `cf r2 objects put`: the bucket `ruxn-files`, at `pub/guesthouse/`, which files.ruxn.com serves as `/p/guesthouse/`. It downloads the installer back to check it. From the moment the latest file is up, every app offers the new version.
 
-4. **Point the site at it.** In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and the `Site deploy` workflow puts it up. Then open the page and see that it names the new version.
+4. **Point the site at it.** The workflow does this for a published release, so this is the fallback. In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and the `Site deploy` workflow puts it up. Then open the page and see that it names the new version.
 
 If the release is wrong, publish a new version: a file on the file drop never changes once it's up. To stop apps offering a broken one meanwhile, put the previous version's `guesthouse-windows-latest.json` back.

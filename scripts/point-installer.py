@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Points the installer at a Linux release: step 7 of RELEASING.md, done from the release's own files.
+"""Points the installer at a release: step 7 of RELEASING.md for Linux, step 5 of the Windows host's, done from the release's own files.
 
     point-installer.py VERSION SHA256SUMS PAYLOAD_BYTES APPIMAGE_BYTES
+    point-installer.py windows VERSION SETUP_SHA256 SETUP_BYTES
 
-VERSION has no v, like 0.10.0. SHA256SUMS is the file from the release. The sizes are the payload's
-and the AppImage's, in bytes, for the two sizes the site shows. Run from the root of a checkout of
-main. It changes install.sh, packaging/nix/package.nix, README.md and site/public/index.html, and it
-stops without writing anything if one of the places it has to change isn't found exactly once.
+VERSION has no v, like 0.10.0. For Linux, SHA256SUMS is the file from the release, and the sizes are
+the payload's and the AppImage's, in bytes, for the two sizes the site shows. It changes install.sh,
+packaging/nix/package.nix, README.md and site/public/index.html.
+For Windows, SETUP_SHA256 is the installer's .sha256 file and SETUP_BYTES the installer's size. It
+changes only the Windows parts of site/public/index.html.
+Run from the root of a checkout of main. It exits non-zero, without writing anything, if one of the
+places it has to change isn't found exactly once.
 """
 
 import base64
@@ -48,7 +52,34 @@ def sub_once(text: str, pattern: str, repl: str, what: str) -> str:
     return text
 
 
+def setup_megabytes(size: int) -> str:
+    """The Windows installer's size as the site writes it: binary megabytes, one decimal."""
+    return f"{size / 2**20:.1f} MB"
+
+
+def point_windows(argv: list[str]) -> int:
+    if len(argv) != 3 or not SEMVER.fullmatch(argv[0]):
+        sys.exit(__doc__)
+    version = argv[0]
+    parts = Path(argv[1]).read_text().split()
+    name = f"guesthouse-setup-{version}.exe"
+    if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]) or parts[1].lstrip("*") != name:
+        sys.exit(f"The .sha256 file isn't one line for {name}.")
+    size = setup_megabytes(int(argv[2]))
+
+    site = Path("site/public/index.html").read_text()
+    site = sub_once(site, r'(<span class="eyebrow">Linux <b>\d+\.\d+\.\d+</b> · Windows <b>)\d+\.\d+\.\d+(</b>)', rf"\g<1>{version}\g<2>", "the Windows version in the site's top line")
+    site = sub_once(site, r"(files\.ruxn\.com/p/guesthouse/guesthouse-setup-)\d+\.\d+\.\d+(\.exe\")", rf"\g<1>{version}\g<2>", "the installer's link")
+    site = sub_once(site, r'(<span class="name">Guesthouse )\d+\.\d+\.\d+(</span><span class="meta">Installer · )\d+(?:\.\d+)? MB', rf"\g<1>{version}\g<2>{size}", "the installer's name and size")
+    site = sub_once(site, r"(files\.ruxn\.com/p/guesthouse/guesthouse-setup-)\d+\.\d+\.\d+(\.exe\.sha256\")", rf"\g<1>{version}\g<2>", "the installer's hash link")
+    Path("site/public/index.html").write_text(site)
+    print(f"version={version}\nsha256={parts[0]}\nsize={size}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "windows":
+        return point_windows(argv[2:])
     if len(argv) != 5 or not SEMVER.fullmatch(argv[1]):
         sys.exit(__doc__)
     version = argv[1]

@@ -12,7 +12,9 @@
 //!
 //! A host that keeps pairing's time itself and says what happens drives its machine's pairing with
 //! [`Driver::host_says`] and [`Driver::host_event`] instead, which read nothing and run no clock; such
-//! a pairing is never given to [`Driver::step`], whose readings are for a host that answers `status`.
+//! [`Driver::step`], [`Driver::open_pairing`], [`Driver::device`] and [`Driver::read`] are for a host
+//! that answers `status`, and refuse a host-timed pairing with [`HOST_TIMED`], sending nothing and
+//! changing nothing; [`Driver::started`] leaves one as it is (its host calls [`Driver::host_started`]).
 //!
 //! A step ends. Pairing sends a command again only when a reading still shows what the command was
 //! to change, so a guest whose status never shows a command taken, or a stale reading, would have
@@ -59,6 +61,9 @@ pub struct NotDelivered(pub String);
 
 /// What is said when the host is told something for a pairing that is read from its status.
 pub const NOT_HOST_TIMED: &str = "This machine's pairing is read from its host's status, not told.";
+
+/// What is said when a host-timed pairing is given to a call that reads the host's status.
+pub const HOST_TIMED: &str = "This machine's pairing is told by its host, not read from its status.";
 
 /// What is said when a step would act while the guest has not answered since a command that may
 /// or may not have run.
@@ -227,6 +232,9 @@ impl Driver<'_> {
         let (mut pairing, unsure) = self.sessions.with(self.machine, |session| {
             (session.pairing.get_or_insert_with(|| self.fresh_pairing()).clone(), session.unsure)
         });
+        if pairing.is_host_timed() {
+            return Some(HOST_TIMED.to_string());
+        }
         // The last pop goes first.
         let read_first = unsure && matches!(event, StepEvent::Plain(_));
         let mut events = if read_first { vec![event, StepEvent::Read] } else { vec![event] };
@@ -299,7 +307,11 @@ impl Driver<'_> {
     }
 
     /// Reads the host's status, and keeps it.
+    /// Nothing for a host-timed pairing, which is never read.
     pub fn read(&self) -> Option<Status> {
+        if self.is_host_timed() {
+            return None;
+        }
         let said = self.guest.ctl(&ctl::status());
         let now = (self.now)();
         self.sessions.with(self.machine, |session| {
@@ -338,6 +350,9 @@ impl Driver<'_> {
     /// Sends one command about a device, then reads the host again. Gives why the host would not,
     /// or that the guest did not answer.
     pub fn device(&self, words: &Words) -> Result<(), String> {
+        if self.is_host_timed() {
+            return Err(HOST_TIMED.to_string());
+        }
         let said = match self.guest.ctl(words) {
             Ok(said) => said,
             Err(why) => {
@@ -357,9 +372,18 @@ impl Driver<'_> {
     /// The host found the machine running at its start: whatever pairing an earlier run left open
     /// is closed and what it held is given back.
     pub fn started(&self) {
+        if self.is_host_timed() {
+            return;
+        }
         let fresh = self.fresh_pairing();
         self.sessions.with(self.machine, |session| session.pairing = Some(fresh));
         self.step(StepEvent::Read);
+    }
+
+    /// The machine's pairing is a [`Pairing::host_timed`] one.
+    fn is_host_timed(&self) -> bool {
+        self.sessions
+            .with(self.machine, |session| session.pairing.as_ref().is_some_and(Pairing::is_host_timed))
     }
 
     /// A fresh [`Pairing::host_timed`] for this run, with what the host kept of an earlier one.
@@ -430,3 +454,5 @@ impl Driver<'_> {
 mod tests;
 #[cfg(test)]
 mod tests_host;
+#[cfg(test)]
+mod tests_refuse;

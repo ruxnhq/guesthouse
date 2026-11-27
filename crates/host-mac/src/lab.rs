@@ -18,12 +18,6 @@ pub fn firmware_dir(home: &Path) -> Option<PathBuf> {
     None
 }
 
-/// A developer's copy of the script that makes the driver's disk. None here.
-pub fn stick_script(home: &Path) -> Option<PathBuf> {
-    let _ = home;
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +28,5 @@ mod tests {
             assert!(builds(tool, Path::new("/h")).is_empty());
         }
         assert!(firmware_dir(Path::new("/h")).is_none());
-        assert!(stick_script(Path::new("/h")).is_none());
     }
 }

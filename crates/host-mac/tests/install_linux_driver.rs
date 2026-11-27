@@ -51,8 +51,7 @@ impl Support {
             install: InstallConfig {
                 fake: true,
                 driver_dir: Some(self.0.join("linux-driver")),
-                stick_script: Some(support::stand_ins(&self.0).1),
-                firmware_dir: Some(support::stand_ins(&self.0).0),
+                firmware_dir: Some(support::firmware_dir(&self.0)),
             },
             shutdown_timeout: Duration::from_secs(5),
             start_timeout: Duration::from_secs(10),

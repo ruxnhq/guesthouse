@@ -52,8 +52,6 @@ pub struct InstallConfig {
     pub fake: bool,
     /// The folder the driver's build gathers its files in (`GUESTHOUSE_DRIVER_DIR`).
     pub driver_dir: Option<PathBuf>,
-    /// `stick.sh`, which makes the small disk the driver goes in on (`GUESTHOUSE_STICK_SH`).
-    pub stick_script: Option<PathBuf>,
     /// A folder holding QEMU's firmware (`edk2-aarch64-code.fd` and the vars file) and the option
     /// ROM, tried after the folders beside QEMU (`GUESTHOUSE_FIRMWARE_DIR`).
     pub firmware_dir: Option<PathBuf>,
@@ -92,9 +90,6 @@ impl Config {
             install: InstallConfig {
                 fake: std::env::var_os("GUESTHOUSE_INSTALL_FAKE").is_some_and(|v| !v.is_empty()),
                 driver_dir: std::env::var_os("GUESTHOUSE_DRIVER_DIR")
-                    .filter(|p| !p.is_empty())
-                    .map(PathBuf::from),
-                stick_script: std::env::var_os("GUESTHOUSE_STICK_SH")
                     .filter(|p| !p.is_empty())
                     .map(PathBuf::from),
                 firmware_dir: std::env::var_os("GUESTHOUSE_FIRMWARE_DIR")

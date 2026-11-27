@@ -19,5 +19,6 @@ pub mod plan;
 pub mod runner;
 pub mod state;
 pub mod steps;
+pub mod stick;
 pub mod ubuntu;
 pub mod windows;

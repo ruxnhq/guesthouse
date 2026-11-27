@@ -1,4 +1,4 @@
-# A pull request goes in only once its author's line is in CLA-SIGNERS.md.
+# A pull request goes in only once its author's own file is in CLA/signers.
 name: CLA
 
 on:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Look for the author's line
+      - name: Look for the author's file
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: sh scripts/cla-check.sh "$AUTHOR"

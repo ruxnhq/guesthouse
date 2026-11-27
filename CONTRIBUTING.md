@@ -54,7 +54,7 @@ These matter more than anything else here, because text inside code is something
 
 ## The contributor licence agreement
 
-Your first pull request goes in once you've signed the [contributor licence agreement](CLA.md), by adding your line to [CLA-SIGNERS.md](CLA-SIGNERS.md) in that pull request. You keep your copyright. The agreement gives RUXN LLC a licence to your work that isn't tied to the GPL, and RUXN LLC keeps publishing your work under GPL-2.0-or-later. A check on the pull request looks for your line.
+Your first pull request goes in once you've signed the [contributor licence agreement](CLA.md), by adding a file with your line to [CLA/signers](CLA/signers) in that pull request, as [CLA/README.md](CLA/README.md) says. You keep your copyright. The agreement gives RUXN LLC a licence to your work that isn't tied to the GPL, and RUXN LLC keeps publishing your work under GPL-2.0-or-later. A check on the pull request looks for your file.
 
 ## Recordings
 
@@ -72,6 +72,8 @@ Recordings hold guest data. They never go in git. Keep them in `/captures/`, whi
 ## Keeping the layers apart
 
 `core` must never know about a vendor, and a backend must never reach into `core`. If a backend needs something, add a method to `HostServices`, and if the core needs a vendor's answer, add one to `Backend`. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+The hosts follow the same rule, whether it's Linux, Windows or the Mac host. Before you build a feature for one host, read how the other two do the same job, even if one's code lives outside this repository, and reuse their names and shapes. Logic with no OS or hypervisor calls belongs in a crate every host builds on, not in a host's own crate. Don't rewrite a working host to fit: move one piece at a time, in a commit that changes no behaviour. See "What the hosts share" in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Behaviour
 

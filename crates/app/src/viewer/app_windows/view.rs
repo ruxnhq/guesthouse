@@ -146,8 +146,9 @@ pub fn add_style(display: &gdk::Display) {
 }
 
 impl View {
-    /// A toplevel for `cell`, or a popup against `parent`. Nothing is shown until a frame is given.
-    pub fn open(hub: &Rc<Hub>, cell: &Cell, parent: Option<&Rc<View>>) -> Rc<View> {
+    /// A toplevel for `cell`, kept over `owner`'s if it has one, or a popup against `parent`. Nothing
+    /// is shown until a frame is given.
+    pub fn open(hub: &Rc<Hub>, cell: &Cell, parent: Option<&Rc<View>>, owner: Option<&View>) -> Rc<View> {
         let frame = CellPicture::default();
         frame.set_focusable(false);
         frame.set_guest(hub.guest());
@@ -217,6 +218,8 @@ impl View {
         }
         match &view.host {
             Host::Window(window) => {
+                // Before the first commit: sway decides at it whether a window floats, as one with a parent does.
+                view.keep_over(owner);
                 window.present();
                 // A window that is minimized in the guest from its first layout opens that way.
                 if cell.state == State::Minimized {
@@ -243,6 +246,18 @@ impl View {
     /// Whether the picture takes the pointer. Not while the guest's input desktop is not the normal one.
     pub fn take_pointer(&self, on: bool) {
         self.frame.set_can_target(on);
+    }
+
+    /// Keeps this window over `owner`'s, as a dialog over its program's window, or lets it go.
+    pub fn keep_over(&self, owner: Option<&View>) {
+        let Host::Window(window) = &self.host else { return };
+        let owner = owner.and_then(|owner| match &owner.host {
+            Host::Window(owner) => Some(owner),
+            Host::Popup(_) => None,
+        });
+        if window.transient_for().as_ref() != owner {
+            window.set_transient_for(owner);
+        }
     }
 
     /// Gives the host window the focus.

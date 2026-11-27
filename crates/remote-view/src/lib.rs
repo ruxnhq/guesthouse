@@ -133,4 +133,13 @@ mod tests {
         assert!(SETUP.ends_with(GUEST_SETUP));
         assert!(SCRIPT.contains("screen: fingerprint"));
     }
+
+    #[test]
+    fn the_guest_script_switches_remotemans_own_update_check_off_with_the_shared_words() {
+        let line = format!("ctl --port {PORT} {}", ctl::updates_off().join(" "));
+        assert!(SCRIPT.contains(&line), "{line}");
+        // Taken only on a plain `ok`, as ctl::updates_off_took reads it.
+        assert!(SCRIPT.contains("if ($said -eq 'ok') { break }"));
+        assert_eq!(ctl::updates_off_took("ok"), Ok(()));
+    }
 }

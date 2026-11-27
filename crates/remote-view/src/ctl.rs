@@ -81,6 +81,27 @@ pub fn share(on: bool) -> Words {
     words(&["sharing", word(on)])
 }
 
+/// `set updates off`: the host never looks for a newer remoteman by itself, and never fetches one.
+/// Guesthouse pins the release it puts in a guest and updates it itself, so a guest doesn't reach a
+/// download site on its own. The host keeps it in `updates.json` in its state folder, across restarts
+/// and installer runs. Hosts before 0.1.9 don't know it.
+pub fn updates_off() -> Words {
+    words(&["set", "updates", "off"])
+}
+
+/// Whether the host took [`updates_off`]: only a plain `ok` does, as that is when it was written
+/// down. Otherwise the host's words for why not: an older host's list of what it knows, a host
+/// started with `--updates`, or one that couldn't keep it.
+pub fn updates_off_took(answer: &str) -> Result<(), String> {
+    match parse_ack(answer) {
+        Ack::Done(line) if line == "ok" => Ok(()),
+        Ack::Done(line) | Ack::NotKept(line) | Ack::Refused(line) => {
+            Err(if line.is_empty() { "the host said nothing".to_string() } else { line })
+        }
+        Ack::Stopping => Err(STOPPING.to_string()),
+    }
+}
+
 /// `allow clipboard on|off` or `allow files on|off`: what the host serves every device, before
 /// what each device may do.
 pub fn host_allow(what: &str, on: bool) -> Result<Words, String> {

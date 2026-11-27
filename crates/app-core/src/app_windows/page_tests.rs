@@ -31,6 +31,7 @@ fn cell(id: &str, exe: &str, popup: bool) -> Cell {
         frame: rect,
         popup,
         parent: String::new(),
+        owner: String::new(),
         rel: Point::default(),
         state: WindowState::Shown,
         overflow: false,

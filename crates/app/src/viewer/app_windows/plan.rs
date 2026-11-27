@@ -173,6 +173,26 @@ pub fn follow_host_state(presence: Presence, active: bool, suspended: bool) -> (
     }
 }
 
+/// The host window that `cell`'s host window is kept over: that of the window that owns it in the
+/// guest, a program's window for its dialog, when that one is hosted as a window (`hosted` as in
+/// `steps`). The compositor then keeps the dialog over it, and a tiling one lets it float.
+pub fn owner_window<'a>(cell: &'a Cell, hosted: &BTreeMap<String, bool>) -> Option<&'a str> {
+    let owner = cell.owner.as_str();
+    (!cell.popup && !owner.is_empty() && owner != cell.id && hosted.get(owner) == Some(&false))
+        .then_some(owner)
+}
+
+/// The hosted windows that `id`'s host window is to be kept under, now that it is there again: the
+/// ones the guest says it owns.
+pub fn owned_windows(id: &str, model: &Model, hosted: &BTreeMap<String, bool>) -> Vec<String> {
+    model
+        .windows()
+        .filter(|cell| cell.owner == id && hosted.get(&cell.id) == Some(&false))
+        .filter(|cell| owner_window(cell, hosted).is_some())
+        .map(|cell| cell.id.clone())
+        .collect()
+}
+
 /// The request that tells the guest a host window got the focus, if it has not been told already.
 /// Never for a popup: a change of the foreground window closes the menu the user is looking at.
 pub fn focus_request(already: Option<&str>, cell: &Cell) -> Option<Request> {
@@ -401,6 +421,7 @@ mod tests {
             frame: at,
             popup: false,
             parent: String::new(),
+            owner: String::new(),
             rel: Point::default(),
             state: State::Shown,
             overflow: false,
@@ -409,6 +430,34 @@ mod tests {
             resizable: true,
             corner: 0,
         }
+    }
+
+    #[test]
+    fn a_dialog_is_kept_over_the_window_that_owns_it_when_that_one_is_hosted() {
+        let program = window("1", rect(0, 0, 800, 600));
+        let dialog = Cell { owner: "1".into(), ..window("2", rect(800, 0, 400, 300)) };
+        let mut hosted = BTreeMap::from([("2".to_string(), false)]);
+        assert_eq!(owner_window(&dialog, &hosted), None, "its owner has no host window yet");
+        hosted.insert("1".into(), false);
+        assert_eq!(owner_window(&dialog, &hosted), Some("1"));
+        assert_eq!(owner_window(&program, &hosted), None, "nothing owns it");
+        hosted.insert("1".into(), true);
+        assert_eq!(owner_window(&dialog, &hosted), None, "a popup is no window to be kept over");
+        let own = Cell { owner: "2".into(), ..window("2", rect(0, 0, 10, 10)) };
+        assert_eq!(owner_window(&own, &hosted), None, "never over itself");
+        let menu = Cell { owner: "1".into(), ..popup("3", "1", rect(0, 0, 10, 10)) };
+        hosted.insert("1".into(), false);
+        assert_eq!(owner_window(&menu, &hosted), None, "a popup hangs on its parent instead");
+    }
+
+    #[test]
+    fn a_window_that_opens_again_takes_back_the_dialogs_it_owns() {
+        let mut rig = Rig::new();
+        let dialog = Cell { owner: "1".into(), ..window("2", rect(800, 0, 400, 300)) };
+        let other = window("3", rect(0, 600, 400, 300));
+        rig.show(vec![window("1", rect(0, 0, 800, 600)), dialog, other]);
+        assert_eq!(owned_windows("1", &rig.model, &rig.hosted), vec!["2".to_string()]);
+        assert!(owned_windows("3", &rig.model, &rig.hosted).is_empty());
     }
 
     fn popup(id: &str, parent: &str, at: Rect) -> Cell {

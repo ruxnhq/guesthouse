@@ -6,4 +6,4 @@ Anything that isn't done, or that's worth knowing before it goes in.
 
 Where anything that isn't your own work comes from, and its licence.
 
-If this is your first pull request here, your line in `CLA-SIGNERS.md`.
+If this is your first pull request here, your own file in `CLA/signers`, see `CLA/README.md`.

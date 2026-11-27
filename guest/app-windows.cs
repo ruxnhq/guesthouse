@@ -145,7 +145,8 @@ public class AppWindows : Form
     const int DWMWA_CAPTION_BUTTON_BOUNDS = 5, DWMWA_EXTENDED_FRAME_BOUNDS = 9, DWMWA_CLOAKED = 14;
     const uint DWM_TNP_RECTDESTINATION = 1, DWM_TNP_RECTSOURCE = 2, DWM_TNP_OPACITY = 4, DWM_TNP_VISIBLE = 8, DWM_TNP_SOURCECLIENTAREAONLY = 0x10;
     const int GWL_STYLE = -16, GWL_EXSTYLE = -20;
-    const uint GW_OWNER = 4, GA_PARENT = 1;
+    const uint GW_OWNER = 4, GW_ENABLEDPOPUP = 6, GA_PARENT = 1;
+    const long WS_DISABLED = 0x08000000L;
     const uint LWA_ALPHA = 2;
     const uint SWP_NOSIZE = 1, SWP_NOMOVE = 2, SWP_NOZORDER = 4, SWP_NOACTIVATE = 0x10, SWP_SHOWWINDOW = 0x40, SWP_ASYNCWINDOWPOS = 0x4000;
     const int SM_CXSCREEN = 0, SM_CYSCREEN = 1, SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77, SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
@@ -219,7 +220,9 @@ public class AppWindows : Form
         public long Style, ExStyle;
         public IntPtr Owner;                    // direct owner window (0 = none)
         public bool Popup;
+        public bool Stray;                      // an unowned tool window taken as a popup: only a window of its own program takes it
         public IntPtr Parent;                   // for popups: owner root, else window it sits over (0 = none)
+        public IntPtr OwnerCell;                // for windows: the nearest owner that is an app window here (a dialog's program window)
         public bool HasRel; public int RelX, RelY;   // popup frame origin minus parent frame origin
         public bool Active;                     // qualifies right now (has a thumbnail)
         public long DormantAt;
@@ -230,6 +233,9 @@ public class AppWindows : Form
         public int CellW, CellH;                // size of the cell as shown (never more than the source)
         public int X, Y;                        // top-left of the cell inside the overlay
         public bool Placed, Overflow, Hidden;   // Hidden: an overflow cell lies over it
+        public bool OnSite;                     // a popup shown where it really is, over its parked window, as no free spot was left
+        public int SiteDX, SiteDY;              // for one on site: how far that window's cell lies from the window
+        public IntPtr SiteUnder;                // and which window that is
         public long MoveAt;                     // when to move a cell that outgrew its slot (0 = not pending)
         public RECT Frame, Win;                 // last known real rectangles (screen coordinates)
         public bool Cured; public int CureTries;
@@ -247,7 +253,7 @@ public class AppWindows : Form
     class Probe
     {
         public IntPtr H, Owner; public uint Pid; public string Cls; public long Style, Ex;
-        public bool Popup, Iconic; public RECT Frame;
+        public bool Popup, Stray, Iconic; public RECT Frame;
     }
 
     // A request that waits for Windows to do what it was asked.
@@ -413,7 +419,7 @@ public class AppWindows : Form
             return;
         }
         if (m.Msg == WM_DISPLAYCHANGE) OnDisplayChange();
-        else if (m.Msg == WM_SETTINGCHANGE) { FitPackArea(); }
+        else if (m.Msg == WM_SETTINGCHANGE) OnWorkAreaChange();
         else if (m.Msg == WM_WTSSESSION_CHANGE)
         {
             int what = m.WParam.ToInt32();
@@ -429,6 +435,20 @@ public class AppWindows : Form
     {
         FitToScreen();
         KeepScale();
+        PlaceAgain();
+    }
+
+    // The taskbar settles on a new screen after the change of mode, so the work area the windows were packed in just now was
+    // the old screen's: a window that did not fit in it stayed an overflow cell over the others on a screen grown for it.
+    void OnWorkAreaChange()
+    {
+        int l = packL, t = packT, r = packR, b = packB;
+        FitPackArea();
+        if (l != packL || t != packT || r != packR || b != packB) PlaceAgain();
+    }
+
+    void PlaceAgain()
+    {
         foreach (Cell c in cells.Values)
         {
             // A larger screen may have room for an overflow cell, and a window cut to the old screen gets its whole size back.
@@ -638,7 +658,10 @@ public class AppWindows : Form
         // A popup is a menu, tip or drop-down: a known class, or a window with no title bar that is a tool window,
         // never activates, or is an owned WS_POPUP. A heuristic.
         bool popup = known || (!caption && (toolish || (owner != IntPtr.Zero && (st & WS_POPUP) != 0)));
-        if ((ex & WS_EX_TOOLWINDOW) != 0 && owner == IntPtr.Zero && !known) return null;
+        // An unowned tool window is no app window. One that is a captionless WS_POPUP is a program's own drop-down (Word's
+        // dialogs have theirs so): a popup, which only a window of its own program may take (see ComputeParents).
+        bool stray = (ex & WS_EX_TOOLWINDOW) != 0 && owner == IntPtr.Zero && !known;
+        if (stray && (caption || (st & WS_POPUP) == 0)) return null;
 
         RECT f = new RECT();
         if (!iconic)
@@ -648,7 +671,7 @@ public class AppWindows : Form
             if (f.R - f.L < MinCellSide || f.B - f.T < MinCellSide) return null;
         }
         Probe p = new Probe();
-        p.H = h; p.Owner = owner; p.Pid = pid; p.Cls = cls; p.Style = st; p.Ex = ex; p.Popup = popup; p.Iconic = iconic; p.Frame = f;
+        p.H = h; p.Owner = owner; p.Pid = pid; p.Cls = cls; p.Style = st; p.Ex = ex; p.Popup = popup; p.Stray = stray; p.Iconic = iconic; p.Frame = f;
         return p;
     }
 
@@ -681,7 +704,7 @@ public class AppWindows : Form
             seen.Add(h);
             c.Z = z;
             c.Fg = (h == fg);
-            c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup;
+            c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup; c.Stray = p.Stray;
             ReadState(c, now);
             c.LocDirty = false;
             if (now - c.TitleAt >= TitleMs) { c.Title = TextOf(h); c.TitleAt = now; c.NameDirty = false; }
@@ -710,7 +733,7 @@ public class AppWindows : Form
         Cell c = new Cell();
         c.Src = p.H; c.Thumb = t; c.Order = ++orderCounter; c.Stamp = c.Order; c.Pid = p.Pid;
         c.Exe = ExeOf(p.Pid); Identify(c); c.Cls = p.Cls; c.Title = TextOf(p.H); c.TitleAt = now;
-        c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup;
+        c.Style = p.Style; c.ExStyle = p.Ex; c.Owner = p.Owner; c.Popup = p.Popup; c.Stray = p.Stray;
         c.Frame = p.Frame; c.Win = p.Frame;
         c.Active = true; c.ThumbDirty = true;
         c.InDone = !c.Popup; c.InAt = now + InsetFirstMs;
@@ -807,7 +830,10 @@ public class AppWindows : Form
     {
         foreach (Cell o in cells.Values)
         {
-            if (o == self || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;   // a menu that closed keeps its place only so it can come back, not against other windows
+            // A menu that closed keeps its place only so it can come back, not against other windows. A cell on site lies over its
+            // program's window and takes no space of its own either, or that window could not have its place back after a change of mode.
+            // An overflow cell takes no space either, as a window under it is only hidden; a popup there would never be seen.
+            if (o == self || !o.Placed || (o.Overflow && !self.Popup) || o.OnSite || (o.Popup && !o.Active)) continue;
             if (Hit(x, y, bw, bh, o.X, o.Y, o.CellW, o.CellH)) return true;
         }
         return false;
@@ -823,6 +849,7 @@ public class AppWindows : Form
         int wantW = Math.Min(sw - c.InL - c.InR, ovW), wantH = Math.Min(sh - c.InT - c.InB, ovH);
         c.ThumbDirty = true;
         if (!c.Placed) { c.CellW = wantW; c.CellH = wantH; return; }
+        if (c.OnSite) { c.CellW = wantW; c.CellH = wantH; c.MoveAt = 0; c.Placed = false; return; }   // it never fits "in place": it lies over its window
         if (wantW == c.CellW && wantH == c.CellH && c.MoveAt == 0) return;
         if (c.Overflow || !FitsInPlace(c, wantW, wantH))
         {
@@ -863,7 +890,7 @@ public class AppWindows : Form
         xs.Add(packL); ys.Add(packT);
         foreach (Cell o in cells.Values)
         {
-            if (o == c || !o.Placed || o.Overflow || (o.Popup && !o.Active)) continue;
+            if (o == c || !o.Placed || o.Overflow || o.OnSite || (o.Popup && !o.Active)) continue;
             xs.Add(o.X + o.CellW);
             ys.Add(o.Y + o.CellH);
         }
@@ -881,16 +908,78 @@ public class AppWindows : Form
     }
 
     // Place a cell: a free spot; else an overflow cell at the corner of the work area that hides the cells it lies over.
-    // A popup never overflows (it would hide real cells for a moment); one with no place gets no picture.
+    // A popup never overflows (it would hide real cells for a moment). With no free spot, which is the case whenever a window
+    // fills the screen (a maximized one does, after Unzoom), it is shown where it really is (PlaceOnSite); else it has no picture.
     void PlaceCell(Cell c)
     {
+        c.OnSite = false;
         if (TrySpot(c)) return;
+        // A dialog comes up before the screen has grown for it. As an overflow cell it would hide its own program's window,
+        // whose host window would go and come back over it. Where it really is, it hides nothing until the screen has grown.
+        if (c.Popup || c.Owner != IntPtr.Zero) { if (PlaceOnSite(c)) return; }
         if (!c.Popup) { c.X = packL; c.Y = packT; c.Placed = true; c.Overflow = true; }
         else { c.Placed = false; c.Overflow = false; }
     }
 
+    // Where a popup's picture goes in the overlay to be at the same point of its window's picture as the popup really is over
+    // that window: its real place, moved as far as the window's cell lies from the window (nothing for a parked window). One
+    // that reaches past an edge (Word opens its dialogs 5 px above the screen, then moves them) is shown that much inside it.
+    int SiteX(Cell c) { return Math.Max(0, Math.Min(c.Frame.L + c.InL - vx + c.SiteDX, ovW - c.CellW)); }
+    int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy + c.SiteDY, ovH - c.CellH)); }
+
+    // A popup with no free spot is shown on site, against the window of its own program it belongs to: the one its owners lead
+    // to, else the one it lies over the most. Its picture then sits at the same point of that window's cell as in the window the
+    // app drew it over, so the window's host window shows it where the popup's host surface is anyway. A window that covers the
+    // screen and is not parked (a maximized one Windows keeps so) counts too: the offset of its cell is taken along.
+    bool PlaceOnSite(Cell c)
+    {
+        int w = c.CellW, h = c.CellH;
+        if (w <= 0 || h <= 0 || w > ovW || h > ovH) return false;
+        Cell under = null;
+        for (IntPtr o = c.Owner; o != IntPtr.Zero && under == null; o = GetWindow(o, GW_OWNER))
+        {
+            Cell oc;
+            if (cells.TryGetValue(o, out oc) && SiteWindow(c, oc)) under = oc;
+        }
+        long best = 0;
+        if (under == null)
+            foreach (Cell b in cells.Values)
+            {
+                if (!SiteWindow(c, b)) continue;
+                long ix = Math.Min(c.Frame.R, b.Frame.R) - Math.Max(c.Frame.L, b.Frame.L);
+                long iy = Math.Min(c.Frame.B, b.Frame.B) - Math.Max(c.Frame.T, b.Frame.T);
+                if (ix > 0 && iy > 0 && ix * iy > best) { best = ix * iy; under = b; }
+            }
+        if (under == null) return false;
+        c.SiteDX = vx + under.X - under.Frame.L; c.SiteDY = vy + under.Y - under.Frame.T; c.SiteUnder = under.Src;
+        c.X = SiteX(c); c.Y = SiteY(c);
+        if (!Hit(c.X, c.Y, w, h, under.X, under.Y, under.CellW, under.CellH)) { c.SiteDX = c.SiteDY = 0; return false; }
+        c.Placed = true; c.Overflow = false; c.OnSite = true;
+        return true;
+    }
+
+    // Whether the window a cell on site is shown against is still there, with its cell as far from it as when it was placed.
+    bool SiteHolds(Cell c)
+    {
+        Cell u;
+        return cells.TryGetValue(c.SiteUnder, out u) && SiteWindow(c, u) && vx + u.X - u.Frame.L == c.SiteDX && vy + u.Y - u.Frame.T == c.SiteDY;
+    }
+
+    // A window a popup or dialog can be shown on site against: a shown window of the same program.
+    static bool SiteWindow(Cell c, Cell b)
+    {
+        return b != c && (b.Pid == c.Pid || b.AppPid == c.Pid) && b.Active && !b.Popup && b.Placed && !b.Hidden && !b.Iconic && !b.OnSite;
+    }
+
     void PlaceAll()
     {
+        // A popup shown on site goes where the popup went, and gets a free spot again if one has come up meanwhile.
+        foreach (Cell c in cells.Values)
+            if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c) || !SiteHolds(c))) c.Placed = false;
+        // A dialog first shows up where it cannot be on site (off the screen, before its program moves it over itself), so an
+        // overflow dialog tries again on each pass rather than hide its program's window until the screen has grown.
+        foreach (Cell c in cells.Values)
+            if (c.Overflow && c.Placed && c.Active && !c.Popup && c.Owner != IntPtr.Zero && PlaceOnSite(c)) c.ThumbDirty = true;
         List<Cell> todo = new List<Cell>();
         foreach (Cell c in cells.Values) if (!c.Placed && c.Active) todo.Add(c);
         if (todo.Count == 0) return;
@@ -904,7 +993,7 @@ public class AppWindows : Form
         foreach (Cell a in cells.Values)
         {
             bool hid = false;
-            if (a.Active && a.Placed)
+            if (a.Active && a.Placed && !a.OnSite)            // one on site lies over its own window by design
             {
                 foreach (Cell b in cells.Values)
                 {
@@ -998,6 +1087,7 @@ public class AppWindows : Form
             if (l + r >= w - MinCellSide || t + b >= h - MinCellSide) { l = t = r = b = 0; }
             c.InL = l; c.InT = t; c.InR = r; c.InB = b;
             c.CellW = Math.Min(w - l - r, ovW); c.CellH = Math.Min(h - t - b, ovH);
+            if (c.OnSite) { c.X = SiteX(c); c.Y = SiteY(c); }   // the menu alone, still where it really is
             c.InDone = true; c.ThumbDirty = true;
             ApplyThumbs();
         }
@@ -1197,18 +1287,38 @@ public class AppWindows : Form
         return next;
     }
 
+    // The nearest owner of a window that is an app window here: the host keeps a dialog over its program's window.
+    IntPtr OwnerCellOf(Cell c)
+    {
+        IntPtr o = c.Owner;
+        for (int depth = 0; o != IntPtr.Zero && depth < 8; depth++)
+        {
+            Cell oc;
+            if (cells.TryGetValue(o, out oc) && oc.Active && !oc.Popup) return o;
+            o = GetWindow(o, GW_OWNER);
+        }
+        return IntPtr.Zero;
+    }
+
     // ================================================================ Popup parents
-    // Owner chain first (the root owner). Failing that, the app window the popup lies over the most,
-    // windows of the same process before others.
+    // Owner chain first: the outermost owner that is an app window here. An owner the user never sees (a toolkit's hidden
+    // window that owns every window of the program) has no cell and would leave the popup with nothing to hang on. Failing
+    // that, the app window the popup lies over the most, windows of the same process before others.
     void ComputeParents()
     {
         foreach (Cell c in cells.Values)
         {
             if (!c.Active) continue;
             c.Parent = IntPtr.Zero; c.HasRel = false;
+            c.OwnerCell = c.Popup ? IntPtr.Zero : OwnerCellOf(c);
             if (!c.Popup) continue;
             IntPtr root = IntPtr.Zero, o = c.Owner;
-            for (int depth = 0; o != IntPtr.Zero && depth < 8; depth++) { root = o; o = GetWindow(o, GW_OWNER); }
+            for (int depth = 0; o != IntPtr.Zero && depth < 8; depth++)
+            {
+                Cell oc;
+                if (cells.TryGetValue(o, out oc) && oc.Active) root = o;
+                o = GetWindow(o, GW_OWNER);
+            }
             if (root != IntPtr.Zero) c.Parent = root;
             else
             {
@@ -1216,6 +1326,7 @@ public class AppWindows : Form
                 foreach (Cell b in cells.Values)
                 {
                     if (b == c || !b.Active || b.Popup || b.Iconic) continue;
+                    if (c.Stray && b.Pid != c.Pid && b.AppPid != c.Pid) continue;
                     long ix = Math.Min(c.Frame.R, b.Frame.R) - Math.Max(c.Frame.L, b.Frame.L);
                     long iy = Math.Min(c.Frame.B, b.Frame.B) - Math.Max(c.Frame.T, b.Frame.T);
                     if (ix <= 0 || iy <= 0) continue;
@@ -1286,6 +1397,7 @@ public class AppWindows : Form
         Rc(sb, "frame", c.Frame.L + c.InL, c.Frame.T + c.InT, c.Frame.R - c.Frame.L - c.InL - c.InR, c.Frame.B - c.Frame.T - c.InT - c.InB);   // where the window really is: where input goes
         sb.Append(",\"popup\":").Append(B(c.Popup));
         sb.Append(",\"parent\":\"").Append(c.Parent == IntPtr.Zero ? "" : L(c.Parent.ToInt64())).Append('"');
+        sb.Append(",\"owner\":\"").Append(c.OwnerCell == IntPtr.Zero ? "" : L(c.OwnerCell.ToInt64())).Append('"');
         sb.Append(",\"rel\":{\"x\":").Append(I(c.HasRel ? c.RelX : 0)).Append(",\"y\":").Append(I(c.HasRel ? c.RelY : 0)).Append('}');
         sb.Append(",\"state\":\"").Append(StateOf(c)).Append('"');
         sb.Append(",\"overflow\":").Append(B(c.Overflow));
@@ -1782,6 +1894,7 @@ public class AppWindows : Form
             case "restore": p.Deadline = now + RestoreWaitMs; break;
             case "focus":
                 if (c.Popup) { Answer(link, n, false, "a popup takes no focus"); return; }
+                p.Win = FocusTarget(c.Src);
                 p.Deadline = now + FocusWaitMs;
                 // The host window got the focus, so an overflow cell lying under others comes to the top.
                 c.Stamp = ++orderCounter; c.ThumbDirty = true; Kick();
@@ -1805,6 +1918,15 @@ public class AppWindows : Form
         pending.Add(p);
         CheckPending();
         if (pending.Count > 0 && !pendingTimer.Enabled) pendingTimer.Start();
+    }
+
+    // A window that a modal dialog has disabled takes no input, and given the focus it would keep it from the dialog, which
+    // then sits unseen behind it. The focus goes to the window Windows says is the enabled one it owns, as a click on it would.
+    static IntPtr FocusTarget(IntPtr h)
+    {
+        if ((GetWindowLongPtr(h, GWL_STYLE).ToInt64() & WS_DISABLED) == 0) return h;
+        IntPtr enabled = GetWindow(h, GW_ENABLEDPOPUP);
+        return enabled != IntPtr.Zero && IsWindowVisible(enabled) ? enabled : h;
     }
 
     void OnPendingTick(object sender, EventArgs e)

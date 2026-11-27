@@ -59,6 +59,18 @@ fn an_idle_host() {
 }
 
 #[test]
+fn a_host_from_0_1_9_says_how_it_looks_for_updates_and_older_ones_do_not() {
+    let off = read("from-source-idle-updates-off.json");
+    assert!(off.updates_off());
+    assert_eq!(off.update.and_then(|update| update.mode).as_deref(), Some("off"));
+    for older in ["from-source-idle.json", "captured-idle.json", "captured-connected.json"] {
+        let status = read(older);
+        assert_eq!(status.update, None, "{older}");
+        assert!(!status.updates_off(), "{older}");
+    }
+}
+
+#[test]
 fn pairing_open() {
     let status = read("from-source-pairing-open.json");
     assert!(status.pairing && status.pending.is_none());

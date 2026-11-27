@@ -38,6 +38,8 @@ path = "src/bin/remote_view.rs"
 [target.'cfg(target_os = "linux")'.dependencies]
 # The NVIDIA backend's driver profiles, so setup knows the daemon's branches. It opens nothing.
 guesthouse-backend-nvidia.workspace = true
+# Whether a newer release is out, as every host decides it.
+guesthouse-update-check.workspace = true
 # Reads a recorded Intel card, for a lab run on a PC without one. It opens nothing.
 guesthouse-backend-intel.workspace = true
 # Only for its slot names, so the app and the daemon can never disagree about what a VM owns.

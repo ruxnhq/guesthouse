@@ -1,6 +1,8 @@
 //! What the host needs for a bridged machine, and what to tell the user to do about it.
 
-use crate::network::{NIXOS_MARK, OWN_BRIDGE_HELPER, bridge_helper, bridge_name_problem};
+use crate::network::{
+    NIXOS_MARK, OWN_BRIDGE_HELPER, PACKAGE_BRIDGE_HELPER, bridge_helper, bridge_name_problem,
+};
 use crate::text::shell_quote;
 use rustix::fs::{Mode, stat};
 use std::fs;
@@ -18,8 +20,10 @@ const MOST_INCLUDES: u32 = 8;
 pub struct BridgeHost {
     pub net: PathBuf,
     pub helper: PathBuf,
-    /// The one install.sh sets up. Only the installer mends that.
+    /// The one install.sh sets up, or a package's. Only the installer or the package mends that.
     pub own_helper: PathBuf,
+    /// Whether the helper is a package's, which installing the package again puts right.
+    pub packaged: bool,
     pub config: PathBuf,
     pub routes: PathBuf,
     pub firewall: PathBuf,
@@ -30,10 +34,13 @@ pub struct BridgeHost {
 
 impl Default for BridgeHost {
     fn default() -> Self {
+        let helper = bridge_helper();
+        let packaged = helper == PACKAGE_BRIDGE_HELPER;
         Self {
             net: "/sys/class/net".into(),
-            helper: bridge_helper().into(),
-            own_helper: OWN_BRIDGE_HELPER.into(),
+            helper: helper.into(),
+            own_helper: if packaged { PACKAGE_BRIDGE_HELPER } else { OWN_BRIDGE_HELPER }.into(),
+            packaged,
             config: "/etc/qemu/bridge.conf".into(),
             routes: "/proc/net/route".into(),
             firewall: "/proc/sys/net/bridge/bridge-nf-call-iptables".into(),
@@ -83,9 +90,11 @@ impl BridgeHost {
         } else if ports.is_ok_and(|mut ports| ports.next().is_none()) {
             found.push(format!("Nothing is connected to {bridge}, so it does not reach the network."));
         }
-        // Guesthouse's installer or its NixOS module puts its own helper in, so either way that's the fix.
+        // Guesthouse's installer, its package or its NixOS module puts its own helper in, so that's the fix.
         let fix = if self.nixos {
             "Turn on programs.guesthouse in your NixOS configuration and rebuild, which puts"
+        } else if self.packaged {
+            "Install the guesthouse package again with your package manager, which puts"
         } else {
             "Run Guesthouse's installer again, which puts"
         };
@@ -219,6 +228,7 @@ mod tests {
             net: scratch.path("net"),
             helper: scratch.write("helper", ""),
             own_helper: scratch.path("own-helper"),
+            packaged: false,
             config: scratch.path("bridge.conf"),
             routes: scratch.path("route"),
             firewall: scratch.path("firewall"),
@@ -342,6 +352,14 @@ mod tests {
         assert!(said.contains("is missing. Run Guesthouse's installer again"));
         assert!(!said.contains("cannot run as root"));
         assert!(!host.commands("br0", Some("eno2"), true).contains("setcap"), "nothing to give a right to");
+    }
+
+    #[test]
+    fn a_package_s_helper_is_mended_by_the_package() {
+        let scratch = Scratch::new();
+        let host = BridgeHost { helper: scratch.path("nowhere"), packaged: true, ..host(&scratch) };
+        let said = problems(&host);
+        assert!(said.contains("is missing. Install the guesthouse package again"), "{said}");
     }
 
     #[test]

@@ -24,14 +24,18 @@ pub const CONTROL_MAC: &str = "52:54:00:67:68:01";
 pub const DEFAULT_BRIDGE: &str = "br0";
 /// Where install.sh puts Guesthouse's own bridge helper, setuid root. It says the same.
 pub const OWN_BRIDGE_HELPER: &str = "/usr/local/libexec/guesthouse/qemu-bridge-helper";
+/// Where Guesthouse's deb, rpm and pacman packages put the same helper, beside the program, as a package
+/// never puts files in /usr/local.
+pub const PACKAGE_BRIDGE_HELPER: &str = "/usr/libexec/guesthouse/qemu-bridge-helper";
 /// Where Guesthouse's NixOS module puts the same helper, as a setuid wrapper. It isn't called
 /// `qemu-bridge-helper`, as NixOS's libvirt module already gives that name to its own QEMU's.
 pub const NIXOS_BRIDGE_HELPER: &str = "/run/wrappers/bin/guesthouse-bridge-helper";
 /// Makes a tap as root, for a QEMU that runs as this user. Guesthouse's own comes first, from
-/// install.sh or from the NixOS module. A build of the repo has none, and then it's the
+/// install.sh, a package or the NixOS module. A build of the repo has none, and then it's the
 /// distribution's: Fedora keeps it in the third of these, and Debian, Ubuntu and Arch in the fourth.
-const BRIDGE_HELPERS: [&str; 4] = [
+const BRIDGE_HELPERS: [&str; 5] = [
     OWN_BRIDGE_HELPER,
+    PACKAGE_BRIDGE_HELPER,
     NIXOS_BRIDGE_HELPER,
     "/usr/libexec/qemu-bridge-helper",
     "/usr/lib/qemu/qemu-bridge-helper",
@@ -49,12 +53,21 @@ fn first_that_exists<'a>(places: &[&'a str], exists: impl Fn(&str) -> bool) -> &
 /// What NixOS has, and nothing else does.
 pub const NIXOS_MARK: &str = "/etc/NIXOS";
 
+/// What a Guesthouse package has, and nothing else does.
+const PACKAGE_MARK: &str = "/usr/libexec/guesthouse/installed-by";
+
 /// Where this PC keeps the helper. If it has none, the bridge check says so about Guesthouse's own:
-/// install.sh's, or on NixOS the module's.
+/// install.sh's, a package's, or on NixOS the module's.
 pub fn bridge_helper() -> &'static str {
     let found = first_that_exists(&BRIDGE_HELPERS, |place| Path::new(place).exists());
     let none = !Path::new(found).exists();
-    if none && Path::new(NIXOS_MARK).exists() { NIXOS_BRIDGE_HELPER } else { found }
+    if none && Path::new(NIXOS_MARK).exists() {
+        NIXOS_BRIDGE_HELPER
+    } else if none && Path::new(PACKAGE_MARK).exists() {
+        PACKAGE_BRIDGE_HELPER
+    } else {
+        found
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -336,7 +349,7 @@ mod tests {
     fn the_helper_is_found_where_each_distribution_keeps_it() {
         let debian = |place: &str| place.starts_with("/usr/lib/qemu/");
         assert_eq!(first_that_exists(&BRIDGE_HELPERS, debian), "/usr/lib/qemu/qemu-bridge-helper");
-        let fedora = |place: &str| place.starts_with("/usr/libexec/");
+        let fedora = |place: &str| place.starts_with("/usr/libexec/") && place != PACKAGE_BRIDGE_HELPER;
         assert_eq!(first_that_exists(&BRIDGE_HELPERS, fedora), "/usr/libexec/qemu-bridge-helper");
         assert_eq!(first_that_exists(&BRIDGE_HELPERS, |_| false), OWN_BRIDGE_HELPER);
     }
@@ -345,6 +358,9 @@ mod tests {
     fn guesthouse_s_own_helper_comes_before_the_distribution_s() {
         let installed = |place: &str| place == OWN_BRIDGE_HELPER || place.starts_with("/usr/libexec/");
         assert_eq!(first_that_exists(&BRIDGE_HELPERS, installed), OWN_BRIDGE_HELPER);
+        let packaged =
+            |place: &str| place.starts_with("/usr/libexec/") || place.starts_with("/usr/lib/qemu/");
+        assert_eq!(first_that_exists(&BRIDGE_HELPERS, packaged), PACKAGE_BRIDGE_HELPER);
     }
 
     fn tcp(host: u16, guest: u16) -> Forward {

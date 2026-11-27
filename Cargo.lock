@@ -923,6 +923,7 @@ dependencies = [
  "guesthouse-relay",
  "guesthouse-remote-view-core",
  "guesthouse-sensors",
+ "guesthouse-update-check",
  "jiff",
  "libc",
  "mdns-sd",

@@ -5,7 +5,7 @@ use super::Window;
 use crate::common::in_background;
 use crate::rows::{on_yes, question};
 use adw::prelude::*;
-use guesthouse_app_core::updates::{Found, VERSION, check, update};
+use guesthouse_app_core::updates::{Found, Method, PACMAN_UPDATE, VERSION, check, method, update};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -47,7 +47,8 @@ fn look(window: &Window, asked: bool) {
                 }
                 Ok(Found::Latest) => format!("Guesthouse {VERSION} is the latest release."),
                 Ok(Found::NotInstalled) => {
-                    "This copy wasn't installed with install.sh, so it can't update itself.".to_owned()
+                    "This copy wasn't installed with install.sh or a package, so it can't update itself."
+                        .to_owned()
                 }
                 Ok(Found::CantTell) | Err(_) => {
                     "Couldn't find out the latest release. Are you online?".to_owned()
@@ -67,15 +68,42 @@ pub fn ask_to_update(window: &Window) {
         window.problem(SHUT_DOWN_FIRST);
         return;
     }
-    let body = format!(
-        "This downloads Guesthouse {version}, checks it and puts it in place of {VERSION}. Your machines and \
-         settings stay as they are. If a part needs root, a window asks for your password. Then Guesthouse \
-         starts again."
-    );
+    let body = match method(&window.context()) {
+        Some(Method::Pacman) => {
+            tell_arch(window, &version);
+            return;
+        }
+        Some(Method::Apt) => apt_or_dnf_body(&version, "apt"),
+        Some(Method::Dnf) => apt_or_dnf_body(&version, "dnf"),
+        _ => format!(
+            "This downloads Guesthouse {version}, checks it and puts it in place of {VERSION}. Your machines and \
+             settings stay as they are. If a part needs root, a window asks for your password. Then Guesthouse \
+             starts again."
+        ),
+    };
     let dialog =
         question(&format!("Update to {version}?"), &body, "Update", adw::ResponseAppearance::Suggested);
     let handle = window.clone();
     on_yes(&dialog, move || run_update(&handle, &version));
+    dialog.present(Some(window.widget()));
+}
+
+fn apt_or_dnf_body(version: &str, manager: &str) -> String {
+    format!(
+        "This updates Guesthouse from {VERSION} to {version} with {manager}, and nothing else on this PC. Your \
+         machines and settings stay as they are. A window asks for your password. Then Guesthouse starts again."
+    )
+}
+
+/// Arch takes no partial upgrades, so Guesthouse can't update alone. It comes with the rest of the system.
+fn tell_arch(window: &Window, version: &str) {
+    let body = format!(
+        "Arch updates the whole system at once, so Guesthouse comes with the rest. Shut your VMs down, run \
+         {PACMAN_UPDATE} in a terminal, then open Guesthouse again."
+    );
+    let dialog = adw::AlertDialog::new(Some(&format!("Guesthouse {version} is out")), Some(&body));
+    dialog.add_response("ok", "OK");
+    dialog.set_close_response("ok");
     dialog.present(Some(window.widget()));
 }
 

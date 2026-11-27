@@ -85,7 +85,8 @@ pub fn make_disc(context: &Context, folder: &Path, version: &str) -> Result<Path
     }
     let parent = path.parent().ok_or_else(|| Failure::new("The driver disc has no folder."))?;
     fs::create_dir_all(parent)?;
-    let part = path.with_extension("iso.part");
+    // Its own name, as two machines can start at once and make the same disc.
+    let part = path.with_extension(format!("iso.{}.part", std::process::id()));
     let result = Command::new(iso_maker())
         .args(["-quiet", "-J", "-joliet-long", "-r", "-V", DISC_LABEL, "-graft-points", "-o"])
         .arg(&part)

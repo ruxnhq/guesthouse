@@ -60,6 +60,13 @@ function Get-Tree($root) {
     return $tree
 }
 
+# Each file's path inside a folder, as it is written.
+function Get-Inside($root) {
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    $full = (Get-Item -LiteralPath $root).FullName.TrimEnd('\', '/')
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force) { $file.FullName.Substring($full.Length + 1) }
+}
+
 function Test-SameTree($a, $b) {
     if ($a.Count -ne $b.Count) { return $false }
     foreach ($name in $a.Keys) {
@@ -89,10 +96,10 @@ function Remove-Folder($path) {
 # queue is documented to do.
 function Get-RenamePairs($store, $new, $old) {
     $pairs = @()
-    foreach ($name in (Get-Tree $store).Keys | Sort-Object) {
+    foreach ($name in Get-Inside $store | Sort-Object) {
         $pairs += , @((Join-Path $store $name), (Join-Path $old $name))
     }
-    foreach ($name in (Get-Tree $new).Keys | Sort-Object) {
+    foreach ($name in Get-Inside $new | Sort-Object) {
         $pairs += , @((Join-Path $new $name), (Join-Path $store $name))
     }
     return $pairs
@@ -120,8 +127,16 @@ function Test-Queued($new) {
 }
 
 # Adds the renames to the ones Windows makes at its next boot, in one write, so either all of them
-# are queued or none is. The folders they go to are made now, as a rename doesn't make them.
+# are queued or none is. The folders they go to are made now, as a rename doesn't make them. Another
+# program's entries may hold empty strings, which reading the value can lose, so this only writes the
+# value when there is none: rewriting it could turn someone's deletion into a rename. A value that
+# doesn't read back as written goes.
 function Add-Pending($store, $new, $old) {
+    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($PendingKey, $true)
+    if ($key.GetValueNames() -contains $PendingValue) {
+        $key.Close()
+        throw 'Windows has other changes waiting for its next restart'
+    }
     foreach ($folder in Get-ChildItem -LiteralPath $new -Recurse -Directory -Force) {
         $inside = $folder.FullName.Substring($new.Length + 1)
         New-Item -ItemType Directory -Force (Join-Path $store $inside) | Out-Null
@@ -132,13 +147,18 @@ function Add-Pending($store, $new, $old) {
         New-Item -ItemType Directory -Force (Join-Path $old $inside) | Out-Null
     }
     $entries = New-Object System.Collections.Generic.List[string]
-    foreach ($entry in Get-Pending) { $entries.Add($entry) }
     foreach ($pair in Get-RenamePairs $store $new $old) {
         $entries.Add("\??\$($pair[0])")
         $entries.Add("\??\$($pair[1])")
     }
-    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($PendingKey, $true)
-    $key.SetValue($PendingValue, $entries.ToArray(), [Microsoft.Win32.RegistryValueKind]::MultiString)
+    $kind = [Microsoft.Win32.RegistryValueKind]::MultiString
+    $key.SetValue($PendingValue, $entries.ToArray(), $kind)
+    $after = @(Get-Pending)
+    if (($after -join "`n") -ne ($entries -join "`n") -or $after.Count -ne $entries.Count) {
+        $key.DeleteValue($PendingValue, $false)
+        $key.Close()
+        throw 'the queued renames did not read back as written'
+    }
     $key.Close()
 }
 

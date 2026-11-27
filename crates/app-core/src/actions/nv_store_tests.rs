@@ -168,6 +168,18 @@ fn the_driver_disc_goes_where_the_tools_disc_would_and_qemu_may_read_it() {
     let arguments = plan.qemu_arguments();
     let drive = format!("if=none,id=cd1,media=cdrom,readonly=on,file={}", disc.display());
     assert!(arguments.contains(&drive), "{arguments:?}");
+    let jail = crate::vm_args::QemuJail {
+        launcher: "/bin/guesthouse-jail".into(),
+        namespaces: true,
+        qemu_sandbox: false,
+        sound_socket: None,
+        backing_files: Vec::new(),
+    };
+    let grants = plan.qemu_jail_plan(&jail).paths;
+    assert!(
+        grants.contains(&(guesthouse_jail::Grant::Read, disc)),
+        "a jailed QEMU can open the disc: {grants:?}"
+    );
 }
 
 // The real script, where PowerShell is installed, against folders that stand in for the store and the
@@ -212,7 +224,7 @@ fn lay_out(scratch: &Scratch) -> (PathBuf, PathBuf, PathBuf) {
     write_inf(&disc, OFFERED);
     fs::write(disc.join("nvwgf2umx.dll"), "newer").unwrap();
     fs::create_dir_all(disc.join("sub")).unwrap();
-    fs::write(disc.join("sub").join("nvgpucomp64.dll"), "deep").unwrap();
+    fs::write(disc.join("sub").join("NvGpuComp64.dll"), "deep").unwrap();
     (root, disc, store)
 }
 
@@ -319,5 +331,5 @@ fn the_renames_for_the_next_boot_move_the_old_files_out_first() {
         into.iter().all(|(from, to)| from.starts_with(&*disc.to_string_lossy())
             && to.starts_with(&*store.to_string_lossy()))
     );
-    assert!(into.iter().any(|(_, to)| to.ends_with("nvgpucomp64.dll") && to.contains("sub")));
+    assert!(into.iter().any(|(_, to)| to.ends_with("NvGpuComp64.dll") && to.contains("sub")));
 }

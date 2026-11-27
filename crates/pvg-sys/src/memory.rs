@@ -112,12 +112,20 @@ impl GuestMemory {
             .ok_or_else(|| Error::Memory(format!("{length:#x} bytes are no size for a guest's memory")))?;
         // The framework shares each range with a helper process of its own, and for that the
         // range has to be a mapping of its own: memory from the allocator ends the process.
+        //
+        // A range starts on one of the device's pages here too, and the kernel only promises its
+        // own page: 16 KiB on a Mac with Apple silicon, the device's size, but 4 KiB on most other
+        // hosts, where the tests also run. So one device page more is mapped, and the range starts
+        // at the first device page inside it.
+        let mapped = bytes
+            .checked_add(PAGE_BYTES as usize)
+            .ok_or_else(|| Error::Memory(format!("{length:#x} bytes are no size for a guest's memory")))?;
         // SAFETY: an anonymous mapping at an address of the kernel's choosing touches nothing
         // that exists.
         let start = unsafe {
             libc::mmap(
                 ptr::null_mut(),
-                bytes,
+                mapped,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_ANON | libc::MAP_PRIVATE,
                 -1,
@@ -128,8 +136,12 @@ impl GuestMemory {
             return Err(Error::Memory(format!("no {length:#x} bytes to be had for a guest's memory")));
         }
         let start = start.cast::<u8>();
-        let owned = Owned { start, length: bytes };
-        let range = Range { guest_address, length, host_address: start };
+        let owned = Owned { start, length: mapped };
+        let skip = (start as u64).next_multiple_of(PAGE_BYTES) - start as u64;
+        // SAFETY: `skip` is less than one device page, and the mapping is one device page longer
+        // than the range, so the range lies inside it.
+        let first = unsafe { start.add(skip as usize) };
+        let range = Range { guest_address, length, host_address: first };
         // SAFETY: the mapping is `length` bytes, lives as long as `owned`, and no reference to it
         // exists.
         unsafe { Self::from_ranges(vec![range], Box::new(owned)) }
@@ -258,5 +270,26 @@ impl GuestMemory {
             all |= unsafe { ptr::read_volatile(from.add(index)) };
         }
         Some(all == 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_of_this_process_starts_on_a_device_page_whatever_the_host_s_page() {
+        // Odd sizes in between, so the kernel's next address isn't left on a device page by luck.
+        let kept: Vec<GuestMemory> = (1..=32)
+            .map(|pages| {
+                let memory = GuestMemory::anonymous(0x4000_0000, pages * PAGE_BYTES).expect("memory");
+                let _odd = GuestMemory::anonymous(0x8000_0000, PAGE_BYTES);
+                memory
+            })
+            .collect();
+        for memory in &kept {
+            let range = memory.ranges()[0];
+            assert!(on_a_page(range.host_address as u64), "{:p}", range.host_address);
+        }
     }
 }

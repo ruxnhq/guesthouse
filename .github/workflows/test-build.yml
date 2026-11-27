@@ -1,0 +1,199 @@
+# A test build of a pull request, for a tester to try before it's merged. A maintainer adds the label
+# test-build, and this builds the payload and the deb, rpm and pacman packages from the PR, puts them in
+# pkg.ruxn.com/test/PR/ with SHA256SUMS, and says where in a comment. The label comes off again, and
+# adding it again builds again and replaces what's there. test-build-cleanup.yml removes them later.
+#
+# It runs as pull_request_target, so this file and the upload's steps are main's and never the PR's.
+# The PR's code runs in the build job only, with a read-only token and no secrets. The upload job never
+# checks out or runs anything of the PR's: it takes a few files of known names and kinds from the build,
+# and writes only under test/PR/, with a bucket token that lives in the test-builds environment, which
+# only main may use. A fork's PR is built, but nothing of it is uploaded.
+name: Test build
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# Another label added meanwhile starts a run of its own, which mustn't stop this one.
+concurrency:
+  group: test-build-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+env:
+  LABEL: test-build
+
+jobs:
+  check:
+    name: who asked
+    if: github.event.label.name == 'test-build'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.who.outputs.allowed }}
+      same-repo: ${{ steps.who.outputs.same-repo }}
+    steps:
+      # The label is what starts it, so whoever added it must be able to push to this repository.
+      - id: who
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission || echo none)
+          case $permission in
+            admin | maintain | write) echo "allowed=true" >>"$GITHUB_OUTPUT" ;;
+            *)
+              echo "$SENDER can't push here ($permission), so their label builds nothing."
+              echo "allowed=false" >>"$GITHUB_OUTPUT"
+              ;;
+          esac
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then
+            echo "same-repo=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "same-repo=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: build the PR
+    needs: check
+    if: needs.check.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      # As payload.yml builds it. The source stage is a release's, and wants the Windows display driver.
+      - name: Build QEMU, the bundled source, the app and the payload
+        run: sh packaging/build-in-images.sh --out "$RUNNER_TEMP/release" qemu bundled app payload
+      # The package's own release is 0.PR, so a test build never sorts above the release it's built on.
+      - name: Build the packages
+        env:
+          PACKAGE_RELEASE: 0.${{ github.event.pull_request.number }}
+        run: |
+          mkdir dist
+          mv "$RUNNER_TEMP"/release/guesthouse-*-x86_64.tar.xz dist/
+          sh packaging/packages/build-packages.sh --out dist dist/guesthouse-*-x86_64.tar.xz
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-build
+          path: dist
+          retention-days: 7
+          compression-level: 0
+
+  upload:
+    name: upload to pkg.ruxn.com
+    needs: [check, build]
+    if: needs.check.outputs.same-repo == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: test-builds
+    permissions: {}
+    outputs:
+      files: ${{ steps.check.outputs.files }}
+    env:
+      # A number from GitHub's own event, and the only thing the bucket's keys are made from.
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-build
+          path: ${{ runner.temp }}/dist
+      # Only what a build makes: the payload and three packages, plain files with the names and the first
+      # bytes of their kind, and no bigger than a release's.
+      - name: Check what the build made
+        id: check
+        run: |
+          set -eu
+          printf '%s' "$PR" | grep -Eqx '[1-9][0-9]*' || { echo "::error::not a PR number: $PR"; exit 1; }
+          cd "$RUNNER_TEMP/dist"
+          most_bytes=$((700 * 1024 * 1024))
+          most_total=$((2 * 1024 * 1024 * 1024))
+          version='[0-9]+\.[0-9]+\.[0-9]+'
+          release="0\\.$PR"
+          strays=$(find . -mindepth 1 \( ! -type f -o -path './*/*' \) -print)
+          [ -z "$strays" ] || { echo "::error::the build left more than plain files: $strays"; exit 1; }
+          total=0
+          files=
+          for file in *; do
+            magic=$(head -c 8 -- "$file" | od -An -tx1 | tr -d ' \n')
+            case $file in
+              *.tar.xz) printf '%s' "$file" | grep -Eqx "guesthouse-$version-x86_64\\.tar\\.xz" && [ "${magic#fd377a585a00}" != "$magic" ] ;;
+              *.deb) printf '%s' "$file" | grep -Eqx "guesthouse_$version-${release}_amd64\\.deb" && [ "$magic" = 213c617263683e0a ] ;;
+              *.rpm) printf '%s' "$file" | grep -Eqx "guesthouse-$version-$release\\.x86_64\\.rpm" && [ "${magic#edabeedb}" != "$magic" ] ;;
+              *.pkg.tar.zst) printf '%s' "$file" | grep -Eqx "guesthouse-$version-$release-x86_64\\.pkg\\.tar\\.zst" && [ "${magic#28b52ffd}" != "$magic" ] ;;
+              *) false ;;
+            esac || { echo "::error::$file isn't something a test build makes"; exit 1; }
+            size=$(stat -c %s -- "$file")
+            [ "$size" -le "$most_bytes" ] || { echo "::error::$file is $size bytes"; exit 1; }
+            total=$((total + size))
+            files="$files $file"
+          done
+          [ "$total" -le "$most_total" ] || { echo "::error::the build is $total bytes"; exit 1; }
+          [ "$(echo "$files" | wc -w)" -eq 4 ] || { echo "::error::expected four files, found:$files"; exit 1; }
+          # shellcheck disable=SC2086 # names checked above, with no spaces
+          sha256sum -- $files >SHA256SUMS
+          cat SHA256SUMS
+          echo "files=SHA256SUMS$files" >>"$GITHUB_OUTPUT"
+      - name: Replace what's in test/${{ github.event.pull_request.number }}/
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: "true"
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          set -eu
+          prefix="s3://ruxn-pkg/test/$PR/"
+          aws --endpoint-url "$R2_ENDPOINT" s3 rm "$prefix" --recursive --only-show-errors
+          cd "$RUNNER_TEMP/dist"
+          for file in $(sed 's/^[0-9a-f]*  //' SHA256SUMS) SHA256SUMS; do
+            aws --endpoint-url "$R2_ENDPOINT" s3 cp "./$file" "$prefix$file" --only-show-errors \
+              --cache-control 'public, max-age=60'
+          done
+
+  report:
+    name: say where it is
+    needs: [check, build, upload]
+    if: always() && needs.check.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          FILES: ${{ needs.upload.outputs.files }}
+          UPLOADED: ${{ needs.upload.result }}
+          SAME_REPO: ${{ needs.check.outputs.same-repo }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          body=$RUNNER_TEMP/comment.md
+          if [ "$UPLOADED" = success ]; then
+            {
+              echo "Test build of ${SHA%"${SHA#???????}"}, at https://pkg.ruxn.com/test/$PR/ :"
+              echo
+              for file in $FILES; do echo "- https://pkg.ruxn.com/test/$PR/$file"; done
+              echo
+              echo "Install a package with your package manager, such as \`sudo apt install ./FILE\`, or unpack the payload and run \`sh guesthouse-VERSION-x86_64/install.sh --payload guesthouse-VERSION-x86_64\`. A test build has no Windows display driver and isn't signed: check it against SHA256SUMS. It's removed after 14 days or once this is closed. Adding the label again builds again."
+            } >"$body"
+          elif [ "$SAME_REPO" = false ]; then
+            echo "This PR is from a fork, so its test build stays with the run and isn't uploaded: $RUN" >"$body"
+          else
+            echo "The test build didn't finish: $RUN" >"$body"
+          fi
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" || true

@@ -291,6 +291,8 @@ main() {
     version=${version%-x86_64.tar.xz}
     printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
         die "$1 isn't called guesthouse-VERSION-x86_64.tar.xz with a version of three numbers."
+    printf '%s' "$PACKAGE_RELEASE" | grep -Eqx '[0-9]+(\.[0-9]+)?' ||
+        die "PACKAGE_RELEASE is a number, or two with a dot, as all three formats take."
     shift
     [ $# -gt 0 ] || set -- deb rpm pacman
     for format in "$@"; do

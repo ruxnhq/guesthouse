@@ -1,0 +1,65 @@
+# Moves a pve-qemu-kvm from the testing suite of pkg.ruxn.com/proxmox to stable, once it has run on a
+# real card. The run waits for a reviewer's approval in the proxmox-stable environment. It copies the
+# same file, so the attestation the testing run made still matches, and signs stable's index again.
+name: Proxmox stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version in testing to move to stable, such as 11.1.3-4+gpupv1.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: move to stable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Required reviewers approve each run, and the environment holds the key and the bucket's token.
+    environment: proxmox-stable
+    concurrency:
+      group: pkg-proxmox
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ inputs.version }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the version
+        run: |
+          printf '%s' "$VERSION" | grep -Eqx '[0-9][0-9A-Za-z.~-]*\+[a-z0-9][a-z0-9.]*' ||
+            { echo "::error::$VERSION doesn't look like a version of this repository"; exit 1; }
+      - name: Take the signing key
+        env:
+          SIGNING_KEY_SECRET: ${{ secrets.PKG_SIGNING_KEY }}
+        run: sh packaging/packages/signing-key.sh "$RUNNER_TEMP"
+      - name: Copy it from testing to stable
+        run: |
+          sh packaging/packages/bucket.sh pull proxmox repo
+          # testing's index is signed. Its signature, then the file's hash in it, say the file is the one
+          # the testing run published.
+          gpg --batch --dearmor <packaging/packages/ruxn-pkg.asc >"$RUNNER_TEMP/ruxn-pkg.gpg"
+          gpgv --keyring "$RUNNER_TEMP/ruxn-pkg.gpg" repo/dists/testing/InRelease
+          file=pve-qemu-kvm_$(printf '%s' "$VERSION" | sed 's/^[0-9]*://')_amd64.deb
+          [ -f "repo/pool/testing/$file" ] || { echo "::error::testing has no $file"; exit 1; }
+          [ ! -e "repo/pool/stable/$file" ] || { echo "::error::stable has $file already"; exit 1; }
+          wanted=$(awk -v f="pool/testing/$file" '/^Filename: / { name = $2 } /^SHA256: / && name == f { print $2 }' \
+            repo/dists/testing/main/binary-amd64/Packages)
+          grep -qF "$(sha256sum repo/dists/testing/main/binary-amd64/Packages | cut -d ' ' -f 1)" repo/dists/testing/InRelease ||
+            { echo "::error::testing's Packages isn't the one its InRelease signs"; exit 1; }
+          echo "$wanted  repo/pool/testing/$file" | sha256sum -c
+          mkdir -p repo/pool/stable
+          cp "repo/pool/testing/$file" "repo/pool/stable/$file"
+          sh packaging/packages/publish-repo.sh proxmox repo stable
+          sh packaging/packages/bucket.sh push repo proxmox
+      - name: Forget the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/signing-key.asc"

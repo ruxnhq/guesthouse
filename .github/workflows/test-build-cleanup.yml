@@ -1,0 +1,44 @@
+# Removes test builds from pkg.ruxn.com/test/ once their PR is closed, or 14 days after the last one,
+# whichever comes first. test-build.yml makes them.
+name: Test build cleanup
+
+on:
+  schedule:
+    - cron: "29 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  cleanup:
+    name: remove old test builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: test-builds
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      DAYS: "14"
+    steps:
+      - run: |
+          set -eu
+          s3() { aws --endpoint-url "$R2_ENDPOINT" "$@"; }
+          oldest_kept=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S)
+          for pr in $(s3 s3api list-objects-v2 --bucket ruxn-pkg --prefix test/ --delimiter / \
+              --query 'CommonPrefixes[].Prefix' --output text | tr '\t' '\n' | sed -n 's|^test/\([0-9][0-9]*\)/$|\1|p'); do
+            newest=$(s3 s3api list-objects-v2 --bucket ruxn-pkg --prefix "test/$pr/" \
+              --query 'max_by(Contents, &LastModified).LastModified' --output text)
+            state=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state --jq .state || echo UNKNOWN)
+            if [ "$state" = CLOSED ] || [ "$state" = MERGED ] || [ "${newest%%.*}" \< "$oldest_kept" ]; then
+              echo "removing test/$pr/: the PR is $state, and its build is from $newest"
+              s3 s3 rm "s3://ruxn-pkg/test/$pr/" --recursive --only-show-errors
+            fi
+          done

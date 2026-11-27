@@ -1,0 +1,153 @@
+# Publishes a release on pkg.ruxn.com once install.sh on main names it: a copy of its files, the deb,
+# rpm and pacman packages in their signed repositories, and last of all guesthouse/latest.json, which
+# install.sh's --check-update and the app in a package read. RELEASING.md's step 7 is what starts it.
+#
+# The packages are the release's own payload, checked against the hash install.sh has, so they hold
+# what install.sh would install. Nothing published is ever replaced: a version that's up already stays.
+name: Packages
+
+on:
+  push:
+    branches: [main]
+    paths: [install.sh]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time, as each copies the repositories down, adds to them and copies them up.
+concurrency:
+  group: pkg-guesthouse
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build the packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the release install.sh names
+        id: release
+        run: |
+          constant() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" install.sh | head -n 1; }
+          version=$(constant RELEASE_VERSION)
+          if [ -z "$version" ]; then
+            echo "install.sh names no release yet, so there's nothing to publish."
+            exit 0
+          fi
+          printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::$version isn't three numbers"; exit 1; }
+          {
+            echo "version=$version"
+            echo "payload=$(constant PAYLOAD_SHA256)"
+            echo "source=$(constant SOURCE_SHA256)"
+          } >>"$GITHUB_OUTPUT"
+      - name: Download the release and check it
+        if: steps.release.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PAYLOAD_SHA256: ${{ steps.release.outputs.payload }}
+          SOURCE_SHA256: ${{ steps.release.outputs.source }}
+        run: |
+          mkdir -p dist/release
+          cd dist/release
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            -p "guesthouse-$VERSION-x86_64.tar.xz" -p "guesthouse-$VERSION-source.tar.xz" \
+            -p "guesthouse-$VERSION-bundled-source.tar" -p "guesthouse-installer-$VERSION.AppImage" -p SHA256SUMS
+          # install.sh's two hashes are what everyone's install checks, and SHA256SUMS covers the rest.
+          echo "$PAYLOAD_SHA256  guesthouse-$VERSION-x86_64.tar.xz" | sha256sum -c
+          echo "$SOURCE_SHA256  guesthouse-$VERSION-source.tar.xz" | sha256sum -c
+          sha256sum -c SHA256SUMS
+      - name: Build the packages
+        if: steps.release.outputs.version != ''
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: sh packaging/packages/build-packages.sh --out dist/packages "dist/release/guesthouse-$VERSION-x86_64.tar.xz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.release.outputs.version != ''
+        with:
+          name: release-${{ steps.release.outputs.version }}
+          path: dist
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: publish on pkg.ruxn.com
+    needs: build
+    if: needs.build.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # The environment holds the signing key and the bucket's token, and only main may use it.
+    environment: packages
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: dist
+      # Anyone can check a package came from this workflow: gh attestation verify FILE --repo ruxnlabs/guesthouse
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/packages/*
+      - name: Take the signing key
+        env:
+          SIGNING_KEY_SECRET: ${{ secrets.PKG_SIGNING_KEY }}
+        run: sh packaging/packages/signing-key.sh "$RUNNER_TEMP"
+      - name: The public key, where the docs say it is
+        run: |
+          gpg --batch --dearmor <packaging/packages/ruxn-pkg.asc >"$RUNNER_TEMP/ruxn-pkg.gpg"
+          sh packaging/packages/bucket.sh put packaging/packages/ruxn-pkg.asc ruxn-pkg.asc
+          sh packaging/packages/bucket.sh put "$RUNNER_TEMP/ruxn-pkg.gpg" ruxn-pkg.gpg
+      # The copy install.sh and the NixOS package try before GitHub. Each file is checked against the
+      # same hash either way, so the copy only has to be there.
+      - name: Copy the release's files
+        run: |
+          prefix=guesthouse/releases/v$VERSION
+          for file in dist/release/*; do
+            name=${file##*/}
+            if sh packaging/packages/bucket.sh has "$prefix/$name"; then
+              echo "$prefix/$name is up already."
+            else
+              sh packaging/packages/bucket.sh put "$file" "$prefix/$name"
+            fi
+          done
+      - name: The apt repository
+        run: |
+          sh packaging/packages/bucket.sh pull guesthouse/apt repo/apt
+          sh packaging/packages/publish-repo.sh apt repo/apt stable dist/packages/guesthouse_"$VERSION"-*_amd64.deb
+          sh packaging/packages/bucket.sh push repo/apt guesthouse/apt
+      - name: The rpm repository
+        run: |
+          sh packaging/packages/bucket.sh pull guesthouse/rpm repo/rpm
+          sh packaging/packages/publish-repo.sh rpm repo/rpm dist/packages/guesthouse-"$VERSION"-*.x86_64.rpm
+          sh packaging/packages/bucket.sh push repo/rpm guesthouse/rpm
+      - name: The pacman repository
+        run: |
+          sh packaging/packages/bucket.sh pull guesthouse/arch repo/arch
+          sh packaging/packages/publish-repo.sh pacman repo/arch dist/packages/guesthouse-"$VERSION"-*-x86_64.pkg.tar.zst
+          sh packaging/packages/bucket.sh push repo/arch guesthouse/arch
+      # Last of all, so nothing offers the version before everything it needs is up.
+      - name: Say this is the latest release
+        run: |
+          printf '{\n  "version": "%s",\n  "notes": "https://github.com/%s/releases/tag/v%s"\n}\n' \
+            "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" >"$RUNNER_TEMP/latest.json"
+          sh packaging/packages/bucket.sh put "$RUNNER_TEMP/latest.json" guesthouse/latest.json
+      - name: Forget the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/signing-key.asc"

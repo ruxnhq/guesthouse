@@ -21,8 +21,9 @@ concurrency:
   group: flake-hunt-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# As Checks has them: the cache's key is made with them.
 env:
-  CARGO_TERM_COLOR: never
+  CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -63,8 +64,12 @@ jobs:
           chown -R tester:tester "$GITHUB_WORKSPACE" /home/tester
           runuser -u tester -- env HOME=/home/tester cargo test --locked --workspace --no-run
       # A busy loop for each CPU, and twice as many test threads as CPUs, so tests that race show it.
-      # Only the loops started here are stopped.
+      # Only the loops started here are stopped. The last line says cargo finished: a log without it was
+      # cut off by the step's time limit, and its last test binary hung.
       - name: Run the tests under load
+        timeout-minutes: 40
+        env:
+          CARGO_TERM_COLOR: never
         run: |
           mkdir -p /flake
           hogs=()
@@ -78,6 +83,7 @@ jobs:
           runuser -u tester -- env HOME=/home/tester RUST_TEST_THREADS="$(( $(nproc) * 2 ))" \
             cargo test --locked --workspace --no-fail-fast -- --color never 2>&1 | tee /flake/test.log
           code=${PIPESTATUS[0]}
+          echo "flake-hunt: cargo test exited with $code" | tee -a /flake/test.log
           echo "::group::What failed in this run"
           grep -E '^test .* \.\.\. FAILED$|process didn.t exit successfully' /flake/test.log || echo "nothing"
           echo "::endgroup::"

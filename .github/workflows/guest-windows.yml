@@ -10,13 +10,11 @@ on:
       - "crates/guest-scripts/**"
       - "tests/windows/**"
       - ".github/workflows/guest-windows.yml"
-      # What sends the scripts to a guest, and the app's tests of them.
-      - "crates/app-core/src/agent.rs"
-      - "crates/app-core/src/actions/**"
-      - "crates/app-core/src/app_windows/**"
-      - "crates/app-core/src/guest_files/**"
-      - "crates/app-core/tests/guest_files.rs"
-      - "crates/host-windows/src/guest.rs"
+      # The crates that send the scripts to a guest or build them in.
+      - "crates/app-core/**"
+      - "crates/app-windows/**"
+      - "crates/host-windows/**"
+      - "crates/remote-view/**"
   push:
     branches: [main]
 
@@ -44,8 +42,8 @@ jobs:
         shell: pwsh
         run: |
           cargo --version
-          pwsh -NoProfile -Command '"pwsh $($PSVersionTable.PSVersion)"'
-          powershell.exe -NoProfile -Command '"Windows PowerShell $($PSVersionTable.PSVersion)"'
+          pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
       # The tests run the scripts in folders under the runner's own temp folder, which has a long name:
       # the user's TEMP is a short 8.3 name, which the scripts never see in a guest.
       - name: Build the script tests

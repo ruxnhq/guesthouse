@@ -5,7 +5,8 @@
 
 LOGS holds a folder for each run of the workspace's tests, named run-N or flake-run-N, with that
 run's `cargo test` output in test.log. A test is flaky when it failed in some runs and passed in
-others. A test binary that crashed, which cargo tells by its exit, counts the same way.
+others. A test binary that crashed, which cargo tells by its exit, counts the same way, as does one that
+hung: the hunt ends each finished log with a line that says so, and a log cut off has none.
 A test that failed in every run it ran in is a broken main, which the normal CI shows, so it is only
 listed in the summary. A run that never got to the tests, as a failed build, isn't counted.
 
@@ -32,7 +33,8 @@ LABEL_TEXT = "Fails in some runs and passes in others. The nightly flake hunt fi
 # A night that finds more than this is a broken main or a broken hunt, not a few flaky tests.
 MOST_ISSUES = 10
 EXCERPT_LINES = 60
-STOPPED = "(the test binary crashed)"
+STOPPED = "(the test binary crashed or hung)"
+FINISHED = "flake-hunt: cargo test exited with "
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z ")
@@ -70,7 +72,7 @@ def binary_label(source: str, path: str) -> str:
 def parse(number: int, text: str) -> Run:
     run = Run(number)
     binary = None
-    labels, crashed = {}, set()
+    labels, crashed, finished = {}, set(), False
     capture, captured = None, []
 
     def end_capture():
@@ -85,6 +87,9 @@ def parse(number: int, text: str) -> Run:
             end_capture()
             binary = binary_label(found.group(1), found.group(2))
             labels[found.group(2)] = binary
+            continue
+        if line.startswith(FINISHED):
+            finished = True
             continue
         if found := EXITED.search(line):
             path = found.group(1)
@@ -118,6 +123,8 @@ def parse(number: int, text: str) -> Run:
             if not found.group(2).startswith("ignored"):
                 run.results[(binary, found.group(1))] = found.group(2) == "ok"
     end_capture()
+    if not finished and binary in labels.values():
+        crashed.add(binary)
     for label in labels.values():
         run.results[(label, STOPPED)] = label not in crashed
     return run
@@ -142,13 +149,13 @@ class Finding:
     @property
     def title(self) -> str:
         if self.test == STOPPED:
-            return f"Flaky crash: the tests of {self.binary}"
+            return f"Flaky crash or hang: the tests of {self.binary}"
         return f"Flaky test: {self.test} in {self.binary}"
 
     @property
     def subject(self) -> str:
         if self.test == STOPPED:
-            return f"The test binary of `{self.binary}` crashed: it"
+            return f"The test binary of `{self.binary}` crashed or hung: it"
         return f"`{self.test}` in `{self.binary}`"
 
 

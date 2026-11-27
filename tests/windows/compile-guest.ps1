@@ -28,6 +28,13 @@ function Say-Problem([string]$file, [int]$line, [string]$message) {
     }
 }
 
+# A program's output and errors as lines. Windows PowerShell 5.1 turns a native program's stderr into
+# errors, which would stop this script at the first one under 'Stop'.
+function Invoke-Native([string]$program, [string[]]$arguments) {
+    $ErrorActionPreference = 'Continue'
+    & $program @arguments 2>&1 | ForEach-Object { "$_" }
+}
+
 function Start-Group([string]$title) { if ($inCi) { "::group::$title" } else { "== $title" } }
 function Stop-Group { if ($inCi) { '::endgroup::' } }
 
@@ -130,7 +137,7 @@ if (-not $appWindows) {
     $arguments += $appWindows.References | ForEach-Object { "/reference:$_" -replace '(?<!\.dll)$', '.dll' }
     $arguments += Join-Path $guest 'app-windows.cs'
     "$csc $($arguments -join ' ')"
-    $said = & $csc @arguments 2>&1 | ForEach-Object { "$_" }
+    $said = Invoke-Native $csc $arguments
     $code = $LASTEXITCODE
     $said
     Stop-Group
@@ -145,13 +152,23 @@ if (-not $appWindows) {
 $child = Join-Path $work 'add-type.ps1'
 Set-Content -LiteralPath $child -Encoding UTF8 -Value @'
 param([string]$SourceFile, [string]$References)
-$ErrorActionPreference = 'Stop'
+# Every compiler message is printed, and only then does it fail.
+$ErrorActionPreference = 'Continue'
 $source = [IO.File]::ReadAllText($SourceFile, [Text.Encoding]::UTF8)
-if ($References) {
-    Add-Type -ReferencedAssemblies ($References -split '\|') -TypeDefinition $source
-} else {
-    Add-Type -TypeDefinition $source
+$failed = $false
+try {
+    & {
+        if ($References) {
+            Add-Type -ReferencedAssemblies ($References -split '\|') -TypeDefinition $source
+        } else {
+            Add-Type -TypeDefinition $source
+        }
+    } 2>&1 | ForEach-Object { $failed = $true; "$_" }
+} catch {
+    $failed = $true
+    "$_"
 }
+if ($failed) { exit 1 }
 '@
 $number = 0
 foreach ($item in $sources) {
@@ -159,22 +176,27 @@ foreach ($item in $sources) {
     $sourceFile = Join-Path $work "source-$number.cs"
     [IO.File]::WriteAllText($sourceFile, $item.Source, (New-Object Text.UTF8Encoding($false)))
     $label = if ($item.Name -eq $item.Script) { "$($item.Script):$($item.Line)" } else { "$($item.Name) as $($item.Script):$($item.Line) loads it" }
-    $said = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $child -SourceFile $sourceFile -References ($item.References -join '|') 2>&1 | ForEach-Object { "$_" }
+    # Windows PowerShell drops an empty argument on its way to a program, so no -References is given
+    # when there are none.
+    $arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $child, '-SourceFile', $sourceFile)
+    if ($item.References) { $arguments += @('-References', ($item.References -join '|')) }
+    $said = Invoke-Native powershell.exe $arguments
     if ($LASTEXITCODE -eq 0) { "ok   Add-Type $label"; continue }
     Start-Group "Add-Type: $label failed"
     $said
     Stop-Group
-    $lines = @($said | Select-String -Pattern '\.cs\((\d+)\)\s*:\s*(.*)$' | ForEach-Object { $_.Matches[0] })
+    # Windows PowerShell's compiler says FILE.cs(LINE) : MESSAGE, and Roslyn (LINE,COLUMN): MESSAGE.
+    $lines = @($said | Select-String -Pattern '(?:\.cs\((?<line>\d+)\)\s*:|^\((?<line>\d+),\d+\):)\s*(?<message>.*)$' | ForEach-Object { $_.Matches[0] })
     if (-not $lines) { Say-Problem $item.Script $item.Line "Add-Type failed: $($said -join ' ')" }
     foreach ($found in $lines) {
         $file = if ($item.Name -eq $item.Script) { $item.Script } else { $item.Name }
-        Say-Problem $file ([int]$found.Groups[1].Value + $item.Offset) "Add-Type: $($found.Groups[2].Value.Trim())"
+        Say-Problem $file ([int]$found.Groups['line'].Value + $item.Offset) "Add-Type: $($found.Groups['message'].Value.Trim())"
     }
 }
 
 # api-check.ps1's probes, by its own check.
 foreach ($name in $selfChecked) {
-    $said = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $guest $name) -SelfCheck 2>&1 | ForEach-Object { "$_" }
+    $said = Invoke-Native powershell.exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $guest $name), '-SelfCheck')
     $code = $LASTEXITCODE
     Start-Group "guest/$name -SelfCheck"
     $said

@@ -33,7 +33,7 @@ fn shell() -> Option<&'static str> {
 }
 
 fn version(program: &str) -> Option<String> {
-    let done = Command::new(program)
+    let done = shell_command(program)
         .args(["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"])
         .output()
         .ok()?;
@@ -48,6 +48,14 @@ fn must_run(program: &'static str) -> &'static str {
         }
         None => panic!("{SHELL_VARIABLE} asks for {program}, and it doesn't run here"),
     }
+}
+
+/// Each shell finds its own modules: a Windows PowerShell started under pwsh, as CI starts these tests,
+/// would otherwise look in pwsh's module folders first.
+fn shell_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env_remove("PSModulePath");
+    command
 }
 
 /// What a run of the shell said, with everything a failed assertion should show.
@@ -80,7 +88,7 @@ impl std::fmt::Display for Said {
 
 /// Runs PowerShell commands in a shell of their own, as the guest's agent runs a script.
 fn run(shell: &str, command: &str) -> Said {
-    let done: Output = Command::new(shell)
+    let done: Output = shell_command(shell)
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command])
         .output()
         .unwrap();

@@ -46,7 +46,8 @@ const LIST_NAME: &str = "nv-files.txt";
 const LOG_NAME: &str = "nv-files.log";
 const CHECK_SECONDS: u64 = 20;
 const PLACE_SECONDS: u64 = 110;
-const MISSING_MARK: &str = "missing ";
+/// How the placing script's check, and the count without it, answer: the files a run would copy.
+const TO_PLACE_MARK: &str = "to place ";
 const FAILED_MARK: &str = "FAILED";
 const KEY_SECONDS: u64 = 20;
 const KEY_MARK: &str = "device key set";
@@ -84,24 +85,39 @@ fn send_list(task: &Task, list: &str) {
     );
 }
 
-/// The guest counts for itself, as only it knows what is in its folders.
+/// The guest counts for itself, as only it knows what is in its folders. The placing script says
+/// how many files it would copy, by the same comparison it copies by, so a file that is there but
+/// older than the driver's counts as well as one that is missing. It goes as the request itself, so a
+/// start with nothing to place sends no file. `None` when the guest didn't say.
+fn count_to_place(task: &Task, script: &str, store: Option<&str>) -> Option<u32> {
+    let request = format!("& {{\n{script}\n}} {} -Check", script_arguments(store));
+    let said = task.ask_guest(&request, CHECK_SECONDS);
+    said.split(TO_PLACE_MARK).nth(1)?.trim().parse().ok()
+}
+
+/// Without the script, which only an incomplete program folder lacks, the guest can still say which
+/// files are missing.
 fn count_missing(task: &Task) -> Option<u32> {
     let list = guest_path(LIST_NAME);
     let script = format!(
         "$count = 0; foreach ($line in Get-Content -LiteralPath '{list}') {{ \
          $folder, $name, $target = $line -split \"`t\"; \
          if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $env:windir $folder) $target))) {{ $count++ }} }}; \
-         \"{MISSING_MARK}$count\""
+         \"{TO_PLACE_MARK}$count\""
     );
     let said = task.ask_guest(&script, CHECK_SECONDS);
-    said.split(MISSING_MARK).nth(1)?.trim().parse().ok()
+    said.split(TO_PLACE_MARK).nth(1)?.trim().parse().ok()
 }
 
-/// `store` names the driver's folder in the guest's driver store, where NVIDIA's is the script's own.
-fn run_placing_script(task: &Task, store: Option<&str>) -> String {
-    let (script, list, log) = (guest_path(SCRIPT_NAME), guest_path(LIST_NAME), guest_path(LOG_NAME));
+/// The list, and the driver's folder in the guest's driver store, where NVIDIA's is the script's own.
+fn script_arguments(store: Option<&str>) -> String {
     let store = store.map(|name| format!(" -StoreFolder {name}")).unwrap_or_default();
-    task.ask_guest(&format!("& {script} {list}{store} | Tee-Object {log}"), PLACE_SECONDS)
+    format!("{}{store}", guest_path(LIST_NAME))
+}
+
+fn run_placing_script(task: &Task, store: Option<&str>) -> String {
+    let (script, log) = (guest_path(SCRIPT_NAME), guest_path(LOG_NAME));
+    task.ask_guest(&format!("& {script} {} | Tee-Object {log}", script_arguments(store)), PLACE_SECONDS)
 }
 
 /// The folder NVIDIA's settings store lives in, with the driver's own profile database in it. A guest
@@ -436,12 +452,14 @@ pub(super) fn write_device_key(task: &mut Task) -> Result<()> {
 fn place_listed_files(task: &mut Task, list: &str, store: Option<&str>) -> Result<()> {
     task.step("Checking the driver's files");
     send_list(task, list);
-    if count_missing(task).is_none_or(|count| count == 0) {
+    let Ok(script) = guest_script(task.context, SCRIPT_NAME) else {
+        if count_missing(task).is_some_and(|count| count > 0) {
+            write_log(task.context, "driver files: this program folder has no script to place them")?;
+            task.error = NO_SCRIPT.to_owned();
+        }
         return Ok(());
-    }
-    if !task.context.paths.guest_files().join(SCRIPT_NAME).exists() {
-        write_log(task.context, "driver files: this program folder has no script to place them")?;
-        task.error = NO_SCRIPT.to_owned();
+    };
+    if count_to_place(task, &script, store).is_none_or(|count| count == 0) {
         return Ok(());
     }
     task.step("Placing the driver's files");

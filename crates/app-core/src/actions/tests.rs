@@ -520,12 +520,34 @@ fn a_guest_with_all_the_drivers_files_is_left_alone() {
     let scratch = Scratch::new();
     let mut context = plain_task_context(&scratch);
     with_driver_files(&scratch, &context);
-    let agent = Arc::new(ScriptedAgent::answering(&["", "missing 0\r\n"]));
+    let agent = Arc::new(ScriptedAgent::answering(&["", "to place 0\r\n"]));
     context.agent = agent.clone();
     let host = RecordingHost::default();
     place_driver_files(&mut placing_task(&context, &host)).unwrap();
     let asked = agent.requests.lock().unwrap();
     assert_eq!(asked.len(), 2, "only the list and the count");
+    let check = &asked[1].2;
+    assert!(check.contains("copies files"), "the script's own comparison counts: {check}");
+    assert!(check.ends_with(r"C:\gpupv\nv-files.txt -Check"), "{check}");
+}
+
+/// A guest whose files are all there but older than the driver's, as after a driver it had before.
+#[test]
+fn files_that_are_there_but_older_are_placed_too() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    with_driver_files(&scratch, &context);
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../guest/nv-files.ps1");
+    scratch.write("program/guest/nv-files.ps1", fs::read_to_string(script).unwrap());
+    let agent =
+        Arc::new(ScriptedAgent::answering(&["", "to place 5\r\n", "", "copied 5, kept 0, failed 0\r\n"]));
+    context.agent = agent.clone();
+    let host = RecordingHost::default();
+    place_driver_files(&mut placing_task(&context, &host)).unwrap();
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked.len(), 4, "the list, the check, the script and its run");
+    assert!(asked[1].2.contains("Test-Newer"), "the check compares versions, not only what is there");
+    assert!(!asked[1].2.contains("Test-Path -LiteralPath (Join-Path"), "it isn't the count of missing files");
 }
 
 #[test]
@@ -534,7 +556,7 @@ fn missing_files_are_placed_with_the_guests_script() {
     let mut context = plain_task_context(&scratch);
     with_driver_files(&scratch, &context);
     let agent =
-        Arc::new(ScriptedAgent::answering(&["", "missing 4\r\n", "", "copied System32\\one.dll\r\n"]));
+        Arc::new(ScriptedAgent::answering(&["", "to place 4\r\n", "", "copied System32\\one.dll\r\n"]));
     context.agent = agent.clone();
     let host = RecordingHost::default();
     let mut task = placing_task(&context, &host);
@@ -551,7 +573,7 @@ fn a_file_that_fails_is_said_and_the_start_goes_on() {
     let mut context = plain_task_context(&scratch);
     with_driver_files(&scratch, &context);
     let agent =
-        Arc::new(ScriptedAgent::answering(&["", "missing 1\r\n", "", "FAILED System32\\one.dll\r\n"]));
+        Arc::new(ScriptedAgent::answering(&["", "to place 1\r\n", "", "FAILED System32\\one.dll\r\n"]));
     context.agent = agent.clone();
     let host = RecordingHost::default();
     let mut task = placing_task(&context, &host);
@@ -572,7 +594,7 @@ fn with_the_wrapper_nvidias_nvapi_is_left_out_of_the_list() {
     with_driver_files(&scratch, &context);
     let inf = crate::setup::guest_files::stand_in::FILES_INF.replace("one.dll", "nvapi64.dll");
     fs::write(crate::settings::driver_folder(&context).join("nv_dispi.inf"), inf).unwrap();
-    let agent = Arc::new(ScriptedAgent::answering(&["", "missing 0\r\n", "", "missing 0\r\n"]));
+    let agent = Arc::new(ScriptedAgent::answering(&["", "to place 0\r\n", "", "to place 0\r\n"]));
     context.agent = agent.clone();
     let host = RecordingHost::default();
     place_driver_files(&mut placing_task(&context, &host)).unwrap();
@@ -623,7 +645,7 @@ fn with_the_wrapper_turned_off_nvidias_nvapi_stays_in_the_list() {
     let inf = crate::setup::guest_files::stand_in::FILES_INF.replace("one.dll", "nvapi64.dll");
     fs::write(crate::settings::driver_folder(&context).join("nv_dispi.inf"), inf).unwrap();
     scratch.write("program/guest/nvapi64.dll", "wrapper");
-    let agent = Arc::new(ScriptedAgent::answering(&["", "missing 0\r\n"]));
+    let agent = Arc::new(ScriptedAgent::answering(&["", "to place 0\r\n"]));
     context.agent = agent.clone();
     let host = RecordingHost::default();
     let mut task = placing_task(&context, &host);
@@ -693,7 +715,7 @@ fn with_no_script_the_start_goes_on_and_says_so() {
     let mut context = plain_task_context(&scratch);
     with_driver_files(&scratch, &context);
     fs::remove_file(scratch.path("program/guest/nv-files.ps1")).unwrap();
-    context.agent = Arc::new(ScriptedAgent::answering(&["", "missing 4\r\n"]));
+    context.agent = Arc::new(ScriptedAgent::answering(&["", "to place 4\r\n"]));
     let host = RecordingHost::default();
     let mut task = placing_task(&context, &host);
     place_driver_files(&mut task).unwrap();
@@ -953,7 +975,7 @@ fn an_intel_machine_is_given_the_loaders_from_the_drivers_list_out_of_intels_sto
     let agent = Arc::new(ScriptedAgent::answering(&[
         "device key set\r\n",
         "",
-        "missing 1\r\n",
+        "to place 1\r\n",
         "",
         "copied vulkan-1.dll\r\n",
     ]));
@@ -988,7 +1010,7 @@ fn amd_runtime_machine(scratch: &Scratch, answers: &[&str]) -> (Context, Arc<Scr
 #[test]
 fn an_amd_machine_is_given_the_media_runtime_in_its_system_folders_from_amds_store_folder() {
     let scratch = Scratch::new();
-    let answers = ["", "missing 2\r\n", "", "copied System32\\amfrt64.dll\r\n"];
+    let answers = ["", "to place 2\r\n", "", "copied System32\\amfrt64.dll\r\n"];
     let (context, agent, amd) = amd_runtime_machine(&scratch, &answers);
     let host = RecordingHost::default();
     let mut task = Task::new(&context, &host, "start", amd);
@@ -1005,7 +1027,7 @@ fn an_amd_machine_is_given_the_media_runtime_in_its_system_folders_from_amds_sto
 #[test]
 fn an_amd_guest_that_has_the_media_runtime_is_only_asked_what_it_lacks() {
     let scratch = Scratch::new();
-    let (context, agent, amd) = amd_runtime_machine(&scratch, &["", "missing 0\r\n"]);
+    let (context, agent, amd) = amd_runtime_machine(&scratch, &["", "to place 0\r\n"]);
     let host = RecordingHost::default();
     let mut task = Task::new(&context, &host, "start", amd);
     place_amd_runtime(&mut task).unwrap();
@@ -1035,7 +1057,7 @@ fn an_intel_guest_whose_list_predates_the_64_bit_runtime_is_sent_it_for_system32
     let old = "System32\tIntel_OpenCL_ICD64.dll\tOpenCL.dll\n";
     scratch.write("intel-driver/system-files.txt", old);
     crate::setup::intel::write_intel_setup(&context, &scratch.path("intel-driver"), "32.0.101.9175").unwrap();
-    let agent = Arc::new(ScriptedAgent::answering(&["device key set\r\n", "", "missing 0\r\n"]));
+    let agent = Arc::new(ScriptedAgent::answering(&["device key set\r\n", "", "to place 0\r\n"]));
     context.agent = agent.clone();
     let mut intel = machine(&context);
     intel.use_windows_card(GpuMaker::Intel, "0000:00:02.0");

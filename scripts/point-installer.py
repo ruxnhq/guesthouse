@@ -63,7 +63,7 @@ def main(argv: list[str]) -> int:
     nix = sub_once(nix, r'^(  version = ")[^"\n]*(";)$', rf"\g<1>{version}\g<2>", "version in package.nix")
     nix = sub_once(
         nix,
-        r'(releases/download/v\$\{version\}/guesthouse-\$\{version\}-x86_64\.tar\.xz";\s*hash = ")[^"\n]*(";)',
+        r'(releases/download/v\$\{version\}/guesthouse-\$\{version\}-x86_64\.tar\.xz"[;\s\]]*hash = ")[^"\n]*(";)',
         rf"\g<1>{sri(payload)}\g<2>",
         "the payload's hash in package.nix",
     )

@@ -111,6 +111,7 @@ jobs:
         env:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
+          set -o pipefail
           R="$RUNNER_TEMP/release"
           python3 scripts/point-installer.py "$VERSION" "$R/SHA256SUMS" "$(cat "$R/payload-size")" "$(cat "$R/appimage-size")" | tee "$R/printed"
           git diff --stat

@@ -239,7 +239,7 @@ public class AppWindows : Form
         public long MoveAt;                     // when to move a cell that outgrew its slot (0 = not pending)
         public RECT Frame, Win;                 // last known real rectangles (screen coordinates)
         public bool Cured; public int CureTries;
-        public long BornAt;                     // when the helper first saw it
+        public long BornAt; public bool EverPlaced;   // when the helper first saw it, and whether it has had a place since
         public int AwayW, AwayH;                // its outer size when Windows went to another monitor for a moment (NoteSizes)
         public bool WasZoomed, HeldZoomed; public int UnzoomTries; public long UnzoomAt;   // HeldZoomed: maximized at a cell's size (HoldZoomed)   // maximized when the helper took it out of that, to be put back at the end
         public bool NameDirty, LocDirty, ThumbDirty, ThumbApplied;
@@ -560,7 +560,9 @@ public class AppWindows : Form
         PutSizesBack();
         FitToScreen();
         KeepScale();
-        foreach (Cell c in cells.Values) { c.ParkTries = 0; c.ParkAfter = 0; if (!c.Popup) ReadCaption(c); }
+        // Windows can maximize again a window that opened maximized when the monitor comes back (measured: Paint 7468x1309 at -1,-8
+        // right after one). That is not the window insisting, so it does not count towards giving up (Unzoom).
+        foreach (Cell c in cells.Values) { c.ParkTries = 0; c.ParkAfter = 0; c.UnzoomTries = 0; if (!c.Popup) ReadCaption(c); }
         PlaceAgain();
     }
 
@@ -979,6 +981,10 @@ public class AppWindows : Form
             if (c.MoveAt == 0 || now < c.MoveAt) continue;
             c.MoveAt = 0;
             c.ThumbDirty = true;
+            // Unmaximize and HoldZoomed ask for a move with no size of their own: the window's picture is the size. A size wanted
+            // before and left over made the cell that size for good, as the picture's size did not change again (the cell of
+            // Word at 0x0, measured; a left-over size is the inferred cause of Word left an overflow cell once).
+            if (c.WantW <= 0 || c.WantH <= 0) { c.WantW = Math.Min(c.SrcW - c.InL - c.InR, ovW); c.WantH = Math.Min(c.SrcH - c.InT - c.InB, ovH); }
             if (!c.Overflow && FitsInPlace(c, c.WantW, c.WantH)) { c.CellW = c.WantW; c.CellH = c.WantH; continue; }
             c.CellW = c.WantW; c.CellH = c.WantH;
             c.Placed = false;                           // PlaceAll finds a new spot
@@ -1031,7 +1037,8 @@ public class AppWindows : Form
     const long NewcomerWaitMs = 3000;           // the host grows the screen after 0.5 s; the new mode takes about a second more
 
     // Whether a window with no spot still waits for the screen to grow for it.
-    static bool Waiting(Cell c, long now) { return !c.Popup && now - c.BornAt < NewcomerWaitMs; }
+    // One that has been shown already does not go out of sight again for this.
+    static bool Waiting(Cell c, long now) { return !c.Popup && !c.EverPlaced && now - c.BornAt < NewcomerWaitMs; }
 
     // Where a popup's picture goes in the overlay to be at the same point of its window's picture as the popup really is over
     // that window: its real place, moved as far as the window's cell lies from the window (nothing for a parked window). One
@@ -1103,7 +1110,7 @@ public class AppWindows : Form
         foreach (Cell c in cells.Values) if (!c.Placed && c.Active) todo.Add(c);
         if (todo.Count == 0) return;
         todo.Sort(delegate(Cell a, Cell b) { return a.Order.CompareTo(b.Order); });
-        foreach (Cell c in todo) { PlaceCell(c); c.ThumbDirty = true; }
+        foreach (Cell c in todo) { PlaceCell(c); c.ThumbDirty = true; if (c.Placed) c.EverPlaced = true; }
     }
 
     // An overflow cell hides (not moves) every cell it lies over; of two overflow cells the one raised last wins.
@@ -1315,7 +1322,14 @@ public class AppWindows : Form
         if (c.UnzoomTries >= 3) { HoldZoomed(c); return; }
         c.UnzoomTries++; c.UnzoomAt = now;
         int w, h;
-        if (UnzoomSize(c, out w, out h)) Unmaximize(c, w, h);
+        // Its new size is read at once, so the pass places it at that size: placed at the screen's size it was an overflow
+        // cell that hid every other for a pass, and the host closed their windows (measured with Word, maximized again by
+        // Windows as its monitor came back).
+        if (UnzoomSize(c, out w, out h) && Unmaximize(c, w, h))
+        {
+            ReadState(c, now);
+            if (c.Overflow) c.Placed = false;
+        }
     }
 
     const long UnzoomForgetMs = 5000;
@@ -1344,6 +1358,7 @@ public class AppWindows : Form
         if (!UnzoomSize(c, out w, out h)) return;
         if (c.Win.R - c.Win.L == w && c.Win.B - c.Win.T == h) return;
         SetWindowPos(c.Src, IntPtr.Zero, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        c.WantW = c.WantH = 0;
         c.MoveAt = Now() + 1;
     }
 
@@ -1360,6 +1375,7 @@ public class AppWindows : Form
         // Some windows come back at a size they keep themselves (WinForms does, measured), so the size is set again.
         SetWindowPos(c.Src, IntPtr.Zero, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
         c.WasZoomed = true;
+        c.WantW = c.WantH = 0;                  // Settle takes the picture's size then, not one wanted before (see Settle)
         c.MoveAt = Now() + 1;
         return true;
     }
@@ -1430,7 +1446,7 @@ public class AppWindows : Form
         {
             if (!c.Active) continue;
             c.Fg = (c.Src == fg);
-            if (c.LocDirty) { c.LocDirty = false; ReadState(c, now); }
+            if (c.LocDirty) { c.LocDirty = false; ReadState(c, now); if (!c.Popup) Unzoom(c); }   // maximized: out of it before it is placed
             if (c.NameDirty)
             {
                 long since = now - c.TitleAt;
@@ -1592,7 +1608,9 @@ public class AppWindows : Form
     void LayoutStep()
     {
         List<Cell> list = new List<Cell>();
-        foreach (Cell c in cells.Values) if (c.Active && c.InDone && c.IdSettled) list.Add(c);   // a popup waits until its margins are known
+        // A popup waits until its margins are known, and a window until it has had a place (see Waiting): one the host heard of
+        // first with no place opened as a 1x1 host window, and stayed so (measured with Word).
+        foreach (Cell c in cells.Values) if (c.Active && c.InDone && c.IdSettled && (c.Popup || c.EverPlaced)) list.Add(c);
         // A popup goes only with the window it belongs to, directly or through other popups: one of a program with no
         // app window here (the shell's own tips and menus) would be a host popup with no window to hang on.
         for (bool dropped = true; dropped; )
@@ -1935,7 +1953,9 @@ public class AppWindows : Form
         int needH = Math.Min(Math.Max(floorH, tallest + taskbarH), maxH);
         int needW = Math.Min(Math.Max(floorW, widest + taskbarW), maxW);
         while (needW < maxW && !PacksInto(sizes, needW - taskbarW, needH - taskbarH)) needW = Math.Min(maxW, needW + 16);
-        return "{\"w\":" + I(needW & ~1) + ",\"h\":" + I(needH & ~1) + "}";
+        // Even sizes, rounded up: rounded down, a window of an odd height one short of the screen got a screen 1 px short of it,
+        // and stayed an overflow cell over the others with the need already met (measured: Word 1261 high, 6128x1308).
+        return "{\"w\":" + I((needW + 1) & ~1) + ",\"h\":" + I((needH + 1) & ~1) + "}";
     }
 
     string DisplayLine()

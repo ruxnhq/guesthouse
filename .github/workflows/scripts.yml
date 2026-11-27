@@ -29,6 +29,8 @@ jobs:
       # Ubuntu's sh is dash, as Proxmox VE's is.
       - name: Proxmox's check, on made-up hosts
         run: bash tests/proxmox/run.sh
+      - name: The package page, against the docs
+        run: bash tests/packages/page.sh
 
   psscriptanalyzer:
     name: PSScriptAnalyzer

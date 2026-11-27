@@ -86,6 +86,49 @@ impl<'a> CreateAllocation<'a> {
     }
 }
 
+/// The guest changing where an allocation may live, or how the GPU reaches it. The fields follow
+/// the header: the paging queue, the allocation, the segments it may use, the segment preference
+/// (several segments packed into one word), flags (bit 0 is "accessed physically"), the paging
+/// fence value (an answer, so empty here), and a mask of the properties being changed (bit 0
+/// accessed physically, bit 1 supported segments, bit 2 preferred segment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateAllocationProperty {
+    pub paging_queue: u32,
+    pub allocation: u32,
+    pub supported_segments: u32,
+    pub segment_preference: u32,
+    pub flags: u32,
+    pub property_mask: u32,
+}
+
+impl UpdateAllocationProperty {
+    const PAGING_QUEUE: usize = HEADER_SIZE;
+    const ALLOCATION: usize = HEADER_SIZE + 4;
+    const SUPPORTED_SEGMENTS: usize = HEADER_SIZE + 8;
+    const SEGMENT_PREFERENCE: usize = HEADER_SIZE + 12;
+    const FLAGS: usize = HEADER_SIZE + 16;
+    const PROPERTY_MASK: usize = HEADER_SIZE + 32;
+
+    pub fn parse(message: &[u8]) -> Result<Self, Malformed> {
+        Ok(Self {
+            paging_queue: u32_at(message, Self::PAGING_QUEUE)?,
+            allocation: u32_at(message, Self::ALLOCATION)?,
+            supported_segments: u32_at(message, Self::SUPPORTED_SEGMENTS)?,
+            segment_preference: u32_at(message, Self::SEGMENT_PREFERENCE)?,
+            flags: u32_at(message, Self::FLAGS)?,
+            property_mask: u32_at(message, Self::PROPERTY_MASK)?,
+        })
+    }
+
+    /// The paging fence value the change reaches, then a status. The change is complete when
+    /// it is answered, so the fence value is zero and the guest has nothing to wait for.
+    pub fn answer(status: Status, out: &mut Vec<u8>) {
+        put_u64(out, 0);
+        put_u32(out, status.0);
+        put_u32(out, 0);
+    }
+}
+
 /// The answer: fixed fields, a table with an entry per allocation, then the private data.
 pub struct CreateAllocationAnswer;
 
@@ -269,6 +312,22 @@ impl<'a> SetGuestPages<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_allocation_property_update_is_read_and_answered_without_a_fence() {
+        let mut message = vec![0; 64];
+        message[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&0x4003_7700u32.to_le_bytes());
+        message[HEADER_SIZE + 4..HEADER_SIZE + 8].copy_from_slice(&0x4003_9080u32.to_le_bytes());
+        message[HEADER_SIZE + 8..HEADER_SIZE + 12].copy_from_slice(&0x8000_0000u32.to_le_bytes());
+        message[HEADER_SIZE + 32] = 6;
+        let update = UpdateAllocationProperty::parse(&message).unwrap();
+        assert_eq!((update.paging_queue, update.allocation), (0x4003_7700, 0x4003_9080));
+        assert_eq!((update.supported_segments, update.property_mask), (0x8000_0000, 6));
+        assert!(UpdateAllocationProperty::parse(&message[..58]).is_err());
+        let mut out = Vec::new();
+        UpdateAllocationProperty::answer(Status::SUCCESS, &mut out);
+        assert_eq!(out, [0; 16]);
+    }
     use crate::wire::u64_at;
 
     fn create_message(guest_backed: bool, blocks: &[&[u8]], runtime: &[u8]) -> Vec<u8> {

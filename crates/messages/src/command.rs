@@ -77,6 +77,7 @@ commands! {
     CreateHardwareQueue = 50,
     DestroyHardwareQueue = 51,
     SubmitToHardwareQueue = 52,
+    UpdateAllocationProperty = 56,
     SetAllocationPriority = 59,
     GetAllocationPriority = 60,
     QueryClockCalibration = 62,
@@ -98,7 +99,7 @@ mod tests {
 
     #[test]
     fn numbers_round_trip() {
-        for number in [0, 20, 52, 59, 60, 66, 1000, 1010, 67, 4242] {
+        for number in [0, 20, 52, 56, 59, 60, 66, 1000, 1010, 67, 4242] {
             assert_eq!(Command::from_wire(number).to_wire(), number);
         }
     }

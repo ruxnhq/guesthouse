@@ -492,6 +492,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             Some(C::DescribeStandardAllocation) => self.describe_standard_allocation(message, out)?,
             Some(C::OpenResource) => self.open_resource(message, out)?,
             Some(C::LockForCpu) => self.lock_for_cpu(message, out)?,
+            Some(C::UpdateAllocationProperty) => self.update_allocation_property(message, out)?,
             Some(C::SetAllocationPriority) => self.set_allocation_priority(message, out)?,
             Some(C::GetAllocationPriority) => self.get_allocation_priority(message, out)?,
             Some(C::SetGuestPages) => self.set_guest_pages(message, out)?,

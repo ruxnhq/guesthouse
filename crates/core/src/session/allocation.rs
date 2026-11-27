@@ -9,6 +9,7 @@ use guesthouse_backend::{
     UnmapRequest,
 };
 use guesthouse_messages::address::PAGE_SIZE;
+use guesthouse_messages::allocation::UpdateAllocationProperty;
 use guesthouse_messages::allocation::{
     CACHED_FOR_CPU, CreateAllocation, CreateAllocationAnswer, DestroyAllocation, OpenResource, PRIMARY,
     SetGuestPages, lock_answer, locked_allocation,
@@ -326,6 +327,22 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             };
             self.defer(DeferredAction::FreeAllocation(freed));
         }
+    }
+
+    /// The guest's wish for where an allocation lives and how the GPU reaches it. The host's driver
+    /// places memory itself, so this only checks the message and answers that nothing is pending.
+    pub(super) fn update_allocation_property(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
+        let update = UpdateAllocationProperty::parse(message)?;
+        log::debug!(
+            "allocation {:#x} property update: segments={:#x} preference={:#x} flags={:#x} mask={:#x}",
+            update.allocation,
+            update.supported_segments,
+            update.segment_preference,
+            update.flags,
+            update.property_mask
+        );
+        UpdateAllocationProperty::answer(Status::SUCCESS, out);
+        Ok(())
     }
 
     /// Keeps the priorities for the allocations named, or for the whole resource if none is. The

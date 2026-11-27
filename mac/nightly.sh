@@ -3,7 +3,8 @@
 # Builds the Mac app as a nightly: from a clean checkout, in Release, stamped with the date and the
 # commit, every program in it signed inside-out with the hardened runtime, checked, made into a
 # compressed disk image that is signed too, and, when notary keys are given, notarised and stapled.
-# It writes the image, NAME.sha256 and guesthouse-macos-nightly.json into the output folder.
+# It writes the image Guesthouse-nightly-YYYYMMDD-COMMIT8.dmg, the same name with .sha256 after
+# it, and guesthouse-macos-nightly.json into the output folder.
 #
 #   sh mac/nightly.sh [--out FOLDER] [--helpers FOLDER]
 #
@@ -51,8 +52,19 @@ trap cleanup EXIT INT TERM HUP
 say() { printf '%s\n' "$*"; }
 
 # --- The name: version, date and commit ---------------------------------------------------
-date_stamp=${GUESTHOUSE_VERSION_DATE:-$(date -u +%Y%m%d)}
-commit=${GUESTHOUSE_COMMIT:-$(git -C "$here" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)}
+# The date is the commit's own (UTC), and the commit is its first 8 hex digits, so a commit always
+# has the same name, however often or whenever it is built: a second run for it, after a publish
+# that failed halfway, has the same names to find.
+date_stamp=${GUESTHOUSE_VERSION_DATE:-$(TZ=UTC git -C "$here" show -s --format=%cd --date=format-local:%Y%m%d HEAD 2>/dev/null || echo unknown)}
+commit=${GUESTHOUSE_COMMIT:-$(git -C "$here" rev-parse HEAD 2>/dev/null | cut -c1-8)}
+case $date_stamp in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) echo "nightly.sh: the date $date_stamp is not YYYYMMDD" >&2; exit 1 ;;
+esac
+case $commit in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) echo "nightly.sh: the commit $commit is not 8 hex digits" >&2; exit 1 ;;
+esac
 base=$(sed -n 's/^ *MARKETING_VERSION: "\([0-9]*\.[0-9]*\)\.[0-9]*".*/\1/p' project.yml | head -n 1)
 minimum=$(sed -n 's/^ *macOS: "\([0-9.]*\)".*/\1/p' project.yml | head -n 1)
 [ -n "$base" ] && [ -n "$minimum" ] || { echo "nightly.sh: project.yml has no version or deployment target" >&2; exit 1; }
@@ -208,7 +220,7 @@ assess open "$dmg"
 # --- What it made ---------------------------------------------------------------------------
 sum=$(shasum -a 256 "$dmg" | awk '{ print $1 }')
 size=$(stat -f %z "$dmg")
-printf '%s  %s\n' "$sum" "$name.dmg" >"$out/$name.sha256"
+printf '%s  %s\n' "$sum" "$name.dmg" >"$out/$name.dmg.sha256"
 cat >"$out/guesthouse-macos-nightly.json" <<JSON
 {
   "version": "$version",
@@ -222,6 +234,6 @@ cat >"$out/guesthouse-macos-nightly.json" <<JSON
 JSON
 say "made:"
 say "  $dmg ($size bytes)"
-say "  $out/$name.sha256"
+say "  $out/$name.dmg.sha256"
 say "  $out/guesthouse-macos-nightly.json"
 say "  version $version, commit $commit, sha256 $sum"

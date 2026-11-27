@@ -18,7 +18,7 @@ pub const LATEST_URL: &str = "https://files.ruxn.com/p/guesthouse/guesthouse-mac
 /// check ignores: `commit`, `date`, `file`, `size`, `sha256`, `minimum_macos`). Its version is the
 /// release's major and minor and the date as the patch (0.1.20261128), so a nightly is newer than
 /// the release it follows and older than the next one.
-pub const NIGHTLY_URL: &str = "https://files.ruxn.com/p/guesthouse/nightly/guesthouse-macos-nightly.json";
+pub const NIGHTLY_URL: &str = "https://files.ruxn.com/p/guesthouse-nightly/guesthouse-macos-nightly.json";
 /// Where to go when the file names no release page.
 pub const WEBSITE: &str = "https://guesthouse.ruxn.com";
 const FETCH_SECONDS: &str = "20";
@@ -112,6 +112,6 @@ mod tests {
         assert_eq!(answer("0.1.20261128", Some(file)), r#"{"state":"latest"}"#);
         assert!(answer("0.1.0", Some(file)).contains("newer"));
         assert_eq!(answer("0.2.0", Some(file)), r#"{"state":"latest"}"#);
-        assert!(NIGHTLY_URL.ends_with("/nightly/guesthouse-macos-nightly.json"));
+        assert_eq!(NIGHTLY_URL, "https://files.ruxn.com/p/guesthouse-nightly/guesthouse-macos-nightly.json");
     }
 }

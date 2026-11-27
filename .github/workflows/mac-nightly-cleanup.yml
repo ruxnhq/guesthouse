@@ -1,5 +1,5 @@
 # Removes the Mac nightlies from files.ruxn.com once they are 14 days old, as test-build-cleanup.yml does
-# for test builds. mac-nightly.yml makes them. The newest nightly and its guesthouse-macos-nightly.json are
+# for test builds. mac-nightly.yml makes them. The newest dated nightly with its hash, the fixed-name copy and guesthouse-macos-nightly.json are
 # always kept. It does nothing until the repository has the variable FILES_BUCKET (the bucket that serves
 # files.ruxn.com) and the `mac-nightly-cleanup` environment has the bucket's keys.
 name: Mac nightly cleanup
@@ -28,7 +28,7 @@ jobs:
       AWS_EC2_METADATA_DISABLED: "true"
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-      PREFIX: pub/guesthouse/nightly/
+      PREFIX: pub/guesthouse-nightly/
       DAYS: "14"
     steps:
       - run: |
@@ -37,16 +37,14 @@ jobs:
           oldest_kept=$(date -u -d "$DAYS days ago" +%Y-%m-%dT%H:%M:%S)
           # The newest image is kept, whatever its age, so the nightly file never points at nothing.
           newest=$(s3 s3api list-objects-v2 --bucket "$FILES_BUCKET" --prefix "$PREFIX" \
-            --query "max_by(Contents[?starts_with(Key, \`pub/guesthouse/nightly/Guesthouse-nightly-\`) && ends_with(Key, \`.dmg\`)], &LastModified).Key" --output text)
+            --query "max_by(Contents[?starts_with(Key, \`pub/guesthouse-nightly/Guesthouse-nightly-\`) && ends_with(Key, \`.dmg\`)], &LastModified).Key" --output text)
           for key in $(s3 s3api list-objects-v2 --bucket "$FILES_BUCKET" --prefix "$PREFIX" \
               --query 'Contents[].Key' --output text | tr '\t' '\n'); do
-            case $key in
-              */Guesthouse-nightly.dmg*) continue ;;
-              *.dmg | *.sha256) ;;
-              *) continue ;;
-            esac
+            # Only a dated image and its hash, by the Worker's names. The three names that are replaced
+            # (Guesthouse-nightly.dmg, its .sha256 and guesthouse-macos-nightly.json) never match.
+            printf '%s\n' "$key" | grep -Eq "^${PREFIX}Guesthouse-nightly-[0-9]{8}-[0-9a-f]{8}\.dmg(\.sha256)?\$" || continue
             [ "$key" = "$newest" ] && continue
-            [ "$key" = "${newest%.dmg}.sha256" ] && continue
+            [ "$key" = "$newest.sha256" ] && continue
             when=$(s3 s3api head-object --bucket "$FILES_BUCKET" --key "$key" --query LastModified --output text)
             if [ "${when%%.*}" \< "$oldest_kept" ]; then
               echo "removing $key, from $when"

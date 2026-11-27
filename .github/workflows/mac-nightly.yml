@@ -1,5 +1,5 @@
 # A nightly build of the Mac app: built on a GitHub-hosted Mac from main, signed with the team's
-# Developer ID, notarised, and put on files.ruxn.com in /p/guesthouse/nightly/ with its hash and a
+# Developer ID, notarised, and put on files.ruxn.com in the project guesthouse-nightly (/p/guesthouse-nightly/) with its hash and a
 # small guesthouse-macos-nightly.json that the app's nightly channel reads. mac/nightly.sh does the
 # building, and its comments say what it needs. docs/mac-host.md has the whole of it.
 #
@@ -10,7 +10,7 @@
 # sends this job's GitHub OIDC token, as release-files.yml does.
 #
 # Before the first run: the `mac-nightly` environment with these secrets, and the Worker for
-# files.ruxn.com taking this workflow for /p/guesthouse/nightly/ (docs/mac-host.md says which).
+# files.ruxn.com taking this workflow for the project guesthouse-nightly (docs/mac-host.md says which).
 #   MAC_SIGN_P12_BASE64      the Developer ID Application certificate and key, a .p12 file in base64
 #   MAC_SIGN_P12_PASSWORD    its password
 #   MAC_NOTARY_KEY           the App Store Connect key that notarises, the .p8 file's text
@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NIGHTLY_URL: https://files.ruxn.com/p/guesthouse/nightly/guesthouse-macos-nightly.json
+  NIGHTLY_URL: https://files.ruxn.com/p/guesthouse-nightly/guesthouse-macos-nightly.json
   XCODE: /Applications/Xcode_27.2.app
 
 jobs:
@@ -56,7 +56,7 @@ jobs:
         env:
           FORCE: ${{ inputs.force }}
         run: |
-          head=$(git rev-parse --short=7 HEAD)
+          head=$(git rev-parse HEAD | cut -c1-8)
           last=$(curl -fsSL --max-time 30 "$NIGHTLY_URL" | jq -r '.commit // empty' || true)
           echo "main is $head, the last nightly is ${last:-none}."
           if [ "$FORCE" = true ] || [ "$head" != "$last" ]; then
@@ -137,19 +137,38 @@ jobs:
         working-directory: nightly
         run: |
           set -eu
-          sha256sum -c ./*.sha256
           dmg=$(jq -r .file guesthouse-macos-nightly.json)
-          [ -f "$dmg" ]
+          # The only names the Worker takes: the dated image and its hash, with the hash's name the
+          # image's with .sha256 after it.
+          printf '%s\n' "$dmg" | grep -Eq '^Guesthouse-nightly-[0-9]{8}-[0-9a-f]{8}\.dmg$'
+          [ -f "$dmg" ] && [ -f "$dmg.sha256" ]
+          sha256sum -c "$dmg.sha256"
           [ "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(jq -r .sha256 guesthouse-macos-nightly.json)" ]
       - name: Publish it, its hash, a copy under a fixed name, and the nightly file last
         working-directory: nightly
         run: |
           set -eu
+          project=guesthouse-nightly
           dmg=$(jq -r .file guesthouse-macos-nightly.json)
-          ../scripts/files-publish.sh guesthouse/nightly "$dmg" "${dmg%.dmg}.sha256"
+          # A dated image is written once. If a run for this commit published it already (and then
+          # failed before the end), this build's bytes are not those: take the published image and
+          # its hash as they are, and make the rest from them, so the run can finish.
+          if curl -fsSL -o published.dmg "https://files.ruxn.com/p/$project/$dmg" &&
+            curl -fsSL -o published.sha256 "https://files.ruxn.com/p/$project/$dmg.sha256"; then
+            echo "$dmg is up already; using it as it is."
+            mv published.dmg "$dmg"
+            mv published.sha256 "$dmg.sha256"
+            sha256sum -c "$dmg.sha256"
+            sum=$(cut -d ' ' -f 1 "$dmg.sha256")
+            size=$(stat -c %s "$dmg")
+            jq --arg sha256 "$sum" --argjson size "$size" '.sha256 = $sha256 | .size = $size' \
+              guesthouse-macos-nightly.json >nightly.json
+            mv nightly.json guesthouse-macos-nightly.json
+          fi
+          ../scripts/files-publish.sh "$project" "$dmg" "$dmg.sha256"
           # The site's button can't read a file (it runs no script), so the newest image is also up under
           # a name that never changes. Only these two, and the nightly file, are ever replaced.
           cp "$dmg" Guesthouse-nightly.dmg
           sha256sum Guesthouse-nightly.dmg >Guesthouse-nightly.dmg.sha256
-          ../scripts/files-publish.sh --replace guesthouse/nightly Guesthouse-nightly.dmg Guesthouse-nightly.dmg.sha256
-          ../scripts/files-publish.sh --replace guesthouse/nightly guesthouse-macos-nightly.json
+          ../scripts/files-publish.sh --replace "$project" Guesthouse-nightly.dmg Guesthouse-nightly.dmg.sha256
+          ../scripts/files-publish.sh --replace "$project" guesthouse-macos-nightly.json

@@ -23,7 +23,7 @@ None has been published yet. Until the first one is on files.ruxn.com there is n
 The workflow needs these before its first run:
 
 - An environment called `mac-nightly`, limited to `main`, with five secrets: `MAC_SIGN_P12_BASE64` and `MAC_SIGN_P12_PASSWORD` (the Developer ID Application certificate and its key), `MAC_NOTARY_KEY`, `MAC_NOTARY_KEY_ID` and `MAC_NOTARY_ISSUER_ID` (an App Store Connect key that notarises). `mac/nightly.sh` never prints them and puts the certificate in a keychain of its own that it deletes.
-- The Worker behind files.ruxn.com taking `mac-nightly.yml` for `/p/guesthouse/nightly/`, as it takes `release-files.yml` for `/p/guesthouse/`. The upload has no secret: `scripts/files-publish.sh` sends the job's GitHub OIDC token.
+- The Worker behind files.ruxn.com taking `mac-nightly.yml` for the project `guesthouse-nightly`, whose files are at `/p/guesthouse-nightly/`, as it takes `release-files.yml` for `/p/guesthouse/`. It takes only `Guesthouse-nightly-YYYYMMDD-<8 hex>.dmg` and its `.dmg.sha256` (written once), and `Guesthouse-nightly.dmg`, its `.sha256` and `guesthouse-macos-nightly.json` (which are replaced). The upload has no secret: `scripts/files-publish.sh` sends the job's GitHub OIDC token.
 - For the 14-day cleanup (`mac-nightly-cleanup.yml`), the repository variable `FILES_BUCKET` and an environment `mac-nightly-cleanup` with the bucket's keys. Without them the cleanup does nothing.
 
 A nightly is the release's major and minor with the date as the patch (`0.1.20261128`), so it is newer than the release it follows and older than the next one.

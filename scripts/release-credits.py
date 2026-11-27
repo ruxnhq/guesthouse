@@ -26,6 +26,8 @@ from urllib.parse import quote_plus
 OWN = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PAGES, PAGE = 3, 100
 START, END = "<!-- credits:start -->", "<!-- credits:end -->"
+# A pull request that only signs the CLA isn't a contribution to thank. Credits are never tied to the CLA.
+CLA_PATHS = ("CLA/", "CLA-SIGNERS.md")
 LINUX_TAG = re.compile(r"v\d+\.\d+\.\d+")
 
 
@@ -73,6 +75,16 @@ def outside_pulls(items: list) -> list[tuple[int, str, str]]:
     return sorted(found)
 
 
+def only_signs_the_cla(files: list[str]) -> bool:
+    """Whether a pull request's files are all CLA signatures."""
+    return bool(files) and all(name.startswith(CLA_PATHS) for name in files)
+
+
+def changed_files(repo: str, number: int) -> list[str]:
+    answer = gh("api", f"repos/{repo}/pulls/{number}/files?per_page=100")
+    return [f["filename"] for f in answer if isinstance(f, dict) and isinstance(f.get("filename"), str)]
+
+
 def section(pulls: list[tuple[int, str, str]]) -> str:
     """The notes' section, between markers so a second run finds it again."""
     lines = [f"- {title} (#{number}, thanks @{login})" for number, title, login in pulls]
@@ -108,7 +120,7 @@ def main() -> int:
         if len(found) < PAGE:
             break
 
-    pulls = outside_pulls(items)
+    pulls = [p for p in outside_pulls(items) if not only_signs_the_cla(changed_files(args.repo, p[0]))]
     if not pulls:
         print(f"No outside pull requests in {args.tag}.", file=sys.stderr)
         return 0

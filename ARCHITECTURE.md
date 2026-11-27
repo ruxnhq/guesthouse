@@ -295,12 +295,6 @@ These crates are shared. `guesthouse-jail` is built on by the Linux daemon, `app
 
 Small pieces that belong to no one subject go in `guesthouse-basics` (`crates/basics`), so a host takes them without the rest of a subject's crate.
 
-Small pieces that belong to no one subject go in `guesthouse-basics` (`crates/basics`), so a host takes them without the rest of a subject's crate.
-
-Small pieces that belong to no one subject go in `guesthouse-basics` (`crates/basics`), so a host takes them without the rest of a subject's crate.
-
-Small pieces that belong to no one subject go in `guesthouse-basics` (`crates/basics`), so a host takes them without the rest of a subject's crate.
-
 The direction is one core for every host:
 
 - Before a feature is designed for one host, the code of the other two for the same job is read first, including a host whose code lives outside this repository, and the same names and shapes are reused.

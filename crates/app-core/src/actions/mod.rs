@@ -320,29 +320,41 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
     intel_device::switch_back_on(task, shown)?;
     let picture_first = hardware_desktop::picture_first(task);
     // A guest left running without its GPU stays as it came up, for the reports it's kept for.
-    if get_gpu_ready_on_this_desktop(task, picture_first)? != Gpu::Working {
+    let gpu = get_gpu_ready_on_this_desktop(task, picture_first)?;
+    if !kept_going(task, gpu) {
         return Ok(());
     }
     let new_identity = new_vm_needed(shown, &read_state(task.context, &task.machine), &task.machine);
     let to_nvme = nvme_move::ready_windows(task)?;
     if new_identity || to_nvme {
         start_again_in_new_vm(task, new_identity)?;
-        if get_gpu_ready_on_this_desktop(task, picture_first)? != Gpu::Working {
+        let gpu = get_gpu_ready_on_this_desktop(task, picture_first)?;
+        if !kept_going(task, gpu) {
             return Ok(());
         }
     }
     intel_device::switch_off_for_software_desktop(task, shown)?;
-    // Its display is set in the user's session, so with nobody signed in it waits for someone to.
+    // Its display is set in the user's session, so with nobody signed in it waits for someone to. The
+    // picture is judged once the display is set up, so not on a boot that waits.
     if !task.desktop_owed {
         set_up_desktop(task)?;
-    }
-    if let Some(why) = hardware_desktop::no_picture(task) {
-        return start_again_on_software_desktop(task, &why).map(|_| ());
+        if let Some(why) = hardware_desktop::no_picture(task) {
+            return start_again_on_software_desktop(task, &why).map(|_| ());
+        }
     }
     finish_on_desktop(task)?;
     // The picture is up, so the start is done, and the watch goes on behind it.
     task.watch_after_start = picture_first && hardware_desktop::watched(task);
     Ok(())
+}
+
+/// Whether the start goes on after the GPU's part. A guest kept running without its GPU doesn't, and
+/// nor is its desktop set up once someone signs in. One started again has had its whole start.
+fn kept_going(task: &mut Task, gpu: Gpu) -> bool {
+    if gpu == Gpu::Missing {
+        task.desktop_owed = false;
+    }
+    gpu == Gpu::Working
 }
 
 /// The settings and the card maker's files, which are all asked of the guest. A VM that has gone by

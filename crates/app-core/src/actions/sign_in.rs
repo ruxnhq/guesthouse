@@ -9,7 +9,7 @@
 //! app's own look at restarts sets that one up.
 
 use super::Task;
-use super::desktop::{desktop_up, rebooted, set_up_desktop};
+use super::desktop::{RESTART_SIGN_IN_NOTE, START_SIGN_IN_NOTE, desktop_up, rebooted, set_up_desktop};
 use super::late_watch::take_slot;
 use crate::log::write_log;
 
@@ -30,7 +30,8 @@ pub(super) fn set_up_desktop_after_sign_in(task: &mut Task) {
         return;
     };
     note(task, "someone signed in, so the desktop is set up");
-    task.error.clear();
+    // What else the start said still holds.
+    task.error = without_note(&task.error);
     task.step("Setting up the desktop");
     task.desktop_owed = false;
     if let Err(failure) = set_up_desktop(task) {
@@ -52,6 +53,11 @@ fn wait_for_sign_in(task: &Task, qemu: u32) -> Option<&'static str> {
             return None;
         }
     }
+}
+
+fn without_note(error: &str) -> String {
+    let rest = error.replace(START_SIGN_IN_NOTE, "").replace(RESTART_SIGN_IN_NOTE, "");
+    rest.trim().to_owned()
 }
 
 fn note(task: &Task, text: &str) {
@@ -196,5 +202,58 @@ mod tests {
         set_up_desktop_after_sign_in(&mut task);
         assert!(task.said.lock().unwrap().is_empty());
         assert!(asked(&agent).is_empty(), "the app's own look sets that restart up");
+    }
+
+    #[test]
+    fn a_guest_kept_without_its_gpu_at_the_sign_in_screen_is_left_as_it_came_up() {
+        let scratch = Scratch::new();
+        let mut then = vec![NOBODY];
+        then.extend(["gpu working 0\n"; 19]);
+        let (context, _) = context_after_a_wait(&scratch, &then);
+        let mut vm = machine(&context);
+        vm.use_windows_card(crate::gpu_maker::GpuMaker::Intel, "0000:03:00.0");
+        crate::agent::make_token(&context, &vm).unwrap();
+        crate::intel_desktop::fall_back(&context, &vm, "a test of the software desktop").unwrap();
+        let host = RecordingHost::default();
+        let mut task = Task::new(&context, &host, "start", vm);
+        assert_eq!(boot(&mut task), Ok(()));
+        assert_eq!(host.said(), ["start gpu"]);
+        assert!(!task.desktop_owed, "its desktop is not set up later either");
+        assert!(task.error.contains("left running") && !task.error.contains("sign in"), "{}", task.error);
+    }
+
+    #[test]
+    fn what_else_the_start_said_is_kept_once_the_desktop_is_set_up() {
+        assert_eq!(
+            without_note(&format!("{START_SIGN_IN_NOTE} Only room for 8 GiB.")),
+            "Only room for 8 GiB."
+        );
+        assert_eq!(without_note(RESTART_SIGN_IN_NOTE), "");
+    }
+
+    #[test]
+    fn a_restart_in_the_app_at_the_sign_in_screen_is_set_up_once_someone_signs_in() {
+        let scratch = Scratch::new();
+        let (context, agent) = context_after_a_wait(&scratch, &[NOBODY, NO_DESKTOP, "3\n"]);
+        let vm = machine(&context);
+        crate::agent::make_token(&context, &vm).unwrap();
+        fs::write(context.run_folder(None).join(SERIAL_FILE), BOOT_LINE).unwrap();
+        let host = RecordingHost::default();
+        assert_eq!(super::super::run_task(&context, &host, "after_reboot", &vm.id, &[]), Ok(()));
+        let asked = asked(&agent);
+        assert!(
+            asked[60].contains("Win32_ComputerSystem"),
+            "who is signed in is asked once the wait runs out"
+        );
+        assert!(
+            asked[61..63].iter().all(|script| script.contains("explorer")),
+            "then the desktop is waited for"
+        );
+        assert_eq!(fs::read_to_string(context.run_folder(None).join(BOOTS_FILE)).unwrap(), "1");
+        assert!(!rebooted(&context, None), "the app doesn't start it again");
+        let record = read_task(&context, None);
+        assert_eq!((record.pid, record.step.as_str(), record.error.as_str()), (0, "", ""));
+        let log = crate::log::read_log(&context);
+        assert!(log.contains("sign-in: someone signed in, so the desktop is set up"), "{log}");
     }
 }

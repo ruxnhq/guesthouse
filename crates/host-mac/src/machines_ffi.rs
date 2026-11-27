@@ -278,17 +278,17 @@ pub unsafe extern "C" fn guesthouse_graphics_status(id: *const c_char) -> *mut c
 
 /// Looks once for a newer Mac release of Guesthouse, with `current` the running version. Returns
 /// `{"state": "newer", "version", "where"}`, `{"state": "latest"}` or `{"state": "cant_tell"}`.
-/// Waits for the network (at most twenty seconds), so call it off the main thread. Downloads and
-/// installs nothing.
+/// With `nightly` it looks at the nightly build's file instead of the release's. Waits for the
+/// network (at most twenty seconds), so call it off the main thread. Downloads and installs nothing.
 ///
 /// # Safety
 /// `current` is null or points to a nul-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn guesthouse_update_check(current: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn guesthouse_update_check(current: *const c_char, nightly: bool) -> *mut c_char {
     // SAFETY: passed on from the caller.
     let current = unsafe { text(current) };
     into_c_string(match current {
-        Some(current) => crate::updates::check(current),
+        Some(current) => crate::updates::check(current, nightly),
         None => error_json("the version is not text"),
     })
 }

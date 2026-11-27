@@ -42,8 +42,9 @@ enum UpdateCheck {
     /// Looks once, off the main thread, and keeps the answer and the time. Nothing is downloaded.
     static func run() async -> UpdateState {
         let version = AppInfo.version
+        let nightly = UserDefaults.standard.bool(forKey: SettingsKey.nightlyChannel)
         let answer = await Task.detached { () -> String in
-            guard let text = guesthouse_update_check(version) else { return "{}" }
+            guard let text = guesthouse_update_check(version, nightly) else { return "{}" }
             defer { guesthouse_string_free(text) }
             return String(cString: text)
         }.value
@@ -73,6 +74,7 @@ enum UpdateCheck {
 /// version in a machine is not reported by the guest yet, so none is shown as if it were known.
 struct UpdatesSettings: View {
     @AppStorage(SettingsKey.autoCheckUpdates) private var auto = true
+    @AppStorage(SettingsKey.nightlyChannel) private var nightly = false
     @State private var state = UpdateCheck.kept?.state
     @State private var checkedAt = UpdateCheck.kept?.at
     @State private var checking = false
@@ -97,6 +99,10 @@ struct UpdatesSettings: View {
                     }
                 }
                 Toggle("Check for updates by itself", isOn: $auto)
+                Toggle("Look for nightly builds", isOn: $nightly)
+                Text("A nightly build is made from the newest source each night. It is for trying what is new, and it may be broken. Nothing is downloaded either way.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             Section("Graphics drivers in your machines") {
                 Text("A machine's driver is installed when it is made. Which version is in a machine, and updating it, need the machine to report its driver, which it does not yet.")

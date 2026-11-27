@@ -294,6 +294,8 @@ enum SettingsKey {
     static let accent = "accent"
     /// Whether the app looks for a newer version by itself (once a day, when it opens).
     static let autoCheckUpdates = "autoCheckUpdates"
+    /// Whether the update check reads the nightly build's file (off unless the person turns it on).
+    static let nightlyChannel = "nightlyChannel"
     /// When it last looked, as seconds since 1970, and what it found (the core's answer).
     static let updateCheckedAt = "updateCheckedAt"
     static let updateFound = "updateFound"

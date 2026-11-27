@@ -54,9 +54,10 @@ char *guesthouse_report_send(const char *archive, const char *summary_header, co
 char *guesthouse_report_issue_page(void);
 
 /* Looks once for a newer Mac release (the shared update check): {"state": "newer", "version",
- * "where"}, {"state": "latest"} or {"state": "cant_tell"}. May wait for the network, so not on the
- * main thread. Downloads nothing. */
-char *guesthouse_update_check(const char *current);
+ * "where"}, {"state": "latest"} or {"state": "cant_tell"}. With `nightly` it reads the nightly
+ * build's file, not the release's. May wait for the network, so not on the main thread.
+ * Downloads nothing. */
+char *guesthouse_update_check(const char *current, bool nightly);
 
 /* Whether machine `id`'s graphics driver is the released one: {"state": "unknown"|"current"} or
  * {"state": "old", "reported", "released"} or {"state": "missing", "released"}. */

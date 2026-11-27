@@ -15,6 +15,7 @@ default-members = [
     "crates/core",
     "crates/daemon",
     "crates/frame-socket",
+    "crates/guest-scripts",
     "crates/hcs",
     "crates/host-windows",
     "crates/installer-windows",

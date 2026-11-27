@@ -1,0 +1,79 @@
+# The guest's code on Windows, where it runs: the scripts' tests under Windows PowerShell 5.1, as in a
+# guest, and under pwsh, and the guest's C# compiled with the .NET Framework's own compiler, as Add-Type
+# compiles it in a guest. PSScriptAnalyzer runs in scripts.yml.
+name: Guest on Windows
+
+on:
+  pull_request:
+    paths:
+      - "guest/**"
+      - "crates/guest-scripts/**"
+      - "tests/windows/**"
+      - ".github/workflows/guest-windows.yml"
+      # What sends the scripts to a guest, and the app's tests of them.
+      - "crates/app-core/src/agent.rs"
+      - "crates/app-core/src/actions/**"
+      - "crates/app-core/src/app_windows/**"
+      - "crates/app-core/src/guest_files/**"
+      - "crates/app-core/tests/guest_files.rs"
+      - "crates/host-windows/src/guest.rs"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guest-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  guest:
+    name: guest scripts and C#
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Versions
+        shell: pwsh
+        run: |
+          cargo --version
+          pwsh -NoProfile -Command '"pwsh $($PSVersionTable.PSVersion)"'
+          powershell.exe -NoProfile -Command '"Windows PowerShell $($PSVersionTable.PSVersion)"'
+      # The tests run the scripts in folders under the runner's own temp folder, which has a long name:
+      # the user's TEMP is a short 8.3 name, which the scripts never see in a guest.
+      - name: Build the script tests
+        id: build
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cargo test --locked -p guesthouse-guest-scripts --no-run
+      - name: Script tests, Windows PowerShell 5.1
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        env:
+          GUESTHOUSE_GUEST_SHELL: powershell
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cargo test --locked -p guesthouse-guest-scripts
+      - name: Script tests, pwsh
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        env:
+          GUESTHOUSE_GUEST_SHELL: pwsh
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cargo test --locked -p guesthouse-guest-scripts
+      - name: The guest's C#, with Windows PowerShell 5.1's compiler
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          & .\tests\windows\compile-guest.ps1
+          exit $LASTEXITCODE

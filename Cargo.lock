@@ -1051,6 +1051,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-guest-scripts"
+version = "0.10.0"
+
+[[package]]
 name = "guesthouse-guest-share"
 version = "0.10.0"
 dependencies = [

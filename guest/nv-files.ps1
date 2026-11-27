@@ -3,9 +3,15 @@
 # then the date.
 # Usage: nv-files.ps1 LIST [-StoreFolder NAME] [-Check]
 # The files are taken from the driver's folder in the host driver store: NVIDIA's unless another is named.
+# -StoreRoot is for the tests, which give a folder that stands in for the store.
 # With -Check nothing is copied: it says how many files a run would copy or fail on, as "to place N".
-param([Parameter(Mandatory)][string]$List, [string]$StoreFolder = 'nv_dispi.inf_amd64_gpupv', [switch]$Check)
-$store = Join-Path 'C:\Windows\System32\HostDriverStore\FileRepository' $StoreFolder
+param(
+    [Parameter(Mandatory)][string]$List,
+    [string]$StoreFolder = 'nv_dispi.inf_amd64_gpupv',
+    [switch]$Check,
+    [string]$StoreRoot = 'C:\Windows\System32\HostDriverStore\FileRepository'
+)
+$store = Join-Path $StoreRoot $StoreFolder
 
 function Test-Newer($source, $target) {
     if (-not (Test-Path -LiteralPath $target)) { return $true }

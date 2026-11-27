@@ -4,7 +4,7 @@ The Linux host and the Windows host are released apart, each with a version of i
 
 ## The Linux host
 
-I do this by hand on my own PC. Nothing is automated yet, and `SHA256SUMS` isn't signed yet.
+I build and upload this by hand on my own PC. Pointing `main` at the release, the credits in its notes and the site's deploy follow by themselves from the release being published, as steps 6 to 8 say. `SHA256SUMS` isn't signed yet.
 
 The order matters. `install.sh` on `main` is what points people at a release, so it changes last, once everything it names is really there.
 
@@ -50,6 +50,8 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
      BUILD_FOLDER/SHA256SUMS
    ```
 
+   Write `NOTES` without a credits section. Once the release is published, the `Release credits` workflow adds one to the notes: a line for each pull request of someone outside the project that was merged since the release before, as `scripts/release-credits.py` finds them. To see it first, run `scripts/release-credits.py TAG`. If the workflow didn't run, run it from the Actions tab with the tag. The README's Thanks list names projects, not people.
+
    The two sources are there for the GPL and the LGPL, so a release doesn't go out without them. They have to stay up for as long as the payload does.
 
    The site's download button points at the AppImage on files.ruxn.com, not at GitHub. So publish it there too, with its hash beside it, using the file drop's `files` tool:
@@ -61,9 +63,9 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    files publish guesthouse /tmp/guesthouse-installer-VERSION.AppImage.sha256
    ```
 
-7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed. In `packaging/nix/package.nix`, set `version` too, and `hash` to the payload's SHA-256 as Nix writes it, which `nix hash convert --hash-algo sha256 --to sri PAYLOAD_SHA256` prints. In the same pull request, set the version in the README's note and in `site/public/index.html`: the Linux version at the top, the AppImage's two links and the release's link. Merge it all with one pull request. From that moment the one line installs this release, `--update` and `--check-update` offer it to everyone, and the flake gives it to NixOS.
+7. **Point `main` at it, last of all.** Publishing the release starts the `Point the installer` workflow. It downloads the payload and the source again and checks them against `SHA256SUMS`, waits for the AppImage's `.sha256` on files.ruxn.com, and opens the pull request `Point the installer at VERSION`. That one sets `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` in `install.sh`, `version` and `hash` in `packaging/nix/package.nix`, the version in the README's note, and in `site/public/index.html` the Linux version at the top, the AppImage's links, name and size, and the release's link, name and size, all by `scripts/point-installer.py`. If the AppImage isn't on files.ruxn.com within half an hour, the pull request is a draft: publish it, then mark it ready. Read the pull request, and merge it once the checks pass. From that moment the one line installs this release, `--update` and `--check-update` offer it to everyone, and the flake gives it to NixOS. If the workflow didn't run, run it from the Actions tab with the tag, or do the same by hand with `scripts/point-installer.py VERSION SHA256SUMS PAYLOAD_BYTES APPIMAGE_BYTES`.
 
-8. **Deploy the site.** Nothing deploys it by itself, so until this step guesthouse.ruxn.com still names the release before. From a checkout of `main` at that merge, in `site`, run `cf deploy public`. Then open the page and see that it names the new version.
+8. **The site deploys itself.** A change to `site/` on `main` runs the `Site deploy` workflow, which does what `cf deploy public` in `site` did. Open the page after the merge and see that it names the new version. If the workflow fails, run it again from the Actions tab, or deploy by hand as before.
 
 9. **Check it from the outside.** Run `install.sh --dry-run` from the raw URL, in a fake HOME. It should download, verify and show the plan.
 
@@ -79,6 +81,6 @@ This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the
 
 3. **Release it.** Run the script again without `-DryRun`. It builds again, tags the commit `windows-vVERSION` and pushes the tag, and makes the GitHub release `Windows VERSION` with the installer and its `.sha256`, which isn't marked latest, as that's the Linux host's. Then it publishes the installer, its `.sha256` and, last of all, `guesthouse-windows-latest.json` to the file drop with `cf r2 objects put`: the bucket `ruxn-files`, at `pub/guesthouse/`, which files.ruxn.com serves as `/p/guesthouse/`. It downloads the installer back to check it. From the moment the latest file is up, every app offers the new version.
 
-4. **Point the site at it.** In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and from a checkout of `main` at that merge, in `site`, run `cf deploy public`. Then open the page and see that it names the new version.
+4. **Point the site at it.** In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and the `Site deploy` workflow puts it up. Then open the page and see that it names the new version.
 
 If the release is wrong, publish a new version: a file on the file drop never changes once it's up. To stop apps offering a broken one meanwhile, put the previous version's `guesthouse-windows-latest.json` back.

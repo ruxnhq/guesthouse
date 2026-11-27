@@ -1,0 +1,44 @@
+# Thanks the outside contributors in a Linux release's notes, once the release is published. The
+# section comes from scripts/release-credits.py, which asks GitHub who the outside authors of the
+# merged pull requests are. It writes between markers in the notes, so running it again, from the
+# Actions tab, replaces its own section and leaves the rest of the notes as they are.
+name: Release credits
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to write the credits into, like v0.10.0
+        required: true
+
+permissions:
+  contents: write # to edit the release's notes
+
+concurrency:
+  group: release-credits-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  credits:
+    name: credits in the notes
+    # Linux releases only: windows-v*, test and macos-part tags aren't thanked here.
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Write the credits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "$TAG isn't a Linux release tag."; exit 0 ;;
+          esac
+          python3 scripts/release-credits.py --repo "$GITHUB_REPOSITORY" --apply "$TAG"

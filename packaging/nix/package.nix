@@ -169,7 +169,11 @@ stdenvNoCC.mkDerivation {
       --prefix PATH : ${toolPath}
   '';
 
-  passthru = { inherit toolPath; };
+  passthru = {
+    inherit toolPath;
+    # The card's clock helper comes in the releases after 0.10.0, and the module wraps it only then.
+    hasClockHelper = lib.versionOlder "0.10.0" version;
+  };
 
   meta = {
     description = "Windows and Linux machines on KVM, with the real GPU driver";

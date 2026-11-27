@@ -52,7 +52,7 @@ which a machine on an AMD card needs, to whoever is logged in.
 - Installs the package, and `hwdata`, which the app reads card names from.
 - Puts the bridge helper at `/run/wrappers/bin/guesthouse-bridge-helper`, setuid root. It has its own name so it
   doesn't clash with the one `virtualisation.libvirtd` makes.
-- Puts Guesthouse's clock helper at `/run/wrappers/bin/guesthouse-clock-helper`, setuid root. It holds an NVIDIA
+- From the first release after 0.10.0, puts Guesthouse's clock helper at `/run/wrappers/bin/guesthouse-clock-helper`, setuid root. It holds an NVIDIA
   card's memory clock up while another device views a machine, and does nothing else. [NVIDIA](nvidia.md)
 - Turns on `hardware.graphics`, unless you set it yourself. QEMU loads the host's OpenGL libraries.
 - Writes two firmware descriptors to `/etc/qemu/firmware`, from nixpkgs' OVMF. Both have Secure Boot. One has

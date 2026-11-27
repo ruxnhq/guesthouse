@@ -11,17 +11,28 @@ use common::*;
 use guesthouse_messages::wire::set_u64;
 use log::{LevelFilter, Log, Metadata, Record};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Each thread counts its own, as in the core's test. The test harness's main thread allocates its
+    // bookkeeping just after it starts the test's thread, which can land in the window being measured.
+    // A submission is read and logged on the calling thread, and nothing starts another, so its own
+    // count is the whole of it. A const value with no destructor is never allocated and is never gone
+    // while the thread runs.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn allocations() -> usize {
+    ALLOCATIONS.with(Cell::get)
+}
 
 // SAFETY: passes everything to the system allocator and only counts.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         // SAFETY: the caller's promises are the ones the system allocator needs.
         unsafe { System.alloc(layout) }
     }
@@ -55,7 +66,6 @@ static FORMATTING: Formatting = Formatting;
 const WARM_UP: u64 = 100;
 const ROUNDS: u64 = 1_000;
 
-// One test, as the counter is the whole program's.
 #[test]
 fn submissions_do_not_allocate_with_every_line_formatted() {
     log::set_logger(&FORMATTING).unwrap();
@@ -71,7 +81,7 @@ fn submissions_do_not_allocate_with_every_line_formatted() {
         let _ = session.handle_message(&work, TICKET, &mut out);
     };
     (0..WARM_UP).for_each(&mut run);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     (WARM_UP..WARM_UP + ROUNDS).for_each(&mut run);
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(allocations() - before, 0);
 }

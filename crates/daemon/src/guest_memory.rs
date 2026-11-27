@@ -40,15 +40,19 @@ fn check(result: *mut libc::c_void) -> io::Result<*mut libc::c_void> {
 
 const HOST_BUFFER_NAME: &str = "frame-slot";
 
-/// A new file in memory, mapped here for the GPU to write and a viewer to read.
+/// A new file in memory, mapped here for the GPU to write and a viewer to read. It is whole pages
+/// long, so the card can take its pages as a dma-buf and not by their address.
 fn map_host_buffer(size: u64) -> io::Result<HostBuffer> {
-    let file = sized_buffer(HOST_BUFFER_NAME, size)?;
+    // SAFETY: sysconf only reads a value.
+    let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap_or(PAGE_SIZE).max(1);
+    let length = size.div_ceil(page).saturating_mul(page);
+    let file = sized_buffer(HOST_BUFFER_NAME, length)?;
     let protection = libc::PROT_READ | libc::PROT_WRITE;
-    // SAFETY: the kernel picks the address, and the file is `size` bytes long and sealed so.
+    // SAFETY: the kernel picks the address, and the file is `length` bytes long and sealed so.
     let at = check(unsafe {
-        libc::mmap(ptr::null_mut(), size as usize, protection, libc::MAP_SHARED, file.as_raw_fd(), 0)
+        libc::mmap(ptr::null_mut(), length as usize, protection, libc::MAP_SHARED, file.as_raw_fd(), 0)
     })?;
-    Ok(HostBuffer { file, host_address: at as u64 })
+    Ok(HostBuffer { file, host_address: at as u64, length })
 }
 
 fn unmap_host_buffer(address: u64, size: u64) {
@@ -274,6 +278,23 @@ mod tests {
     use std::fs::{self, OpenOptions};
     use std::path::{Path, PathBuf};
     use std::process;
+
+    #[test]
+    fn a_host_buffer_is_whole_pages_of_its_file() {
+        // SAFETY: sysconf only reads a value.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+        // A picture whose rows don't end on a page, as 1366 by 768 doesn't.
+        let size = 1366 * 768 * 4;
+        let buffer = map_host_buffer(size).unwrap();
+        assert_eq!(buffer.length, size.div_ceil(page) * page);
+        let file = fs::File::from(buffer.file.try_clone().unwrap());
+        assert_eq!(file.metadata().unwrap().len(), buffer.length);
+        // The last page is mapped and can be written, as the GPU may.
+        let last = (buffer.host_address + buffer.length - 1) as *mut u8;
+        // SAFETY: the mapping is `length` bytes long and writable.
+        unsafe { last.write_volatile(7) };
+        unmap_host_buffer(buffer.host_address, buffer.length);
+    }
 
     fn temporary_file(name: &str, bytes: &[u8]) -> PathBuf {
         let path = env::temp_dir().join(format!("guesthouse-test-{}-{name}", process::id()));

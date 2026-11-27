@@ -18,9 +18,10 @@ mod random_messages;
 
 use guesthouse_backend::{
     AdapterFacts, AllocationShape, Backend, BackendError, CardLabel, CommandBuffer, Doorbell, DriverFound,
-    DriverSurvey, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind, PciCard, RangeView,
-    Refusal, RegistryName, RegistryValue, RingTiling, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart,
-    StandardSurface, Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
+    DriverSurvey, FilePages, FileRange, GpuRange, GuestBooks, HostServices, MapRequest, MemoryId, MemoryKind,
+    PciCard, RangeView, Refusal, RegistryName, RegistryValue, RingTiling, Setup, SlotCopy, SpaceId,
+    StagingCopy, StagingStart, StandardSurface, Status, SurfaceShape, UnmapRequest, VendorQuery, Work,
+    WorkStart,
 };
 pub use memory::SparseMemory;
 pub use random_messages::RandomMessages;
@@ -87,6 +88,8 @@ pub struct StandIn {
     pub memory_starts: HashMap<MemoryId, Vec<u8>>,
     /// Set to make every export fail.
     pub refuse_exports: bool,
+    /// Memory adopted from host pages: its size, and the file's ranges when it came with its file.
+    pub adopted: Vec<(u64, Option<Vec<FileRange>>)>,
     /// The tiles a viewer's frames can be laid out in, for a test to set. `None` is a card with none.
     pub ring_tiling: Option<RingTiling>,
     /// Set to refuse every allocation's, context's and queue's private data, as a vendor's driver
@@ -203,6 +206,7 @@ impl StandIn {
             slot_copy_status: Status::SUCCESS,
             memory_starts: HashMap::new(),
             refuse_exports: false,
+            adopted: Vec::new(),
             ring_tiling: None,
             refuse_private_data: false,
             standard_data: None,
@@ -386,7 +390,18 @@ impl Backend for StandIn {
         self.card_free
     }
 
-    fn adopt_host_pages(&mut self, _host_address: u64, _size: u64) -> Result<MemoryId, BackendError> {
+    fn adopt_host_pages(&mut self, _host_address: u64, size: u64) -> Result<MemoryId, BackendError> {
+        self.adopted.push((size, None));
+        Ok(self.new_memory())
+    }
+
+    fn adopt_file_pages(
+        &mut self,
+        _host_address: u64,
+        size: u64,
+        pages: &FilePages<'_>,
+    ) -> Result<MemoryId, BackendError> {
+        self.adopted.push((size, Some(pages.ranges.clone())));
         Ok(self.new_memory())
     }
 

@@ -130,9 +130,10 @@ impl GuestMemory for SparseMemory {
     /// A file that holds nothing, at an address of its own, as the core only passes both on.
     fn host_buffer(&mut self, size: u64) -> io::Result<HostBuffer> {
         let host_address = self.next_view;
-        self.next_view += size.div_ceil(PAGE_SIZE) * PAGE_SIZE;
+        let length = size.div_ceil(PAGE_SIZE) * PAGE_SIZE;
+        self.next_view += length;
         self.host_buffers.push((host_address, size));
-        Ok(HostBuffer { file: File::open("/dev/null")?.into(), host_address })
+        Ok(HostBuffer { file: File::open("/dev/null")?.into(), host_address, length })
     }
 
     fn release_host_buffer(&mut self, address: u64, size: u64) {

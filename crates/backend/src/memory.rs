@@ -161,6 +161,9 @@ pub trait GuestMemory {
 pub struct HostBuffer {
     pub file: OwnedFd,
     pub host_address: u64,
+    /// How long the file is: the size asked for, rounded up to whole pages of this PC, so a driver
+    /// can take the file's pages themselves.
+    pub length: u64,
 }
 
 #[cfg(test)]

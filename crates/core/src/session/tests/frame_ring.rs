@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{CopyOrder, Delivery, Frame, FrameRing, FrameSink, ViewerFacts};
+use guesthouse_backend::FileRange;
 use std::os::fd::BorrowedFd;
 
 const WIDTH: u32 = 640;
@@ -258,6 +259,7 @@ fn a_viewer_on_another_gpu_gets_slots_in_memory_here_and_they_go_with_it() {
     let surfaces = screen(&mut session, WIDTH, HEIGHT);
     present(&mut session, surfaces);
     session.backend_mut().refuse_exports = true;
+    let adopted_before = session.backend().adopted.len();
     session.viewer_arrived();
     session.viewer_described(ViewerFacts { wants_memory: true, ..ViewerFacts::default() });
     let mut sink = Sink::new();
@@ -267,6 +269,13 @@ fn a_viewer_on_another_gpu_gets_slots_in_memory_here_and_they_go_with_it() {
     assert_eq!(sink.frames.len(), 1);
     assert_eq!(session.memory().host_buffers.len(), SLOTS);
     let blocks = session.backend().live_memory_blocks();
+    let adopted = &session.backend().adopted[adopted_before..];
+    assert_eq!(adopted.len(), SLOTS);
+    for (size, ranges) in adopted {
+        // Whole pages of the slot's own file, from its start, and not its address alone.
+        assert_eq!(size % 4096, 0, "{size:#x}");
+        assert_eq!(ranges.as_deref(), Some(&[FileRange { offset: 0, length: *size }][..]));
+    }
     session.viewer_left();
     assert!(session.memory().host_buffers.is_empty());
     assert_eq!(session.backend().live_memory_blocks(), blocks - SLOTS);

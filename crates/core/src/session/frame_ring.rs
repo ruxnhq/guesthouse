@@ -11,8 +11,8 @@ use crate::frames::{Delivery, Frame, FrameCounts, FrameRing, FrameSink, Picture,
 use crate::frames::{LiveRing, RING_SLOTS, SlotInFlight, SlotMemory};
 use crate::gpu_addresses::{ALLOCATION_ALIGN, AddressUse};
 use guesthouse_backend::{
-    Backend, BackendError, GuestMemory, MapRequest, MemoryId, MemoryKind, RingTiling, SlotCopy, SpaceId,
-    StagingCopy, StagingStart, Status, SurfaceShape, UnmapRequest,
+    Backend, BackendError, FilePages, FileRange, GuestMemory, MapRequest, MemoryId, MemoryKind, RingTiling,
+    SlotCopy, SpaceId, StagingCopy, StagingStart, Status, SurfaceShape, UnmapRequest,
 };
 use guesthouse_messages::indirect::Look;
 use guesthouse_messages::wire::align_up;
@@ -299,7 +299,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         space: SpaceId,
     ) -> Result<(SlotMemory, OwnedFd), BackendError> {
         let buffer = self.memory.host_buffer(size).map_err(|error| BackendError::new(error.to_string()))?;
-        let memory = match self.backend.adopt_host_pages(buffer.host_address, size) {
+        // The slot is a file of its own, so the card takes its pages from the file where it can.
+        // Pages it takes by their address are looked up again at each submission, and amdgpu refuses
+        // the submission while the kernel is moving any of them, as it does under memory pressure.
+        let whole_file = [FileRange { offset: 0, length: buffer.length }];
+        let pages = FilePages { file: buffer.file.as_fd(), ranges: whole_file.to_vec() };
+        let memory = match self.backend.adopt_file_pages(buffer.host_address, buffer.length, &pages) {
             Ok(memory) => memory,
             Err(error) => {
                 self.memory.release_host_buffer(buffer.host_address, size);

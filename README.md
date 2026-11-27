@@ -38,7 +38,7 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 | **Windows hosts** · Windows 11 Home or Pro, no Hyper-V needed | **The app** · give it an ISO, and it installs the guest with its GPU |
 
 > [!NOTE]
-> **Early days.** Linux 0.11.0 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS and Android guests are previews ([macOS](docs/macos.md), [Android](docs/android.md)). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
+> **Early days.** Linux 0.11.0 is out, and Windows hosts are a preview. NVIDIA works best, AMD is newer, Intel Arc is an experiment, and macOS and Android guests are previews ([macOS](docs/macos.md), [Android](docs/android.md)). A host for Macs with Apple silicon is in development, and isn't released ([the Mac host](docs/mac-host.md)). [The site](https://guesthouse.ruxn.com/#cards) lists every card it has run on.
 
 ## Install
 
@@ -53,6 +53,10 @@ The script is meant to be read first, and [what it does](docs/install.md) is wri
 **Windows 11** · Home or Pro, x64
 
 Get the installer from **[guesthouse.ruxn.com](https://guesthouse.ruxn.com/#download)**. [How it works on Windows](docs/windows-host.md).
+
+**Mac** · Apple silicon · in development, not released
+
+There's nothing to download yet. The source is here, in `mac/` and `crates/host-mac`, and [the Mac host](docs/mac-host.md) says what it can do, and what it needs that isn't here yet: the graphics process and a patched QEMU, and the guest's driver packages. It has been tried on one Mac. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.
 
 ## What a machine can do
 
@@ -99,6 +103,8 @@ cargo run -p guesthouse-app-windows      # the window, which asks the service fo
 ```
 
 The service is in `crates/service-windows`, and the serial relay it needs beside it comes from `crates/host-windows`. On Linux a VM also needs QEMU with the patch in `qemu/`, which cargo doesn't build.
+
+On a Mac, with Rust and Xcode 27, only the Mac host builds: `cargo test -p guesthouse-host-mac`, and `mac/build.sh` for the app. On Linux and Windows its crate is empty. See [the Mac host](docs/mac-host.md).
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest, and [ARCHITECTURE.md](ARCHITECTURE.md) explains how it fits together.
 

@@ -2,7 +2,7 @@
 
 ## Getting going
 
-The workspace builds on Linux and on Windows. Each builds the host for the system it's on, and the other system's crates build empty, so `cargo test` works on both. The GTK app is the exception, and only builds on Linux. No GPU and no VM are needed for any of this.
+The workspace builds on Linux and on Windows, and the Mac host builds on a Mac. Each builds the host for the system it's on, and the other systems' crates build empty, so `cargo test` works on all three. The GTK app is the exception, and only builds on Linux. No GPU and no VM are needed for any of this.
 
 ### On Linux
 
@@ -47,7 +47,7 @@ cargo clippy -p guesthouse-host-mac --all-targets -- -D warnings
 mac/build.sh
 ```
 
-`mac/README.md` says what the app needs beyond that. The checks on pull requests run on Linux only, so build a Mac change on a Mac before you send it.
+`mac/README.md` says what the app needs beyond that, and [docs/mac-host.md](docs/mac-host.md) says what the Mac host is, what it can't do yet and what it needs that isn't in this repository. The checks on pull requests run on Linux only, so build a Mac change on a Mac before you send it.
 
 ## Legal rules
 

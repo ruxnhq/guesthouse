@@ -918,17 +918,18 @@ public class AppWindows : Form
         else { c.Placed = false; c.Overflow = false; }
     }
 
-    // Where a popup's picture goes in the overlay to be where the popup really is on the screen.
-    int SiteX(Cell c) { return c.Frame.L + c.InL - vx; }
-    int SiteY(Cell c) { return c.Frame.T + c.InT - vy; }
+    // Where a popup's picture goes in the overlay to be where the popup really is on the screen. One that reaches past an edge
+    // (Word opens its dialogs 5 px above the screen, then moves them) is shown that much inside it.
+    int SiteX(Cell c) { return Math.Max(0, Math.Min(c.Frame.L + c.InL - vx, ovW - c.CellW)); }
+    int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy, ovH - c.CellH)); }
 
     // A popup lies over its own window, which is parked under its cell, so its picture at its real place sits at the same
     // point of that cell as in the window the app drew it over: the parent's host window shows it where the popup's host
-    // surface is anyway. Only when it lies over such a window of its own program, and wholly on the overlay.
+    // surface is anyway. Only when it lies over such a window of its own program.
     bool PlaceOnSite(Cell c)
     {
         int x = SiteX(c), y = SiteY(c), w = c.CellW, h = c.CellH;
-        if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > ovW || y + h > ovH) return false;
+        if (w <= 0 || h <= 0 || w > ovW || h > ovH) return false;
         foreach (Cell b in cells.Values)
         {
             if (b == c || (b.Pid != c.Pid && b.AppPid != c.Pid) || !b.Active || b.Popup || !b.Placed || b.Overflow || b.Hidden || b.Iconic || b.OnSite) continue;
@@ -945,6 +946,10 @@ public class AppWindows : Form
         // A popup shown on site goes where the popup went, and gets a free spot again if one has come up meanwhile.
         foreach (Cell c in cells.Values)
             if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c))) c.Placed = false;
+        // A dialog first shows up where it cannot be on site (off the screen, before its program moves it over itself), so an
+        // overflow dialog tries again on each pass rather than hide its program's window until the screen has grown.
+        foreach (Cell c in cells.Values)
+            if (c.Overflow && c.Placed && c.Active && !c.Popup && c.Owner != IntPtr.Zero && PlaceOnSite(c)) c.ThumbDirty = true;
         List<Cell> todo = new List<Cell>();
         foreach (Cell c in cells.Values) if (!c.Placed && c.Active) todo.Add(c);
         if (todo.Count == 0) return;
@@ -1052,7 +1057,7 @@ public class AppWindows : Form
             if (l + r >= w - MinCellSide || t + b >= h - MinCellSide) { l = t = r = b = 0; }
             c.InL = l; c.InT = t; c.InR = r; c.InB = b;
             c.CellW = Math.Min(w - l - r, ovW); c.CellH = Math.Min(h - t - b, ovH);
-            if (c.OnSite) { c.X += l; c.Y += t; }   // the menu alone, still where it really is
+            if (c.OnSite) { c.X = SiteX(c); c.Y = SiteY(c); }   // the menu alone, still where it really is
             c.InDone = true; c.ThumbDirty = true;
             ApplyThumbs();
         }

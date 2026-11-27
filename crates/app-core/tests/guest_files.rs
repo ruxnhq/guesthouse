@@ -276,6 +276,18 @@ fn the_app_windows_helper_shows_popups_and_dialogs_of_a_window_that_fills_the_sc
         "if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c))) c.Placed = false;"
     ));
     assert!(helper.contains("o.OnSite ||"), "a cell on site takes no space of its own");
+    assert!(
+        helper.contains(
+            "int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy, ovH - c.CellH)); }"
+        ),
+        "a dialog a little above the screen is on it"
+    );
+    assert!(
+        helper.contains(
+            "c.Overflow && c.Placed && c.Active && !c.Popup && c.Owner != IntPtr.Zero && PlaceOnSite(c)"
+        ),
+        "a dialog does not stay over its program's window"
+    );
     assert!(helper.contains("if (stray && (caption || (st & WS_POPUP) == 0)) return null;"));
     assert!(helper.contains("if (c.Stray && b.Pid != c.Pid && b.AppPid != c.Pid) continue;"));
     assert!(

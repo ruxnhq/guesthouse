@@ -169,6 +169,7 @@ fn connect_as(
         side,
         starter: Some(starter.clone()),
         timing: context.app_windows.timing,
+        clock: context.clock.clone(),
     };
     Ok(MachineLink {
         client: Client::start(config),

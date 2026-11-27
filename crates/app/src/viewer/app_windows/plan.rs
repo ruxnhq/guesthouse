@@ -689,6 +689,7 @@ mod tests {
             side: false,
             starter: None,
             timing: Timing::default(),
+            clock: std::sync::Arc::new(guesthouse_app_core::clock::RealClock::default()),
         });
         let mut hosted = BTreeMap::new();
         let mut found = Vec::new();

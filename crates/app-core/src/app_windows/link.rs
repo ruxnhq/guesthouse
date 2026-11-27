@@ -11,6 +11,7 @@ use super::message::{Answer, parse_guest_line};
 use super::message::{
     GuestMessage, LineProblem, MOST_APPS_LINE_BYTES, MOST_LINE_BYTES, Request, side_token_line, token_line,
 };
+use crate::clock::Clock;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
@@ -116,6 +117,8 @@ pub struct LinkConfig {
     pub side: bool,
     pub starter: Option<Arc<dyn HelperStarter>>,
     pub timing: Timing,
+    /// What [`Timing::start_cooldown`] is measured by.
+    pub clock: Arc<dyn Clock>,
 }
 
 /// What the thread tells the client.
@@ -189,7 +192,8 @@ struct Link {
     next_try: Instant,
     wait: Duration,
     starting: bool,
-    last_start: Option<Instant>,
+    /// By the config's clock.
+    last_start: Option<Duration>,
     status: Status,
     /// When the helper last said hello. A connection that lasted is no reason to wait long to try again.
     up_since: Option<Instant>,
@@ -450,12 +454,14 @@ impl Link {
     /// Starts the helper in the guest, unless one start is going or one was tried just now.
     fn start_helper(&mut self) {
         let Some(starter) = self.config.starter.clone() else { return };
-        let cooled = self.last_start.is_none_or(|at| at.elapsed() >= self.config.timing.start_cooldown);
+        let now = self.config.clock.now();
+        let cooled =
+            self.last_start.is_none_or(|at| now.saturating_sub(at) >= self.config.timing.start_cooldown);
         if self.starting || !cooled {
             return;
         }
         self.starting = true;
-        self.last_start = Some(Instant::now());
+        self.last_start = Some(now);
         let own = self.own.clone();
         thread::spawn(move || {
             let _ = own.send(Input::Started(starter.start()));

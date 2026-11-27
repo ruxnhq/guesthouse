@@ -1,6 +1,8 @@
 use super::message::*;
 use super::stand_in::{FakeHelper, Welcome};
 use super::*;
+use crate::clock::stand_in::Ticking;
+use crate::clock::{Clock, RealClock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,6 +58,7 @@ fn config(port: u16, starter: Option<&Arc<Starter>>) -> LinkConfig {
         side: false,
         starter: starter.map(|starter| starter.clone() as Arc<dyn HelperStarter>),
         timing: quick(),
+        clock: Arc::new(RealClock::default()),
     }
 }
 
@@ -288,13 +291,25 @@ fn a_helper_started_again_replaces_the_cells_and_the_old_handles_are_not_trusted
 fn a_wrong_token_looks_like_nothing_is_there_and_starts_the_helper_once_in_a_while() {
     let helper = FakeHelper::start("another token");
     let starter = Starter::new();
-    let mut client = Client::start(config(helper.port, Some(&starter)));
+    // The cooldown goes by this clock, which only moves when the test moves it.
+    let clock = Arc::new(Ticking::default());
+    let mut client =
+        Client::start(LinkConfig { clock: clock.clone(), ..config(helper.port, Some(&starter)) });
     down_with(&mut client, "closed");
     assert!(helper.wait_until(|inner| inner.tokens_refused >= 2), "it tries again");
     assert_eq!(starter.count(), 1, "one start, not one a try");
-    thread_sleep(500);
-    assert!(starter.count() >= 2, "and again once the cooldown has gone");
+    clock.sleep(quick().start_cooldown);
+    assert!(starts_reach(&starter, 2), "and again once the cooldown has gone");
     assert_eq!(helper.connections(), 0);
+}
+
+/// Waits until the helper has been started `count` times, or a few seconds are up.
+fn starts_reach(starter: &Starter, count: usize) -> bool {
+    let until = std::time::Instant::now() + SECONDS;
+    while starter.count() < count && std::time::Instant::now() < until {
+        thread_sleep(5);
+    }
+    starter.count() >= count
 }
 
 fn thread_sleep(millis: u64) {

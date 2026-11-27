@@ -10,9 +10,10 @@
 #
 # Everything private comes from the environment, and none of it is ever printed or kept:
 #   GUESTHOUSE_SIGN_IDENTITY       the identity to sign with (a name or a SHA-1), or `-` for ad hoc.
-#   GUESTHOUSE_SIGN_P12            a .p12 file holding the identity. It is imported into a keychain
-#   GUESTHOUSE_SIGN_P12_PASSWORD   made here with a random password, which is deleted on the way out;
-#                                  the login keychain is never touched.
+#   GUESTHOUSE_SIGN_P12            a .p12 file holding the identity, with any encryption: it is read
+#   GUESTHOUSE_SIGN_P12_PASSWORD   with an openssl that can, and its certificate and key go, in an
+#                                  old-format bundle with a random password, into a keychain made here
+#                                  that is deleted on the way out. The login keychain is never touched.
 #   GUESTHOUSE_KEYCHAIN            instead, a keychain that already holds the identity (and its
 #   GUESTHOUSE_KEYCHAIN_PASSWORD   password, to unlock it, if it needs one).
 #   GUESTHOUSE_NOTARY_KEY_ID, GUESTHOUSE_NOTARY_ISSUER_ID, GUESTHOUSE_NOTARY_KEY_PATH
@@ -41,8 +42,13 @@ done
 
 work=$(mktemp -d)
 keychain=
+saved_list=
 cleanup() {
     status=$?
+    if [ -n "$saved_list" ]; then
+        # shellcheck disable=SC2086
+        security list-keychains -d user -s $saved_list >/dev/null 2>&1 || true
+    fi
     if [ -n "$keychain" ]; then security delete-keychain "$keychain" >/dev/null 2>&1 || true; fi
     rm -rf "$work"
     exit "$status"
@@ -74,20 +80,118 @@ version=$base.$date_stamp
 name=Guesthouse-nightly-$date_stamp-$commit
 iso_date=$(printf '%s' "$date_stamp" | sed 's/\(....\)\(..\)\(..\)/\1-\2-\3/')
 
+# --- Reading the .p12 ------------------------------------------------------------------------
+# macOS's `security import` reads only the old encryption of a .p12 (3DES and a SHA-1 MAC), and a
+# bundle made with a new openssl (AES and a SHA-256 MAC) is refused as "MAC verification failed". So
+# the bundle is read with an openssl that can, and the certificate and key go into a new bundle with
+# the old encryption and a fresh random password, which `security` reads: that works for any key
+# type and any openssl, where importing the PEM files one by one depends on the key's format. The
+# password reaches openssl through the environment, never a command line. The fresh one is for a
+# file that exists for a moment in the private folder, and it is on `security`'s command line,
+# which has no other way to take it.
+find_openssl() {
+    candidates=$(command -v openssl 2>/dev/null || true)
+    for dir in /opt/homebrew/opt/openssl@4 /opt/homebrew/opt/openssl@3 /opt/homebrew/opt/openssl \
+        /usr/local/opt/openssl@4 /usr/local/opt/openssl@3 /usr/local/opt/openssl; do
+        [ -x "$dir/bin/openssl" ] && candidates="$candidates $dir/bin/openssl"
+    done
+    candidates="$candidates /usr/bin/openssl"
+    for candidate in $candidates; do
+        [ -x "$candidate" ] || continue
+        for legacy in "" -legacy; do
+            # shellcheck disable=SC2086
+            if "$candidate" pkcs12 $legacy -in "$GUESTHOUSE_SIGN_P12" -passin env:GUESTHOUSE_SIGN_P12_PASSWORD \
+                -nokeys -noout >/dev/null 2>&1; then
+                ossl=$candidate
+                ossl_legacy=$legacy
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+import_p12() {
+    keychain_to=$1
+    find_openssl || {
+        echo "nightly.sh: no openssl on this machine reads the .p12 (wrong password, or a format none of them reads)" >&2
+        return 1
+    }
+    say "p12: read with $("$ossl" version | awk '{ print $1, $2 }')${ossl_legacy:+ ($ossl_legacy)}"
+    mkdir -p "$work/p12"
+    chmod 700 "$work/p12"
+    # shellcheck disable=SC2086
+    "$ossl" pkcs12 $ossl_legacy -in "$GUESTHOUSE_SIGN_P12" -passin env:GUESTHOUSE_SIGN_P12_PASSWORD \
+        -nodes -out "$work/p12/identity.pem" >/dev/null 2>&1 ||
+        "$ossl" pkcs12 $ossl_legacy -in "$GUESTHOUSE_SIGN_P12" -passin env:GUESTHOUSE_SIGN_P12_PASSWORD \
+            -noenc -out "$work/p12/identity.pem" >/dev/null 2>&1 || {
+        echo "nightly.sh: cannot unpack the .p12" >&2
+        return 1
+    }
+    rewrap_pass=$(openssl rand -hex 24)
+    REWRAP_PASS=$rewrap_pass "$ossl" pkcs12 -export -in "$work/p12/identity.pem" -out "$work/p12/old.p12" \
+        -passout env:REWRAP_PASS -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 >/dev/null 2>&1 || {
+        rm -rf "$work/p12"
+        echo "nightly.sh: cannot make the old-format bundle" >&2
+        return 1
+    }
+    rm -f "$work/p12/identity.pem"
+    security import "$work/p12/old.p12" -k "$keychain_to" -P "$rewrap_pass" \
+        -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/security >/dev/null
+    rm -rf "$work/p12"
+}
+
+# --- The Developer ID intermediate ---------------------------------------------------------------
+# codesign builds the signature's chain from the certificate to Apple's root, and needs Apple's
+# "Developer ID Certification Authority" (G2) between them. The system's keychains have it on a Mac that
+# has been used for signing; a fresh build machine may not. So it is fetched from Apple's own site over
+# https, checked against the SHA-256 pinned here, and put in the temporary keychain.
+DEVID_G2_URL=https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+DEVID_G2_SHA256=f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a
+developer_id_chain() {
+    if security find-certificate -a -Z -c "Developer ID Certification Authority" 2>/dev/null |
+        tr 'A-F' 'a-f' | grep -q "$DEVID_G2_SHA256"; then
+        say "chain: Apple's Developer ID G2 intermediate is in this machine's keychains already"
+    else
+        say "chain: Apple's Developer ID G2 intermediate was not found here"
+    fi
+    curl -fsSL --proto =https --max-time 60 -o "$work/devid-g2.cer" "$DEVID_G2_URL"
+    got=$(shasum -a 256 "$work/devid-g2.cer" | awk '{ print $1 }')
+    [ "$got" = "$DEVID_G2_SHA256" ] || {
+        echo "nightly.sh: Apple's intermediate has the fingerprint $got, not the pinned one" >&2
+        return 1
+    }
+    security import "$work/devid-g2.cer" -k "$1" >/dev/null 2>&1 || true
+    say "chain: the intermediate (checked against its pinned SHA-256) is in the build keychain"
+}
+
 # --- The identity -------------------------------------------------------------------------
 identity=${GUESTHOUSE_SIGN_IDENTITY:-}
 kc_args=
+names=
 if [ -n "${GUESTHOUSE_SIGN_P12:-}" ]; then
     keychain=$work/nightly.keychain-db
     pass=$(openssl rand -hex 24)
     security create-keychain -p "$pass" "$keychain"
     security set-keychain-settings -lut 7200 "$keychain"
     security unlock-keychain -p "$pass" "$keychain"
-    security import "$GUESTHOUSE_SIGN_P12" -k "$keychain" -P "${GUESTHOUSE_SIGN_P12_PASSWORD:-}" \
-        -T /usr/bin/codesign -T /usr/bin/security >/dev/null
+    import_p12 "$keychain"
     security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$keychain" >/dev/null
     if [ -z "$identity" ]; then
         identity=$(security find-identity -p codesigning "$keychain" | awk '/^ *1\)/ { print $2 }')
+    fi
+    # Which certificate signs, by its name only, so a log shows it and nothing else.
+    names=$(security find-identity -p codesigning "$keychain" | sed -n 's/^ *[0-9]*) [0-9A-F]* "\(.*\)".*/\1/p')
+    say "identity: $names"
+    case $names in
+        "Developer ID Application"*) developer_id_chain "$keychain" ;;
+    esac
+    if [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${CI:-}" ]; then
+        # On a build machine of its own, the keychain is put first in the search list for the run and the
+        # list is put back on the way out, so the chain can be built.
+        saved_list=$(security list-keychains -d user | tr -d '"' | sed 's/^ *//')
+        # shellcheck disable=SC2086
+        security list-keychains -d user -s "$keychain" $saved_list
     fi
     kc_args=$keychain
 elif [ -n "${GUESTHOUSE_KEYCHAIN:-}" ]; then
@@ -100,7 +204,7 @@ if [ -z "$identity" ]; then
     identity=-
     say "signing: ad hoc (no identity was given), so this build is for trying on this Mac only"
 else
-    say "signing: identity $identity"
+    say "signing: ${names:-the identity given}"
 fi
 
 # codesign, with the identity and the keychain if there is one, and a timestamp for a real one.

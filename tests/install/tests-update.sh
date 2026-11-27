@@ -334,6 +334,21 @@ t_the_update_check_answers_in_one_line() {
     check_home_is "$T/before"
 }
 
+t_the_update_check_reads_pkg_ruxn_com_first() {
+    two_releases
+    make_main_name 1.0
+    printf '{\n  "version": "2.0",\n  "notes": "https://github.com/ruxnlabs/guesthouse/releases/tag/v2.0"\n}\n' \
+        >"$T/releases/latest.json"
+    no_terminal "$SHELL_UNDER_TEST" "$root/current/install.sh" --check-update
+    check_exit 10
+    [ "$(cat "$T/said")" = "update-available 1.0 2.0" ] || fail "said: $(cat "$T/said")"
+    check_log "https://pkg.ruxn.com/guesthouse/latest.json"
+    printf '{\n  "version": "$(reboot)"\n}\n' >"$T/releases/latest.json"
+    no_terminal "$SHELL_UNDER_TEST" "$root/current/install.sh" --check-update
+    check_exit 0
+    [ "$(cat "$T/said")" = "up-to-date 1.0" ] || fail "nonsense in the file wasn't left for main's script: $(cat "$T/said")"
+}
+
 t_the_update_check_runs_nothing_it_downloads() {
     two_releases
     {

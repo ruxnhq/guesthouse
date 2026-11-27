@@ -21,7 +21,13 @@ SOURCE_SHA256="2dd6ad037f97f3711262c5c4089b0c3cd2773c414c38174635d439bf74926d38"
 REPO_URL=https://github.com/ruxnlabs/guesthouse
 DISCORD_URL=https://discord.gg/rN3VARayZV
 RELEASE_URL=$REPO_URL/releases/download
+# A copy of each release's files, tried first. Either way the file has to match the hash below.
+MIRROR_URL=https://pkg.ruxn.com/guesthouse/releases
 LATEST_SCRIPT_URL=https://raw.githubusercontent.com/ruxnlabs/guesthouse/main/install.sh
+# What a release publishes last of all, once its packages are up too. --check-update reads its version,
+# and an update still takes the hashes from the script on main.
+LATEST_FILE_URL=https://pkg.ruxn.com/guesthouse/latest.json
+LATEST_FILE_BYTES=4096
 
 APP_ID=io.github.xnixy.Guesthouse
 ARCH=x86_64
@@ -324,6 +330,14 @@ read_latest_release() {
     is_version "$RELEASE_VERSION" && is_sha256 "$PAYLOAD_SHA256" && is_sha256 "$SOURCE_SHA256"
 }
 
+# The version in the latest file, which is JSON with a line for each field.
+read_latest_file() {
+    text=$(fetch -s --max-time "$CURL_SECONDS" --max-filesize "$LATEST_FILE_BYTES" "$LATEST_FILE_URL") || return 1
+    version=$(printf '%s\n' "$text" | sed -n 's/^ *"version": *"\([^"]*\)",\{0,1\} *$/\1/p' | head -n 1)
+    is_version "$version" || return 1
+    RELEASE_VERSION=$version
+}
+
 newer_than() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }
@@ -335,7 +349,7 @@ check_for_update() {
         say "not-installed"
         exit 1
     fi
-    if ! read_latest_release 2>/dev/null; then
+    if ! read_latest_file 2>/dev/null && ! read_latest_release 2>/dev/null; then
         say "unknown $installed"
         exit 1
     fi
@@ -377,17 +391,29 @@ check_room() {
         die "this needs ${ROOM_NEEDED_MIB} MiB free in your home folder, and there's $((free_kib / 1024)) MiB."
 }
 
+# From the copy on pkg.ruxn.com, or else from GitHub. The hash is this script's either way, so a copy
+# that's wrong or gone only means the second download.
 download_verified() {
     name=$1
     wanted=$2
-    url=$RELEASE_URL/v$RELEASE_VERSION/$name
-    say "Downloading $url"
-    fetch -# -o "$STAGING/$name" "$url" || die "couldn't download $url"
-    found=$(sha256sum "$STAGING/$name" | cut -d ' ' -f 1)
-    [ "$found" = "$wanted" ] || die "$name isn't the file this script expects, so I'm stopping.
+    for url in "$MIRROR_URL/v$RELEASE_VERSION/$name" "$RELEASE_URL/v$RELEASE_VERSION/$name"; do
+        rm -f "$STAGING/$name"
+        say "Downloading $url"
+        if ! fetch -# -o "$STAGING/$name" "$url"; then
+            warn "couldn't download $url"
+            continue
+        fi
+        found=$(sha256sum "$STAGING/$name" | cut -d ' ' -f 1)
+        if [ "$found" = "$wanted" ]; then
+            say "Verified $name"
+            return 0
+        fi
+        warn "$name from $url isn't the file this script expects.
   expected $wanted
   got      $found"
-    say "Verified $name"
+    done
+    rm -f "$STAGING/$name"
+    die "couldn't download a $name that matches this script, so I'm stopping."
 }
 
 # The toolchain on this PC matches this PC, which is the point of a source build. A container is the

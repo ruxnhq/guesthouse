@@ -1,5 +1,6 @@
 #!/bin/sh
 # Stands in for curl: a release is a folder, FAKE_RELEASES/vVERSION, and main's script a file in it.
+# pkg.ruxn.com's copy of a release is FAKE_RELEASES/mirror/vVERSION, and its latest file latest.json.
 out=""
 url=""
 while [ $# -gt 0 ]; do
@@ -12,6 +13,8 @@ done
 printf '%s\n' "$url" >>"$STAND_IN_LOG"
 case $url in
     */releases/download/*) file=$FAKE_RELEASES/${url#*/releases/download/} ;;
+    https://pkg.ruxn.com/guesthouse/releases/*) file=$FAKE_RELEASES/mirror/${url#*/guesthouse/releases/} ;;
+    https://pkg.ruxn.com/guesthouse/latest.json) file=$FAKE_RELEASES/latest.json ;;
     */main/install.sh) file=$FAKE_RELEASES/main-install.sh ;;
     *) exit 22 ;;
 esac

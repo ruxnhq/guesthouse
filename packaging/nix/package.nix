@@ -74,8 +74,12 @@ stdenvNoCC.mkDerivation {
   pname = "guesthouse";
   inherit version;
 
+  # The copy on pkg.ruxn.com first, then GitHub's. Nix checks the same hash whichever it gets.
   src = fetchurl {
-    url = "https://github.com/ruxnlabs/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz";
+    urls = [
+      "https://pkg.ruxn.com/guesthouse/releases/v${version}/guesthouse-${version}-x86_64.tar.xz"
+      "https://github.com/ruxnlabs/guesthouse/releases/download/v${version}/guesthouse-${version}-x86_64.tar.xz"
+    ];
     hash = "sha256-SqXyxMwv1Hf0j52Cag7F+16QIiJNfEN/1jentbIo5m4=";
   };
   sourceRoot = "guesthouse-${version}-x86_64";

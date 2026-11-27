@@ -63,6 +63,30 @@ t_musl_is_refused() {
     check_said "musl isn't supported"
 }
 
+t_the_copy_on_pkg_ruxn_com_comes_first() {
+    release 1.0
+    give_everything
+    mkdir -p "$T/releases/mirror"
+    cp -R "$T/releases/v1.0" "$T/releases/mirror/v1.0"
+    install_version 1.0
+    check_exit 0
+    check_log "https://pkg.ruxn.com/guesthouse/releases/v1.0/guesthouse-1.0-x86_64.tar.xz"
+    check_not_log "/releases/download/"
+}
+
+t_a_wrong_copy_falls_back_to_github() {
+    release 1.0
+    give_everything
+    mkdir -p "$T/releases/mirror"
+    cp -R "$T/releases/v1.0" "$T/releases/mirror/v1.0"
+    printf 'tampered' >>"$T/releases/mirror/v1.0/guesthouse-1.0-x86_64.tar.xz"
+    install_version 1.0
+    check_exit 0
+    check_said "isn't the file this script expects"
+    check_log "/releases/download/v1.0/guesthouse-1.0-x86_64.tar.xz"
+    [ "$(current_says)" = "guesthouse 1.0" ] || fail "it doesn't run"
+}
+
 t_a_wrong_download_stops_before_anything_changes() {
     release 1.0
     give_everything

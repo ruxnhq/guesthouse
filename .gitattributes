@@ -11,3 +11,5 @@ crates/host-windows/tests/answers-golden/** -text
 guest/autounattend.xml text eol=lf
 linux/setup/seed/** text eol=lf
 crates/answers/data/** text eol=lf
+# The remote-view sentences as data, compared byte for byte with what the Rust wording makes.
+crates/remote-view/wording.json -text

@@ -3,8 +3,9 @@
 //! what each of its controls asks, made from the service's last answer, with nothing of Windows in
 //! it, so its tests run on any system. Drawing it is `window.rs`'s, and asking is `bridge.rs`'s.
 //!
-//! The words are `guesthouse_remote_view_core::wording`'s, the same on every host. The few this host
-//! needs and the shared crate doesn't have yet are in [`proposed`].
+//! The words are `guesthouse_remote_view_core::wording`'s. Those every host says are used from there
+//! directly; the few only this host says are there too, under keys of their own, and [`proposed`]
+//! keeps the names this app has used for them.
 //!
 //! On this host one device shows the machine at a time, Guesthouse's own window included: a device
 //! that connects takes the screen from this PC, and Open screen takes it back. There's no
@@ -19,59 +20,61 @@ use guesthouse_control::Request;
 use guesthouse_remote_view_core::share::{DeviceInfo, PAIRING_SECONDS, PERMISSIONS, ShareInfo, ShareState};
 use guesthouse_remote_view_core::wording;
 
-/// Words this host shows that the shared wording doesn't have. They're proposed: each should move
-/// to `guesthouse_remote_view_core::wording`, for every host to say the same, once it's agreed.
+/// Words this host shows that the other hosts don't. They are the shared wording's now, under their
+/// own keys there, and keep their names here.
 pub mod proposed {
+    use guesthouse_remote_view_core::wording;
+
     /// The group's heading.
-    pub const TITLE: &str = "Remote View";
-    pub const ADDRESS: &str = "Address";
-    pub const PORT: &str = "Port";
-    pub const FINGERPRINT: &str = "Fingerprint";
+    pub const TITLE: &str = wording::REMOTE_VIEW_TITLE;
+    pub const ADDRESS: &str = wording::ADDRESS_LABEL;
+    pub const PORT: &str = wording::PORT_LABEL;
+    pub const FINGERPRINT: &str = wording::FINGERPRINT_LABEL;
     /// The heading of the row while pairing is open, as the Linux app has it.
-    pub const PAIRING_OPEN: &str = "Pairing is open";
-    pub const CANCEL: &str = "Cancel";
+    pub const PAIRING_OPEN: &str = wording::PAIRING_OPEN_TITLE;
+    pub const CANCEL: &str = wording::CANCEL;
     /// While pairing is open, or a device waits, the host holds clipboard and files off for every
     /// device, Guesthouse's own window included.
-    pub const HELD: &str = "Clipboard sharing with this PC pauses until pairing closes.";
+    pub const HELD: &str = wording::HELD_WHILE_PAIRING;
     /// Under the switch while the machine is bridged, which the service allows and nobody has tried.
-    pub const BRIDGED: &str = "This machine is bridged. Viewing from other devices is made for the shared network, and \
-                               hasn't been tried bridged yet.";
+    pub const BRIDGED: &str = wording::BRIDGED_UNTRIED;
     /// Said once an open pairing's time is up, until the service says it closed.
-    pub const CLOSING: &str = "Closing\u{2026}";
+    pub const CLOSING: &str = wording::CLOSING;
 
     /// The countdown of an open pairing, "Closes in 1:45", as the Linux app has it.
     pub fn closes_in(seconds: u64) -> String {
-        format!("Closes in {}", clock(seconds))
+        wording::closes_in(seconds)
     }
 
     /// The time a waiting device has to be answered in, as the Linux app has it.
     pub fn left_to_answer(seconds: u64) -> String {
-        format!("{seconds} s left to answer")
+        wording::left_to_answer(seconds)
     }
 
     /// In the group while a device views the machine: it has the screen, what that did to this PC's
     /// own window, and how to take it back. Tried with remoteman 0.1.9: the viewer's window here says
     /// its session ended as another device took over, and neither side connects again by itself.
+    /// The shared `only_notice`, which says the picture comes back, isn't true here and isn't shown.
     pub fn takes_screen(name: &str) -> String {
-        format!(
-            "One device shows this machine at a time, so {name} has its screen and the machine's window here has \
-             lost it. Open screen takes it back, and {name}'s view ends. Neither connects again by itself."
-        )
+        wording::takes_screen(name)
     }
 
     /// The Screen row's line while a device views the machine.
     pub fn screen_line(name: &str) -> String {
-        format!("{name} has this machine's screen now. Open screen takes it back.")
+        wording::screen_line(name)
     }
 
     /// What a device's switch is called for a screen reader, which reads it apart from its row.
     pub fn switch_name(label: &str, device: &str) -> String {
-        format!("{label} for {device}")
+        wording::switch_name(label, device)
     }
 
-    /// "1:45" for a time left, which is what a countdown reads best as.
+    /// "1:45" for a time left, which is what a countdown reads best as. [`closes_in`] writes its
+    /// time this way through the shared wording, so only the tests call this one now; it keeps its
+    /// name.
+    #[allow(dead_code)]
     pub fn clock(seconds: u64) -> String {
-        format!("{}:{:02}", seconds / 60, seconds % 60)
+        wording::countdown(seconds)
     }
 }
 

@@ -1,0 +1,327 @@
+{
+  "version": 1,
+  "keys": {
+    "remote_view.accept": {
+      "en": "Accept",
+      "params": []
+    },
+    "remote_view.address_label": {
+      "en": "Address",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.allow_title": {
+      "en": "Allow viewing from other devices",
+      "params": []
+    },
+    "remote_view.bridged_untried": {
+      "en": "This machine is bridged. Viewing from other devices is made for the shared network, and hasn't been tried bridged yet.",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.cancel": {
+      "en": "Cancel",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.closed_text.closed": {
+      "en": "Closed",
+      "params": []
+    },
+    "remote_view.closed_text.declined": {
+      "en": "Closed. The device was turned away. Press Pair a New Device to try again.",
+      "params": []
+    },
+    "remote_view.closed_text.paired": {
+      "en": "Closed. A device was paired.",
+      "params": []
+    },
+    "remote_view.closed_text.paired_name": {
+      "en": "Closed. {name} was paired.",
+      "params": [
+        "name"
+      ]
+    },
+    "remote_view.closed_text.timeout": {
+      "en": "Closed. Nobody paired in time.",
+      "params": []
+    },
+    "remote_view.closes_in": {
+      "en": "Closes in {time}",
+      "params": [
+        "time"
+      ],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.closing": {
+      "en": "Closing…",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.compare_code_line": {
+      "en": "Check that this code matches the one shown on the device before you press Accept.",
+      "params": []
+    },
+    "remote_view.connect_title": {
+      "en": "Connect from remoteman",
+      "params": []
+    },
+    "remote_view.copy_address": {
+      "en": "Copy Address",
+      "params": []
+    },
+    "remote_view.decline": {
+      "en": "Decline",
+      "params": []
+    },
+    "remote_view.device_line": {
+      "en": "{status} · {tag}",
+      "params": [
+        "status",
+        "tag"
+      ]
+    },
+    "remote_view.device_status.not_connected": {
+      "en": "Not connected",
+      "params": []
+    },
+    "remote_view.device_status.viewing_now": {
+      "en": "Viewing now",
+      "params": []
+    },
+    "remote_view.devices_title": {
+      "en": "Devices that can view this machine",
+      "params": []
+    },
+    "remote_view.disconnect": {
+      "en": "Disconnect",
+      "params": []
+    },
+    "remote_view.fingerprint_label": {
+      "en": "Fingerprint",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.headline.failed": {
+      "en": "The screen could not be shared: {why}",
+      "params": [
+        "why"
+      ]
+    },
+    "remote_view.headline.no_reason": {
+      "en": "Something went wrong.",
+      "params": []
+    },
+    "remote_view.headline.not_running": {
+      "en": "On. The screen is shared once the machine is running.",
+      "params": []
+    },
+    "remote_view.headline.off": {
+      "en": "Off. Nothing is listening for other devices.",
+      "params": []
+    },
+    "remote_view.headline.ready": {
+      "en": "Ready. A paired device can connect.",
+      "params": []
+    },
+    "remote_view.headline.starting": {
+      "en": "Starting to share the screen…",
+      "params": []
+    },
+    "remote_view.headline.viewing": {
+      "en": "{viewer} is viewing this machine.",
+      "params": [
+        "viewer"
+      ]
+    },
+    "remote_view.held_while_pairing": {
+      "en": "Clipboard sharing with this PC pauses until pairing closes.",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.host_said.nothing": {
+      "en": "The host said nothing.",
+      "params": []
+    },
+    "remote_view.left_to_answer": {
+      "en": "{seconds} s left to answer",
+      "params": [
+        "seconds"
+      ],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.network_warning": {
+      "en": "Devices on the same network can reach this machine's screen once they are paired.",
+      "params": []
+    },
+    "remote_view.no_devices": {
+      "en": "No device has been paired yet. Press Pair a New Device to add one.",
+      "params": []
+    },
+    "remote_view.only_notice": {
+      "en": "{name} is showing this machine on its own screen only, so there is no picture here. It comes back when {name} leaves.",
+      "params": [
+        "name"
+      ],
+      "hosts": [
+        "linux"
+      ],
+      "note": "Says the picture comes back when the device leaves, which is true on the Linux host. The Windows host's own window does not come back by itself, so the Windows app shows remote_view.takes_screen instead."
+    },
+    "remote_view.pair_new_device": {
+      "en": "Pair a New Device",
+      "params": []
+    },
+    "remote_view.paired_hint": {
+      "en": "A device that is already paired connects to the address above. To add another device, press Pair a New Device.",
+      "params": []
+    },
+    "remote_view.pairing_note": {
+      "en": "Only devices you accepted here can connect. Anyone on the same network can ask to pair while pairing is open.",
+      "params": []
+    },
+    "remote_view.pairing_open_title": {
+      "en": "Pairing is open",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.pairing_steps.1": {
+      "en": "In remoteman on the other device, add a computer and enter the address above.",
+      "params": []
+    },
+    "remote_view.pairing_steps.2": {
+      "en": "If remoteman shows a fingerprint, check that it matches the one above.",
+      "params": []
+    },
+    "remote_view.pairing_steps.3": {
+      "en": "The device waits, and its name and a code appear here. Check that the code matches the one on the device, then press Accept. Pairing closes when the device has been answered, or when the time is up.",
+      "params": []
+    },
+    "remote_view.pairing_title": {
+      "en": "Pairing",
+      "params": []
+    },
+    "remote_view.permission_label.camera": {
+      "en": "Camera",
+      "params": []
+    },
+    "remote_view.permission_label.clipboard": {
+      "en": "Clipboard",
+      "params": []
+    },
+    "remote_view.permission_label.files": {
+      "en": "Files",
+      "params": []
+    },
+    "remote_view.permission_label.input": {
+      "en": "Control",
+      "params": []
+    },
+    "remote_view.permission_label.mic": {
+      "en": "Microphone",
+      "params": []
+    },
+    "remote_view.permission_label.sound": {
+      "en": "Sound",
+      "params": []
+    },
+    "remote_view.port_label": {
+      "en": "Port",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.remote_view_title": {
+      "en": "Remote View",
+      "params": [],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.remove": {
+      "en": "Remove",
+      "params": []
+    },
+    "remote_view.remove_message": {
+      "en": "It will be disconnected and will have to be paired again to view this machine.",
+      "params": []
+    },
+    "remote_view.remove_question": {
+      "en": "Remove {name}?",
+      "params": [
+        "name"
+      ]
+    },
+    "remote_view.screen_line": {
+      "en": "{name} has this machine's screen now. Open screen takes it back.",
+      "params": [
+        "name"
+      ],
+      "hosts": [
+        "windows"
+      ],
+      "note": "True on a host whose guest serves one device at a time, its own window included, and whose window does not connect again by itself: the Windows host. The Linux host says remote_view.only_notice instead."
+    },
+    "remote_view.stop": {
+      "en": "Stop",
+      "params": []
+    },
+    "remote_view.switch_name": {
+      "en": "{label} for {device}",
+      "params": [
+        "label",
+        "device"
+      ],
+      "hosts": [
+        "windows"
+      ],
+      "note": "Shown by the Windows app."
+    },
+    "remote_view.takes_screen": {
+      "en": "One device shows this machine at a time, so {name} has its screen and the machine's window here has lost it. Open screen takes it back, and {name}'s view ends. Neither connects again by itself.",
+      "params": [
+        "name"
+      ],
+      "hosts": [
+        "windows"
+      ],
+      "note": "True on a host whose guest serves one device at a time, its own window included, and whose window does not connect again by itself: the Windows host. The Linux host says remote_view.only_notice instead."
+    },
+    "remote_view.wants_to_pair": {
+      "en": "{name} wants to pair",
+      "params": [
+        "name"
+      ]
+    }
+  }
+}

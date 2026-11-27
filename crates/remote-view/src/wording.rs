@@ -1,7 +1,12 @@
 //! The sentences every host shows about viewing from other devices, as functions of the state.
 //!
 //! The words are the same on each host, so a person who moves between them reads the same thing.
-//! Where a host needs more than the common words, the function says so.
+//! Where a host needs more than the common words, the function says so, and where a sentence is
+//! true on one host only, its doc says which. Sentences that differ by host are kept apart, each
+//! under its own name; none is made to fit another host.
+//!
+//! The same sentences are data too, for an app that cannot call Rust: [`data`] gives each a key that
+//! never changes, and `wording.json` beside this crate holds them all, made from these functions.
 
 use crate::share::{CloseReason, DeviceInfo, ShareInfo, ShareState};
 
@@ -37,6 +42,9 @@ pub const COPY_ADDRESS: &str = "Copy Address";
 pub const DISCONNECT: &str = "Disconnect";
 pub const REMOVE: &str = "Remove";
 
+/// What a failure says when the host gave no reason.
+const NO_REASON: &str = "Something went wrong.";
+
 /// One line on where viewing from other devices stands. `allowed` is the machine's switch and
 /// `machine_running` whether the machine is up, since the screen is only shared then.
 pub fn headline(allowed: bool, machine_running: bool, share: &ShareInfo) -> String {
@@ -53,7 +61,7 @@ pub fn headline(allowed: bool, machine_running: bool, share: &ShareInfo) -> Stri
             None => "Ready. A paired device can connect.".to_string(),
         },
         ShareState::Failed => {
-            let why = share.reason.as_deref().unwrap_or("Something went wrong.");
+            let why = share.reason.as_deref().unwrap_or(NO_REASON);
             format!("The screen could not be shared: {why}")
         }
     }
@@ -94,7 +102,10 @@ pub fn remove_question(name: &str) -> String {
     format!("Remove {name}?")
 }
 
-/// What the machine's own window says while a device has its screen to itself.
+/// What the machine's own window says while a device has its screen to itself. True where the
+/// picture comes back by itself when the device leaves: the Linux host. Not true on the Windows host,
+/// whose own window does not come back by itself, so its app does not show this and says
+/// [`takes_screen`] instead.
 pub fn only_notice(name: &str) -> String {
     format!(
         "{name} is showing this machine on its own screen only, so there is no picture here. It comes back when {name} leaves."
@@ -118,7 +129,11 @@ pub fn device_tag(fingerprint: &str) -> String {
 /// A device's line under its name: whether it is viewing, and its [`device_tag`].
 /// "Viewing now · 9f2c 41ab".
 pub fn device_line(device: &DeviceInfo) -> String {
-    format!("{} \u{b7} {}", device_status(device), device_tag(&device.fingerprint))
+    device_line_of(device_status(device), &device_tag(&device.fingerprint))
+}
+
+fn device_line_of(status: &str, tag: &str) -> String {
+    format!("{status} \u{b7} {tag}")
 }
 
 /// What a device's switch is called, by the name of what it allows. `input` is shown as Control.
@@ -165,5 +180,75 @@ pub fn host_said(text: &str) -> String {
     if text.is_empty() { "The host said nothing.".to_string() } else { text.to_string() }
 }
 
+/// The heading of the Windows app's group for viewing from other devices.
+pub const REMOTE_VIEW_TITLE: &str = "Remote View";
+/// The labels of the Windows app's rows for where to connect.
+pub const ADDRESS_LABEL: &str = "Address";
+pub const PORT_LABEL: &str = "Port";
+pub const FINGERPRINT_LABEL: &str = "Fingerprint";
+/// The heading of the Windows app's row while pairing is open.
+pub const PAIRING_OPEN_TITLE: &str = "Pairing is open";
+/// The button that leaves the Windows app's question before a device is removed.
+pub const CANCEL: &str = "Cancel";
+/// Said by the Windows app while pairing is open or a device waits: the host holds clipboard and
+/// files off for every device, the machine's own window on this PC included.
+pub const HELD_WHILE_PAIRING: &str = "Clipboard sharing with this PC pauses until pairing closes.";
+/// Said by the Windows app under the switch while the machine is bridged.
+pub const BRIDGED_UNTRIED: &str = "This machine is bridged. Viewing from other devices is made for the shared \
+                                   network, and hasn't been tried bridged yet.";
+/// Said by the Windows app once an open pairing's time is up, until the host says it closed.
+pub const CLOSING: &str = "Closing\u{2026}";
+
+/// "1:45" for a time left: minutes, a colon, and two digits of seconds, as a countdown reads best.
+pub fn countdown(seconds: u64) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// The Windows app's countdown of an open pairing, "Closes in 1:45", with the time as
+/// [`countdown`] gives it.
+pub fn closes_in(seconds: u64) -> String {
+    closes_in_at(&countdown(seconds))
+}
+
+fn closes_in_at(time: &str) -> String {
+    format!("Closes in {time}")
+}
+
+/// The time a waiting device has to be answered in, as the Windows app says it.
+pub fn left_to_answer(seconds: u64) -> String {
+    left_to_answer_of(&seconds.to_string())
+}
+
+fn left_to_answer_of(seconds: &str) -> String {
+    format!("{seconds} s left to answer")
+}
+
+/// Said by the Windows app while a device views the machine. True on a host whose guest serves one
+/// device at a time, its own window included, and whose window does not connect again by itself:
+/// the Windows host. A host that gives the device the screen to itself and has the picture come
+/// back says [`only_notice`] instead.
+pub fn takes_screen(name: &str) -> String {
+    format!(
+        "One device shows this machine at a time, so {name} has its screen and the machine's window here has \
+         lost it. Open screen takes it back, and {name}'s view ends. Neither connects again by itself."
+    )
+}
+
+/// The Windows app's line in the Screen row while a device views the machine. True on the same host
+/// as [`takes_screen`].
+pub fn screen_line(name: &str) -> String {
+    format!("{name} has this machine's screen now. Open screen takes it back.")
+}
+
+/// What a device's switch is called for a screen reader, which reads it apart from its row: the
+/// switch's [`permission_label`] and the device's name.
+pub fn switch_name(label: &str, device: &str) -> String {
+    format!("{label} for {device}")
+}
+
+pub mod data;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_data;

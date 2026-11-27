@@ -6,6 +6,12 @@
 set -e
 cd "$(dirname "$0")"
 ./build-core.sh
+# The icon's pictures are kept in the tree; they are drawn again only if they are missing (and by
+# hand, with Icon/make-icon.swift, when the drawing changes).
+if [ ! -f App/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png ]; then
+    swiftc -O Icon/make-icon.swift -o build/make-icon
+    build/make-icon Icon App/Assets.xcassets
+fi
 xcodegen generate
 sign=
 if [ -n "${GUESTHOUSE_SIGN_IDENTITY:-}" ]; then
@@ -17,4 +23,5 @@ if [ -n "${GUESTHOUSE_SIGN_IDENTITY:-}" ]; then
 fi
 # shellcheck disable=SC2086
 xcodebuild -project Guesthouse.xcodeproj -scheme Guesthouse -configuration Release \
-    -destination 'platform=macOS,arch=arm64' -derivedDataPath build/dd $sign build
+    -destination 'platform=macOS,arch=arm64' -derivedDataPath build/dd $sign \
+    ${GUESTHOUSE_XCODEBUILD_SETTINGS:-} build

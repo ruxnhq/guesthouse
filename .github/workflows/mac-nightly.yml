@@ -1,0 +1,150 @@
+# A nightly build of the Mac app: built on a GitHub-hosted Mac from main, signed with the team's
+# Developer ID, notarised, and put on files.ruxn.com in /p/guesthouse/nightly/ with its hash and a
+# small guesthouse-macos-nightly.json that the app's nightly channel reads. mac/nightly.sh does the
+# building, and its comments say what it needs. docs/mac-host.md has the whole of it.
+#
+# It runs on main only, from the schedule or by hand, never on a pull request, and it does nothing
+# when main hasn't changed since the last nightly. The signing keys are in the `mac-nightly`
+# environment, which only main may use. They are never in a log: nightly.sh prints none, and puts the
+# certificate in a keychain of its own that it deletes. The upload has no secret: scripts/files-publish.sh
+# sends this job's GitHub OIDC token, as release-files.yml does.
+#
+# Before the first run: the `mac-nightly` environment with these secrets, and the Worker for
+# files.ruxn.com taking this workflow for /p/guesthouse/nightly/ (docs/mac-host.md says which).
+#   MAC_SIGN_P12_BASE64      the Developer ID Application certificate and key, a .p12 file in base64
+#   MAC_SIGN_P12_PASSWORD    its password
+#   MAC_NOTARY_KEY           the App Store Connect key that notarises, the .p8 file's text
+#   MAC_NOTARY_KEY_ID        its key id
+#   MAC_NOTARY_ISSUER_ID     the issuer id
+name: Mac nightly
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if main is the commit of the last nightly
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-nightly
+  cancel-in-progress: false
+
+env:
+  NIGHTLY_URL: https://files.ruxn.com/p/guesthouse/nightly/guesthouse-macos-nightly.json
+  XCODE: /Applications/Xcode_27.2.app
+
+jobs:
+  plan:
+    name: has main changed
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - id: plan
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          head=$(git rev-parse --short=7 HEAD)
+          last=$(curl -fsSL --max-time 30 "$NIGHTLY_URL" | jq -r '.commit // empty' || true)
+          echo "main is $head, the last nightly is ${last:-none}."
+          if [ "$FORCE" = true ] || [ "$head" != "$last" ]; then
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "build=false" >>"$GITHUB_OUTPUT"
+            echo "Nothing has changed since the last nightly."
+          fi
+
+  build:
+    name: build, sign and notarise
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    # The runner is one line: the image that has Xcode 27 and macOS 27, as the app's deployment
+    # target needs. Self-hosted, it would be a Mac that only ever runs this job.
+    runs-on: xcode-27
+    timeout-minutes: 90
+    # The environment holds the signing keys, and only main may use it.
+    environment: mac-nightly
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Use Xcode 27.2
+        run: sudo xcode-select -s "$XCODE"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build, sign and notarise
+        env:
+          MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
+          GUESTHOUSE_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
+          MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
+          GUESTHOUSE_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          GUESTHOUSE_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          set -eu
+          umask 077
+          keys=$(mktemp -d "$RUNNER_TEMP/keys.XXXXXX")
+          trap 'rm -rf "$keys"' EXIT
+          printf '%s' "$MAC_SIGN_P12_BASE64" | base64 --decode >"$keys/identity.p12"
+          printf '%s' "$MAC_NOTARY_KEY" >"$keys/notary.p8"
+          GUESTHOUSE_SIGN_P12="$keys/identity.p12" GUESTHOUSE_NOTARY_KEY_PATH="$keys/notary.p8" \
+            sh mac/nightly.sh --out "$RUNNER_TEMP/nightly"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/nightly/*.dmg
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guesthouse-macos-nightly
+          path: ${{ runner.temp }}/nightly/
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: put it on files.ruxn.com
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guesthouse-macos-nightly
+          path: nightly
+      - name: Check the image against its hash and its file
+        working-directory: nightly
+        run: |
+          set -eu
+          sha256sum -c ./*.sha256
+          dmg=$(jq -r .file guesthouse-macos-nightly.json)
+          [ -f "$dmg" ]
+          [ "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(jq -r .sha256 guesthouse-macos-nightly.json)" ]
+      - name: Publish it, its hash, and the nightly file last
+        working-directory: nightly
+        run: |
+          set -eu
+          dmg=$(jq -r .file guesthouse-macos-nightly.json)
+          ../scripts/files-publish.sh guesthouse/nightly "$dmg" "${dmg%.dmg}.sha256"
+          ../scripts/files-publish.sh --replace guesthouse/nightly guesthouse-macos-nightly.json

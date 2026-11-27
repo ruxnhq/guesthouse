@@ -1,0 +1,70 @@
+# Builds the Mac host and runs its tests on a Mac, so the Mac crate and the app are compiled in the
+# checks. The other checks run on Linux, where the Mac crate is an empty crate. It has no secret, and
+# it signs ad hoc, so a pull request from a fork runs it as well.
+#
+# Xcode 27 is on the `xcode-27` image only (macOS 27, Apple silicon), which the app's deployment
+# target needs. If a newer image replaces that label, it is the one line to change, in `runs-on`.
+name: Mac checks
+
+on:
+  pull_request:
+    paths:
+      - mac/**
+      - crates/host-mac/**
+      - crates/remote-view/**
+      - crates/report/**
+      - crates/state/**
+      - crates/account/**
+      - crates/answers/**
+      - crates/basics/**
+      - crates/update-check/**
+      - Cargo.lock
+      - .github/workflows/mac-checks.yml
+  push:
+    branches: [main]
+    paths:
+      - mac/**
+      - crates/host-mac/**
+      - .github/workflows/mac-checks.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  XCODE: /Applications/Xcode_27.2.app
+
+jobs:
+  build:
+    name: build and test on a Mac
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use Xcode 27.2
+        run: |
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test the core
+        run: cargo test --locked -p guesthouse-host-mac
+      - name: Clippy on the core
+        run: cargo clippy --locked -p guesthouse-host-mac --all-targets -- -D warnings
+      # The runner has 14 GB of disk, so the test build is cleared before the app's.
+      - name: Make room
+        run: cargo clean
+      - name: Build the app, signed ad hoc
+        run: sh mac/build.sh
+      - name: Test the app's wording and rules
+        working-directory: mac
+        run: |
+          xcodebuild -scheme GuesthouseTests -derivedDataPath build/dd build-for-testing
+          xcrun xctest build/dd/Build/Products/Debug/GuesthouseTests.xctest

@@ -7,7 +7,8 @@
 # Each file is checked against the release's own hashes first, and downloaded back after.
 #
 # No secret: scripts/files-publish.sh sends this job's GitHub OIDC token to the Worker's publish
-# address, which takes it only from this repo's release events and writes only under pub/guesthouse/.
+# address, which takes it only from this workflow in this repo, run by a release event on a tag or from
+# the Actions tab on main, and writes only under pub/guesthouse/.
 # A published file there never changes, so a run again skips what's up and stops at anything that
 # differs; only the latest file is replaced.
 name: Release files
@@ -47,10 +48,18 @@ jobs:
           ref: main
           persist-credentials: false
       - name: Download it and check it against SHA256SUMS
+        id: files
         run: |
           case "$TAG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "::error::$TAG isn't a Linux release tag."; exit 1 ;;
+          esac
+          case "${TAG#v}" in
+            *[!0-9.]*)
+              echo "$TAG isn't a plain version, so it has nothing for files.ruxn.com."
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+              ;;
           esac
           NAME="guesthouse-installer-${TAG#v}.AppImage"
           mkdir -p "$RUNNER_TEMP/files"
@@ -61,6 +70,7 @@ jobs:
           sha256sum "$NAME" >"$NAME.sha256"
           rm SHA256SUMS
       - name: Publish it, its hash last
+        if: steps.files.outputs.skip != 'true'
         run: |
           NAME="guesthouse-installer-${TAG#v}.AppImage"
           scripts/files-publish.sh guesthouse "$RUNNER_TEMP/files/$NAME" "$RUNNER_TEMP/files/$NAME.sha256"
@@ -79,14 +89,29 @@ jobs:
           ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
       - name: Download them and check them against each other
+        id: files
         run: |
           case "$TAG" in
             windows-v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "::error::$TAG isn't a Windows host tag."; exit 1 ;;
           esac
           VERSION=${TAG#windows-v}
+          case "$VERSION" in
+            *[!0-9.]*)
+              echo "$TAG isn't a plain version, so it has nothing for files.ruxn.com."
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
           SETUP="guesthouse-setup-$VERSION.exe"
           WINFSP=$(jq -r .source.file windows/winfsp.json)
+          # windows-release.ps1 by hand publishes the files itself, and its release has no latest file.
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' |
+            grep -qx guesthouse-windows-latest.json; then
+            echo "$TAG has no guesthouse-windows-latest.json, so it was released by hand and its files are up."
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           mkdir -p "$RUNNER_TEMP/files"
           cd "$RUNNER_TEMP/files"
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$SETUP" -p "$SETUP.sha256" -p "$WINFSP" \
@@ -98,6 +123,7 @@ jobs:
           [ "$(jq -r .sha256 guesthouse-windows-latest.json)" = "$SAID" ]
           [ "$(jq -r .installer guesthouse-windows-latest.json)" = "https://files.ruxn.com/p/guesthouse/$SETUP" ]
       - name: Publish them, the latest file last
+        if: steps.files.outputs.skip != 'true'
         run: |
           VERSION=${TAG#windows-v}
           SETUP="guesthouse-setup-$VERSION.exe"

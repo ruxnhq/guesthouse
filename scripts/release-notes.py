@@ -3,10 +3,12 @@
 
     release-notes.py [--previous TAG] [--intro TEXT] TAG
     release-notes.py --print-previous TAG
+    release-notes.py --list-previous TAG
 
 TAG is vX.Y.Z for the Linux host or windows-vX.Y.Z for the Windows host. The release before is the
 newest tag of the same kind below TAG that TAG's commit has in it, unless --previous names one. The
---print-previous only prints that tag, or nothing if there's none. The
+--print-previous only prints that tag, or nothing if there's none, and --list-previous prints every
+tag it could be, newest first, for a workflow to pick the newest that was really published. The
 pull requests are the squash merges on main between the two, found by the (#N) at the end of their
 subjects, so it reads only git and needs no token. Each goes under the area its title starts with,
 like "App windows: ..." under App windows. An area with one pull request goes under Other with
@@ -65,19 +67,24 @@ def version(tag: str, kind: str) -> tuple[int, ...]:
     return tuple(int(part) for part in found.groups())
 
 
-def previous_tag(tag: str, kind: str) -> str | None:
-    """The newest tag of the same kind below `tag` that `tag` has in it."""
+def previous_tags(tag: str, kind: str) -> list[str]:
+    """The tags of the same kind below `tag` that `tag` has in it, newest first."""
     mine = version(tag, kind)
     older = [
         other
         for other in git("tag", "--list").split()
         if KINDS[kind].fullmatch(other) and version(other, kind) < mine
     ]
-    for other in sorted(older, key=lambda t: version(t, kind), reverse=True):
-        inside = subprocess.run(["git", "merge-base", "--is-ancestor", other, tag], capture_output=True)
-        if inside.returncode == 0:
-            return other
-    return None
+    return [
+        other
+        for other in sorted(older, key=lambda t: version(t, kind), reverse=True)
+        if subprocess.run(["git", "merge-base", "--is-ancestor", other, tag], capture_output=True).returncode == 0
+    ]
+
+
+def previous_tag(tag: str, kind: str) -> str | None:
+    """The newest tag of the same kind below `tag` that `tag` has in it."""
+    return next(iter(previous_tags(tag, kind)), None)
 
 
 def pulls(since: str | None, tag: str) -> list[tuple[int, str, str]]:
@@ -144,9 +151,14 @@ def main() -> int:
     ask.add_argument("--previous", help="the release before, if not the newest tag of the same kind")
     ask.add_argument("--intro", help="what goes at the top, in place of the Linux host's usual opening")
     ask.add_argument("--print-previous", action="store_true", help="only print the release before")
+    ask.add_argument("--list-previous", action="store_true", help="only print what could be the release before")
     args = ask.parse_args()
 
     kind = kind_of(args.tag)
+    if args.list_previous:
+        for other in previous_tags(args.tag, kind):
+            print(other)
+        return 0
     since = args.previous or previous_tag(args.tag, kind)
     if args.print_previous:
         print(since or "")

@@ -7,8 +7,8 @@
 # It never gets a key to the bucket, which also holds what testers send. It speaks to the Worker's
 # publish address, /ci/PROJECT/{start,part,finish}, the same three steps bin/files sends through a
 # publish link, with the workflow's GitHub OIDC token (audience https://files.ruxn.com) as a bearer
-# token. The Worker checks that token is GitHub's, for this repo, from a release event, and writes only
-# under pub/PROJECT/. The job needs `permissions: id-token: write`. FILES_PUBLISH_TOKEN, if set, is
+# token, a fresh one for each request as they last minutes. The Worker checks that token is GitHub's,
+# for this repo and release-files.yml, and writes only under pub/PROJECT/. The job needs `permissions: id-token: write`. FILES_PUBLISH_TOKEN, if set, is
 # sent in its place, for a Worker that takes a shared secret instead.
 #
 # A published file never changes. So a file that's up already with the same bytes is skipped, and one
@@ -36,6 +36,10 @@ token() {
         "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -er .value
 }
 
+auth() {
+    printf 'Authorization: Bearer %s' "$(token)"
+}
+
 sha256() {
     sha256sum "$1" | cut -d ' ' -f 1
 }
@@ -51,11 +55,11 @@ published_sha256() {
 }
 
 send() {
-    local base=$1 file=$2 auth=$3
+    local base=$1 file=$2
     local name size started stored upload_id part_count parts='[]' part answer query_name
     name=$(basename "$file")
     size=$(stat -c %s "$file")
-    started=$(curl -fsS -X POST -H "$auth" -H 'content-type: application/json' "$base/start" \
+    started=$(curl -fsS -X POST -H "$(auth)" -H 'content-type: application/json' "$base/start" \
         -d "$(jq -n --arg name "$name" --argjson size "$size" '{name: $name, size: $size}')")
     stored=$(jq -r .name <<<"$started")
     [ "$stored" = "$name" ] || die "the Worker would store $name as $stored."
@@ -64,12 +68,12 @@ send() {
     part_count=$(((size + PART_BYTES - 1) / PART_BYTES))
     for ((part = 1; part <= part_count; part++)); do
         answer=$(dd if="$file" bs=$PART_BYTES skip=$((part - 1)) count=1 status=none |
-            curl -fsS --retry 4 --retry-all-errors -X PUT -H "$auth" --data-binary @- \
+            curl -fsS --retry 4 --retry-all-errors -X PUT -H "$(auth)" --data-binary @- \
                 -H 'content-type: application/octet-stream' \
                 "$base/part?name=$query_name&uploadId=$upload_id&part=$part")
         parts=$(jq -c --argjson answer "$answer" '. + [$answer]' <<<"$parts")
     done
-    curl -fsS -X POST -H "$auth" -H 'content-type: application/json' "$base/finish" \
+    curl -fsS -X POST -H "$(auth)" -H 'content-type: application/json' "$base/finish" \
         -d "$(jq -n --arg name "$name" --arg uploadId "$upload_id" --argjson parts "$parts" \
             '{name: $name, uploadId: $uploadId, parts: $parts}')" >/dev/null
 }
@@ -87,8 +91,8 @@ main() {
         [a-z0-9]*) ;;
         *) die "$project isn't a project name." ;;
     esac
-    local auth file name url want got
-    auth="Authorization: Bearer $(token)"
+    local file name url want got
+    token >/dev/null # stops here, before anything is sent, if there's no token to be had
     for file in "$@"; do
         [ -s "$file" ] || die "$file is missing or empty."
         name=$(basename "$file")
@@ -102,7 +106,7 @@ main() {
         if [ -n "$got" ] && [ "$replace" != true ]; then
             die "$url is up already with other bytes ($got, not $want), and a published file never changes."
         fi
-        send "$SITE/ci/$project" "$file" "$auth"
+        send "$SITE/ci/$project" "$file"
         got=$(published_sha256 "$url")
         [ "$got" = "$want" ] || die "$url came back as ${got:-nothing}, not $want."
         echo "Published $url ($want)."

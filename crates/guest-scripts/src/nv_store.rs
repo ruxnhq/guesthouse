@@ -204,11 +204,31 @@ fn a_store_in_use_is_queued_for_the_next_boot() {
         return;
     }
     assert_eq!(said.last(), format!("store queued {OFFERED}"), "{said}");
+    let old = layout.root.join("nv_dispi.inf_amd64_gpupv.old");
+    let old_names = if old.exists() { names(&old) } else { Vec::new() };
+    assert_eq!(
+        names(&layout.store),
+        before,
+        "the refused rename left the store whole, with nothing moved out yet: .old has {old_names:?}"
+    );
     let queued = queue::read(shell).unwrap_or_default();
-    assert_eq!(queued.len(), 12, "three files out and three in, each a pair of paths: {queued:#?}");
     let mark = format!(r"\??\{}", layout.root.display());
     assert!(queued.iter().all(|entry| entry.starts_with(&mark)), "{queued:#?}");
-    assert_eq!(names(&layout.store), before, "the store is as it was until the boot");
+    assert_eq!(queued.len(), 12, "three files out and three in, each a pair of paths: {queued:#?}");
+    // Every file of the store moves out, and before a file of the copy takes its place.
+    let store = format!(r"{mark}\nv_dispi.inf_amd64_gpupv\");
+    let pairs: Vec<(&str, &str)> =
+        queued.chunks(2).map(|pair| (pair[0].as_str(), pair[1].as_str())).collect();
+    let out_at = |path: &str| pairs.iter().position(|(from, _)| from.eq_ignore_ascii_case(path));
+    for name in &before {
+        let path = format!("{store}{}", name.replace('/', r"\"));
+        assert!(out_at(&path).is_some(), "{path} never moves out: {queued:#?}");
+    }
+    for (at, (_, to)) in pairs.iter().enumerate().filter(|(_, (from, _))| !from.starts_with(&store)) {
+        if let Some(out) = out_at(to) {
+            assert!(out < at, "{to} moves in before the old one moves out: {queued:#?}");
+        }
+    }
     let again = layout.update(OFFERED);
     assert_eq!(
         again.lines(),

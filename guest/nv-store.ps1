@@ -87,6 +87,17 @@ function Find-Disc {
     return $null
 }
 
+# One rename of a whole folder, which happens or doesn't. Move-Item is not used: when Windows refuses
+# to rename a folder with a file in use, it moves the folder's files one by one instead, up to the one
+# in use, and leaves the driver split between two folders.
+function Move-Folder($from, $to) {
+    try {
+        [IO.Directory]::Move($from, $to)
+    } catch {
+        throw $_.Exception.GetBaseException()
+    }
+}
+
 function Remove-Folder($path) {
     if (-not (Test-Path -LiteralPath $path)) { return $true }
     Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
@@ -170,7 +181,7 @@ function Update-Store($Version, $Source, $StoreRoot, $StoreFolder) {
     $old = "$store.old"
     # A change cut short between its two renames left the store missing and the old copy beside it.
     if (-not (Test-Path -LiteralPath $store) -and (Test-Path -LiteralPath $old)) {
-        Move-Item -LiteralPath $old -Destination $store -ErrorAction Stop
+        Move-Folder $old $store
     }
     $from = $Source
     if (-not $from) { $from = Find-Disc }
@@ -217,7 +228,7 @@ function Update-Store($Version, $Source, $StoreRoot, $StoreFolder) {
     if (-not (Remove-Folder $old)) { return "store failed: an older copy at $old could not be removed" }
     if (Test-Path -LiteralPath $store) {
         try {
-            Move-Item -LiteralPath $store -Destination $old -ErrorAction Stop
+            Move-Folder $store $old
         } catch {
             # Windows refused the rename: something has a file in it open.
             try {
@@ -229,9 +240,9 @@ function Update-Store($Version, $Source, $StoreRoot, $StoreFolder) {
         }
     }
     try {
-        Move-Item -LiteralPath $new -Destination $store -ErrorAction Stop
+        Move-Folder $new $store
     } catch {
-        if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $store -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $old) { try { Move-Folder $old $store } catch { } }
         return "store failed: the copy could not take the store's place: $($_.Exception.Message)"
     }
     if (Remove-Folder $old) { return "store replaced $wanted" }

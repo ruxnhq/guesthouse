@@ -493,6 +493,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             Some(C::OpenResource) => self.open_resource(message, out)?,
             Some(C::LockForCpu) => self.lock_for_cpu(message, out)?,
             Some(C::UpdateAllocationProperty) => self.update_allocation_property(message, out)?,
+            Some(C::OfferAllocations) => self.offer_allocations(message, out)?,
+            Some(C::ReclaimAllocations) => self.reclaim_allocations(message, out)?,
+            // Nothing here schedules by priority, so every context is at the normal one, which is zero.
+            Some(C::GetContextSchedulingPriority) => {
+                put_u32(out, Status::SUCCESS.0);
+                put_u32(out, 0);
+            }
             Some(C::SetAllocationPriority) => self.set_allocation_priority(message, out)?,
             Some(C::GetAllocationPriority) => self.get_allocation_priority(message, out)?,
             Some(C::SetGuestPages) => self.set_guest_pages(message, out)?,

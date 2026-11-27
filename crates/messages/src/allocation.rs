@@ -1,7 +1,7 @@
 //! Creating, destroying, opening and locking allocations.
 
 use crate::wire::{
-    Malformed, U32List, U64List, declared_count, pad_to, put_u32, put_u64, set_u32, set_u64, u32_at,
+    Malformed, U32List, U64List, declared_count, pad_to, put_u32, put_u64, set_u32, set_u64, u8_at, u32_at,
 };
 use crate::{HEADER_SIZE, Status};
 
@@ -126,6 +126,83 @@ impl UpdateAllocationProperty {
         put_u64(out, 0);
         put_u32(out, status.0);
         put_u32(out, 0);
+    }
+}
+
+/// The guest offering allocations back, so the host may reuse their memory. The fields follow the
+/// header: the device, how many handles, the priority, flags, whether the handles are resources
+/// rather than allocations (one byte, padded), then the handles. The answer is a bare status.
+#[derive(Debug, Clone, Copy)]
+pub struct OfferAllocations<'a> {
+    pub device: u32,
+    pub priority: u32,
+    pub flags: u32,
+    pub resources: bool,
+    pub handles: U32List<'a>,
+}
+
+impl<'a> OfferAllocations<'a> {
+    const DEVICE: usize = HEADER_SIZE;
+    const COUNT: usize = HEADER_SIZE + 4;
+    const PRIORITY: usize = HEADER_SIZE + 8;
+    const FLAGS: usize = HEADER_SIZE + 12;
+    const RESOURCES: usize = HEADER_SIZE + 16;
+    const HANDLES: usize = HEADER_SIZE + 20;
+
+    pub fn parse(message: &'a [u8]) -> Result<Self, Malformed> {
+        let count = declared_count(message, Self::COUNT, HANDLE_SIZE)?;
+        Ok(Self {
+            device: u32_at(message, Self::DEVICE)?,
+            priority: u32_at(message, Self::PRIORITY)?,
+            flags: u32_at(message, Self::FLAGS)?,
+            resources: u8_at(message, Self::RESOURCES)? != 0,
+            handles: U32List::at(message, Self::HANDLES, count)?,
+        })
+    }
+}
+
+/// The guest taking offered allocations back. The fields follow the header: the device, the paging
+/// queue, how many handles, whether they are resources, whether the guest wants a result for each
+/// (two bytes, padded), then the handles.
+#[derive(Debug, Clone, Copy)]
+pub struct ReclaimAllocations<'a> {
+    pub device: u32,
+    pub paging_queue: u32,
+    pub resources: bool,
+    pub write_results: bool,
+    pub handles: U32List<'a>,
+}
+
+impl<'a> ReclaimAllocations<'a> {
+    const DEVICE: usize = HEADER_SIZE;
+    const PAGING_QUEUE: usize = HEADER_SIZE + 4;
+    const COUNT: usize = HEADER_SIZE + 8;
+    const RESOURCES: usize = HEADER_SIZE + 12;
+    const WRITE_RESULTS: usize = HEADER_SIZE + 13;
+    const HANDLES: usize = HEADER_SIZE + 16;
+
+    pub fn parse(message: &'a [u8]) -> Result<Self, Malformed> {
+        let count = declared_count(message, Self::COUNT, HANDLE_SIZE)?;
+        Ok(Self {
+            device: u32_at(message, Self::DEVICE)?,
+            paging_queue: u32_at(message, Self::PAGING_QUEUE)?,
+            resources: u8_at(message, Self::RESOURCES)? != 0,
+            write_results: u8_at(message, Self::WRITE_RESULTS)? != 0,
+            handles: U32List::at(message, Self::HANDLES, count)?,
+        })
+    }
+
+    /// A paging fence value of zero, which the guest has nothing to wait for, a status, and, if
+    /// the guest asked, a result of zero ("reclaimed intact") for each handle. Nothing is ever
+    /// discarded, as the host never takes the memory an offer gives up.
+    pub fn answer(&self, out: &mut Vec<u8>) {
+        put_u64(out, 0);
+        put_u32(out, Status::SUCCESS.0);
+        if self.write_results {
+            (0..self.handles.len()).for_each(|_| put_u32(out, 0));
+        } else {
+            put_u32(out, 0);
+        }
     }
 }
 
@@ -312,6 +389,43 @@ impl<'a> SetGuestPages<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn handles_message(header_fields: &[u8], handles: &[u32]) -> Vec<u8> {
+        let mut message = vec![0; HEADER_SIZE];
+        message.extend_from_slice(header_fields);
+        handles.iter().for_each(|&handle| put_u32(&mut message, handle));
+        message
+    }
+
+    #[test]
+    fn an_offer_names_its_handles_after_the_flags() {
+        let mut fields = vec![];
+        [7u32, 2, 2, 1, 1].iter().for_each(|&word| put_u32(&mut fields, word));
+        let message = handles_message(&fields, &[0x10, 0x20]);
+        let offer = OfferAllocations::parse(&message).unwrap();
+        assert_eq!((offer.device, offer.priority, offer.flags, offer.resources), (7, 2, 1, true));
+        assert_eq!(offer.handles.iter().collect::<Vec<_>>(), [0x10, 0x20]);
+        assert!(OfferAllocations::parse(&message[..message.len() - 4]).is_err());
+    }
+
+    #[test]
+    fn a_reclaim_is_answered_with_no_fence_and_nothing_discarded() {
+        let mut fields = vec![];
+        [7u32, 9, 3, 0x0100].iter().for_each(|&word| put_u32(&mut fields, word));
+        let message = handles_message(&fields, &[0x10, 0x20, 0x30]);
+        let reclaim = ReclaimAllocations::parse(&message).unwrap();
+        assert_eq!((reclaim.device, reclaim.paging_queue), (7, 9));
+        assert!(!reclaim.resources && reclaim.write_results);
+        let mut out = Vec::new();
+        reclaim.answer(&mut out);
+        assert_eq!(out, [0; 24]);
+        let mut quiet = message.clone();
+        quiet[HEADER_SIZE + 13] = 0;
+        let mut out = Vec::new();
+        ReclaimAllocations::parse(&quiet).unwrap().answer(&mut out);
+        assert_eq!(out, [0; 16]);
+        assert!(ReclaimAllocations::parse(&message[..message.len() - 4]).is_err());
+    }
 
     #[test]
     fn an_allocation_property_update_is_read_and_answered_without_a_fence() {

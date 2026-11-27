@@ -29,7 +29,7 @@ I'm saying the awkward parts first, because you should know them before you buil
 
 ## Build
 
-You need Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The graphics process and QEMU with the `pvg-fwd` device are not in this tree; `docs/mac-host.md` says what they are. The app builds without them but can't start a machine on the protected path.
+You need Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The graphics process and QEMU with the `pvg-fwd` device are in `crates/pvg-host` and `qemu/mac/`, and `docs/mac-host.md` says how to build them. The nightly build carries them inside the app. An app you build yourself finds them through its Settings or an environment variable, or in `Contents/Helpers` if you put them there with `mac/nightly.sh --helpers`.
 
 ```sh
 ./build.sh

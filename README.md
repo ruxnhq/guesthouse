@@ -56,7 +56,7 @@ Get the installer from **[guesthouse.ruxn.com](https://guesthouse.ruxn.com/#down
 
 **Mac** · Apple silicon · in development, not released
 
-There's nothing to download yet. The source is here, in `mac/` and `crates/host-mac`, and [the Mac host](docs/mac-host.md) says what it can do, and what it needs that isn't here yet: the graphics process and a patched QEMU, and the guest's driver packages. It has been tried on one Mac. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.
+A nightly build, for trying what is new and which may be broken, is on [the site](https://guesthouse.ruxn.com/#download). It carries QEMU, the graphics process and rmhost. The source is here, in `mac/`, `crates/host-mac`, `crates/pvg-host` and `qemu/mac`, and [the Mac host](docs/mac-host.md) says what it can do, and what it needs that isn't here yet: the guest's driver packages. It has been tried on one Mac. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.
 
 ## What a machine can do
 

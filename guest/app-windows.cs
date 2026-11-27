@@ -234,6 +234,8 @@ public class AppWindows : Form
         public int X, Y;                        // top-left of the cell inside the overlay
         public bool Placed, Overflow, Hidden;   // Hidden: an overflow cell lies over it
         public bool OnSite;                     // a popup shown where it really is, over its parked window, as no free spot was left
+        public int SiteDX, SiteDY;              // for one on site: how far that window's cell lies from the window
+        public IntPtr SiteUnder;                // and which window that is
         public long MoveAt;                     // when to move a cell that outgrew its slot (0 = not pending)
         public RECT Frame, Win;                 // last known real rectangles (screen coordinates)
         public bool Cured; public int CureTries;
@@ -830,7 +832,8 @@ public class AppWindows : Form
         {
             // A menu that closed keeps its place only so it can come back, not against other windows. A cell on site lies over its
             // program's window and takes no space of its own either, or that window could not have its place back after a change of mode.
-            if (o == self || !o.Placed || o.Overflow || o.OnSite || (o.Popup && !o.Active)) continue;
+            // An overflow cell takes no space either, as a window under it is only hidden; a popup there would never be seen.
+            if (o == self || !o.Placed || (o.Overflow && !self.Popup) || o.OnSite || (o.Popup && !o.Active)) continue;
             if (Hit(x, y, bw, bh, o.X, o.Y, o.CellW, o.CellH)) return true;
         }
         return false;
@@ -918,34 +921,61 @@ public class AppWindows : Form
         else { c.Placed = false; c.Overflow = false; }
     }
 
-    // Where a popup's picture goes in the overlay to be where the popup really is on the screen. One that reaches past an edge
-    // (Word opens its dialogs 5 px above the screen, then moves them) is shown that much inside it.
-    int SiteX(Cell c) { return Math.Max(0, Math.Min(c.Frame.L + c.InL - vx, ovW - c.CellW)); }
-    int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy, ovH - c.CellH)); }
+    // Where a popup's picture goes in the overlay to be at the same point of its window's picture as the popup really is over
+    // that window: its real place, moved as far as the window's cell lies from the window (nothing for a parked window). One
+    // that reaches past an edge (Word opens its dialogs 5 px above the screen, then moves them) is shown that much inside it.
+    int SiteX(Cell c) { return Math.Max(0, Math.Min(c.Frame.L + c.InL - vx + c.SiteDX, ovW - c.CellW)); }
+    int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy + c.SiteDY, ovH - c.CellH)); }
 
-    // A popup lies over its own window, which is parked under its cell, so its picture at its real place sits at the same
-    // point of that cell as in the window the app drew it over: the parent's host window shows it where the popup's host
-    // surface is anyway. Only when it lies over such a window of its own program.
+    // A popup with no free spot is shown on site, against the window of its own program it belongs to: the one its owners lead
+    // to, else the one it lies over the most. Its picture then sits at the same point of that window's cell as in the window the
+    // app drew it over, so the window's host window shows it where the popup's host surface is anyway. A window that covers the
+    // screen and is not parked (a maximized one Windows keeps so) counts too: the offset of its cell is taken along.
     bool PlaceOnSite(Cell c)
     {
-        int x = SiteX(c), y = SiteY(c), w = c.CellW, h = c.CellH;
+        int w = c.CellW, h = c.CellH;
         if (w <= 0 || h <= 0 || w > ovW || h > ovH) return false;
-        foreach (Cell b in cells.Values)
+        Cell under = null;
+        for (IntPtr o = c.Owner; o != IntPtr.Zero && under == null; o = GetWindow(o, GW_OWNER))
         {
-            if (b == c || (b.Pid != c.Pid && b.AppPid != c.Pid) || !b.Active || b.Popup || !b.Placed || b.Overflow || b.Hidden || b.Iconic || b.OnSite) continue;
-            if (vx + b.X != b.Frame.L || vy + b.Y != b.Frame.T) continue;                 // not parked: its cell is not where it is
-            if (!Hit(x, y, w, h, b.X, b.Y, b.CellW, b.CellH)) continue;
-            c.X = x; c.Y = y; c.Placed = true; c.Overflow = false; c.OnSite = true;
-            return true;
+            Cell oc;
+            if (cells.TryGetValue(o, out oc) && SiteWindow(c, oc)) under = oc;
         }
-        return false;
+        long best = 0;
+        if (under == null)
+            foreach (Cell b in cells.Values)
+            {
+                if (!SiteWindow(c, b)) continue;
+                long ix = Math.Min(c.Frame.R, b.Frame.R) - Math.Max(c.Frame.L, b.Frame.L);
+                long iy = Math.Min(c.Frame.B, b.Frame.B) - Math.Max(c.Frame.T, b.Frame.T);
+                if (ix > 0 && iy > 0 && ix * iy > best) { best = ix * iy; under = b; }
+            }
+        if (under == null) return false;
+        c.SiteDX = vx + under.X - under.Frame.L; c.SiteDY = vy + under.Y - under.Frame.T; c.SiteUnder = under.Src;
+        c.X = SiteX(c); c.Y = SiteY(c);
+        if (!Hit(c.X, c.Y, w, h, under.X, under.Y, under.CellW, under.CellH)) { c.SiteDX = c.SiteDY = 0; return false; }
+        c.Placed = true; c.Overflow = false; c.OnSite = true;
+        return true;
+    }
+
+    // Whether the window a cell on site is shown against is still there, with its cell as far from it as when it was placed.
+    bool SiteHolds(Cell c)
+    {
+        Cell u;
+        return cells.TryGetValue(c.SiteUnder, out u) && SiteWindow(c, u) && vx + u.X - u.Frame.L == c.SiteDX && vy + u.Y - u.Frame.T == c.SiteDY;
+    }
+
+    // A window a popup or dialog can be shown on site against: a shown window of the same program.
+    static bool SiteWindow(Cell c, Cell b)
+    {
+        return b != c && (b.Pid == c.Pid || b.AppPid == c.Pid) && b.Active && !b.Popup && b.Placed && !b.Hidden && !b.Iconic && !b.OnSite;
     }
 
     void PlaceAll()
     {
         // A popup shown on site goes where the popup went, and gets a free spot again if one has come up meanwhile.
         foreach (Cell c in cells.Values)
-            if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c))) c.Placed = false;
+            if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c) || !SiteHolds(c))) c.Placed = false;
         // A dialog first shows up where it cannot be on site (off the screen, before its program moves it over itself), so an
         // overflow dialog tries again on each pass rather than hide its program's window until the screen has grown.
         foreach (Cell c in cells.Values)
@@ -963,7 +993,7 @@ public class AppWindows : Form
         foreach (Cell a in cells.Values)
         {
             bool hid = false;
-            if (a.Active && a.Placed)
+            if (a.Active && a.Placed && !a.OnSite)            // one on site lies over its own window by design
             {
                 foreach (Cell b in cells.Values)
                 {

@@ -268,17 +268,20 @@ fn the_app_windows_helper_shows_popups_and_dialogs_of_a_window_that_fills_the_sc
     let helper = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
     assert!(helper.contains("if (c.Popup || c.Owner != IntPtr.Zero) { if (PlaceOnSite(c)) return; }"));
     assert!(
-        helper.contains("if (vx + b.X != b.Frame.L || vy + b.Y != b.Frame.T) continue;"),
-        "over a parked window only"
+        helper.contains("c.SiteDX = vx + under.X - under.Frame.L; c.SiteDY = vy + under.Y - under.Frame.T;"),
+        "at the same point of its window's picture, parked or not"
     );
-    assert!(helper.contains("(b.Pid != c.Pid && b.AppPid != c.Pid)"), "of its own program only");
-    assert!(helper.contains(
-        "if (c.OnSite && c.Placed && c.Active && (c.X != SiteX(c) || c.Y != SiteY(c))) c.Placed = false;"
-    ));
+    assert!(helper.contains("(b.Pid == c.Pid || b.AppPid == c.Pid)"), "of its own program only");
+    assert!(helper.contains("(c.X != SiteX(c) || c.Y != SiteY(c) || !SiteHolds(c))) c.Placed = false;"));
     assert!(helper.contains("o.OnSite ||"), "a cell on site takes no space of its own");
+    assert!(helper.contains("(o.Overflow && !self.Popup)"), "a popup never goes under an overflow cell");
+    assert!(
+        helper.contains("if (a.Active && a.Placed && !a.OnSite)"),
+        "nor is one on site hidden by its own window"
+    );
     assert!(
         helper.contains(
-            "int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy, ovH - c.CellH)); }"
+            "int SiteY(Cell c) { return Math.Max(0, Math.Min(c.Frame.T + c.InT - vy + c.SiteDY, ovH - c.CellH)); }"
         ),
         "a dialog a little above the screen is on it"
     );

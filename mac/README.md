@@ -16,7 +16,7 @@ I'm saying the awkward parts first, because you should know them before you buil
 - Making a machine from a disk image, or installing Windows 11 for ARM from an ISO you give it, or Ubuntu, which it downloads and checks against Ubuntu's checksums.
 - Starting, shutting down and turning off a machine, with the machine's screen in a window, the keyboard and the mouse.
 - The Windows graphics driver and the Ubuntu one, installed at the end of an install. The Windows driver is test signed, so a Windows guest runs with test signing on.
-- Viewing a machine from another device, with pairing. It needs `rmhost`, which is built separately.
+- Viewing a machine from another device, with pairing. It needs `rmhost`, which is in `mac/rmhost` and built with `sh mac/rmhost/build.sh`.
 - Sending a bug report, with a preview of what is in it first.
 
 ## What doesn't work yet

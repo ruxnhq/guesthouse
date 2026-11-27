@@ -11,15 +11,17 @@
 //! system, no network and no clock of its own, so each host builds on one implementation: the
 //! state a screen shows (`share`), the words remoteman's host takes and how it answers (`ctl`,
 //! `status`), pairing as a state machine (`pairing`, `policy`) and as a driver that runs it against
-//! a guest (`session`), what a screen makes of them (`view`), the trust list across the installer's
-//! runs (`trust`), the switch and its port (`switch`), when the host card's clock is held for a
-//! viewer (`stream_clocks`) and the sentences (`wording`).
+//! a guest (`session`), the events a pairing's changes make (`events`), what a screen makes of them
+//! (`view`), the trust list across the installer's runs (`trust`), the switch and its port
+//! (`switch`), when the host card's clock is held for a viewer (`stream_clocks`) and the sentences
+//! (`wording`).
 //!
 //! Nothing here calls the system or a hypervisor, so every host can build on it.
 
 pub mod announce;
 pub mod ctl;
 pub mod ctl_wire;
+pub mod events;
 pub mod install;
 pub mod pairing;
 pub mod policy;

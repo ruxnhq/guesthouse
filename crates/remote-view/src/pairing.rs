@@ -141,6 +141,8 @@ enum Phase {
 struct Outcome {
     reason: CloseReason,
     paired: Option<String>,
+    /// The fingerprint of the device that paired, for [`crate::events`].
+    fingerprint: Option<String>,
 }
 
 /// Where pairing stands.
@@ -236,6 +238,20 @@ impl Pairing {
             closed_reason: self.outcome.as_ref().map(|outcome| outcome.reason),
             paired: self.outcome.as_ref().and_then(|outcome| outcome.paired.clone()),
         }
+    }
+
+    /// When an open pairing ends by this clock, while its time is still running: `None` when it is
+    /// not open, or its time is up and it waits for a reading to close.
+    pub(crate) fn open_end(&self) -> Option<Millis> {
+        match &self.phase {
+            Phase::Open(opening) if !opening.expired => Some(opening.counted_to + opening.left_ms),
+            _ => None,
+        }
+    }
+
+    /// The fingerprint of the device that paired since pairing was last opened.
+    pub(crate) fn paired_fingerprint(&self) -> Option<&str> {
+        self.outcome.as_ref().and_then(|outcome| outcome.fingerprint.as_deref())
     }
 
     /// What follows from `event` at time `now`.
@@ -366,7 +382,7 @@ impl Pairing {
     /// Ends this pairing for `reason`, giving back what was held.
     fn close(&mut self, reason: CloseReason, paired: Option<String>, commands: &mut Commands) {
         self.phase = Phase::Closed;
-        self.outcome = Some(Outcome { reason, paired });
+        self.outcome = Some(Outcome { reason, paired, fingerprint: None });
         self.restore(commands);
     }
 
@@ -410,6 +426,9 @@ impl Pairing {
             commands.extend(self.policy.device_allow(fingerprint, what, false));
         }
         self.close(CloseReason::Paired, Some(name.to_string()), commands);
+        if let Some(outcome) = &mut self.outcome {
+            outcome.fingerprint = Some(fingerprint.to_string());
+        }
     }
 
     /// A waiting device went without appearing: its time was up, or it was turned away.
@@ -530,6 +549,8 @@ impl Pairing {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_events;
 #[cfg(test)]
 mod tests_policy;
 #[cfg(test)]

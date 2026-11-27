@@ -21,6 +21,7 @@
 //! may or may not have run, so it is never sent again blind: the next step reads the host first.
 
 use crate::ctl::{self, Ack, Words, parse_ack};
+use crate::events::{PairingEvent, pairing_events};
 use crate::pairing::{Event, HostWide, Millis, Pairing};
 use crate::policy::Policy;
 use crate::share::{ShareInfo, ShareState};
@@ -202,6 +203,13 @@ impl Driver<'_> {
     /// `held`, and reads the host again when asked to. Gives why the event was refused, or why the
     /// step stopped short (see the module's top).
     pub fn step(&self, event: StepEvent) -> Option<String> {
+        self.step_with_events(event).0
+    }
+
+    /// [`Driver::step`], and the [`PairingEvent`]s of every change it kept, in order (see
+    /// [`crate::events`]). A round whose commands did not all go out is not kept, so it says nothing.
+    pub fn step_with_events(&self, event: StepEvent) -> (Option<String>, Vec<PairingEvent>) {
+        let mut said = Vec::new();
         let (mut pairing, unsure) = self.sessions.with(self.machine, |session| {
             (session.pairing.get_or_insert_with(|| self.fresh_pairing()).clone(), session.unsure)
         });
@@ -212,16 +220,21 @@ impl Driver<'_> {
         let mut sent: Vec<Vec<Words>> = Vec::new();
         while let Some(event) = events.pop() {
             let reading;
+            let now;
             let step = match &event {
                 StepEvent::Plain(_) if read_first && self.sessions.with(self.machine, |s| s.unsure) => {
                     refused = Some(STILL_UNSURE.to_string());
                     break;
                 }
-                StepEvent::Plain(event) => pairing.step((self.now)(), *event),
+                StepEvent::Plain(event) => {
+                    now = (self.now)();
+                    pairing.step(now, *event)
+                }
                 StepEvent::Read => {
                     reading = self.read();
                     let Some(status) = &reading else { continue };
-                    pairing.step((self.now)(), Event::Reading(status))
+                    now = (self.now)();
+                    pairing.step(now, Event::Reading(status))
                 }
             };
             refused = refused.or(step.refused);
@@ -250,6 +263,7 @@ impl Driver<'_> {
                 self.sessions.with(self.machine, |session| session.unsure = true);
                 break;
             }
+            said.extend(pairing_events(&pairing, &step.pairing, now));
             pairing = step.pairing;
             self.guest.keep_held(pairing.held());
             if step.read_now || !step.commands.is_empty() {
@@ -257,7 +271,7 @@ impl Driver<'_> {
             }
         }
         self.sessions.with(self.machine, |session| session.pairing = Some(pairing));
-        refused
+        (refused, said)
     }
 
     /// Sends a round's commands in order, each once the one before has been answered. Gives why
@@ -313,6 +327,14 @@ impl Driver<'_> {
         self.step(StepEvent::Plain(Event::Open { seconds }))
     }
 
+    /// [`Driver::open_pairing`], and the [`PairingEvent`]s of both its steps, in order.
+    pub fn open_pairing_with_events(&self, seconds: u64) -> (Option<String>, Vec<PairingEvent>) {
+        let (_, mut said) = self.step_with_events(StepEvent::Read);
+        let (refused, opened) = self.step_with_events(StepEvent::Plain(Event::Open { seconds }));
+        said.extend(opened);
+        (refused, said)
+    }
+
     /// Sends one command about a device, then reads the host again. Gives why the host would not,
     /// or that the guest did not answer.
     pub fn device(&self, words: &Words) -> Result<(), String> {
@@ -349,3 +371,5 @@ impl Driver<'_> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_events;

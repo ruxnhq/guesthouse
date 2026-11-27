@@ -27,3 +27,13 @@ The workflow needs these before its first run:
 - For the 14-day cleanup (`mac-nightly-cleanup.yml`), the repository variable `FILES_BUCKET` and an environment `mac-nightly-cleanup` with the bucket's keys. Without them the cleanup does nothing.
 
 A nightly is the release's major and minor with the date as the patch (`0.1.20261128`), so it is newer than the release it follows and older than the next one.
+
+## Helpers inside the app
+
+`mac/nightly.sh --helpers FOLDER` puts the programs the app runs inside the app, each signed with the hardened runtime and its own entitlements (`mac/Nightly/entitlements/NAME.entitlements`, none if there is no file). The folder is laid out as the app wants it:
+
+- the programs (`guesthouse-pvg-host`, `qemu-system-aarch64`, `rmhost`) go to `Contents/Helpers`, where the app looks for them first;
+- `Resources/` goes to `Contents/Resources`: QEMU's firmware (`edk2-aarch64-code.fd`, `edk2-aarch64-vars.fd`) and the graphics device's option ROM (`pvgfb.rom`) in `Resources/qemu`, which a QEMU in the app finds beside itself;
+- `Frameworks/` goes to `Contents/Frameworks`: libraries QEMU needs.
+
+`sh mac/rmhost/build.sh --helpers FOLDER` puts `rmhost` in such a folder. QEMU needs the hypervisor entitlement and has its file; what the graphics process needs is not known yet.

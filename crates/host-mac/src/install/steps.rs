@@ -125,13 +125,15 @@ fn read_firmware(path: &Path) -> Option<Vec<u8>> {
 }
 
 /// The folders a QEMU's firmware may be in: `share/qemu` of the prefix it is installed in, then
-/// `pc-bios` beside it, where a QEMU run from its own build folder keeps it.
+/// `pc-bios` beside it, where a QEMU run from its own build folder keeps it, and, for a QEMU in an
+/// app bundle (`Contents/Helpers`), the bundle's own `Contents/Resources/qemu`.
 pub fn firmware_dirs_of(qemu: &Path) -> Vec<PathBuf> {
     let Some(folder) = qemu.parent() else {
         return Vec::new();
     };
     let mut dirs: Vec<PathBuf> = folder.parent().map(|p| p.join("share/qemu")).into_iter().collect();
     dirs.push(folder.join("pc-bios"));
+    dirs.extend(folder.parent().map(|p| p.join("Resources/qemu")));
     dirs
 }
 

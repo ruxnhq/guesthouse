@@ -339,7 +339,11 @@ fn firmware_is_looked_for_in_the_prefix_and_beside_a_qemu_run_from_its_build_fol
     let installed = world.root.join("prefix/bin/qemu-system-aarch64");
     assert_eq!(
         firmware_dirs_of(&installed),
-        vec![world.root.join("prefix/share/qemu"), world.root.join("prefix/bin/pc-bios")]
+        vec![
+            world.root.join("prefix/share/qemu"),
+            world.root.join("prefix/bin/pc-bios"),
+            world.root.join("prefix/Resources/qemu")
+        ]
     );
     // A QEMU in its build folder, as ours is: the firmware is in pc-bios beside it.
     let build = world.root.join("qemu-build");
@@ -347,6 +351,19 @@ fn firmware_is_looked_for_in_the_prefix_and_beside_a_qemu_run_from_its_build_fol
     fs::write(build.join("pc-bios/edk2-aarch64-code.fd"), b"code").unwrap();
     fs::write(build.join("pc-bios/edk2-aarch64-vars.fd"), b"vars").unwrap();
     let found = find_firmware(&firmware_dirs_of(&build.join("qemu-system-aarch64"))).unwrap();
+    assert_eq!(found, (b"code".to_vec(), b"vars".to_vec()));
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn a_qemu_in_an_app_bundle_finds_its_firmware_in_the_bundles_resources() {
+    let world = World::new("firmware-bundle");
+    let qemu = world.root.join("Guesthouse.app/Contents/Helpers/qemu-system-aarch64");
+    let resources = world.root.join("Guesthouse.app/Contents/Resources/qemu");
+    fs::create_dir_all(&resources).unwrap();
+    fs::write(resources.join("edk2-aarch64-code.fd"), b"code").unwrap();
+    fs::write(resources.join("edk2-aarch64-vars.fd"), b"vars").unwrap();
+    let found = find_firmware(&firmware_dirs_of(&qemu)).unwrap();
     assert_eq!(found, (b"code".to_vec(), b"vars".to_vec()));
     let _ = fs::remove_dir_all(world.root);
 }

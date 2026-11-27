@@ -19,9 +19,14 @@
 #   GUESTHOUSE_NOTARY_KEY_ID, GUESTHOUSE_NOTARY_ISSUER_ID, GUESTHOUSE_NOTARY_KEY_PATH
 #                                  the App Store Connect key that notarises. With none of the three
 #                                  the build is not notarised, and says so.
-#   GUESTHOUSE_HELPERS_DIR         (or --helpers) a folder of programs to put in Contents/Helpers,
-#                                  such as QEMU, the graphics process and rmhost, each signed with
-#                                  Nightly/entitlements/NAME.entitlements if there is one.
+#   GUESTHOUSE_HELPERS_DIR         (or --helpers) a folder of the programs the app runs, laid out as
+#                                  the app wants them: the programs (guesthouse-pvg-host,
+#                                  qemu-system-aarch64, rmhost) go to Contents/Helpers, Resources/
+#                                  (QEMU's firmware and the graphics device's option ROM, in
+#                                  Resources/qemu) to Contents/Resources, and Frameworks/ (libraries
+#                                  QEMU needs) to Contents/Frameworks. Each program and library is
+#                                  signed with Nightly/entitlements/NAME.entitlements if there is
+#                                  one, and with none if not.
 #   GUESTHOUSE_VERSION_DATE, GUESTHOUSE_COMMIT   override the date (YYYYMMDD) and the short commit,
 #                                  for tests.
 # With no identity at all it signs ad hoc, and says so.
@@ -253,8 +258,18 @@ app=$stage/Guesthouse.app
 if [ -n "$helpers" ]; then
     [ -d "$helpers" ] || { echo "nightly.sh: no helpers folder $helpers" >&2; exit 1; }
     mkdir -p "$app/Contents/Helpers"
-    ditto "$helpers" "$app/Contents/Helpers"
+    for item in "$helpers"/*; do
+        [ -e "$item" ] || continue
+        case $(basename "$item") in
+            Resources) ditto "$item" "$app/Contents/Resources" ;;
+            Frameworks) ditto "$item" "$app/Contents/Frameworks" ;;
+            *) ditto "$item" "$app/Contents/Helpers/$(basename "$item")" ;;
+        esac
+    done
     say "helpers: $(ls "$app/Contents/Helpers" | tr '\n' ' ')"
+    if [ -d "$helpers/Resources" ]; then
+        say "resources: $(find "$helpers/Resources" -type f | wc -l | tr -d ' ') files"
+    fi
 fi
 
 # --- Sign inside-out: every Mach-O file, deepest first, then the app ------------------------

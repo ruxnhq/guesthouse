@@ -60,6 +60,11 @@ workspace = true
 name = "jail"
 harness = false
 
+# A logger starts once in a process, so each case starts one in a child process of its own.
+[[test]]
+name = "logger"
+harness = false
+
 [[example]]
 name = "card_processes"
 required-features = ["nvidia"]

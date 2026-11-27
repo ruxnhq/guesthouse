@@ -438,6 +438,84 @@ mod tests {
     }
 
     #[test]
+    fn the_limits_are_64_mib_with_8_of_its_start_8_of_its_newest_and_4_of_the_middle() {
+        assert_eq!(
+            (MOST_BYTES, START_BYTES, NEWEST_BYTES, MIDDLE_BYTES),
+            (64 << 20, 8 << 20, 8 << 20, 4 << 20)
+        );
+        // Its size is looked at once a mebibyte has gone by, counted at 200 bytes a line.
+        assert_eq!((CHECK_EVERY, READ_BYTES), (1 << 20, 1 << 20));
+    }
+
+    #[test]
+    fn a_log_is_cut_from_its_limit_on_and_only_if_more_than_its_start_and_newest_part() {
+        let mut file = log_file("at-limit", &[b'x'; 500]);
+        assert!(keep_within(&mut file, 500, 100, 100, 100).unwrap(), "a log at its limit is cut");
+        let mut file = log_file("below-limit", &[b'x'; 499]);
+        assert!(!keep_within(&mut file, 500, 100, 100, 100).unwrap());
+        assert_eq!(all_of(&file).len(), 499);
+        let mut file = log_file("no-middle", &[b'x'; 500]);
+        assert!(!keep_within(&mut file, 500, 250, 250, 100).unwrap(), "nothing between start and newest");
+        assert_eq!(all_of(&file).len(), 500);
+    }
+
+    /// A level is the line's first bytes, so a longer word that starts with one counts as it, and
+    /// anything else, even a level in lower case or after a space, is no level.
+    #[test]
+    fn a_level_is_the_start_of_the_line() {
+        for line in
+            ["ERROR x", "WARN x", "INFO x", "DEBUG x", "TRACE x", "WARNING x", "INFORMATION", "ERRORS"]
+        {
+            assert!(starts_a_record(line.as_bytes()), "{line}");
+        }
+        for line in ["warn x", " WARN x", "Info x", "host: WARN x", "", "\n", "WAR"] {
+            assert!(!starts_a_record(line.as_bytes()), "{line}");
+        }
+        let mut keeper = Keeper::default();
+        assert!(keeper.keeps(b"WARNING x\n") && keeper.keeps(b"INFORMATION x\n"));
+        assert!(!keeper.keeps(b"DEBUGGER x\n") && !keeper.keeps(b"TRACE x\n"));
+        assert!(!keeper.keeps(b"host: a line with a prefix and no level\n"), "goes with the trace line");
+        assert!(keeper.keeps(b"ERROR x\n") && keeper.keeps(b"host: a line with a prefix and no level\n"));
+    }
+
+    /// A whole log before and after a cut, byte for byte.
+    #[test]
+    fn a_cut_log_byte_for_byte() {
+        let log = "INFO  first\n\
+                   WARN  a warning the start cuts across\n\
+                   host: a line with no level after it\n\
+                   WARNING a word that starts with a level\n\
+                   host: going on with it\n\
+                   DEBUG a detail\n\
+                   host: going on with the detail\n\
+                   DEBUGGER a word that starts with a debug level\n\
+                   TRACE a finer detail\n \
+                   ERROR after a space, so going on with the trace\n\
+                   error in lower case\n\
+                   INFORMATION kept\n\
+                   DEBUG process 0x40001080 is guest pid 7, a.exe\n\
+                   DEBUG the newest part starts in this line\n\
+                   INFO  two\n\
+                   INFO  three\n";
+        let mut file = log_file("golden", log.as_bytes());
+        let newest = "INFO  two\nINFO  three\n".len() as u64 + 3;
+        assert!(keep_within(&mut file, 100, 17, newest, 1_000).unwrap());
+        assert_eq!(
+            all_of(&file),
+            "INFO  first\nWARN \n\
+             INFO  the log passed 100 bytes, so its middle was dropped: 294 bytes, but for its 4 lines below \
+             that aren't debug lines or name a guest program\n\
+             WARNING a word that starts with a level\n\
+             host: going on with it\n\
+             INFORMATION kept\n\
+             DEBUG process 0x40001080 is guest pid 7, a.exe\n\
+             INFO  the log's newest part follows\n\
+             INFO  two\n\
+             INFO  three\n"
+        );
+    }
+
+    #[test]
     fn times_line_up_from_the_start_to_hours_in() {
         let early = timed_line(Duration::from_millis(5_010), Level::Error, "queue");
         assert_eq!(early, "ERROR [    5.010] queue");

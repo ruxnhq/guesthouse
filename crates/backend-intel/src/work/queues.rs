@@ -81,6 +81,12 @@ pub(super) struct Prepared {
     ring_run: Option<Run>,
 }
 
+/// Whether the submission names a batch with no bytes in it. Direct3D 12 sends one on a copy queue
+/// to bring a fence up, with no address either.
+fn names_no_bytes(work: &Work<'_>) -> bool {
+    work.commands.is_some_and(|commands| commands.length == 0)
+}
+
 /// Why a span of GPU memory couldn't be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReadError {
@@ -150,7 +156,13 @@ impl CardWork {
     /// Checks a submission and prepares it. Nothing is sent before its doorbell.
     pub fn start(&mut self, host: &mut dyn HostServices, work: &Work<'_>, header: &Header) -> WorkStart {
         self.write_left_marks(host);
-        let marks = (work.source == WorkSource::Context).then(|| Marks::of(host, work, header));
+        // A submission naming a batch of no bytes runs nothing, as one naming none. It only brings its
+        // queue's fence up, and does so after the runs before it, as a context's does.
+        let marks = match work.source {
+            WorkSource::Context => Some(Marks::of(host, work, header)),
+            _ if names_no_bytes(work) => Some(Marks::default()),
+            _ => None,
+        };
         // Work that may not run is dropped, and the guest hears so. Its marks, and a refused one's,
         // are written at once, as its process is losing its device.
         let dropped = !work.may_run || work.queue_failed;
@@ -231,7 +243,7 @@ impl CardWork {
         if self.space_failed(work.space) {
             return Err(Refused::SpaceFailed);
         }
-        let Some(commands) = work.commands else {
+        let Some(commands) = work.commands.filter(|_| !names_no_bytes(work)) else {
             log::debug!(
                 "intel work: queue {:#x} names no commands, so its work is finished unrun",
                 work.queue
@@ -849,6 +861,32 @@ mod tests {
         assert!(rig.xe.calls_named("create_queue").is_empty() && rig.xe.calls_named("exec").is_empty());
         let work = rig.submission(1, 1);
         assert!(matches!(rig.start(&work), WorkStart::Started { .. }), "OpenCL's does run");
+    }
+
+    #[test]
+    fn a_batch_of_no_bytes_runs_nothing_and_does_not_stop_its_queue() {
+        // As Direct3D 12's copy queue sends it: node 2, no address, no length.
+        let mut rig = ready(Stage::Everything);
+        let mut work = rig.submission(1, 1);
+        work.commands = Some(CommandBuffer { address: 0, length: 0 });
+        assert_eq!(rig.start(&work), WorkStart::Finished);
+        assert!(rig.xe.calls_named("create_queue").is_empty() && rig.xe.calls_named("exec").is_empty());
+    }
+
+    #[test]
+    fn a_batch_of_no_bytes_behind_a_run_brings_its_fence_up_after_it() {
+        let mut rig = ready(Stage::Everything);
+        rig.write_batch(&[batch::BATCH_END]);
+        let WorkStart::Started { doorbell, .. } = rig.start(&rig.submission(1, 1)) else { panic!() };
+        let mut empty = rig.submission(1, 2);
+        empty.commands = Some(CommandBuffer { address: 0, length: 0 });
+        let WorkStart::Started { doorbell: waiting, .. } = rig.start(&empty) else {
+            panic!("it waits for the run before it")
+        };
+        rig.work.ring_doorbell(doorbell).unwrap();
+        assert_eq!(rig.work.ring_doorbell(waiting).unwrap(), Doorbell::Rung);
+        rig.poll_later();
+        assert_eq!(rig.fence(), 2);
     }
 
     #[test]

@@ -15,7 +15,8 @@
 set -eu
 
 BUCKET=${BUCKET:-ruxn-pkg}
-# Indexes change with each publish, so Cloudflare keeps them a minute. Everything else never changes.
+# Indexes and the landing page change with each publish, so Cloudflare keeps them a minute. Everything
+# else never changes.
 INDEX_CACHE='public, max-age=60'
 FILE_CACHE='public, max-age=604800'
 # R2 doesn't take the checksums newer AWS command lines send by default.
@@ -67,7 +68,7 @@ case ${1:-} in
         check_key "$3"
         [ -f "$2" ] || die "there's no file called $2."
         cache=$FILE_CACHE
-        case ${3##*/} in latest.json | SHA256SUMS) cache=$INDEX_CACHE ;; esac
+        case ${3##*/} in latest.json | SHA256SUMS | index.html) cache=$INDEX_CACHE ;; esac
         s3 cp "$2" "s3://$BUCKET/$3" --cache-control "$cache"
         ;;
     has)

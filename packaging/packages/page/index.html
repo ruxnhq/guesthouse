@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>pkg.ruxn.com: Guesthouse packages</title>
+<meta name="description" content="Signed apt, rpm and pacman repositories for Guesthouse, a Proxmox repository, and a mirror of its releases.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='16' y='16' width='96' height='96' rx='22' fill='%232f7ae5'/%3E%3Crect x='46' y='50' width='36' height='40' rx='6' fill='%23f6c42d'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #070b1a; --ink: #eef1fb; --ink-2: #aab3cf; --ink-3: #7480a3;
+    --blue: #2f7ae5; --blue-2: #6aa6ff; --gold: #f6c42d;
+    --line: rgba(160, 178, 230, 0.16); --card: rgba(255, 255, 255, 0.035); --code: #050813;
+    --glow: rgba(47, 122, 229, 0.35);
+    --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f7fc; --ink: #11162b; --ink-2: #475070; --ink-3: #6b7594;
+      --blue: #1f63c4; --blue-2: #1f63c4; --gold: #9a6b00;
+      --line: rgba(40, 60, 120, 0.16); --card: #ffffff; --code: #eef2fb;
+      --glow: rgba(47, 122, 229, 0.18);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(900px 420px at 50% -120px, var(--glow), transparent 70%) no-repeat, var(--bg); color: var(--ink); font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased; }
+  a { color: var(--blue-2); }
+  a:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 6px; }
+  main { max-width: 820px; margin: 0 auto; padding: 56px 24px 72px; }
+  .eyebrow { display: inline-block; padding: 4px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink-2); font-size: 13px; }
+  .eyebrow b { color: var(--gold); font-weight: 600; }
+  h1 { font-size: clamp(34px, 6vw, 52px); line-height: 1.08; letter-spacing: -0.04em; margin: 18px 0 14px; font-weight: 750; }
+  h2 { font-size: 22px; letter-spacing: -0.02em; margin: 44px 0 6px; }
+  p { margin: 0 0 12px; color: var(--ink-2); }
+  .lede { font-size: 19px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin: 0 0 14px; }
+  .card h3 { margin: 0 0 2px; font-size: 16px; }
+  .card p { font-size: 14.5px; color: var(--ink-3); margin-bottom: 10px; }
+  pre { margin: 0; padding: 14px 16px; border-radius: 12px; background: var(--code); border: 1px solid var(--line); font: 13px/1.55 var(--mono); color: var(--ink); overflow-x: auto; scrollbar-color: var(--ink-3) transparent; }
+  code { font-family: var(--mono); font-size: .92em; color: var(--ink); }
+  .key { word-break: break-all; }
+  ul { margin: 0; padding-left: 20px; color: var(--ink-2); }
+  li { margin: 4px 0; }
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">{{LATEST}}</span>
+  <h1>Guesthouse packages</h1>
+  <p class="lede">This is where Guesthouse's signed package repositories live, with a copy of each release. One key signs them all.</p>
+
+  <h2>Debian and Ubuntu</h2>
+  <p>Debian 13, and Ubuntu 24.04 or newer.</p>
+  <pre>{{APT}}</pre>
+
+  <h2>Fedora</h2>
+  <pre>{{DNF}}</pre>
+  <p style="margin-top:10px">dnf asks once whether to trust the key, and shows its fingerprint.</p>
+
+  <h2>Arch</h2>
+  <pre>{{PACMAN}}</pre>
+
+  <h2>Proxmox VE</h2>
+  <p>A <code>pve-qemu-kvm</code> with the GPU-PV devices, as root on the host. This is the <code>stable</code> suite. Write <code>testing</code> in its place for the newest build.</p>
+  <pre>{{PROXMOX}}</pre>
+
+  <h2>The signing key</h2>
+  <p>Its fingerprint is</p>
+  <p><code class="key">{{FINGERPRINT}}</code></p>
+  <ul>
+    <li><a href="/ruxn-pkg.asc">ruxn-pkg.asc</a>, the public key, armored.</li>
+    <li><a href="/ruxn-pkg.gpg">ruxn-pkg.gpg</a>, the same key in the form apt reads.</li>
+  </ul>
+  <p style="margin-top:12px">Every package also has a build attestation. <code>gh attestation verify FILE --repo ruxnlabs/guesthouse</code> checks it was built by Guesthouse's own workflow.</p>
+
+  <h2>Releases</h2>
+  <p>Each release's files are copied to <code>/guesthouse/releases/vVERSION/</code>. The newest version is named in <a href="/guesthouse/latest.json">latest.json</a>.</p>
+
+  <footer>
+    <a href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/install.md">Install docs</a> &middot;
+    <a href="https://github.com/ruxnlabs/guesthouse/blob/main/docs/proxmox.md">Proxmox docs</a> &middot;
+    <a href="https://guesthouse.ruxn.com">guesthouse.ruxn.com</a>
+  </footer>
+</main>
+</body>
+</html>

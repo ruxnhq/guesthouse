@@ -1,0 +1,45 @@
+# Puts pkg.ruxn.com's landing page and public key up on their own, so a change to the page doesn't wait
+# for the next release. The page is made from page/index.html and the setup commands in the docs, with
+# the version the bucket's latest.json names. A release's own publish does the same as its last step.
+name: Package page
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - packaging/packages/page/**
+      - packaging/packages/make-page.sh
+      - packaging/packages/publish-page.sh
+      - packaging/packages/ruxn-pkg.asc
+      - docs/install.md
+      - docs/proxmox.md
+      - .github/workflows/pkg-page.yml
+
+permissions:
+  contents: read
+
+# Shares a release publish's group, as both write the root's files.
+concurrency:
+  group: pkg-guesthouse
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish the page
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The environment holds the bucket's token, and only main may use it.
+    environment: packages
+    env:
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the page's commands against the docs
+        run: bash tests/packages/page.sh
+      - name: Publish the key and the page
+        run: sh packaging/packages/publish-page.sh "$RUNNER_TEMP"

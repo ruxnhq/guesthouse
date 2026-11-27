@@ -1,6 +1,7 @@
 # Publishes a release on pkg.ruxn.com once install.sh on main names it: a copy of its files, the deb,
-# rpm and pacman packages in their signed repositories, and last of all guesthouse/latest.json, which
-# install.sh's --check-update and the app in a package read. RELEASING.md's step 7 is what starts it.
+# rpm and pacman packages in their signed repositories, and guesthouse/latest.json, which install.sh's
+# --check-update and the app in a package read. Last of all comes the landing page at the domain's root.
+# RELEASING.md's step 7 is what starts it.
 #
 # The packages are the release's own payload, checked against the hash install.sh has, so they hold
 # what install.sh would install. Nothing published is ever replaced: a version that's up already stays.
@@ -113,11 +114,6 @@ jobs:
         env:
           SIGNING_KEY_SECRET: ${{ secrets.PKG_SIGNING_KEY }}
         run: sh packaging/packages/signing-key.sh "$RUNNER_TEMP"
-      - name: The public key, where the docs say it is
-        run: |
-          gpg --batch --dearmor <packaging/packages/ruxn-pkg.asc >"$RUNNER_TEMP/ruxn-pkg.gpg"
-          sh packaging/packages/bucket.sh put packaging/packages/ruxn-pkg.asc ruxn-pkg.asc
-          sh packaging/packages/bucket.sh put "$RUNNER_TEMP/ruxn-pkg.gpg" ruxn-pkg.gpg
       # The copy install.sh and the NixOS package try before GitHub. Each file is checked against the
       # same hash either way, so the copy only has to be there.
       - name: Copy the release's files
@@ -162,6 +158,9 @@ jobs:
           printf '{\n  "version": "%s",\n  "notes": "https://github.com/%s/releases/tag/v%s"\n}\n' \
             "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" >"$RUNNER_TEMP/latest.json"
           sh packaging/packages/bucket.sh put "$RUNNER_TEMP/latest.json" guesthouse/latest.json
+      # The key and the landing page, the page the very last of all, as it names the version.
+      - name: Publish the key and the page
+        run: sh packaging/packages/publish-page.sh "$RUNNER_TEMP" "$RUNNER_TEMP/latest.json"
       - name: Forget the key
         if: always()
         run: rm -f "$RUNNER_TEMP/signing-key.asc"

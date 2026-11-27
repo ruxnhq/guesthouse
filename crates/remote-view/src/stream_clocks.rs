@@ -11,7 +11,11 @@
 //! - [`Viewers`] says whether a viewer streams, from what a host knows of the devices sending to the
 //!   guest: how long since each was last heard, and whether the guest still answers it. remoteman's
 //!   transport sends a keep-alive every second and gives a connection up after ten seconds of
-//!   silence, so a device heard within that and answered within that is a viewer. A host that knows
+//!   silence, so a device heard within that and answered within that is a viewer. Both ends do it:
+//!   remoteman's host listens with the same QUIC settings as its viewer, a keep-alive every second,
+//!   which QUIC sends as a ping whenever nothing else went out, and it acknowledges the viewer's. So
+//!   the guest answers a viewer every second while its desktop is still, and a still desktop keeps
+//!   its viewer. A host that knows
 //!   it some other way, as from remoteman's own `status.client`, skips this part.
 //! - [`StreamClocks`] turns that into holding and letting go, with the setting and the end of the
 //!   machine.
@@ -154,6 +158,20 @@ mod tests {
         assert!(viewers.streaming(1_000, &[device("a:1", 200, 6)]));
         assert!(viewers.streaming(9_000, &[device("a:1", 8_000, 6)]), "answered within ten seconds");
         assert!(!viewers.streaming(11_000, &[device("a:1", 10_000, 6)]), "gone quiet");
+    }
+
+    #[test]
+    fn a_viewer_of_a_still_desktop_stays_a_viewer() {
+        let mut viewers = Viewers::new();
+        let mut clocks = StreamClocks::new(true);
+        // Five minutes of nothing on the screen: only the keep-alives, a ping each way every second.
+        for second in 0..300 {
+            let now = second * 1_000;
+            let streaming = viewers.streaming(now, &[device("a:1", 300, 2 * second + 1)]);
+            assert!(streaming, "at {second} s");
+            clocks.step(now, streaming);
+            assert!(clocks.held(), "at {second} s");
+        }
     }
 
     #[test]

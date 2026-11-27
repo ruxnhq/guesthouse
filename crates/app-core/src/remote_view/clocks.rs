@@ -13,6 +13,7 @@
 
 use super::RelayClient;
 use guesthouse_remote_view_core::stream_clocks::{Change, Device, StreamClocks, Viewers};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -61,11 +62,41 @@ fn wait_for(child: &mut Child, seconds: u64) -> bool {
     }
 }
 
+/// Where the helper's lines go.
+pub enum Said {
+    /// Where this program's go: the remote view program's are the app's log.
+    Here,
+    /// Into this file, as the app's log, so nothing reaches a terminal.
+    Into(File),
+    Nowhere,
+}
+
+impl Said {
+    fn outputs(self) -> (Stdio, Stdio) {
+        match self {
+            Said::Here => (Stdio::inherit(), Stdio::inherit()),
+            Said::Into(file) => match file.try_clone() {
+                Ok(copy) => (Stdio::from(copy), Stdio::from(file)),
+                Err(_) => (Stdio::null(), Stdio::null()),
+            },
+            Said::Nowhere => (Stdio::null(), Stdio::null()),
+        }
+    }
+}
+
 /// Puts back a lock a killed helper left on `card`, if nobody holds the card now. Quiet where there's
-/// no helper: whoever holds says that.
-pub fn sweep(helper: Option<&Path>, card: &str) {
+/// no helper: whoever holds says that. With nothing to put back the helper doesn't load NVIDIA's
+/// library, so this costs a moment.
+pub fn sweep(helper: Option<&Path>, card: &str, said: Said) {
     let Some(helper) = helper else { return };
-    let started = Command::new(helper).args(["reset", card]).env_clear().stdin(Stdio::null()).spawn();
+    let (out, errors) = said.outputs();
+    let started = Command::new(helper)
+        .args(["reset", card])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(errors)
+        .spawn();
     if let Ok(mut child) = started
         && !wait_for(&mut child, PUT_BACK_SECONDS)
     {
@@ -83,6 +114,8 @@ pub struct ClockHolder {
     holding: Option<Child>,
     /// Helpers told to let go that haven't ended yet.
     leaving: Vec<Child>,
+    /// The end has been seen to, so a second one, as when the holder is dropped, does nothing.
+    ended: bool,
 }
 
 impl ClockHolder {
@@ -96,6 +129,7 @@ impl ClockHolder {
             viewers: Viewers::new(),
             holding: None,
             leaving: Vec::new(),
+            ended: false,
         };
         holder.set_card(card);
         holder
@@ -128,11 +162,12 @@ impl ClockHolder {
                 self.clocks.give_up();
             }
             Some(helper) => {
-                sweep(Some(helper), &card);
+                sweep(Some(helper), &card, Said::Here);
                 self.clocks.set_on(true);
             }
         }
         self.card = Some(card);
+        self.ended = false;
     }
 
     /// One look at the devices the relay has, `now` in milliseconds of the program's own clock.
@@ -193,6 +228,10 @@ impl ClockHolder {
 
     /// The machine or its screen ended: the clock goes back, and this waits until it has.
     pub fn end(&mut self) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
         let change = self.clocks.end();
         self.apply(change);
         for mut child in std::mem::take(&mut self.leaving) {
@@ -201,7 +240,7 @@ impl ClockHolder {
             }
         }
         if let Some(card) = self.card.clone() {
-            sweep(self.helper.as_deref(), &card);
+            sweep(self.helper.as_deref(), &card, Said::Here);
         }
     }
 }
@@ -242,7 +281,7 @@ mod tests {
         fs::read_to_string(path).unwrap_or_default()
     }
 
-    fn eventually(what: impl Fn() -> bool) -> bool {
+    fn eventually(mut what: impl FnMut() -> bool) -> bool {
         let end = Instant::now() + Duration::from_secs(5);
         while !what() && Instant::now() < end {
             thread::sleep(POLL);
@@ -320,10 +359,12 @@ mod tests {
         let (helper, log) = stand_in(&scratch, 6);
         let mut holder = ClockHolder::new(Some(helper), Some(CARD.into()));
         holder.tick(0, &[viewer(0, 5)]);
-        assert!(eventually(|| said(&log).contains("hold")));
-        thread::sleep(Duration::from_millis(200));
-        holder.tick(100, &[viewer(0, 6)]);
-        assert!(!holder.held());
+        let mut now = 0;
+        assert!(eventually(|| {
+            now += 1;
+            holder.tick(now, &[viewer(0, 5 + now)]);
+            !holder.held()
+        }));
         holder.tick(200, &[viewer(0, 7)]);
         assert_eq!(said(&log).matches("hold").count(), 1);
         assert!(why(Some(3)).contains("setuid"));

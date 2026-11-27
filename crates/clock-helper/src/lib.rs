@@ -204,15 +204,19 @@ pub enum Swept {
     Nothing,
 }
 
-/// Puts back a lock a holder left behind, if nobody holds the card now.
-pub fn reset(card: &mut dyn Card, holders: &mut dyn Holders) -> Result<Swept, Fault> {
+/// Puts back a lock a holder left behind, if nobody holds the card now. The card is only opened when
+/// there is something to put back, so a reset with nothing to do never loads NVIDIA's library.
+pub fn reset<C: Card>(
+    holders: &mut dyn Holders,
+    open: impl FnOnce() -> Result<C, Fault>,
+) -> Result<Swept, Fault> {
     if !holders.take_if_free() {
         return Ok(Swept::Held);
     }
     if !holders.marked() {
         return Ok(Swept::Nothing);
     }
-    card.reset_memory_clock()?;
+    open()?.reset_memory_clock()?;
     holders.unmark();
     Ok(Swept::PutBack)
 }
@@ -232,6 +236,7 @@ mod tests {
         resets: u32,
     }
 
+    #[derive(Clone)]
     struct StandInCard {
         state: Rc<RefCell<Shared>>,
         supported: Result<Vec<u32>, Fault>,
@@ -382,10 +387,10 @@ mod tests {
         assert_eq!(state.borrow().locked, Some(14001), "still held for the other");
         assert_eq!(state.borrow().resets, 0);
         // The other one ends.
-        let (mut card, mut holders) = rig(&state);
+        let (card, mut holders) = rig(&state);
         holders.joined = true;
         assert!(holders.leave_last());
-        assert_eq!(reset(&mut card, &mut holders), Ok(Swept::PutBack));
+        assert_eq!(reset(&mut holders, || Ok(card.clone())), Ok(Swept::PutBack));
         assert_eq!(state.borrow().locked, None);
     }
 
@@ -410,19 +415,22 @@ mod tests {
     #[test]
     fn reset_leaves_a_clock_locked_by_hand_and_one_still_held() {
         let state: Rc<RefCell<Shared>> = Rc::default();
-        let (mut card, mut holders) = rig(&state);
+        let (card, mut holders) = rig(&state);
         state.borrow_mut().locked = Some(9501);
-        assert_eq!(reset(&mut card, &mut holders), Ok(Swept::Nothing));
+        assert_eq!(reset(&mut holders, || Ok(card.clone())), Ok(Swept::Nothing));
         assert_eq!(state.borrow().locked, Some(9501), "somebody's own lock");
+        let never =
+            || -> Result<StandInCard, Fault> { panic!("the card was opened with nothing to put back") };
+        assert_eq!(reset(&mut holders, never), Ok(Swept::Nothing));
 
         state.borrow_mut().mark = Some(9501);
         state.borrow_mut().holders = 1;
-        assert_eq!(reset(&mut card, &mut holders), Ok(Swept::Held));
+        assert_eq!(reset(&mut holders, || Ok(card.clone())), Ok(Swept::Held));
         assert_eq!(state.borrow().locked, Some(9501));
 
         // The holder was killed: the kernel let go of its share, and its mark is still there.
         state.borrow_mut().holders = 0;
-        assert_eq!(reset(&mut card, &mut holders), Ok(Swept::PutBack));
+        assert_eq!(reset(&mut holders, || Ok(card.clone())), Ok(Swept::PutBack));
         assert_eq!((state.borrow().locked, state.borrow().mark), (None, None));
     }
 }

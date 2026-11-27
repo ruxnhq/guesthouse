@@ -17,8 +17,9 @@ const NAME: &str = "guesthouse-clock-helper";
 /// Root's folder for the holders' lock files and the marks. `/run` is emptied at boot, as the
 /// card's clocks are.
 const STATE_FOLDER: &CStr = c"/run/guesthouse-clocks";
-const FOLDER_MODE: libc::mode_t = 0o755;
-const FILE_MODE: libc::mode_t = 0o644;
+/// Root's alone: a user who could open the lock file could take a lock on it and stop the count.
+const FOLDER_MODE: libc::mode_t = 0o700;
+const FILE_MODE: libc::mode_t = 0o600;
 const PCI_DEVICES: &str = "/sys/bus/pci/devices";
 /// The library by its standard name, which the loader looks for only in the system's own places for
 /// a setuid program, then where NixOS keeps the driver's libraries.
@@ -90,9 +91,9 @@ fn run(order: &Order) -> Result<(), Fault> {
         ));
     }
     let mut holders = LockFile::open(&order.card)?;
-    let mut card = Nvml::open(&order.card)?;
     match order.verb {
         Verb::Hold => {
+            let mut card = Nvml::open(&order.card)?;
             watch_for_end();
             let mhz = hold(&mut card, &mut holders, |mhz| {
                 say(&format!("holding the memory clock of {} at {mhz} MHz", order.card));
@@ -100,7 +101,7 @@ fn run(order: &Order) -> Result<(), Fault> {
             })?;
             say(&format!("put the memory clock of {} back, after {mhz} MHz", order.card));
         }
-        Verb::Reset => match reset(&mut card, &mut holders)? {
+        Verb::Reset => match reset(&mut holders, || Nvml::open(&order.card))? {
             Swept::PutBack => say(&format!("put back the memory clock a holder left on {}", order.card)),
             Swept::Held | Swept::Nothing => {}
         },
@@ -173,14 +174,16 @@ fn os_fault(what: &str) -> Fault {
     Fault::new(Exit::Failed, format!("{what}: {}", io::Error::last_os_error()))
 }
 
-/// Whether a file is root's and only root can write it.
-fn roots_own(fd: c_int, kind: libc::mode_t) -> bool {
+/// Whether a file is root's, of the kind wanted, and then made root's alone with `mode`, whatever mode
+/// it was made with. One that isn't root's is refused, never changed.
+fn roots_own(fd: c_int, kind: libc::mode_t, mode: libc::mode_t) -> bool {
     // SAFETY: a zeroed stat filled in by fstat, which outlives the call.
     let mut found: libc::stat = unsafe { mem::zeroed() };
-    (unsafe { libc::fstat(fd, &mut found) } == 0)
+    let roots = (unsafe { libc::fstat(fd, &mut found) } == 0)
         && found.st_uid == 0
-        && found.st_mode & libc::S_IFMT == kind
-        && found.st_mode & 0o022 == 0
+        && found.st_mode & libc::S_IFMT == kind;
+    // SAFETY: an open descriptor, and a mode.
+    roots && (found.st_mode & 0o7777 == mode || unsafe { libc::fchmod(fd, mode) } == 0)
 }
 
 struct LockFile {
@@ -205,7 +208,7 @@ impl LockFile {
         }
         // SAFETY: a descriptor just opened, owned from here.
         let folder = unsafe { OwnedFd::from_raw_fd(fd) };
-        if !roots_own(folder.as_raw_fd(), libc::S_IFDIR) {
+        if !roots_own(folder.as_raw_fd(), libc::S_IFDIR, FOLDER_MODE) {
             return Err(Fault::new(
                 Exit::Failed,
                 "/run/guesthouse-clocks isn't root's alone, so it isn't used.",
@@ -224,7 +227,7 @@ impl LockFile {
         }
         // SAFETY: as above.
         let lock = unsafe { OwnedFd::from_raw_fd(fd) };
-        if !roots_own(lock.as_raw_fd(), libc::S_IFREG) {
+        if !roots_own(lock.as_raw_fd(), libc::S_IFREG, FILE_MODE) {
             return Err(Fault::new(
                 Exit::Failed,
                 "The card's lock file isn't root's alone, so it isn't used.",

@@ -276,7 +276,9 @@ pub fn sweep_clocks(context: &Context, machine: &Machine) {
     }
     let card = crate::screen_gpu::machine_card(context, machine);
     if !card.is_empty() {
-        super::sweep(super::clock_helper().as_deref(), &card);
+        // Into the log, never onto the terminal of a `guesthouse-vm stop`.
+        let said = crate::log::open_for_appending(context).map_or(super::Said::Nowhere, super::Said::Into);
+        super::sweep(super::clock_helper().as_deref(), &card, said);
     }
 }
 

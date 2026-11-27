@@ -28,7 +28,7 @@ mod mdns;
 mod process;
 mod settings;
 
-pub use clocks::{ClockHolder, NIXOS_CLOCK_HELPER, OWN_CLOCK_HELPER, clock_helper, sweep};
+pub use clocks::{ClockHolder, NIXOS_CLOCK_HELPER, OWN_CLOCK_HELPER, Said, clock_helper, sweep};
 pub use control::{
     Counters, RelayClient, RelayReply, RelayStatus, Request, ShareState, ask, listener, serve, socket_path,
 };

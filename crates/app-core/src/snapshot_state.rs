@@ -31,6 +31,7 @@ fn files(context: &Context, machine: &Machine) -> Vec<PathBuf> {
         machine.folder(context).join(recipe::OUTCOME_FILE),
         machine.folder(context).join(crate::lean::RESULT_FILE),
         machine.folder(context).join(crate::scan_exclusions::EXCLUSIONS_FILE),
+        crate::guest_driver_store::record_file(context, machine),
     ];
     let clean = throwaway::clean_folder(context, machine);
     if !(machine.throwaway && clean.is_dir()) {
@@ -54,9 +55,11 @@ pub fn keep(context: &Context, machine: &Machine, folder: &Path) -> Result<()> {
 }
 
 /// Puts the notes back as `folder` has them. A snapshot from before they were kept has no folder, and
-/// the notes stay as they are.
+/// the notes stay as they are, but for the version of NVIDIA's driver in the guest: that one goes, so
+/// the next start asks the guest instead of believing it of an older disk.
 pub fn restore(context: &Context, machine: &Machine, folder: &Path) -> Result<()> {
     if !folder.is_dir() {
+        let _ = fs::remove_file(crate::guest_driver_store::record_file(context, machine));
         return Ok(());
     }
     for file in files(context, machine) {

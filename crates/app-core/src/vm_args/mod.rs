@@ -179,6 +179,9 @@ pub struct VmPlan {
     pub network: NetworkPlan,
     /// The tools disc from the first hand-built guest, if this store has one. Nothing makes it now.
     pub tools_disc: Option<PathBuf>,
+    /// NVIDIA's driver on a disc, for a start that brings the guest's copy of it to this PC's version:
+    /// see [`crate::guest_driver_store`]. It goes where the tools disc would.
+    pub driver_disc: Option<PathBuf>,
     /// Sound goes to the host's default output, or the sink named, if PipeWire can be reached. QEMU
     /// won't start if it can't, and a VM matters more.
     pub sound: Option<Sound>,
@@ -285,6 +288,7 @@ impl VmPlan {
                 passt_age,
             },
             tools_disc: tools.is_file().then_some(tools),
+            driver_disc: None,
             sound: None,
             jail: None,
             jail_note: String::new(),

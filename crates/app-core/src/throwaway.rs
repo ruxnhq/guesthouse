@@ -37,7 +37,8 @@ const RUN_FOLDER: &str = "throwaway";
 /// The notes about the guest as they were when it became a throwaway.
 const CLEAN_FOLDER: &str = "throwaway-clean";
 /// The notes the app keeps about what's in the guest, which a run can change.
-const GUEST_NOTES: [&str; 10] = [
+const GUEST_NOTES: [&str; 11] = [
+    crate::guest_driver_store::RECORD_FILE,
     crate::recipe::OUTCOME_FILE,
     crate::lean::RESULT_FILE,
     crate::scan_exclusions::EXCLUSIONS_FILE,

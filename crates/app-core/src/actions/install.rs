@@ -11,6 +11,7 @@ use crate::context::Context;
 use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
 use crate::gpu_maker::GpuMaker;
+use crate::guest_driver_store;
 use crate::iso::{self, iso_maker};
 use crate::lean;
 use crate::library::make_disk;
@@ -240,6 +241,19 @@ pub fn wait_for_setup(task: &mut Task) -> Result<()> {
     )))
 }
 
+/// The version of NVIDIA's driver setup put in the guest's driver store, from the disc's own files, so
+/// the first start doesn't give it the same again.
+fn note_guest_driver(task: &Task) -> Result<()> {
+    if task.machine.windows_maker() != Some(GpuMaker::Nvidia) {
+        return Ok(());
+    }
+    let driver = guest_driver(task.context, &task.machine).map_err(Failure::new)?;
+    match guest_driver_store::offered_version_in(&driver.folder) {
+        Some(version) => guest_driver_store::record_version(task.context, &task.machine, &version),
+        None => Ok(()),
+    }
+}
+
 fn count_files(folder: &Path) -> usize {
     let Ok(entries) = fs::read_dir(folder) else { return 0 };
     entries.flatten().map(|entry| if entry.path().is_dir() { count_files(&entry.path()) } else { 1 }).sum()
@@ -294,6 +308,7 @@ pub fn install(task: &mut Task) -> Result<()> {
     crate::gpu_identity::forget_state(context, &task.machine);
     crate::display::forget_state(context, &task.machine);
     crate::auto_snapshot::record::forget(context, &task.machine);
+    let _ = fs::remove_file(guest_driver_store::record_file(context, &task.machine));
     task.step("Starting the installer");
     let answer = answer_disc_path(context, &task.machine);
     let boot = Boot::Install { iso: task.machine.iso.clone(), answer: answer.clone() };
@@ -306,6 +321,7 @@ pub fn install(task: &mut Task) -> Result<()> {
         return Err(Failure::new("Windows installed, but its desktop never came up."));
     }
     check_guest(task)?;
+    note_guest_driver(task)?;
     // While the install's own session is up, as SYSTEM, and before its shutdown makes the next start
     // the first that counts. It only ever adds a note.
     super::lean::after_install(task);

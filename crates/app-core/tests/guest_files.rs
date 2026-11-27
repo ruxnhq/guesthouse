@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 35] = [
+const SENT_TO_THE_GUEST: [&str; 36] = [
     "SetupComplete.cmd",
     "agent.ps1",
     "app-windows-start.ps1",
@@ -32,6 +32,7 @@ const SENT_TO_THE_GUEST: [&str; 35] = [
     "nv-files.ps1",
     "nv-media-foundation.ps1",
     "nv-profiles.ps1",
+    "nv-store.ps1",
     "nvme-ready.ps1",
     "scan-exclusions.ps1",
     "setmode.ps1",

@@ -966,10 +966,33 @@ fn the_display_mode_agrees_with_what_the_app_is_told() {
 }
 
 #[test]
-fn the_display_mode_goes_with_its_ring() {
+fn the_display_mode_outlasts_a_ring_the_driver_closed() {
+    // A mode change closes the ring and the next one opens a moment later. An app that asked in
+    // between got "not supported", and Vulkan benchmarks quit on it.
     let (mut session, _) = registered();
-    session.end_indirect_ring("the driver closed it");
-    assert!(is_refused(&display_mode(&mut session)));
+    let close = escape_from(PROCESS, &driver::close(NAME));
+    let _ = session.handle_message(&close, Some(ReplyTicket::default()), &mut Vec::new());
+    assert!(session.indirect_screen().is_none());
+    let reply = display_mode(&mut session);
+    assert_eq!(u32_at(&reply, 0), Ok(Status::SUCCESS.0));
+    assert_eq!(u32_at(&reply, 8), Ok(WIDTH));
+    assert_eq!(u32_at(&reply, 12), Ok(HEIGHT));
+    assert_eq!(u32_at(&reply, 24), Ok(120_000));
+}
+
+#[test]
+fn a_mode_change_answers_the_old_mode_until_the_new_ring_opens() {
+    let (mut session, _) = registered();
+    let close = escape_from(PROCESS, &driver::close(NAME));
+    let _ = session.handle_message(&close, Some(ReplyTicket::default()), &mut Vec::new());
+    let old = display_mode(&mut session);
+    assert_eq!(u32_at(&old, 0), Ok(Status::SUCCESS.0));
+    assert_eq!(u32_at(&old, 24), Ok(120_000));
+    let (status, _) = register(&mut session, &Register { refresh_millihertz: 240_000, ..ring(Look::SDR) });
+    assert_eq!(status, STATUS_OK);
+    let new = display_mode(&mut session);
+    assert_eq!(u32_at(&new, 0), Ok(Status::SUCCESS.0));
+    assert_eq!(u32_at(&new, 24), Ok(240_000));
 }
 
 #[test]
@@ -980,7 +1003,7 @@ fn the_display_mode_goes_with_the_drivers_process() {
 }
 
 #[test]
-fn the_display_mode_stays_refused_after_a_close_and_a_refused_ring() {
+fn the_display_mode_is_refused_after_a_close_and_a_refused_ring() {
     let (mut session, _) = registered();
     let close = escape_from(PROCESS, &driver::close(NAME));
     let _ = session.handle_message(&close, Some(ReplyTicket::default()), &mut Vec::new());

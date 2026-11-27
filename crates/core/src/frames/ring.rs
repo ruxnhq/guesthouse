@@ -10,6 +10,7 @@ use super::IndirectRing;
 use super::Registering;
 use super::{Picture, Slots};
 use guesthouse_backend::{MemoryId, RingTiling, SpaceId, SurfaceShape};
+use guesthouse_messages::adapter::DisplayMode;
 use guesthouse_messages::indirect::{Look, RingName};
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
@@ -100,6 +101,9 @@ pub(crate) struct ScreenFrames {
     /// The guest's display driver is the screen. Copies to the old screen are ignored meanwhile.
     pub indirect: Option<IndirectRing>,
     pub registering: Option<Registering>,
+    /// The mode the display driver's newest ring showed. Each mode change closes the ring and opens the
+    /// next one a moment later, and the current display mode query is answered with this meanwhile.
+    pub display_mode: Option<DisplayMode>,
     pub cursor: Cursor,
     /// The viewer draws the cursor itself.
     pub viewer_wants_cursor: bool,

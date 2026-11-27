@@ -113,6 +113,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             (self.ticket, space, taken, Self::ring_makes_sense(&ring))
         else {
             log::warn!("refused a frame ring from process {process:#x}: {ring:?}, already taken: {taken}");
+            self.frames.display_mode = None;
             self.reply(Outcome::Refused, None).write_over(out);
             return;
         };
@@ -203,6 +204,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             Ok(slots) => self.open_indirect_ring(process, &ring, slots),
             Err(error) => {
                 log::warn!("no ring for the display driver: {error}");
+                self.frames.display_mode = None;
                 self.reply(Outcome::Refused, None)
             }
         };
@@ -250,6 +252,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             opened_at: Instant::now(),
             landed: false,
         });
+        self.frames.display_mode = self.ring_display_mode();
         log::info!("the display driver has a ring: {ring:?}");
         self.reply(Outcome::Accepted, granted)
     }
@@ -328,10 +331,19 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.frames.ring.as_ref().map(|ring| (ring.picture, ring.look, landed))
     }
 
-    /// What the current display mode query answers. It comes from the same open ring the app's note
-    /// does, so that the two can't disagree, and it goes when the ring does. A ring with no rate gets
-    /// no answer, which is what a driver too old to send one has always had.
+    /// What the current display mode query answers: what the open ring shows, or, between one ring
+    /// and the next, what the last one showed. A mode change closes the ring and the driver opens
+    /// the next about 0.3 s later, and an app that asked in that gap was told "not supported", which
+    /// Vulkan benchmarks took as a reason to quit. The mode is forgotten when it can no longer be
+    /// true: the driver's process going, a ring it was refused, a guest restart. Before any ring there
+    /// is no mode, so Basic Display's is never given. A ring with no rate gets no answer, which is what
+    /// a driver too old to send one has always had.
     pub(super) fn display_mode(&self) -> Option<DisplayMode> {
+        self.ring_display_mode().or(self.frames.display_mode)
+    }
+
+    /// What the open ring shows, if it has one and a rate.
+    fn ring_display_mode(&self) -> Option<DisplayMode> {
         let rate = self.frames.indirect.as_ref()?.refresh_millihertz;
         let ring = self.frames.ring.as_ref()?;
         let format =
@@ -351,6 +363,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.frames.registering = None;
         self.frames.cursor = Cursor::default();
         self.end_indirect_ring("the guest restarted");
+        self.frames.display_mode = None;
         self.end_the_last_start();
         self.display_driver_seen = false;
         self.context_processes.clear();
@@ -366,6 +379,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn process_going(&mut self, process: u32) {
         if self.frames.indirect.as_ref().is_some_and(|ring| ring.owner == process) {
             self.end_indirect_ring("its process has gone");
+            self.frames.display_mode = None;
         }
     }
 

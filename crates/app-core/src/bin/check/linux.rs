@@ -27,6 +27,22 @@ fn line(check: &Check) -> String {
     format!("check\t{state}\t{}\t{}\t{}", field(&check.title), field(&check.text), field(&check.fix))
 }
 
+fn yes_no(answer: bool) -> &'static str {
+    if answer { "yes" } else { "no" }
+}
+
+/// The lines after the checks: `gtk` only when there is a GTK, then `gpu`, `amd` and `intel`.
+fn closing_lines(gtk: Option<&str>, gpu: bool, amd: bool, intel: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(version) = gtk {
+        lines.push(format!("gtk\t{version}"));
+    }
+    lines.push(format!("gpu\t{}", yes_no(gpu)));
+    lines.push(format!("amd\t{}", yes_no(amd)));
+    lines.push(format!("intel\t{}", yes_no(intel)));
+    lines
+}
+
 /// The files a plain VM would boot, with their format, so a test can boot what the app would.
 fn print_firmware(context: &Context) {
     let firmware = &context.paths.firmware;
@@ -50,13 +66,50 @@ pub fn main() -> ExitCode {
     for check in &report.checks {
         println!("{}", line(check));
     }
-    if let Some(version) = gtk_version() {
-        println!("gtk\t{version}");
-    }
-    println!("gpu\t{}", if report.gpu { "yes" } else { "no" });
     // An AMD card can be a Linux guest's GPU, whatever the checks above say of NVIDIA's.
-    println!("amd\t{}", if amd_cards(&context).is_empty() { "no" } else { "yes" });
+    let amd = !amd_cards(&context).is_empty();
     // Only a card the Intel daemon is written for counts, as nearly every Intel processor has a GPU.
-    println!("intel\t{}", if supported_intel_cards(&context).is_empty() { "no" } else { "yes" });
+    let intel = !supported_intel_cards(&context).is_empty();
+    for line in closing_lines(gtk_version().as_deref(), report.gpu, amd, intel) {
+        println!("{line}");
+    }
     ExitCode::SUCCESS
+}
+
+// install.sh and the Proxmox host check read these lines, and the format is promised stable (see
+// docs/check-output.md). These tests spell it out in full, so a change breaks them first.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use guesthouse_app_core::setup::checks::Part;
+
+    fn check(state: CheckState, title: &str, text: &str, fix: &str) -> Check {
+        Check { title: title.into(), state, text: text.into(), fix: fix.into(), part: Part::Pc }
+    }
+
+    #[test]
+    fn a_check_line_is_check_state_title_found_fix_split_by_tabs() {
+        let ok = check(CheckState::Ok, "KVM", "/dev/kvm is there.", "");
+        assert_eq!(line(&ok), "check\tok\tKVM\t/dev/kvm is there.\t");
+        let warning = check(CheckState::Warning, "Title", "Found.", "Fix it.");
+        assert_eq!(line(&warning), "check\twarning\tTitle\tFound.\tFix it.");
+        let failed = check(CheckState::Failed, "Title", "Found.", "Fix it.");
+        assert_eq!(line(&failed), "check\tfailed\tTitle\tFound.\tFix it.");
+    }
+
+    #[test]
+    fn a_tab_or_line_break_in_a_message_becomes_a_space() {
+        let odd = check(CheckState::Ok, "A\tB", "C\nD", "E\t\nF");
+        assert_eq!(line(&odd), "check\tok\tA B\tC D\tE  F");
+        assert_eq!(line(&odd).split('\t').count(), 5);
+    }
+
+    #[test]
+    fn the_closing_lines_are_gtk_gpu_amd_intel_in_that_order() {
+        assert_eq!(
+            closing_lines(Some("4.14.5"), true, false, true),
+            ["gtk\t4.14.5", "gpu\tyes", "amd\tno", "intel\tyes"]
+        );
+        assert_eq!(closing_lines(None, false, true, false), ["gpu\tno", "amd\tyes", "intel\tno"]);
+    }
 }

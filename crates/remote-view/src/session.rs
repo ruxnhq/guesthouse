@@ -424,6 +424,30 @@ impl Driver<'_> {
             .with(self.machine, |session| session.shown(self.machine, self.policy, state, port, reason))
     }
 
+    /// For a host-timed pairing: gives the host one command about a device, built as for
+    /// [`Driver::device`] (`Policy::device_revoke`, `Policy::device_allow` for each switch and
+    /// view-only, or `ctl::device_drop`, which check the fingerprint). Nothing is read and no answer
+    /// is waited for: what happened comes back through [`Driver::host_says`] and the host's own
+    /// device list, so nothing here changes until then. Gives why the command did not go
+    /// ([`NotDelivered`], also logged), or [`NOT_HOST_TIMED`] for a pairing read from status.
+    pub fn host_device(&self, words: &Words) -> Result<(), String> {
+        let host_timed = self.sessions.with(self.machine, |session| {
+            session.pairing.get_or_insert_with(|| self.fresh_host_timed()).is_host_timed()
+        });
+        if !host_timed {
+            return Err(NOT_HOST_TIMED.to_string());
+        }
+        self.deliver(words)
+    }
+
+    /// Gives a host-timed host one command, logging why it did not go.
+    fn deliver(&self, words: &Words) -> Result<(), String> {
+        self.guest.send(words).map_err(|why| {
+            self.guest.log(&format!("{}: {}", words.join(" "), why.0));
+            why.0
+        })
+    }
+
     fn host_step(&self, step: impl FnOnce(&Pairing, Millis) -> crate::pairing::Step) -> Option<String> {
         let pairing = self.sessions.with(self.machine, |session| {
             session.pairing.get_or_insert_with(|| self.fresh_host_timed()).clone()
@@ -436,9 +460,7 @@ impl Driver<'_> {
         self.guest.keep_held(step.pairing.held());
         for words in &step.commands {
             // The state follows what the host says next, not whether a command went.
-            if let Err(why) = self.guest.send(words) {
-                self.guest.log(&format!("{}: {}", words.join(" "), why.0));
-            }
+            let _ = self.deliver(words);
         }
         step.refused
     }
@@ -454,5 +476,7 @@ impl Driver<'_> {
 mod tests;
 #[cfg(test)]
 mod tests_host;
+#[cfg(test)]
+mod tests_host_device;
 #[cfg(test)]
 mod tests_refuse;

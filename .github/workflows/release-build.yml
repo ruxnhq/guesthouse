@@ -1,0 +1,303 @@
+# Steps 3 to 6 of RELEASING.md for the Linux host, from its tag: pushing vX.Y.Z builds the release in
+# the same images packaging/build-in-images.sh uses by hand, runs the install tests on it, and makes the
+# GitHub release as a draft with its five files and notes drafted from the pull requests since the
+# release before. Nothing is public until someone publishes the draft. Publishing starts the rest:
+# release-files.yml puts the AppImage on files.ruxn.com, point-installer.yml opens the pull request
+# that points main at it, and release-credits.yml writes the Thanks into the notes.
+#
+# The display driver can only be built on Windows, and every new build of it is a new package id that
+# each guest installs again. So, as by hand, the previous release's DLL and INF are used again,
+# checked against that release's SHA256SUMS, unless something compiled in drivers/windows-display
+# changed since that release. Then it's built here on a Windows runner.
+#
+# From the Actions tab it runs for a tag that's pushed already. With "release" off, it only builds and
+# tests, and the files are the run's artifact.
+name: Release build
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Linux release tag to build, like v0.10.0
+        required: true
+      release:
+        description: Make the draft release (off builds and tests only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  # As RELEASING.md says: a new, neutral folder, as its path ends up in the binaries.
+  BUILD_FOLDER: /var/tmp/guesthouse-release
+
+jobs:
+  prepare:
+    name: check the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      previous: ${{ steps.tag.outputs.previous }}
+      driver: ${{ steps.driver.outputs.driver }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The tag is a release of main's, at Cargo.toml's version
+        id: tag
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::$TAG isn't a Linux release tag."; exit 1 ;;
+          esac
+          VERSION=${TAG#v}
+          case "$VERSION" in
+            *[!0-9.]*) echo "::error::$TAG isn't a plain version."; exit 1 ;;
+          esac
+          SAYS=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          [ "$SAYS" = "$VERSION" ] || { echo "::error::Cargo.toml says $SAYS at $TAG, not $VERSION."; exit 1; }
+          git merge-base --is-ancestor "$TAG^{commit}" origin/main ||
+            { echo "::error::$TAG isn't on main. A release is tagged on the version's merge."; exit 1; }
+          # The workflow's own copy, so a tag from before it was added still has one.
+          git show "$GITHUB_SHA:scripts/release-notes.py" >"$RUNNER_TEMP/release-notes.py"
+          PREVIOUS=$(python3 "$RUNNER_TEMP/release-notes.py" --print-previous "$TAG")
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >>"$GITHUB_OUTPUT"
+          echo "Release $VERSION, after ${PREVIOUS:-nothing}."
+
+      # Step 3's rule: the docs, the licences, vdd_settings.xml and the scripts in setup/ go in from the
+      # tree, so they don't count. Nor do the driver's tests, which aren't in its project.
+      - name: Whether the display driver changed since the release before
+        id: driver
+        env:
+          PREVIOUS: ${{ steps.tag.outputs.previous }}
+        run: |
+          D=drivers/windows-display
+          if [ -z "$PREVIOUS" ]; then
+            echo "There's no release before, so the driver is built."
+            echo "driver=build" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "$PREVIOUS" "$TAG" -- "$D" ":(exclude,glob)$D/**/*.md" \
+            ":(exclude)$D/LICENSE" ":(exclude)$D/LICENSE-MS-PL" ":(exclude)$D/vdd_settings.xml" \
+            ":(exclude)$D/setup" ":(exclude)$D/tests")
+          if [ -n "$CHANGED" ]; then
+            printf 'Changed since %s, so the driver is built:\n%s\n' "$PREVIOUS" "$CHANGED"
+            echo "driver=build" >>"$GITHUB_OUTPUT"
+          else
+            echo "Nothing compiled changed since $PREVIOUS, so its driver goes in again."
+            echo "driver=reuse" >>"$GITHUB_OUTPUT"
+          fi
+
+  driver:
+    name: build the display driver
+    needs: prepare
+    if: needs.prepare.outputs.driver == 'build'
+    # Visual Studio 2022 with the WDK and its Spectre-mitigated libraries, as BUILDING.md needs.
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Build it as BUILDING.md does
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $msbuild) { throw 'There is no MSBuild on this runner.' }
+          Set-Location drivers\windows-display
+          & $msbuild GuesthouseDisplay.sln /m /p:Configuration=Release /p:Platform=x64 /p:SignMode=Off
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed ($LASTEXITCODE)" }
+          $built = Get-ChildItem -Recurse -Filter GuesthouseDisplay.inf |
+            Where-Object { $_.FullName -match '\\x64\\Release\\' -and (Test-Path (Join-Path $_.DirectoryName 'GuesthouseDisplay.dll')) } |
+            Select-Object -First 1
+          if (-not $built) { throw 'The build left no GuesthouseDisplay.dll and .inf in x64\Release.' }
+          $out = Join-Path $env:RUNNER_TEMP 'display-driver'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item (Join-Path $built.DirectoryName 'GuesthouseDisplay.dll'), $built.FullName $out
+          Get-ChildItem $out | Format-Table Name, Length
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: display-driver
+          path: ${{ runner.temp }}/display-driver
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: build the release
+    needs: [prepare, driver]
+    if: always() && needs.prepare.result == 'success' && (needs.driver.result == 'success' || needs.driver.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PREVIOUS: ${{ needs.prepare.outputs.previous }}
+      DRIVER: ${{ needs.prepare.outputs.driver }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+
+      # The build wants about 10 GB, and the runner's disk is mostly toolchains this doesn't use.
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /var/tmp
+
+      - name: The previous release's display driver
+        if: env.DRIVER == 'reuse'
+        run: |
+          OLD=${PREVIOUS#v}
+          mkdir -p "$RUNNER_TEMP/previous" "$RUNNER_TEMP/display-driver"
+          cd "$RUNNER_TEMP/previous"
+          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -p "guesthouse-$OLD-x86_64.tar.xz"
+          grep -E " \*?guesthouse-$OLD-x86_64\.tar\.xz\$" SHA256SUMS | sha256sum -c -
+          tar -xJf "guesthouse-$OLD-x86_64.tar.xz" -C "$RUNNER_TEMP/display-driver" --strip-components=2 \
+            "guesthouse-$OLD-x86_64/display-driver/GuesthouseDisplay.dll" \
+            "guesthouse-$OLD-x86_64/display-driver/GuesthouseDisplay.inf"
+          rm -rf "$RUNNER_TEMP/previous"
+
+      - name: The display driver built for this release
+        if: env.DRIVER == 'build'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: display-driver
+          path: ${{ runner.temp }}/display-driver
+
+      - name: Build it in the images
+        run: |
+          (cd "$RUNNER_TEMP/display-driver" && cat GuesthouseDisplay.dll GuesthouseDisplay.inf | sha256sum)
+          sh packaging/build-in-images.sh --out "$BUILD_FOLDER" --display-driver "$RUNNER_TEMP/display-driver"
+
+      - name: The five files, and nothing else
+        run: |
+          cd "$BUILD_FOLDER"
+          for name in "guesthouse-$VERSION-x86_64.tar.xz" "guesthouse-installer-$VERSION.AppImage" \
+            "guesthouse-$VERSION-source.tar.xz" "guesthouse-$VERSION-bundled-source.tar"; do
+            grep -qE " \*?$name\$" SHA256SUMS || { echo "::error::SHA256SUMS has no $name."; exit 1; }
+          done
+          sha256sum -c SHA256SUMS
+          grep -qx "version=$VERSION" stage/RELEASE
+          grep -qx "commit=$(git rev-parse HEAD)" stage/RELEASE
+          cat SHA256SUMS stage/RELEASE
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ needs.prepare.outputs.version }}
+          path: |
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-x86_64.tar.xz
+            ${{ env.BUILD_FOLDER }}/guesthouse-installer-${{ needs.prepare.outputs.version }}.AppImage
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-source.tar.xz
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-bundled-source.tar
+            ${{ env.BUILD_FOLDER }}/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  # Step 5. Its result goes at the top of the draft's notes, for whoever publishes it to see.
+  test:
+    name: try it
+    needs: [prepare, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.prepare.outputs.version }}
+          path: ${{ env.BUILD_FOLDER }}
+      # Ubuntu's AppArmor keeps bubblewrap from making its namespaces unless told. The runner is a
+      # throwaway machine.
+      - name: What the tests need
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          docker pull ubuntu:24.04
+          docker pull debian:13
+      - name: install.sh and uninstall.sh, with no network
+        run: tests/install/run.sh
+      - name: A whole install and uninstall of this release, in a fake HOME
+        run: tests/install/real-run.sh "$BUILD_FOLDER" "$RUNNER_TEMP/real-run"
+      - name: This release on the oldest systems it runs on
+        run: tests/install/real-in-containers.sh "$BUILD_FOLDER"
+
+  release:
+    name: the draft release
+    needs: [prepare, build, test]
+    if: always() && needs.build.result == 'success' && (github.event_name == 'push' || inputs.release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PREVIOUS: ${{ needs.prepare.outputs.previous }}
+      TESTS: ${{ needs.test.result }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ needs.prepare.outputs.version }}
+          path: ${{ env.BUILD_FOLDER }}
+
+      - name: Draft the notes
+        run: |
+          git show "$GITHUB_SHA:scripts/release-notes.py" >"$RUNNER_TEMP/release-notes.py"
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            if [ "$TESTS" = success ]; then
+              echo "<!-- Built and tested in CI: $RUN -->"
+            else
+              echo "<!-- Built in CI, and the install tests did NOT pass ($TESTS): $RUN -->"
+            fi
+            python3 "$RUNNER_TEMP/release-notes.py" ${PREVIOUS:+--previous "$PREVIOUS"} "$TAG"
+          } >"$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      # A run again for the same tag replaces the draft's files. A published release is never touched.
+      - name: Make the draft, or refresh it
+        run: |
+          cd "$BUILD_FOLDER"
+          FILES=("guesthouse-$VERSION-x86_64.tar.xz" "guesthouse-installer-$VERSION.AppImage"
+            "guesthouse-$VERSION-source.tar.xz" "guesthouse-$VERSION-bundled-source.tar" SHA256SUMS)
+          if DRAFT=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$DRAFT" != true ]; then
+              echo "::error::$TAG is published already, and a published release's files never change."
+              exit 1
+            fi
+            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "$VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md" "${FILES[@]}"
+          fi
+          echo "The draft of $TAG is ready to read and publish: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases"

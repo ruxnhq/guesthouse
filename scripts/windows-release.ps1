@@ -16,8 +16,10 @@
 #    pub/guesthouse/, served as files.ruxn.com/p/guesthouse/) with the cf CLI, and downloads the
 #    installer back to check it.
 # -DryRun does 1 to 3 and publishes nothing. RELEASING.md says what comes before and after.
+# -BuildOnly is -DryRun for release-windows.yml, which runs from the tag once it's pushed: the tag being
+# on GitHub already is what it expects, so only that check is left out.
 # It needs git, cargo, gh and cf on PATH, each signed in.
-param([switch]$DryRun)
+param([switch]$DryRun, [switch]$BuildOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 Set-Location $root
@@ -54,7 +56,7 @@ Write-Output "Releasing the Windows host $version, as $tag."
 $dirty = & git status --porcelain
 if ($dirty) { throw "The tree has uncommitted changes. A release is built from a commit:`n$($dirty -join "`n")" }
 $commit = (& git rev-parse HEAD).Trim()
-if (& git ls-remote --tags origin "refs/tags/$tag") { throw "The tag $tag is on GitHub already. Raise windows\version.txt." }
+if (-not $BuildOnly -and (& git ls-remote --tags origin "refs/tags/$tag")) { throw "The tag $tag is on GitHub already. Raise windows\version.txt." }
 if (Test-Published $installer) { throw "$base/$installer is published already, and a published file never changes. Raise windows\version.txt." }
 
 # 2. The app, then the installer with it.
@@ -90,8 +92,8 @@ $latest = Join-Path $out 'guesthouse-windows-latest.json'
 } | ConvertTo-Json | Set-Content -LiteralPath $latest -Encoding ascii
 Write-Output "Built $setup ($sha) from $commit."
 
-if ($DryRun) {
-    Write-Output "-DryRun: nothing was tagged or published. The files are in $out."
+if ($DryRun -or $BuildOnly) {
+    Write-Output "Nothing was tagged or published. The files are in $out."
     exit 0
 }
 

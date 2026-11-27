@@ -1,0 +1,159 @@
+# Step 7 of RELEASING.md: after a Linux release is published, opens the pull request that points
+# install.sh, the Nix package, the README and the site at it. It checks the release's downloads
+# against its SHA256SUMS first, and the AppImage on files.ruxn.com against it too. If the AppImage
+# isn't there within half an hour the pull request is a draft, to be marked ready once it is.
+# Merging is still a person's, and the site deploys itself from main (site-deploy.yml).
+#
+# Secret, optional: RELEASE_PR_TOKEN, a fine-grained token for this repo with Contents and Pull
+# requests read and write. Without it the pull request comes from GITHUB_TOKEN, which needs
+# "Allow GitHub Actions to create and approve pull requests" in the repo's Actions settings, and
+# whose pull requests don't start the checks.
+name: Point the installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to point at, like v0.10.0
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: point-installer
+  cancel-in-progress: false
+
+jobs:
+  point:
+    name: open the pull request
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          persist-credentials: true
+
+      - name: Check the tag and what main says now
+        id: tag
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "$TAG isn't a Linux release tag."; exit 1 ;;
+          esac
+          VERSION=${TAG#v}
+          case "$VERSION" in
+            *[!0-9.]*) echo "$TAG isn't a plain version."; exit 1 ;;
+          esac
+          CURRENT=$(sed -n 's/^RELEASE_VERSION="\(.*\)"$/\1/p' install.sh)
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "main already points at $VERSION."
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$CURRENT" ] && [ "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; then
+            echo "::error::main points at $CURRENT, which is newer than $VERSION."
+            exit 1
+          fi
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+          echo "old=$CURRENT" >>"$GITHUB_OUTPUT"
+
+      - name: Download the release and check it against SHA256SUMS
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS \
+            -p "guesthouse-$VERSION-x86_64.tar.xz" -p "guesthouse-$VERSION-source.tar.xz"
+          grep -E " \*?guesthouse-$VERSION-(x86_64|source)\.tar\.xz\$" SHA256SUMS | sha256sum -c -
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets \
+            -q ".assets[] | select(.name == \"guesthouse-installer-$VERSION.AppImage\") | .size" >appimage-size
+          [ -s appimage-size ] || { echo "::error::The release has no AppImage."; exit 1; }
+          stat -c %s "guesthouse-$VERSION-x86_64.tar.xz" >payload-size
+
+      - name: Wait for the AppImage on files.ruxn.com
+        if: steps.tag.outputs.skip != 'true'
+        id: files
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          cd "$RUNNER_TEMP/release"
+          NAME="guesthouse-installer-$VERSION.AppImage"
+          WANT=$(grep -E " \*?$NAME\$" SHA256SUMS | cut -d' ' -f1)
+          [ -n "$WANT" ] || { echo "::error::SHA256SUMS has no line for the AppImage."; exit 1; }
+          for _ in $(seq 1 60); do
+            GOT=$(curl -fsSL "https://files.ruxn.com/p/guesthouse/$NAME.sha256" 2>/dev/null | awk 'NR==1 {print $1}' || true)
+            if [ "$GOT" = "$WANT" ]; then
+              echo "The AppImage's hash is on files.ruxn.com."
+              echo "up=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::The AppImage's hash isn't on files.ruxn.com, or it differs. The pull request will be a draft."
+          echo "up=false" >>"$GITHUB_OUTPUT"
+
+      - name: Point the files at the release
+        if: steps.tag.outputs.skip != 'true'
+        id: point
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          R="$RUNNER_TEMP/release"
+          python3 scripts/point-installer.py "$VERSION" "$R/SHA256SUMS" "$(cat "$R/payload-size")" "$(cat "$R/appimage-size")" | tee "$R/printed"
+          git diff --stat
+          {
+            echo "payload=$(sed -n 's/^payload=//p' "$R/printed")"
+            echo "source=$(sed -n 's/^source=//p' "$R/printed")"
+            echo "nix=$(sed -n 's/^nix=//p' "$R/printed")"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          OLD: ${{ steps.tag.outputs.old }}
+          PAYLOAD: ${{ steps.point.outputs.payload }}
+          SOURCE: ${{ steps.point.outputs.source }}
+          NIX: ${{ steps.point.outputs.nix }}
+          FILES_UP: ${{ steps.files.outputs.up }}
+        run: |
+          BRANCH="point-installer-$VERSION"
+          TITLE="Point the installer at $VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add install.sh packaging/nix/package.nix README.md site/public/index.html
+          git commit -m "$TITLE" -m "install.sh, the Nix package, the README and the site name $VERSION."
+          git push --force origin "$BRANCH"
+
+          {
+            echo "$VERSION is uploaded. This points install.sh, the Nix package, the README and the site at it."
+            echo
+            echo "Payload $PAYLOAD, source $SOURCE, Nix $NIX. The release's payload and source were downloaded again and match SHA256SUMS, and the AppImage's hash on files.ruxn.com is the one in SHA256SUMS."
+            echo
+            if [ "$FILES_UP" != "true" ]; then
+              echo "The AppImage's hash wasn't on files.ruxn.com yet when this was made, so this is a draft. Mark it ready once the AppImage and its .sha256 are up."
+              echo
+            fi
+            echo "Reverting this puts everyone back on ${OLD:-the release before}. Once it is merged the site deploys by itself."
+          } >"$RUNNER_TEMP/body.md"
+
+          DRAFT=()
+          [ "$FILES_UP" = "true" ] || DRAFT=(--draft)
+          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -qx OPEN; then
+            gh pr edit "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" "${DRAFT[@]}"
+          fi

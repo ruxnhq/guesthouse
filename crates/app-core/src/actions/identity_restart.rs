@@ -4,9 +4,9 @@
 //! one start restarts Windows by itself before the machine counts as ready.
 
 use super::Task;
-use super::desktop::{boots, wait_for_desktop};
+use super::desktop::{boots, wait_for_windows};
 use super::gpu_check::{Gpu, confirm_gpu};
-use crate::failure::{Failure, Result};
+use crate::failure::Result;
 use crate::gpu_identity::{maker_name, read_state, write_state};
 use crate::log::write_log;
 use crate::machine::Machine;
@@ -61,9 +61,7 @@ pub(super) fn restart_after_switch(task: &mut Task) -> Result<Gpu> {
         return Ok(Gpu::Working);
     }
     task.step("Waiting for the desktop");
-    if !wait_for_desktop(task) {
-        return Err(Failure::new(DESKTOP_GONE));
-    }
+    wait_for_windows(task, DESKTOP_GONE)?;
     confirm_gpu(task)
 }
 

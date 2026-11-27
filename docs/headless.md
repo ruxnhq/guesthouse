@@ -53,7 +53,7 @@ NAME is a machine's id, or its name in any case. If a name fits two machines, it
 ## Starting and stopping
 
 - `list` has a line for each machine: its name, id, kind and what it's doing.
-- `start` does what Start does in the app, and prints each step as the task writes it to the log. It ends when the machine is ready, with exit code 0, or prints what went wrong and exits with 1. `--no-wait` returns as soon as the start is under way, and `status` says how far it is.
+- `start` does what Start does in the app, and prints each step as the task writes it to the log. It ends when the machine is ready, with exit code 0, or prints what went wrong and exits with 1. A start that fails after Windows has booted turns the VM off. A Windows that asks for a password or PIN is the exception: once it is up at its sign-in screen, `start` leaves the VM on, says so in a note and exits with 0. You sign in by Remote Desktop, or on its screen in the app, and its display and shared folder are set up then. `--no-wait` returns as soon as the start is under way, and `status` says how far it is.
 - `stop` asks the guest to shut down and waits. If the guest doesn't shut down in time, the VM is turned off and it says so. `off` is Force Off: the power is cut and the guest gets no chance to save anything.
 - A Windows machine with `auto-snapshot` on takes a snapshot first at a start when a change that can leave Windows unable to come up is due, as the app's Start does. See [A snapshot before a risky start](#a-snapshot-before-a-risky-start).
 - `log` says where the log is and shows the end of it. The log is one file for every machine, so the lines aren't sorted by machine.

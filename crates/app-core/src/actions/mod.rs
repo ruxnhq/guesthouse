@@ -30,13 +30,14 @@ mod own_linux;
 mod recipe;
 mod remote_access;
 mod scan_exclusions;
+mod sign_in;
 mod ubuntu;
 mod window_speed;
 
 use amd_files::{bring_amd_driver_up_to_date, complete_host_driver};
 use amd_package::register_amd_package;
+use desktop::{RESTART_SIGN_IN_NOTE, START_SIGN_IN_NOTE, note_boot, set_up_desktop, wait_for_windows};
 pub use desktop::{apply_share, boots, rebooted};
-use desktop::{note_boot, set_up_desktop, wait_for_desktop};
 pub use diagnose::{API_FILE, GATHERED_FOLDER, PROBE_FILE, REPORT_FILE};
 use gpu_check::{Gpu, confirm_gpu};
 use guest_files::{
@@ -114,6 +115,8 @@ pub struct Task<'a> {
     pub ram_this_run: Option<u32>,
     /// The desktop on the card is still to be watched once the start is reported done.
     watch_after_start: bool,
+    /// Windows is up with nobody signed in, so its desktop is set up once someone signs in.
+    desktop_owed: bool,
     /// What a start's snapshot before it has to finish, and tell.
     pub(crate) auto: AutoStart,
     /// Every step said, in order, as the log has them.
@@ -131,6 +134,7 @@ impl<'a> Task<'a> {
             error: String::new(),
             ram_this_run: None,
             watch_after_start: false,
+            desktop_owed: false,
             auto: AutoStart::default(),
             #[cfg(test)]
             said: std::sync::Mutex::default(),
@@ -272,6 +276,10 @@ fn boot(task: &mut Task) -> Result<()> {
     if ready.is_err() {
         turn_off_after_failed_start(task);
     }
+    // Windows is up and only waits for a password or PIN, so the VM stays on for someone to sign in.
+    if ready.is_ok() && task.desktop_owed {
+        task.error = [START_SIGN_IN_NOTE, &task.error].join(" ").trim().to_owned();
+    }
     ready
 }
 
@@ -295,6 +303,8 @@ fn start_gpu_vm(task: &mut Task) -> Result<PciIdentity> {
 }
 
 fn start_gpu_vm_once(task: &mut Task) -> Result<PciIdentity> {
+    // What the last VM's wait found is about a Windows that's gone.
+    task.desktop_owed = false;
     let machine = task.machine_this_run();
     let plan = plan_for(task.context, &machine, Boot::Gpu);
     let started = task.host.start(&plan, &machine);
@@ -322,7 +332,10 @@ fn get_ready(task: &mut Task, shown: PciIdentity) -> Result<()> {
         }
     }
     intel_device::switch_off_for_software_desktop(task, shown)?;
-    set_up_desktop(task)?;
+    // Its display is set in the user's session, so with nobody signed in it waits for someone to.
+    if !task.desktop_owed {
+        set_up_desktop(task)?;
+    }
     if let Some(why) = hardware_desktop::no_picture(task) {
         return start_again_on_software_desktop(task, &why).map(|_| ());
     }
@@ -395,9 +408,7 @@ fn place_files_for_maker(task: &mut Task) -> Result<()> {
 /// that might be about to go.
 fn get_gpu_ready(task: &mut Task) -> Result<Gpu> {
     task.step("Waiting for the desktop");
-    if !wait_for_desktop(task) {
-        return Err(Failure::new("Windows started, but its desktop never came up."));
-    }
+    wait_for_windows(task, "Windows started, but its desktop never came up.")?;
     // Before the check, as a guest missing a file of Intel's driver has no GPU until it has the file.
     complete_intel_driver(task)?;
     if confirm_gpu(task)? == Gpu::Missing || restart_after_switch(task)? == Gpu::Missing {
@@ -475,8 +486,10 @@ fn after_reboot(task: &mut Task) -> Result<()> {
     // Before the wait, so this doesn't start again while it runs.
     note_boot(task)?;
     task.step("Waiting for the desktop");
-    if !wait_for_desktop(task) {
-        return Err(Failure::new("Windows restarted, but its desktop never came back."));
+    wait_for_windows(task, "Windows restarted, but its desktop never came back.")?;
+    if task.desktop_owed {
+        task.error = RESTART_SIGN_IN_NOTE.to_owned();
+        return Ok(());
     }
     set_up_desktop(task)
 }
@@ -668,6 +681,12 @@ pub fn run_task(
     // Also once the start is reported done, and never part of it.
     if result.is_ok() && action == "start" {
         scan_exclusions::after_start(&mut task);
+    }
+    // For as long as nobody signs in, which can be the whole run, so after what's quick.
+    if result.is_ok() && task.desktop_owed {
+        sign_in::set_up_desktop_after_sign_in(&mut task);
+    }
+    if result.is_ok() && action == "start" {
         lean::after_start(&mut task);
     }
     result

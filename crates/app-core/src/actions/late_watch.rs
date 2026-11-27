@@ -7,6 +7,7 @@
 //! slot as a start again, once no other task has it, puts the machine on the software desktop and
 //! starts it again there. A VM that has gone, or another one in the slot, ends the watch.
 
+use super::desktop::START_SIGN_IN_NOTE;
 use super::turn_off_after_failed_start;
 use super::{KEY_POLL, Task, hardware_desktop, start_again_on_software_desktop, take_lock};
 use crate::log::write_log;
@@ -36,12 +37,14 @@ pub(super) fn watch_after_start(task: &mut Task) {
     if let Err(failure) = start_again_on_software_desktop(task, &why) {
         turn_off_after_failed_start(task);
         task.error = failure.0;
+    } else if task.desktop_owed {
+        task.error = [START_SIGN_IN_NOTE, &task.error].join(" ").trim().to_owned();
     }
     task.finish();
 }
 
 /// The slot's lock, once nothing else runs there, for as long as `qemu` is the VM in it.
-fn take_slot(task: &Task, qemu: u32) -> Option<File> {
+pub(super) fn take_slot(task: &Task, qemu: u32) -> Option<File> {
     let end = task.now() + TAKE_OVER_WAIT;
     while task.now() < end && task.pid() == Some(qemu) {
         let other_task = task_alive(task.context, &read_task(task.context, None));

@@ -5,7 +5,7 @@ use super::Task;
 use super::display::set_up_display;
 use crate::agent::guest_script;
 use crate::context::Context;
-use crate::failure::Result;
+use crate::failure::{Failure, Result};
 use crate::text::base64_encode;
 use guesthouse_daemon::slot::Slot;
 use std::fs;
@@ -42,6 +42,18 @@ const DESKTOP_ANSWER_SECONDS: u64 = 6;
 pub(super) const DESKTOP_SCRIPT: &str =
     "(Get-Process explorer,ctfmon,RuntimeBroker -ea 0 | Select -Unique Name).Count";
 const DESKTOP_PROCESSES: u32 = 3;
+/// Says so when nobody is signed in at Windows' console. A guest that can't say isn't taken to be
+/// waiting for anyone.
+const SIGNED_OUT_SCRIPT: &str =
+    "$s=Get-CimInstance Win32_ComputerSystem -ea 0; if($s -and -not $s.UserName){'nobody signed in'}";
+const SIGNED_OUT_MARK: &str = "nobody signed in";
+const SIGNED_OUT_ANSWER_SECONDS: u64 = 20;
+/// What a start that found nobody signed in tells the user.
+pub(super) const START_SIGN_IN_NOTE: &str = "Windows is waiting for someone to sign in, so the VM was left \
+     on. Sign in on its screen or by Remote Desktop. Its display and shared folder are set up once someone has.";
+/// The same, after Windows restarted by itself.
+pub(super) const RESTART_SIGN_IN_NOTE: &str = "Windows restarted and is waiting for someone to sign in. Its \
+     display and shared folder are set up once someone has.";
 
 /// How many times the guest has booted in this VM run.
 pub fn boots(context: &Context, slot: Option<Slot>) -> usize {
@@ -176,16 +188,42 @@ pub fn apply_share(task: &mut Task) -> Result<()> {
 
 /// Waits until the guest's desktop is really up: its processes running and a screen in the session.
 pub(super) fn wait_for_desktop(task: &Task) -> bool {
-    for _ in 0..DESKTOP_ATTEMPTS {
-        task.sleep(DESKTOP_POLL);
-        let said = task.ask_guest(DESKTOP_SCRIPT, DESKTOP_ANSWER_SECONDS);
-        let count = said.lines().find_map(|line| line.trim().parse::<u32>().ok());
-        if count.is_some_and(|count| count >= DESKTOP_PROCESSES) {
-            task.sleep(DESKTOP_SETTLE);
-            return true;
-        }
+    (0..DESKTOP_ATTEMPTS).any(|_| desktop_up(task))
+}
+
+/// One look, after a pause, at whether the desktop is up. One that is gets a moment to settle.
+pub(super) fn desktop_up(task: &Task) -> bool {
+    task.sleep(DESKTOP_POLL);
+    let said = task.ask_guest(DESKTOP_SCRIPT, DESKTOP_ANSWER_SECONDS);
+    let count = said.lines().find_map(|line| line.trim().parse::<u32>().ok());
+    let up = count.is_some_and(|count| count >= DESKTOP_PROCESSES);
+    if up {
+        task.sleep(DESKTOP_SETTLE);
     }
-    false
+    up
+}
+
+/// Whether Windows answers and says nobody is signed in at its console.
+fn nobody_signed_in(task: &Task) -> bool {
+    let said = task.ask_guest(SIGNED_OUT_SCRIPT, SIGNED_OUT_ANSWER_SECONDS);
+    said.lines().any(|line| line.trim() == SIGNED_OUT_MARK)
+}
+
+/// The wait for the desktop in a start, or after a restart of Windows. A Windows that answers with
+/// nobody signed in is up, only waiting for a password or PIN: the work that needs no session goes on,
+/// and the desktop's own setup waits for someone to sign in (see [`super::sign_in`]). A guest that
+/// doesn't answer, or has someone signed in and still no desktop, fails with `never_came`.
+pub(super) fn wait_for_windows(task: &mut Task, never_came: &str) -> Result<()> {
+    if wait_for_desktop(task) {
+        task.desktop_owed = false;
+        return Ok(());
+    }
+    if nobody_signed_in(task) {
+        task.desktop_owed = true;
+        let _ = crate::log::write_log(task.context, "desktop: Windows is up, and nobody has signed in");
+        return Ok(());
+    }
+    Err(Failure::new(never_came))
 }
 
 pub(super) fn set_up_desktop(task: &mut Task) -> Result<()> {

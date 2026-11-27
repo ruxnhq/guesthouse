@@ -5,6 +5,7 @@ use crate::actions::tests::{machine, plain_task_context};
 use crate::agent::GuestAgent;
 use crate::agent::stand_in::ScriptedAgent;
 use crate::context::Context;
+use crate::failure::Failure;
 use crate::gpu_identity::{IdentityState, Shown};
 use crate::machine::Machine;
 use crate::testing::Scratch;
@@ -144,6 +145,23 @@ fn a_desktop_that_does_not_come_back_fails_the_start() {
     let (result, _) = rig.start();
     assert_eq!(result, Err(Failure::new(DESKTOP_GONE)));
     assert!(!rig.state().restart_due, "the next start goes on without it");
+}
+
+#[test]
+fn a_restart_that_lands_at_the_sign_in_screen_goes_on_with_the_gpu_check() {
+    let scratch = Scratch::new();
+    let mut answers = vec!["restarting\r\n"];
+    answers.extend(["1\n"; 60]);
+    answers.extend(["nobody signed in\r\n", GPU_UP]);
+    let rig = Rig::new(&scratch, switching(), true, &answers);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&rig.context, &host, "start", rig.machine.clone());
+    assert_eq!(restart_after_switch(&mut task), Ok(Gpu::Working));
+    assert!(task.desktop_owed, "the desktop is set up once someone signs in");
+    assert!(
+        rig.asked().last().unwrap().contains("Win32_VideoController"),
+        "the GPU is checked at the sign-in screen"
+    );
 }
 
 #[test]

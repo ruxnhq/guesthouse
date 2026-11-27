@@ -6,11 +6,11 @@
 //! with the file there.
 
 use super::Task;
-use super::desktop::wait_for_desktop;
+use super::desktop::wait_for_windows;
 use super::driver_store::{HOST_DRIVER_STORE, guest_names, missing_in_guest};
 use super::guest_upload::put_big_file;
 use super::identity_restart::restart_windows;
-use crate::failure::{Failure, Result};
+use crate::failure::Result;
 use crate::gpu_maker::GpuMaker;
 use crate::log::write_log;
 use crate::setup::guest_driver::guest_driver;
@@ -37,10 +37,7 @@ pub(super) fn complete_intel_driver(task: &mut Task) -> Result<()> {
         return Ok(());
     }
     task.step("Waiting for the desktop");
-    if !wait_for_desktop(task) {
-        return Err(Failure::new(DESKTOP_GONE));
-    }
-    Ok(())
+    wait_for_windows(task, DESKTOP_GONE)
 }
 
 /// Copies into the guest what its copy of the driver lacks, and says whether any of it got there.

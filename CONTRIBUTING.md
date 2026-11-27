@@ -87,6 +87,14 @@ Each handler has tests in `core/src/session/tests.rs`, which send whole messages
 
 `tests/install/run.sh` tests `install.sh` and `uninstall.sh` with stand-ins for sudo, curl and the package manager. It needs bubblewrap, as each test runs with everything but its own folder read-only. `tests/install/real-run.sh` does a whole install and uninstall with a real release's files, in a fake HOME, and `tests/install/in-containers.sh` runs one on each distro image you already have. `tests/install/real-in-containers.sh` installs a real release on Ubuntu 24.04 and Debian 13, the oldest systems it runs on.
 
+`packaging/packages/build-packages.sh PAYLOAD` builds the deb, rpm and pacman packages from a payload, each in a container of its system, and `publish-repo.sh` puts them in a local copy of a signed repository, which is how to try a change to either with a key of your own.
+
+## Test builds
+
+A maintainer can have CI build a pull request for a tester to try. Add the label `test-build` to it. The Test build workflow builds the payload and the three packages from the PR, which takes a few hours, puts them in `https://pkg.ruxn.com/test/PR/` with `SHA256SUMS`, comments the links on the PR and takes the label off. Add the label again to build again, which replaces what's there. Builds are removed 14 days after the last one, or once the PR is closed. A test build isn't signed and has no Windows display driver.
+
+Only a label from someone who can push to the repo starts it. A PR from a fork is built, but nothing of it is uploaded: the files stay with the workflow's run. The PR's code runs with no secrets, and the upload never runs any of it.
+
 ## Commits
 
 Small steps, each of which builds and passes its tests. Say what changed and why, in a line a stranger can follow.

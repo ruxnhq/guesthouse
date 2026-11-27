@@ -34,7 +34,31 @@ So the package is Proxmox's, built from Proxmox's source, with the Windows guest
 
 For a VM without `vmbus-bridge` the six commits change nothing that runs. In `vmbus.c` the bridge gets two properties that default to 0 and a channel's offer gets a field, and `acpi-build.c` gets a branch that's only taken when the bridge has an MMIO window.
 
+## The repository
+
+The package is also in a signed apt repository, so there's nothing to build. It has two suites. `testing` gets a new build the night Proxmox puts out a new `pve-qemu-kvm`, so Proxmox's fixes aren't held back for long. A build reaches `stable` only after it has run with a GPU-PV VM on a real card. Each package has a build attestation, so `gh attestation verify FILE --repo ruxnlabs/guesthouse` checks it came from this repo's workflow. The key is the one Guesthouse's own packages use, with the fingerprint `<fingerprint>`, and its public half is in this repo as [`packaging/packages/ruxn-pkg.asc`](../packaging/packages/ruxn-pkg.asc).
+
+As root on the host, for `stable`:
+
+```sh
+install -d /etc/apt/keyrings
+curl -fsSL https://pkg.ruxn.com/ruxn-pkg.gpg -o /etc/apt/keyrings/ruxn-pkg.gpg
+printf '%s\n' 'Types: deb' 'URIs: https://pkg.ruxn.com/proxmox' 'Suites: stable' 'Components: main' \
+  'Signed-By: /etc/apt/keyrings/ruxn-pkg.gpg' >/etc/apt/sources.list.d/guesthouse-gpupv.sources
+printf '%s\n' 'Package: pve-qemu-kvm' 'Pin: release o=ruxn labs,l=Guesthouse GPU-PV pve-qemu-kvm' 'Pin-Priority: 1001' \
+  >/etc/apt/preferences.d/guesthouse-gpupv
+apt update && apt install pve-qemu-kvm
+```
+
+For `testing`, write `testing` in place of `stable`. The pin takes the place of the hold. It keeps `pve-qemu-kvm` to this repository's builds, even when Proxmox's is newer, and `apt upgrade` still takes each new build here. A package that's held already needs `apt-mark unhold pve-qemu-kvm` first. To go back to Proxmox's own, remove the two files, then `apt update && apt install --allow-downgrades pve-qemu-kvm=VERSION` with Proxmox's version.
+
+Between a new Proxmox release and its build here, `apt list --upgradable` shows nothing for `pve-qemu-kvm`, as the pin keeps Proxmox's out. A `qemu-server` that asks for a newer `pve-qemu-kvm` waits for that build too.
+
+The debug symbols aren't in the repository. They stay with the workflow's run for 30 days.
+
 ## Building the package
+
+To build it yourself instead, or a version the repository doesn't have:
 
 ```
 packaging/proxmox/build-pve-qemu-kvm.sh 11.1.3-4
@@ -50,7 +74,7 @@ The workflow `.github/workflows/proxmox.yml` runs the script with `newest` each 
 
 `11.1.3-2+gpupv1` and the `11.1.3-4+gpupv1` that runs here were built with the same steps, by hand, before the script. The script has built `11.1.3-4+gpupv1` too, in 11 minutes with three jobs, and its package has the same files, version and dependencies as the one that runs.
 
-## Installing it
+## Installing a build of your own
 
 ```
 apt install ./pve-qemu-kvm_11.1.3-4+gpupv1_amd64.deb

@@ -48,7 +48,7 @@ Guesthouse teaches KVM, and Windows 11's Virtual Machine Platform, to speak Hype
 curl -fsSL https://raw.githubusercontent.com/ruxnlabs/guesthouse/main/install.sh | sh
 ```
 
-The script is meant to be read first, and [what it does](docs/install.md) is written out step by step. Or download the AppImage from the [latest release](https://github.com/ruxnlabs/guesthouse/releases/latest) and open it: it shows the same plan in a window, and does the same install. On NixOS there's a [flake](docs/nixos.md).
+The script is meant to be read first, and [what it does](docs/install.md) is written out step by step. Or download the AppImage from the [latest release](https://github.com/ruxnlabs/guesthouse/releases/latest) and open it: it shows the same plan in a window, and does the same install. On NixOS there's a [flake](docs/nixos.md). Debian, Ubuntu, Fedora and Arch can have it from a [signed package repository](docs/install.md#packages) instead.
 
 **Windows 11** · Home or Pro, x64
 

@@ -61,13 +61,21 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    files publish guesthouse /tmp/guesthouse-installer-VERSION.AppImage.sha256
    ```
 
-7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed. In `packaging/nix/package.nix`, set `version` too, and `hash` to the payload's SHA-256 as Nix writes it, which `nix hash convert --hash-algo sha256 --to sri PAYLOAD_SHA256` prints. In the same pull request, set the version in the README's note and in `site/public/index.html`: the Linux version at the top, the AppImage's two links and the release's link. Merge it all with one pull request. From that moment the one line installs this release, `--update` and `--check-update` offer it to everyone, and the flake gives it to NixOS.
+7. **Point `main` at it, last of all.** In `install.sh`, set `RELEASE_VERSION`, `PAYLOAD_SHA256` and `SOURCE_SHA256` to what step 4 printed. In `packaging/nix/package.nix`, set `version` too, and `hash` to the payload's SHA-256 as Nix writes it, which `nix hash convert --hash-algo sha256 --to sri PAYLOAD_SHA256` prints. In the same pull request, set the version in the README's note and in `site/public/index.html`: the Linux version at the top, the AppImage's two links and the release's link. Merge it all with one pull request. From that moment the one line installs this release, `--update` offers it to everyone, and the flake gives it to NixOS.
+
+   The merge starts the Packages workflow, as it changes `install.sh`. It downloads the release, checks it against the two hashes, and puts a copy of its files on pkg.ruxn.com, the deb, rpm and pacman packages in their signed repositories with an attestation each, and last of all `guesthouse/latest.json`. From that moment `--check-update` and the app in a package offer it too. Watch the run. If it fails, run it again from the Actions tab: what it published already stays as it is.
 
 8. **Deploy the site.** Nothing deploys it by itself, so until this step guesthouse.ruxn.com still names the release before. From a checkout of `main` at that merge, in `site`, run `cf deploy public`. Then open the page and see that it names the new version.
 
 9. **Check it from the outside.** Run `install.sh --dry-run` from the raw URL, in a fake HOME. It should download, verify and show the plan.
 
 If something's wrong after step 7, revert that one commit, and everyone goes back to the release before. A file on a release must never change once `main` names it: fix it with a new version.
+
+## Proxmox's package
+
+The Proxmox package workflow builds each new `pve-qemu-kvm` from Proxmox the night it comes out and puts it in the `testing` suite of `pkg.ruxn.com/proxmox`. A version that's in either suite already isn't built again. When our patch changes and Proxmox's version doesn't, run the workflow by hand with a new suffix, such as `+gpupv2`. It refuses a version that's published.
+
+Once a build in `testing` has run with a GPU-PV VM on a real card, run the Proxmox stable workflow with its version, such as `11.1.3-4+gpupv1`. It waits for a reviewer's approval in the `proxmox-stable` environment, then copies the same file to `stable` and signs its index again.
 
 ## The Windows host
 

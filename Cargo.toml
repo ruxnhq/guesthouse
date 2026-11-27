@@ -11,6 +11,7 @@ default-members = [
     "crates/backend-intel",
     "crates/backend-nvidia",
     "crates/backend-standin",
+    "crates/clock-helper",
     "crates/control",
     "crates/core",
     "crates/daemon",

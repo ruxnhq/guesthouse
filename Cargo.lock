@@ -1005,6 +1005,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "guesthouse-clock-helper"
+version = "0.10.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "guesthouse-control"
 version = "0.10.0"
 dependencies = [

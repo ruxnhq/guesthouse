@@ -6,12 +6,16 @@ mod go_back;
 mod hero;
 mod keys;
 mod library_page;
+mod library_sidebar;
+mod look;
 mod machine_card;
 mod refresh;
 mod screen_hdr;
+mod screen_id;
 mod share_panel;
 mod start_over;
 mod updates;
+pub(crate) mod weight;
 
 pub use machine_card::{MachineCard, MachineHandle};
 
@@ -127,6 +131,8 @@ impl Window {
             hold: RefCell::default(),
         }));
         crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
+        screen_id::follow(this.0.window.upcast_ref());
+        this.watch_look();
         if prefs.get(TRAY) == Some(&Value::Bool(true)) {
             this.set_tray(true, crate::login::started_at_login());
         }
@@ -321,6 +327,7 @@ impl Window {
         }
         let id = machine.id.clone();
         let row = MachineCard::new(self, machine);
+        row.set_compact(look::compact_cards());
         let handle = row.machine();
         self.0.library.add(row.widget());
         let first = self.0.library.hero().chosen().is_none();
@@ -515,6 +522,7 @@ impl Window {
         actions::allow_host_keys(self, false);
         let fullscreen = machine.borrow().opens_fullscreen && !self.0.window.is_fullscreen();
         let page = ScreenPage::new(self, machine);
+        screen_id::set_showing_screen(&self.0.context, self.0.window.upcast_ref(), true);
         self.0.pages.push(page.widget());
         if fullscreen {
             page.toggle_fullscreen();
@@ -537,6 +545,7 @@ impl Window {
     }
 
     pub fn screen_closed(&self) {
+        screen_id::set_showing_screen(&self.0.context, self.0.window.upcast_ref(), false);
         *self.0.screen_page.borrow_mut() = None;
         *self.0.screen_mark.borrow_mut() = None;
         actions::allow_host_keys(self, true);

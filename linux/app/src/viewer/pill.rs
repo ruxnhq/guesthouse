@@ -3,6 +3,10 @@
 //! guest's screen starts below it. While it hides, as in fullscreen, it's a pill that floats over the
 //! top of the screen when called. The same buttons move from one to the other. Either is what the
 //! window is dragged by and closed from, as the page has no other bar.
+//!
+//! In Tide there is no header bar: a bar that stays is the pill in a slim solid strip across the
+//! top, and one that hides hangs from the top edge. The window's own buttons go when the compositor
+//! places and closes the window itself.
 
 use crate::rows::{icon_button, name_for_readers};
 use adw::prelude::*;
@@ -39,6 +43,10 @@ pub struct Pill {
     shut_down: gio::SimpleAction,
     /// Whether the buttons are on the header bar.
     docked: Cell<bool>,
+    /// Whether the bar stays, as last asked.
+    stays: Cell<bool>,
+    /// Whether Tide draws the bar.
+    tide: Cell<bool>,
 }
 
 /// A button on the pill. One that took the focus from the screen would end the capture it starts.
@@ -62,6 +70,14 @@ fn without_maximize(layout: &str) -> String {
         buttons.split(',').filter(|button| button.trim() != "maximize").collect::<Vec<_>>().join(",")
     };
     layout.split(':').map(side).collect::<Vec<_>>().join(":")
+}
+
+fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
+    if on {
+        widget.add_css_class(class);
+    } else {
+        widget.remove_css_class(class);
+    }
 }
 
 fn switch(name: &str, on: bool) -> gio::SimpleAction {
@@ -165,6 +181,8 @@ impl Pill {
             hides,
             shut_down,
             docked: Cell::new(false),
+            stays: Cell::new(false),
+            tide: Cell::new(false),
         }
     }
 
@@ -198,9 +216,31 @@ impl Pill {
         self.overlay.set_state(&on.to_variant());
     }
 
-    /// The header bar while the bar stays, and the pill while it hides. The way back goes at the
-    /// header bar's start, and the rest at its end, the menu by the window's buttons as on the pill.
-    pub fn set_docked(&self, docked: bool) {
+    /// Whether Tide draws the bar, and whether the window keeps its own buttons on it.
+    pub fn set_tide(&self, tide: bool, window_buttons: bool) {
+        self.controls.set_visible(window_buttons);
+        if self.tide.replace(tide) != tide {
+            self.set_docked(self.stays.get());
+        }
+    }
+
+    /// The bar while it stays, and the pill while it hides: in Tide a slim strip and a drop that
+    /// hangs from the top edge, and otherwise the header bar and a pill that floats.
+    pub fn set_docked(&self, stays: bool) {
+        self.stays.set(stays);
+        let tide = self.tide.get();
+        let margin = if tide { 0 } else { MARGIN };
+        self.pill.set_margin_top(margin);
+        self.pill.set_margin_bottom(margin);
+        set_class(&self.pill, "slim", tide && stays);
+        set_class(&self.pill, "hanging", tide && !stays);
+        set_class(&self.bar, "tide-bar", tide && stays);
+        self.move_buttons(stays && !tide);
+    }
+
+    /// The way back goes at the header bar's start, and the rest at its end, the menu by the
+    /// window's buttons as on the pill.
+    fn move_buttons(&self, docked: bool) {
         if self.docked.replace(docked) == docked {
             return;
         }

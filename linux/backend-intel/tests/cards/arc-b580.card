@@ -2,8 +2,8 @@ guesthouse-intel-card 1
 # An Arc B580 on xe, from a tester's intel-probe 0.4.1-intel.1 output. That build printed memory
 # in MiB, so the two totals and the card memory the processor reaches are the exact bytes the
 # daemon logged on the same card (system_memory and card_memory); the used figures are rounded.
-address 0000:03:00.0
-kernel 7.2.15-1-omarchy
+address 0000:01:00.0
+kernel 7.0.0-generic
 xe-source 82CB5E7AA7F10E3B74ED286
 driver xe
 pci 0x8086 0xe20b 0x0 0x8086 0x1100 0x30000

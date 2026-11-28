@@ -1,6 +1,6 @@
 //! What the app and the program say to each other: one request as a line of JSON on a Unix socket in
-//! the run folder, and one line back. The monitor and the daemon are reached the same way, and a
-//! socket in the run folder is only open to this user. A program that is not running has no answer,
+//! the notes folder beside the run folder, and one line back. The monitor and the daemon are reached
+//! the same way, and the socket is only open to this user. A program that is not running has no answer,
 //! which is how the app finds out it is not there.
 //!
 //! What the lines say is `guesthouse-relay`'s, as the network side they ask is.
@@ -21,8 +21,10 @@ const LONGEST_REPLY: u64 = 256 * 1024;
 const LINE_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_MODE: u32 = 0o600;
 
+/// In the notes folder beside the run folder, which no jail reaches, so only the app and its own
+/// programs can open it.
 pub fn socket_path(run_folder: &Path) -> PathBuf {
-    run_folder.join(SOCKET)
+    crate::paths::notes_beside(run_folder).join(SOCKET)
 }
 
 /// Asks the program of the machine in this run folder. An error means it did not answer: it is not
@@ -42,6 +44,7 @@ pub fn ask(run_folder: &Path, request: &Request) -> io::Result<RelayReply> {
 /// Makes the socket, replacing one an earlier run left, for only this user.
 pub fn listener(run_folder: &Path) -> io::Result<UnixListener> {
     let path = socket_path(run_folder);
+    crate::context::make_private_folder(&crate::paths::notes_beside(run_folder))?;
     match std::fs::remove_file(&path) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}

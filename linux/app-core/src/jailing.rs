@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const LAUNCHER: &str = "guesthouse-jail";
-/// The row's line about the jail, in the run folder. Empty or missing is a whole jail.
-const NOTE_FILE: &str = "jail-note";
+/// The row's line about the jail. Empty or missing is a whole jail.
+pub const NOTE_FILE: &str = "jail-note";
 const CHECK_SECONDS: &str = "10";
 /// QEMU only knows `-sandbox` if it was built with seccomp, and it stops at `-version` either way.
 const SANDBOX_QUESTION: [&str; 3] = ["-sandbox", "on", "-version"];
@@ -136,13 +136,18 @@ pub fn decide(
     Ok(Choice { qemu: Some(jail), daemon_jailed: true, note })
 }
 
+/// Where the row's line is kept: in the notes folder beside the run folder, which no jail reaches.
+pub fn note_file(run_folder: &Path) -> PathBuf {
+    crate::paths::notes_beside(run_folder).join(NOTE_FILE)
+}
+
 pub fn write_note(run_folder: &Path, note: &str) -> std::io::Result<()> {
-    fs::write(run_folder.join(NOTE_FILE), note)
+    fs::write(note_file(run_folder), note)
 }
 
 /// The row's line, if the running machine's jail has one.
 pub fn read_note(run_folder: &Path) -> Option<String> {
-    let note = fs::read_to_string(run_folder.join(NOTE_FILE)).ok()?;
+    let note = fs::read_to_string(note_file(run_folder)).ok()?;
     Some(note.trim().to_owned()).filter(|note| !note.is_empty())
 }
 
@@ -261,7 +266,7 @@ mod tests {
     fn the_note_is_read_back_and_an_empty_one_is_none() {
         let scratch = Scratch::new();
         let folder = scratch.path("run");
-        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir_all(crate::paths::notes_beside(&folder)).unwrap();
         assert_eq!(read_note(&folder), None);
         write_note(&folder, "").unwrap();
         assert_eq!(read_note(&folder), None);

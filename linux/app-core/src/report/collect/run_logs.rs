@@ -11,11 +11,10 @@ use crate::machine::Machine;
 use crate::report::scrub::scrub_emails;
 use crate::run_files::{
     GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, KEPT_HOST_LOGS, KEPT_SUFFIX, files_since,
-    kept_run_of, local_time, run_of,
+    kept_run_of, local_time, run_files_since, run_of,
 };
 use crate::slots;
 use crate::tasks::{read_task, task_path};
-use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 const GONE_AT_REBOOT: &str = "Run folders go at each reboot, and the app keeps a copy of a machine's last run \
@@ -47,7 +46,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = run_of(&folder, &machine.id) {
             found.has_run_logs = true;
-            add_all(found, &place, &folder, &current, "", since);
+            add_all(found, &place, run_files_since(&folder, &current, "", since));
             found.notes.push(format!(
                 "The logs in {place} are from the run folder, of the run that started at {}.",
                 local_time(since)
@@ -55,7 +54,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = kept_run_of(&folder, &machine.id) {
             let kept: Vec<&str> = wanted(&[&KEPT_HOST_LOGS[..], &[GUEST_SERIAL]].concat());
-            add_all(found, &place, &folder, &kept, KEPT_SUFFIX, since);
+            add_all(found, &place, run_files_since(&folder, &kept, KEPT_SUFFIX, since));
         }
     }
     if !found.has_run_logs {
@@ -63,7 +62,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         if let Some(started) = kept_started(context, &machine.id) {
             found.has_run_logs = true;
             let names: Vec<&str> = wanted(&kept_names()).into_iter().collect();
-            add_all(found, "runs/kept", &kept, &names, "", UNIX_EPOCH);
+            add_all(found, "runs/kept", files_since(&kept, &names, "", UNIX_EPOCH));
             found.notes.push(format!(
                 "No run folder holds this machine's last run, so runs/kept is the copy the app kept of it. \
                  That run started at {started}."
@@ -77,15 +76,8 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
     }
 }
 
-fn add_all(
-    found: &mut Collection,
-    place: &str,
-    folder: &Path,
-    names: &[&str],
-    suffix: &str,
-    since: std::time::SystemTime,
-) {
-    for (name, path) in files_since(folder, names, suffix, since) {
+fn add_all(found: &mut Collection, place: &str, files: Vec<(String, std::path::PathBuf)>) {
+    for (name, path) in files {
         let before = found.items.len();
         found.add_file_if_there(&format!("{place}/{name}"), &path);
         // Apps write what they like to logcat, an account's address among it.
@@ -105,6 +97,7 @@ mod tests {
     use crate::testing::{Scratch, scratch_context};
     use crate::vm_host::MACHINE_NOTE;
     use std::fs;
+    use std::path::Path;
     use std::time::{Duration, SystemTime};
 
     fn request(guest_serial: bool) -> Request {

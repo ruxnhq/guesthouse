@@ -6,7 +6,7 @@
 use crate::context::Context;
 use crate::report::trim::trim;
 use crate::run_files::{
-    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run,
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, local_time, noted_run, run_files_since,
 };
 use crate::vm_host::MACHINE_NOTE;
 use std::fs;
@@ -38,7 +38,7 @@ pub fn keep_run(context: &Context, run_folder: &Path) -> io::Result<()> {
     if !crate::machine::valid_id(&id) {
         return Ok(());
     }
-    let files = files_since(run_folder, &kept_names(), "", since);
+    let files = run_files_since(run_folder, &kept_names(), "", since);
     if files.is_empty() {
         return Ok(());
     }

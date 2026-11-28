@@ -16,19 +16,21 @@ use std::time::SystemTime;
 /// What the host's side of a run leaves: the daemon's output and QEMU's, QEMU's own log, the TPM's,
 /// the Linux GPU device's calls, and the small notes the app and the daemon leave for the machine's
 /// row (written in jailing.rs, daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs
-/// and actions/desktop.rs).
+/// and actions/desktop.rs). The jail's note is in the notes folder beside the run folder.
 pub const HOST_LOGS: [&str; 10] = [
     daemon::OUTPUT_FILE,
     vm_args::OUTPUT_FILE,
     "qemu.log",
     "swtpm.log",
     "calls.log",
-    "jail-note",
+    NOTES_FOLDER_LOG,
     "display-ring",
     "gpu-stopped",
     "gpu-off-reason",
     "guesthouse-boots",
 ];
+/// The one of those that is kept in the notes folder, out of the jails' reach.
+const NOTES_FOLDER_LOG: &str = crate::jailing::NOTE_FILE;
 /// The logs a start keeps from the run before, in vm_host/local.rs.
 pub const KEPT_HOST_LOGS: [&str; 2] = [daemon::OUTPUT_FILE, "qemu.log"];
 /// What the guest wrote to its serial port.
@@ -60,11 +62,33 @@ pub fn kept_run_of(folder: &Path, id: &str) -> Option<SystemTime> {
 
 /// Each of these files, with `suffix` added, that is there and changed at or after `since`.
 pub fn files_since(folder: &Path, names: &[&str], suffix: &str, since: SystemTime) -> Vec<(String, PathBuf)> {
+    found_since(names, suffix, since, |name| folder.join(name))
+}
+
+/// The same for a run folder, whose jail note is in the notes folder beside it.
+pub fn run_files_since(
+    run_folder: &Path,
+    names: &[&str],
+    suffix: &str,
+    since: SystemTime,
+) -> Vec<(String, PathBuf)> {
+    let notes = crate::paths::notes_beside(run_folder);
+    found_since(names, suffix, since, |name| {
+        if name == NOTES_FOLDER_LOG { notes.join(name) } else { run_folder.join(name) }
+    })
+}
+
+fn found_since(
+    names: &[&str],
+    suffix: &str,
+    since: SystemTime,
+    place: impl Fn(&str) -> PathBuf,
+) -> Vec<(String, PathBuf)> {
     names
         .iter()
         .map(|name| format!("{name}{suffix}"))
         .map(|name| {
-            let path = folder.join(&name);
+            let path = place(&name);
             (name, path)
         })
         .filter(|(_, path)| modified(path).is_some_and(|changed| changed >= since))

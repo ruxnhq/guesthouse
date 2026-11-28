@@ -234,7 +234,8 @@ fn a_machine_held_to_an_interface_has_the_launcher_guard_its_passt_with_or_witho
         let (_scratch, plan) = held_to_wg0(windows(), jailed_too);
         let command = plan.qemu_command();
         let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
-        let cut_file = plan.run_folder.join("network-cut").display().to_string();
+        let notes = crate::paths::notes_beside(&plan.run_folder);
+        let cut_file = notes.join("network-cut").display().to_string();
         assert_eq!(command[guard + 1..guard + 3], ["wg0".to_owned(), cut_file]);
     }
     let (_scratch, plan) = on_passt(windows(), true);
@@ -552,6 +553,19 @@ fn a_backing_file_the_settings_dont_name_is_refused_and_not_granted() {
     let (_plan_scratch, plan) = jailed(renamed_to(&scratch, &other), true);
     let refused = plan.with_backing_files(jail(true)).unwrap_err();
     assert!(refused.0.contains(&other.display().to_string()), "{}", refused.0);
+}
+
+/// What the app reads back about a running machine, and the remote view's control socket, are in
+/// the notes folder too.
+#[test]
+fn the_row_notes_and_the_remote_views_socket_are_in_the_notes_folder() {
+    let (_scratch, plan) = held_to_wg0(windows(), true);
+    let notes = crate::paths::notes_beside(&plan.run_folder);
+    assert!(crate::remote_view::socket_path(&plan.run_folder).starts_with(&notes));
+    assert!(crate::jailing::note_file(&plan.run_folder).starts_with(&notes));
+    let command = plan.qemu_command();
+    let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
+    assert!(Path::new(&command[guard + 2]).starts_with(&notes), "{}", command[guard + 2]);
 }
 
 /// The notes the app signals by are beside the run folder, where QEMU writes nothing.

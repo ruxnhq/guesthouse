@@ -8,8 +8,6 @@
 //! Its name is matched to XKB's for the common layouts; one not in the table gives nothing, and
 //! the guest keeps what it has.
 
-use std::process::Command;
-
 /// A layout as XKB names it: `de`, or `ch` with the variant `fr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Xkb {
@@ -91,14 +89,16 @@ pub fn from_input_source(id: &str) -> Option<Xkb> {
 
 /// The layout the Mac's keyboard has now, if macOS says and the table knows it.
 pub fn mac_layout() -> Option<Xkb> {
-    let out = Command::new("/usr/bin/defaults")
-        .args(["read", "com.apple.HIToolbox", "AppleCurrentKeyboardLayoutInputSourceID"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    // `defaults` asks the preferences daemon, which can be slow or stuck on a busy Mac; the
+    // start of a machine waits for this, so it waits only a few seconds (`probe::run_briefly`).
+    let ran = crate::probe::run_briefly(
+        "/usr/bin/defaults",
+        &["read", "com.apple.HIToolbox", "AppleCurrentKeyboardLayoutInputSourceID"],
+    )?;
+    if !ran.succeeded {
         return None;
     }
-    from_input_source(&String::from_utf8_lossy(&out.stdout))
+    from_input_source(&ran.stdout)
 }
 
 #[cfg(test)]

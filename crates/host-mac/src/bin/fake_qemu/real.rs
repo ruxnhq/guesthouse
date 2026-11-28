@@ -16,6 +16,9 @@
 //!
 //! It writes the arguments it was given, one a line, to `fake-qemu.args` in its folder.
 
+#[path = "../fake_parent/mod.rs"]
+mod fake_parent;
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::exit;
@@ -32,6 +35,7 @@ struct Quirks {
 }
 
 pub fn main() {
+    fake_parent::end_with_parent();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["-device", "help"] {
         println!("Misc devices:\nname \"pvg-fwd\", bus PCI, desc \"forwards to the graphics process\"");

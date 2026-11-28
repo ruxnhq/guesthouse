@@ -32,8 +32,29 @@ fn cached(program: &Path, question: &str, ask: impl FnOnce() -> bool) -> bool {
     answer
 }
 
+/// What a program printed, and whether it ended well.
+pub(crate) struct Ran {
+    pub succeeded: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 /// What `program args` prints on both outputs, or `None` if it would not run or did not answer.
 fn say(program: &Path, args: &[&str]) -> Option<String> {
+    let ran = run_briefly(program, args)?;
+    Some(ran.stdout + &ran.stderr)
+}
+
+/// Runs `program args` and waits for it, but never longer than `ANSWER_WAIT` in all: `None` if
+/// it would not run or was still going then (it is killed). Every program the agent runs to
+/// answer a request goes through here, so that a request cannot wait on a program for good.
+///
+/// The pipes are read on their own threads: a read that ends only at end of file can wait for
+/// good when some other process holds the pipe's write end. That can happen: a pipe made just
+/// before another thread starts a program, on macOS, may be inherited by that program, which
+/// may live for hours. The program's own output is complete once it has exited, so a read
+/// that is still going at the deadline is given up on and its thread left to end alone.
+pub(crate) fn run_briefly(program: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Option<Ran> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -41,19 +62,33 @@ fn say(program: &Path, args: &[&str]) -> Option<String> {
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
+    let readers = [reader_of(child.stdout.take()?), reader_of(child.stderr.take()?)];
     let deadline = Instant::now() + ANSWER_WAIT;
-    while child.try_wait().ok()?.is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
+        }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             return None;
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut text = String::new();
-    child.stdout.take()?.read_to_string(&mut text).ok()?;
-    child.stderr.take()?.read_to_string(&mut text).ok()?;
-    Some(text)
+    };
+    let [stdout, stderr] =
+        readers.map(|reader| reader.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok());
+    Some(Ran { succeeded: status.success(), stdout: stdout?, stderr: stderr? })
+}
+
+/// Reads `pipe` to its end on a thread of its own and sends what it read.
+fn reader_of(mut pipe: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        let _ = sender.send(text);
+    });
+    receiver
 }
 
 /// Whether the graphics process can publish its frames (`--frames`). The stock build answers
@@ -138,6 +173,16 @@ mod tests {
         assert_eq!(status["picture"], "1024x768");
         assert_eq!(status["spoiled"], false);
         assert_eq!(parse_status("ok spoiled true")["spoiled"], true);
+    }
+
+    #[test]
+    fn a_pipe_another_process_keeps_open_does_not_hold_the_answer_up() {
+        // The program is done at once; a process it left behind still holds its output.
+        let leaves = script("leaves", "sleep 30 &\necho pvg-fwd");
+        let started = Instant::now();
+        assert!(!qemu_has_device(&leaves, "pvg-fwd"));
+        assert!(started.elapsed() < ANSWER_WAIT + Duration::from_secs(2));
+        let _ = std::fs::remove_file(leaves);
     }
 
     #[test]

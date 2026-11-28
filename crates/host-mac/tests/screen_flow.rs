@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 const FAKE_QEMU: &str = env!("CARGO_BIN_EXE_fake_qemu");
 const FAKE_PVG_HOST: &str = env!("CARGO_BIN_EXE_fake_pvg_host");
+/// The longest anything here waits for the agent or a stand-in. A start takes well under a
+/// second; a fault fails after this, saying what it waited for.
 const WAIT: Duration = Duration::from_secs(15);
 
 struct Support(PathBuf);
@@ -66,8 +68,22 @@ impl Support {
     }
 }
 
+/// Runs `work` on a thread of its own and waits `WAIT` for its answer, so a call that blocks
+/// fails the test with a sentence instead of holding it for good. The thread is left behind.
+fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("{what} did not answer in {} seconds", WAIT.as_secs()))
+}
+
 fn request(agent: &Agent, text: &str) -> Response {
-    serde_json::from_str(&agent.handle(text)).unwrap()
+    let (agent, line) = (agent.clone(), text.to_string());
+    let answer = within(&format!("the agent, asked {text}"), move || agent.handle(&line));
+    serde_json::from_str(&answer).unwrap()
 }
 
 fn wait_state(agent: &Agent, id: &str, state: &str) {
@@ -77,7 +93,12 @@ fn wait_state(agent: &Agent, id: &str, state: &str) {
         if list.iter().any(|s| s.machine == id && s.state == state) {
             return;
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {id} to be {state}");
+        assert!(
+            Instant::now() < deadline,
+            "{id} was not {state} in {} seconds; it is {:?}",
+            WAIT.as_secs(),
+            list.iter().find(|s| s.machine == id).map(|s| &s.state)
+        );
         thread::sleep(Duration::from_millis(50));
     }
 }
@@ -126,14 +147,17 @@ fn a_linux_machine_starts_with_a_network_and_the_scale_it_was_given() {
 
 /// What the app's C function answers for machine `id` wanting `width` by `height`.
 fn want(id: &str, width: u32, height: u32) -> serde_json::Value {
+    let name = id.to_string();
     let id = CString::new(id).unwrap();
-    // SAFETY: a nul-terminated string; the answer is the core's and is freed by it.
-    unsafe {
-        let text = guesthouse_machine_set_wanted_screen(id.as_ptr(), width, height, 200);
-        let value = serde_json::from_str(CStr::from_ptr(text).to_str().unwrap()).unwrap();
-        guesthouse_string_free(text);
-        value
-    }
+    within(&format!("the screen size wanted for {name}"), move || {
+        // SAFETY: a nul-terminated string; the answer is the core's and is freed by it.
+        unsafe {
+            let text = guesthouse_machine_set_wanted_screen(id.as_ptr(), width, height, 200);
+            let value = serde_json::from_str(CStr::from_ptr(text).to_str().unwrap()).unwrap();
+            guesthouse_string_free(text);
+            value
+        }
+    })
 }
 
 #[test]

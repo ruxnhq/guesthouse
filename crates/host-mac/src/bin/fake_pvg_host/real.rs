@@ -13,6 +13,9 @@
 //! - `hoststuck`: stays when QEMU goes, so only SIGTERM ends it
 //! - `hostnomodes`: answers `modes` with an error, as a device that refuses the list
 
+#[path = "../fake_parent/mod.rs"]
+mod fake_parent;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::process::exit;
@@ -22,6 +25,7 @@ use std::time::Duration;
 const USAGE: &str = "pvg-host: usage: guesthouse-pvg-host --socket PATH [--control PATH] [--modes WxH@R,...] [--name NAME] [--window] [--frames NAME]";
 
 pub fn main() {
+    fake_parent::end_with_parent();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mut socket, mut control, mut frames) = (None, None, String::new());
     let mut words = args.iter();

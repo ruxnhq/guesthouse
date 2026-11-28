@@ -33,7 +33,7 @@ impl Connection for Resolving {
     }
 
     fn asker(&self) -> Asker {
-        Asker { user: USER.into(), administrator: false }
+        Asker { user: USER.into(), administrator: false, administrators_account: false }
     }
 }
 

@@ -3,28 +3,58 @@
 //! The owner is kept in the machine's settings, in the service's own folder, and never comes from
 //! what an app sends.
 //!
-//! A machine made before owners were kept has none. The first user other than an administrator who
-//! asks the service anything after that takes every such machine as their own, and it's saved
-//! before they're answered. On a PC with one user, that's them, and nothing changes for them. Until
-//! then such a machine is an administrator's only. An administrator can give a machine to someone
-//! else by changing `owner` in its `machine.json`, or let it be taken again by removing it.
+//! A machine made before owners were kept has none, and one rule gives it one. As the service
+//! starts, the owner of the machine's own folder, then of its disk, is its owner if that's a user's
+//! account, not the system's, the Administrators group's or another of Windows' own. A machine
+//! whose files name no user waits for an administrator: an administrator's account asking as
+//! itself, unelevated as the app runs, takes every machine still waiting, saved before it's
+//! answered, and nobody else sees one. An elevated administrator sees them all without taking any.
+//! An administrator can give a machine to another user by changing `owner` in its `machine.json`.
 
 use super::{Service, Work};
-use crate::machines::Entry;
+use crate::machines::{Entry, Machines};
 use guesthouse_control::Request;
 
-/// Who asked: their account, as a SID, and whether they may do anything to any machine, as the
-/// system and an elevated administrator may.
+/// Who asked: their account, as a SID, whether they may do anything to any machine, as the system
+/// and an elevated administrator may, and whether their account is an administrator's at all, as
+/// one whose app runs unelevated is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asker {
     pub user: String,
     pub administrator: bool,
+    pub administrators_account: bool,
 }
 
 impl Asker {
     /// Whether `entry`'s machine is theirs to see and to act on.
     pub fn may_use(&self, entry: &Entry) -> bool {
         self.administrator || entry.settings.owner.as_deref() == Some(self.user.as_str())
+    }
+}
+
+/// Whether `sid` is a user's account: a local, domain or Microsoft Entra one, not one of Windows'
+/// own accounts or groups.
+pub fn a_users(sid: &str) -> bool {
+    ["S-1-5-21-", "S-1-12-1-"].iter().any(|prefix| sid.starts_with(prefix))
+}
+
+/// Gives `name`, if it has no owner, the user its own folder or its disk belongs to, if either
+/// belongs to one.
+pub(super) fn from_files<W: Work>(machines: &Machines, work: &W, name: &str) {
+    let mut entries = machines.lock();
+    let Some(entry) = entries.get_mut(name).filter(|entry| entry.settings.owner.is_none()) else { return };
+    let files = [machines.store.folder(name), machines.store.disk(name)];
+    let Some(owner) = files.iter().filter_map(|file| work.files_owner(file)).find(|sid| a_users(sid)) else {
+        return;
+    };
+    let mut settings = entry.settings.clone();
+    settings.owner = Some(owner.clone());
+    match machines.store.save(name, &settings) {
+        Ok(()) => {
+            entry.settings = settings;
+            work.log(&format!("{name} is {owner}'s, as its files say."));
+        }
+        Err(error) => work.log(&format!("{name}'s owner couldn't be saved: {error}")),
     }
 }
 
@@ -58,10 +88,10 @@ pub fn named(request: &Request) -> Option<&str> {
 }
 
 impl<W: Work> Service<W> {
-    /// Gives `asker` every machine that has no owner, unless they're an administrator, saving each
-    /// before anything else is done.
+    /// Gives `asker` every machine that has no owner, if their account is an administrator's and
+    /// they ask as themselves, saving each before anything else is done.
     pub(super) fn take_unowned(&self, asker: &Asker) {
-        if asker.administrator {
+        if asker.administrator || !asker.administrators_account {
             return;
         }
         let mut entries = self.machines.lock();

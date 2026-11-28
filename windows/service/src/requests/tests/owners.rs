@@ -4,6 +4,10 @@
 use super::*;
 use guesthouse_control::Forward;
 
+const ADMINISTRATORS: &str = "S-1-5-32-544";
+
+/// A standard user. `USER`'s account is an administrator's, whose app runs unelevated, as on a
+/// PC with one user.
 const SOMEONE_ELSE: &str = "S-1-5-21-1-2-3-1002";
 const AN_ADMINISTRATOR: &str = "S-1-5-21-1-2-3-500";
 
@@ -41,7 +45,7 @@ impl Connection for As {
 
 fn ask_as(service: &Arc<Service<Pretend>>, user: &str, administrator: bool, request: Request) -> Vec<Answer> {
     let (answers, received) = channel();
-    let asker = Asker { user: user.into(), administrator };
+    let asker = Asker { user: user.into(), administrator, administrators_account: user != SOMEONE_ELSE };
     service.answer(request, &mut As { asker, answers });
     received.try_iter().collect()
 }
@@ -120,30 +124,52 @@ fn an_administrator_sees_and_acts_on_every_machine_and_takes_none() {
     assert_eq!(ask_as(service, AN_ADMINISTRATOR, true, Request::Delete { name: "win".into() }), [Answer::Ok]);
 }
 
-#[test]
-fn a_machine_from_before_owners_is_the_first_users_who_asks_and_no_one_elses() {
-    let setup = setup("owners-old", Pretend::default());
+/// A machine from before owners, as a store has it, and the service started on it with `work`.
+fn old_machine(setup: &Setup, work: impl FnOnce(&Store) -> Pretend) -> (Store, Arc<Service<Pretend>>) {
     let store = setup.service.machines().store.clone();
     store.make("old").unwrap();
     store.save("old", &Settings::basic(8192, 1, Card::Default)).unwrap();
-    let service = Service::new(store.clone(), Pretend::default());
+    let service = Service::new(store.clone(), work(&store));
+    (store, service)
+}
 
-    // An administrator sees it, and asking doesn't make it theirs.
-    assert_eq!(names_listed(&service, AN_ADMINISTRATOR, true), ["old"]);
-    assert_eq!(store.load()[0].1.owner, None);
-    // The first user who asks anything takes it, and that's kept before they're answered.
-    assert_eq!(names_listed(&service, USER, false), ["old"]);
-    assert_eq!(store.load()[0].1.owner.as_deref(), Some(USER));
+#[test]
+fn a_machine_from_before_owners_is_the_user_its_files_belong_to() {
+    let setup = setup("owners-files", Pretend::default());
+    let (store, service) = old_machine(&setup, |store| Pretend {
+        owners: vec![(store.folder("old"), "S-1-5-18".into()), (store.disk("old"), SOMEONE_ELSE.into())],
+        ..Pretend::default()
+    });
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(SOMEONE_ELSE), "kept as the service starts");
+    // The PC's administrator asking first, unelevated, takes nothing that's someone's.
+    assert!(names_listed(&service, USER, false).is_empty());
+    assert_eq!(names_listed(&service, SOMEONE_ELSE, false), ["old"]);
+}
+
+#[test]
+fn a_machine_whose_files_name_no_user_waits_for_an_administrators_account() {
+    let setup = setup("owners-old", Pretend::default());
+    let (store, service) = old_machine(&setup, |store| Pretend {
+        owners: vec![(store.folder("old"), "S-1-5-18".into()), (store.disk("old"), ADMINISTRATORS.into())],
+        ..Pretend::default()
+    });
+    // A standard user neither sees it nor takes it.
     assert!(names_listed(&service, SOMEONE_ELSE, false).is_empty());
     let account = Request::Account { name: "old".into() };
     assert_eq!(
         ask_as(&service, SOMEONE_ELSE, false, account),
         [Answer::Refused { reason: "There is no machine called old.".into() }]
     );
-    // And it stays theirs when the service starts again.
+    // An elevated administrator sees it without taking it.
+    assert_eq!(names_listed(&service, AN_ADMINISTRATOR, true), ["old"]);
+    assert_eq!(store.load()[0].1.owner, None);
+    // The administrator's account asking as itself, as the app does on a PC with one user, takes it,
+    // and that's kept before it's answered and through the service starting again.
+    assert_eq!(names_listed(&service, USER, false), ["old"]);
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(USER));
     let again = Service::new(store, Pretend::default());
-    assert!(names_listed(&again, SOMEONE_ELSE, false).is_empty());
     assert_eq!(names_listed(&again, USER, false), ["old"]);
+    assert!(names_listed(&again, SOMEONE_ELSE, false).is_empty());
 }
 
 #[test]

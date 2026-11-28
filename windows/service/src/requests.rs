@@ -65,6 +65,8 @@ pub trait Work: Send + Sync + 'static {
     fn cards(&self) -> Vec<CardInfo>;
     /// Stops at once the machine HCS knows by `id`, if there is one.
     fn end(&self, id: &str);
+    /// The owner of the file or folder at `path`, as a SID.
+    fn files_owner(&self, path: &Path) -> Option<String>;
     /// Who may open a machine's console: its owner, if it has one, and administrators.
     fn console_access(&self, owner: Option<&str>) -> Vec<String>;
     /// Lets a stopped machine's disk grow to `size_gb`, and never shrinks it.
@@ -178,6 +180,7 @@ impl<W: Work> Service<W> {
         let names: Vec<String> = machines.lock().keys().cloned().collect();
         for name in names {
             work.end(&vm_id(&name));
+            owners::from_files(&machines, &work, &name);
             // The disks of a machine whose place can't be used aren't touched.
             if let Some(problem) = machines.store.problem(&name) {
                 work.log(&format!("{name}'s disks can't be used: {problem}"));

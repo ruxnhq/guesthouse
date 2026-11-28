@@ -7,11 +7,13 @@ use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
+    SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, PSECURITY_DESCRIPTOR, PSID,
-    SECURITY_MAX_SID_SIZE, TOKEN_QUERY, TOKEN_USER, TokenUser, WinBuiltinAdministratorsSid,
+    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_MAX_SID_SIZE, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenGroups,
+    TokenUser, WinBuiltinAdministratorsSid,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::core::BOOL;
@@ -142,4 +144,74 @@ pub fn is_administrator(token: HANDLE) -> bool {
     // SAFETY: an impersonation token of the caller's and a SID Windows just wrote.
     let checked = unsafe { CheckTokenMembership(token, sid.as_mut_ptr().cast::<c_void>(), &mut member) };
     checked != 0 && member != 0
+}
+
+/// Whether a token's account is in the Administrators group at all, enabled or, as in an
+/// administrator's filtered token, for deny only: an account that could elevate.
+pub fn in_administrators(token: HANDLE) -> bool {
+    let mut needed = 0u32;
+    // SAFETY: asking only for the size, with no buffer.
+    unsafe { GetTokenInformation(token, TokenGroups, null_mut(), 0, &mut needed) };
+    if needed == 0 {
+        return false;
+    }
+    let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+    // SAFETY: the buffer has room for `needed` bytes.
+    if unsafe { GetTokenInformation(token, TokenGroups, buffer.as_mut_ptr().cast(), needed, &mut needed) }
+        == 0
+    {
+        return false;
+    }
+    // SAFETY: Windows wrote a TOKEN_GROUPS at the buffer's start, with its count of groups after it,
+    // and their SIDs in the buffer too.
+    unsafe {
+        let groups = &*buffer.as_ptr().cast::<TOKEN_GROUPS>();
+        let all = std::slice::from_raw_parts(groups.Groups.as_ptr(), groups.GroupCount as usize);
+        all.iter().any(|group| sid_text(group.Sid).as_deref() == Some(ADMINISTRATORS))
+    }
+}
+
+/// The owner of the file or folder at `path`, as a SID's text.
+pub fn owner_of(path: &std::path::Path) -> Option<String> {
+    let text = wide(path);
+    let mut owner: PSID = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: the path ends in a zero; the owner points into the descriptor, freed after it's read.
+    let read = unsafe {
+        GetNamedSecurityInfoW(
+            text.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if read != 0 {
+        return None;
+    }
+    // SAFETY: the owner is a SID inside the descriptor, which is still allocated.
+    let found = unsafe { sid_text(owner) };
+    // SAFETY: allocated by Windows for us, and not used after this.
+    unsafe { LocalFree(descriptor) };
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_belongs_to_the_user_who_made_it_and_windows_own_to_windows() {
+        let file = std::env::temp_dir().join(format!("gh-owner-{}", std::process::id()));
+        std::fs::write(&file, b"mine").unwrap();
+        let mine = owner_of(&file);
+        std::fs::remove_file(&file).unwrap();
+        assert!(mine.is_some() && mine == own_user() || mine.as_deref() == Some(ADMINISTRATORS), "{mine:?}");
+        let windows = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap();
+        let theirs = owner_of(&windows.join("System32")).unwrap();
+        assert!(!theirs.starts_with("S-1-5-21-"), "{theirs}");
+    }
 }

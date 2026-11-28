@@ -27,6 +27,8 @@ struct Pretend {
     logged: Mutex<Vec<String>>,
     /// The address of this PC's that packets to a guest leave from, when a test says.
     source: Mutex<Option<std::net::Ipv4Addr>>,
+    /// Who owns which file, where a test says; nobody's else.
+    owners: Vec<(PathBuf, String)>,
 }
 
 /// The user who asks, in these tests, but where one says otherwise.
@@ -188,6 +190,10 @@ impl Work for Pretend {
         self.ended.lock().unwrap().push(id.to_owned());
     }
 
+    fn files_owner(&self, path: &Path) -> Option<String> {
+        self.owners.iter().find(|(file, _)| file == path).map(|(_, owner)| owner.clone())
+    }
+
     fn console_access(&self, owner: Option<&str>) -> Vec<String> {
         owner.map(str::to_owned).into_iter().collect()
     }
@@ -336,7 +342,7 @@ impl Connection for Window {
     }
 
     fn asker(&self) -> Asker {
-        Asker { user: USER.into(), administrator: false }
+        Asker { user: USER.into(), administrator: false, administrators_account: true }
     }
 }
 

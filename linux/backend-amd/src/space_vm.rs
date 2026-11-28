@@ -174,8 +174,9 @@ pub struct SpaceVm {
     own_on_card: Option<(u64, Syncobj)>,
     /// The runs sent without waiting that the kernel hasn't been seen to retire, oldest first.
     on_card: VecDeque<OnCard>,
-    /// The fences of runs seen to retire since they were last asked for.
-    retired: Vec<GuestFence>,
+    /// The fences of runs seen to retire since they were last asked for, each with what the kernel
+    /// signalled when it retired, kept to ask how the run ended: for the newest [`SIGNALS_KEPT`].
+    retired: Vec<(GuestFence, Option<Syncobj>)>,
     /// The video runs seen to retire since they were last asked for.
     video_retired: Vec<Retired>,
     /// When a video run here was last seen to retire.
@@ -193,6 +194,10 @@ pub struct SpaceVm {
     /// The kernel's list of the buffers a run here may touch, made when they change.
     lists: BufferList,
 }
+
+/// How many retired runs keep what the kernel signalled for them until they are looked at, newest
+/// first. The backend looks at them every few milliseconds while the guest waits on work.
+const SIGNALS_KEPT: usize = 1024;
 
 /// Where a run's fence is in guest memory, by guest physical address, and the value it ends with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -702,10 +707,20 @@ impl SpaceVm {
         self.shares.get(&ip_type).is_none_or(|share| share.may_send(now, on_card))
     }
 
-    /// The fences of the runs the kernel has retired since this was last asked, looking at them all.
-    pub fn take_retired(&mut self) -> Vec<GuestFence> {
+    /// The runs the kernel has retired since this was last asked, looking at them all, that `lost`
+    /// says are lost: each one's fence, and how the kernel says it ended (see
+    /// [`Syncobj::end_status`]), if it could be asked.
+    pub fn take_lost(&mut self, mut lost: impl FnMut(&GuestFence) -> bool) -> Vec<(GuestFence, Option<i32>)> {
         self.take_back_slots(true);
-        std::mem::take(&mut self.retired)
+        let file = &self.file;
+        let mut found = Vec::new();
+        for (fence, signal) in std::mem::take(&mut self.retired) {
+            if lost(&fence) {
+                found.push((fence, signal.as_ref().and_then(|signal| signal.end_status(file).ok())));
+            }
+            signal.inspect(|signal| signal.destroy(file));
+        }
+        found
     }
 
     /// The number of the oldest run sent here that the kernel hasn't said has ended, whatever became
@@ -733,7 +748,14 @@ impl SpaceVm {
         self.contexts.forget_queue(queue);
         self.video_runs.forget_queue(queue);
         self.video_retired.retain(|run| run.queue != queue);
-        self.retired.retain(|fence| fence.queue != queue);
+        let file = &self.file;
+        self.retired.retain(|(fence, signal)| {
+            let gone = fence.queue == queue;
+            if let Some(signal) = signal.as_ref().filter(|_| gone) {
+                signal.destroy(file);
+            }
+            !gone
+        });
         for run in &mut self.on_card {
             run.fence = run.fence.filter(|fence| fence.queue != queue);
         }
@@ -746,7 +768,6 @@ impl SpaceVm {
         while let Some(run) = self.on_card.pop_front() {
             // A sync object that can't be asked about is one the kernel has no run for.
             if run.retired.signalled(&self.file).unwrap_or(true) {
-                run.retired.destroy(&self.file);
                 let (started, ended) = fence_ibs.times(run.slot);
                 if let Some(sent) = run.sent.filter(|_| self.keeps_finished) {
                     let ticks = |ticks| ticks_to_ns(ticks, self.clock_khz);
@@ -754,7 +775,14 @@ impl SpaceVm {
                     self.finished.push(Finished { ip_type: run.ip_type, times });
                 }
                 fence_ibs.give_back(run.slot);
-                self.retired.extend(run.fence);
+                let Some(fence) = run.fence else {
+                    run.retired.destroy(&self.file);
+                    continue;
+                };
+                if let Some(oldest) = self.retired.len().checked_sub(SIGNALS_KEPT) {
+                    self.retired[oldest].1.take().inspect(|signal| signal.destroy(&self.file));
+                }
+                self.retired.push((fence, Some(run.retired)));
             } else if all {
                 still_on_card.push_back(run);
             } else {

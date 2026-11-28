@@ -60,8 +60,10 @@ fn a_run_that_ended_before_writing_its_fence_gets_it_written_by_the_host() {
         GuestFence { queue: 2, address: LOST, value: 4 },
     ];
     // Only the lost run is named, as that is the one whose command buffers are kept.
-    let lost = stand_in_for_lost_runs(&mut host, retired);
-    assert_eq!(lost, vec![GuestFence { queue: 2, address: LOST, value: 4 }]);
+    let lost: Vec<_> = retired.into_iter().filter(|fence| lost_runs::lost(&host, fence)).collect();
+    let lost = stand_in_for_lost_runs(&mut host, lost.into_iter().map(|fence| (fence, None)).collect());
+    let fence = GuestFence { queue: 2, address: LOST, value: 4 };
+    assert_eq!(lost, vec![lost_runs::LostRun { fence, hung: false }]);
     assert_eq!(host.0[&WRITTEN], 7);
     assert_eq!(host.0[&LOST], 4);
 }
@@ -118,8 +120,7 @@ fn a_fence_already_past_a_lost_run_is_left_alone() {
     const FENCE: u64 = 0x1000;
     let mut host = Fences::default();
     host.0.insert(FENCE, 9);
-    let lost = stand_in_for_lost_runs(&mut host, vec![GuestFence { queue: 1, address: FENCE, value: 8 }]);
-    assert!(lost.is_empty());
+    assert!(!lost_runs::lost(&host, &GuestFence { queue: 1, address: FENCE, value: 8 }));
     assert_eq!(host.0[&FENCE], 9);
 }
 

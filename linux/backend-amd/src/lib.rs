@@ -163,7 +163,7 @@ pub struct AmdBackend {
     video_wake: Option<OwnedFd>,
     /// When the runs on the card were last looked at.
     looked_at_runs: Option<Instant>,
-    /// Spaces that lost a run since the core last asked: see [`Backend::take_fault`].
+    /// Spaces whose own runs hung since the core last asked: see [`Backend::take_fault`].
     lost_runs: lost_runs::Blame,
     /// Makes dma-bufs of guest memory, where this user may.
     udmabuf: Udmabuf,
@@ -1900,15 +1900,13 @@ impl Backend for AmdBackend {
         }
         self.looked_at_runs = Some(now);
         for (&id, space) in &mut self.spaces {
-            let lost = stand_in_for_lost_runs(host, space.vm.take_retired());
-            if !lost.is_empty() {
-                self.lost_runs.lost(id);
-            }
-            if let (Some(keeper), Some(fence)) = (&mut self.ib_dump, lost.first()) {
-                keeper.keep_for(fence.queue, fence.value, "hung", now);
+            let lost = space.vm.take_lost(|fence| lost_runs::lost(host, fence));
+            let lost = stand_in_for_lost_runs(host, lost);
+            self.lost_runs.looked_at(id, &lost);
+            if let (Some(keeper), Some(run)) = (&mut self.ib_dump, lost.first()) {
+                keeper.keep_for(run.fence.queue, run.fence.value, "hung", now);
             }
         }
-        self.lost_runs.end_look();
         if let Some(keeper) = &mut self.ib_dump {
             keeper.now_and_then(now);
         }

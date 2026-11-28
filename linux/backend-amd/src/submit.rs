@@ -27,6 +27,12 @@ const CTX_OUT_CTX_ID: usize = 0;
 const CTX_OUT_FLAGS: usize = 0;
 const CTX_REQUEST_SIZE: usize = 16;
 
+/// `SYNC_IOC_FILE_INFO` from the kernel's `sync_file.h`, `_IOWR('>', 4, struct sync_file_info)`, and
+/// where that structure keeps the fence's status. Asked for no fences, the kernel fills in only that.
+const SYNC_FILE_INFO: u64 = 0xC038_3E04;
+const SYNC_FILE_INFO_SIZE: usize = 56;
+const SYNC_FILE_INFO_STATUS: usize = 32;
+
 // Chunk ids.
 const CHUNK_ID_IB: u32 = 0x01;
 const CHUNK_ID_SYNCOBJ_IN: u32 = 0x04;
@@ -216,6 +222,16 @@ impl Syncobj {
             return Err(error);
         }
         Ok(made)
+    }
+
+    /// How the run behind the fence it holds ended, as the kernel tells it in a sync file's status: 1
+    /// for a run that finished, 0 for one still going, and the negative error number the kernel ended
+    /// it with otherwise.
+    pub fn end_status(&self, file: &impl AsRawFd) -> io::Result<i32> {
+        let sync_file = self.export_sync_file(file)?;
+        let mut request = [0u8; SYNC_FILE_INFO_SIZE];
+        ioctl::drm_ioctl(&sync_file, SYNC_FILE_INFO, &mut request)?;
+        Ok(get32(&request, SYNC_FILE_INFO_STATUS) as i32)
     }
 
     /// Whether the kernel has signalled it, without waiting. A submission must have named it.
@@ -423,6 +439,15 @@ pub fn sdma_write_ib(dst_va: u64, data: &[u32]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sync_file_question_follows_the_kernels_encoding() {
+        let read_write = 3 << 30;
+        assert_eq!(
+            SYNC_FILE_INFO,
+            read_write | (SYNC_FILE_INFO_SIZE as u64) << 16 | u64::from(b'>') << 8 | 4
+        );
+    }
 
     #[test]
     fn a_write_packet_carries_its_address_and_payload() {

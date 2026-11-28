@@ -26,6 +26,11 @@ const SOUND_SOCKET: &str = "pipewire-0";
 const SOUND_FOLDER_VARIABLES: [&str; 2] = ["PIPEWIRE_RUNTIME_DIR", "XDG_RUNTIME_DIR"];
 /// Landlock's ABI that can hold pathname sockets, such as the session bus, out of reach.
 const SOCKETS_BY_PATH_ABI: u32 = 9;
+/// The ABIs that brought the parts a jail holds in namespaces too, as they share the PC's network
+/// and processes: TCP ports, abstract sockets and signals, and UDP ports.
+const TCP_ABI: u32 = 4;
+const SCOPE_ABI: u32 = 6;
+const UDP_ABI: u32 = 10;
 const ALLOW_HINT: &str = "To start this machine anyway, turn on \"Start without a jail\" in its \
                           settings, and it will say so while it runs.";
 
@@ -93,6 +98,25 @@ fn without_namespaces(plan: &VmPlan, landlock_abi: u32) -> String {
     note
 }
 
+/// What this kernel's Landlock leaves out of what this machine's jail would hold, in words.
+fn short_of(plan: &VmPlan, landlock_abi: u32) -> Vec<&'static str> {
+    let parts = [
+        (landlock_abi < TCP_ABI, "TCP ports"),
+        (landlock_abi < SCOPE_ABI, "abstract sockets and signals"),
+        (landlock_abi < UDP_ABI && plan.jail_holds_udp(), "UDP ports"),
+    ];
+    parts.iter().filter(|(short, _)| *short).map(|(_, words)| *words).collect()
+}
+
+fn with_what_it_lacks(note: String, plan: &VmPlan, landlock_abi: u32) -> String {
+    let short = short_of(plan, landlock_abi);
+    if short.is_empty() {
+        return note;
+    }
+    let lacks = format!("This kernel's Landlock can't hold back {}.", short.join(", "));
+    if note.is_empty() { format!("Jailed. {lacks}") } else { format!("{note} {lacks}") }
+}
+
 /// Decides, or refuses the start with the reason and what to do about it.
 pub fn choose(context: &Context, machine: &Machine, plan: &VmPlan, offer: &Offer) -> Result<Choice> {
     decide(context, machine, plan, offer).map_err(|reason| {
@@ -133,6 +157,7 @@ pub fn decide(
     } else {
         without_namespaces(plan, offer.support.landlock_abi)
     };
+    let note = with_what_it_lacks(note, plan, offer.support.landlock_abi);
     Ok(Choice { qemu: Some(jail), daemon_jailed: true, note })
 }
 
@@ -238,7 +263,10 @@ mod tests {
         });
         let plan = VmPlan::new(&context, &ubuntu, boot, slots::first(), 0);
         let choice = choose(&context, &ubuntu, &plan, &offer(4, false)).unwrap();
-        assert_eq!(choice.note, "Jailed, without namespaces: bubblewrap can't make them on this PC.");
+        assert!(
+            choice.note.starts_with("Jailed, without namespaces: bubblewrap can't make them on this PC.")
+        );
+        assert!(!choice.note.contains("desktop's sockets"), "{}", choice.note);
     }
 
     #[test]
@@ -260,6 +288,22 @@ mod tests {
         let choice = choose(&context, &machine, &plan, &offer(10, true)).unwrap();
         assert!(choice.daemon_jailed && choice.qemu.unwrap().namespaces);
         assert_eq!(choice.note, "");
+    }
+
+    #[test]
+    fn the_row_names_what_the_kernels_landlock_leaves_out_of_this_machines_jail() {
+        let bridged = Machine { network_mode: Mode::Bridged, ..windows() };
+        let note = choose_for(&bridged, &offer(7, true)).unwrap().note;
+        assert_eq!(note, "Jailed. This kernel's Landlock can't hold back UDP ports.");
+        assert_eq!(choose_for(&windows(), &offer(7, true)).unwrap().note, "", "NAT holds no UDP port");
+        let old = choose_for(&windows(), &offer(5, true)).unwrap().note;
+        assert_eq!(old, "Jailed. This kernel's Landlock can't hold back abstract sockets and signals.");
+        let older = choose_for(&bridged, &offer(3, false)).unwrap().note;
+        assert!(older.starts_with("Jailed, without namespaces"), "{older}");
+        assert!(
+            older.ends_with("can't hold back TCP ports, abstract sockets and signals, UDP ports."),
+            "{older}"
+        );
     }
 
     #[test]

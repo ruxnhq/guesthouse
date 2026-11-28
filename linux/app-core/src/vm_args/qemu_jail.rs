@@ -132,6 +132,11 @@ impl VmPlan {
         !self.has_machine_line() || (self.network.mode == Mode::Nat && !self.network.passt)
     }
 
+    /// Whether this machine's jail holds QEMU to some UDP ports, which only a newer Landlock can.
+    pub fn jail_holds_udp(&self) -> bool {
+        !self.user_network_is_nat()
+    }
+
     fn jail_network(&self) -> Network {
         let nat = self.user_network_is_nat();
         let mut tcp_bind = self.listened_ports();

@@ -124,5 +124,14 @@ for name in debian fedora archlinux; do
 done
 sh "$REPO/packaging/images/image-of.sh" nothing >/dev/null 2>&1 && fail "image-of.sh gave an image for a name it hasn't got."
 
+# In the container a script is alone in /script, with no repository around it, so it can't look for an
+# image there. Each script's --inside run, from a folder of its own, must get past its top.
+for script in packaging/proxmox/build-pve-qemu-kvm.sh packaging/packages/build-packages.sh packaging/packages/publish-repo.sh; do
+    mkdir -p "$WORK/alone"
+    cp "$REPO/$script" "$WORK/alone/${script##*/}"
+    said=$(sh "$WORK/alone/${script##*/}" --inside nothing 2>&1 </dev/null)
+    case $said in *image-of*) fail "${script##*/} looks for an image when it runs inside a container: $said" ;; esac
+done
+
 [ "$failed" = 0 ] && echo "publish-repo: all checks passed"
 exit "$failed"

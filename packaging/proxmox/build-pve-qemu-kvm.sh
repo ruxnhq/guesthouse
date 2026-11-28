@@ -30,7 +30,6 @@ SUFFIX=+gpupv1
 DEVICES='vmbus-bridge hv-timesync gpupv-global gpupv-vgpu gpupv-render'
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-IMAGE=${IMAGE:-$(sh "$REPO/packaging/images/image-of.sh" debian)}
 OUT=$REPO/build/proxmox
 
 say() {
@@ -230,8 +229,10 @@ main() {
     [ -z "$patches_only" ] || return 0
     [ $# -eq 1 ] || die "name what to build of pve-qemu.git, such as 11.1.3-4, or newest."
     find_engine
+    # Read here, on the host: the container has only this script's folder.
+    image=${IMAGE:-$(sh "$REPO/packaging/images/image-of.sh" debian)}
     "$ENGINE" run --rm --security-opt label=disable -e "OWNER=$OWNER" -e DEBFULLNAME -e DEBEMAIL -e DEB_BUILD_OPTIONS \
-        -v "$OUT:/build" -v "$REPO/packaging/proxmox:/script:ro" "$IMAGE" \
+        -v "$OUT:/build" -v "$REPO/packaging/proxmox:/script:ro" "$image" \
         sh /script/build-pve-qemu-kvm.sh --inside "$1" "$SUFFIX"
     say "the packages are in $OUT"
 }

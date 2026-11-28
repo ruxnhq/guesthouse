@@ -166,9 +166,30 @@ fn a_guests_name_that_leads_out_of_the_folder_is_refused() {
 }
 
 #[test]
+fn a_file_longer_than_the_catch_listed_is_refused_before_any_of_it_is_taken() {
+    let (helper, _requests) = fake_helper(&[b"ok 10\n0123456789"]);
+    let mut taken = Vec::new();
+    let error = helper.get("a.txt", 9, &mut taken, &AtomicBool::new(false)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+    assert!(taken.is_empty());
+    let (helper, _requests) = fake_helper(&[b"ok 9\n012345678"]);
+    assert_eq!(helper.get("a.txt", 9, &mut taken, &AtomicBool::new(false)).unwrap(), 9);
+    assert_eq!(taken, b"012345678");
+}
+
+#[test]
+fn a_copy_that_is_stopped_writes_nothing_more() {
+    let (helper, _requests) = fake_helper(&[b"ok 9\n012345678"]);
+    let mut taken = Vec::new();
+    let error = helper.get("a.txt", 9, &mut taken, &AtomicBool::new(true)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Interrupted);
+    assert!(taken.is_empty());
+}
+
+#[test]
 fn a_file_that_ends_early_is_an_error() {
     let (helper, _requests) = fake_helper(&[b"ok 9\nshort"]);
-    let got = helper.get("a.txt", &mut Vec::new()).unwrap_err();
+    let got = helper.get("a.txt", 9, &mut Vec::new(), &AtomicBool::new(false)).unwrap_err();
     assert_eq!(got.kind(), ErrorKind::UnexpectedEof);
 }
 
@@ -262,6 +283,6 @@ fn a_length_line_with_no_end_is_refused() {
     let mut long = b"ok ".to_vec();
     long.extend(std::iter::repeat_n(b'1', LONGEST_LINE * 2));
     let (helper, _requests) = fake_helper(&[&long]);
-    let error = helper.get("a.txt", &mut Vec::new()).unwrap_err();
+    let error = helper.get("a.txt", 9, &mut Vec::new(), &AtomicBool::new(false)).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::InvalidData);
 }

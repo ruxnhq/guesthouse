@@ -26,6 +26,10 @@ features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_Security",
+    # ConvertSidToStringSidW, for who serves a machine's serial port.
+    "Win32_Security_Authorization",
+    # BCryptGenRandom, for each boot's pipe names.
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Vhd",
     "Win32_System_Com",
@@ -36,6 +40,8 @@ features = [
     "Win32_System_HostComputeSystem",
     "Win32_System_Hypervisor",
     "Win32_System_IO",
+    # GetNamedPipeServerProcessId, and the test's own pipe server.
+    "Win32_System_Pipes",
     "Win32_System_Ioctl",
     "Win32_System_Registry",
     "Win32_System_Services",

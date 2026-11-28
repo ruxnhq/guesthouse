@@ -14,6 +14,7 @@
 //! - `gpu`: the host's cards that can be shared with a guest, and their drivers' folders.
 //! - `drivers`: the copy of a card's driver a guest needs, put on its disk while the machine is off.
 //! - `hvsock`: Hyper-V sockets, which reach a guest with no network. Its IDs build everywhere.
+//! - `worker`: the account a machine's worker process runs as. It builds everywhere.
 //! - `host`: whether this process is elevated, which HCS needs, and Ctrl+C.
 //! - `dns_sd`: announcing a service through Windows' own mDNS responder. What to do after each of
 //!   its answers builds everywhere.
@@ -48,6 +49,7 @@ pub mod services;
 pub mod system;
 #[cfg(windows)]
 mod text;
+pub mod worker;
 
 #[cfg(windows)]
 pub use error::{Error, Result};

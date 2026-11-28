@@ -15,7 +15,7 @@ Each of the list's patches is as its author sent it, with his name, date, messag
 
 The first four are here because the Windows guest has only ever been run on a QEMU that has them. A Linux guest with our driver runs without them: its register accesses are all single loads and stores.
 
-None of this goes to QEMU. `pvg-fwd` and `0007` have no Signed-off-by for that reason.
+None of this goes to QEMU. `pvg-fwd`, `0007`, `0008` and `0009` have no Signed-off-by for that reason.
 
 ## Building it
 

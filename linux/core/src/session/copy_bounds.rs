@@ -83,14 +83,23 @@ impl Rows {
     }
 }
 
-/// Whether these rows can be read from or written to a surface in this much memory. A tiled surface
-/// has to fit whole, as where one row lies in it is the backend's business, and the rows have to lie
-/// inside what the copy engine will take to be the surface.
-pub(super) fn side_fits<B: Backend>(backend: &B, rows: &Rows, surface: &SurfaceShape, memory: u64) -> bool {
+/// Whether these rows can be read from or written to a surface in this much memory, in a copy that
+/// moves `pixel` bytes a pixel. A tiled surface has to fit whole, as where one row lies in it is the
+/// backend's business, and the rows have to lie inside what the copy engine will take to be the
+/// surface. The engine is given the surface's width, and the bytes are measured by its pitch, so
+/// the width has to fit in the pitch: a pitch rounded up past the width, as a Direct3D 9 surface's
+/// is, still does.
+pub(super) fn side_fits<B: Backend>(
+    backend: &B,
+    rows: &Rows,
+    (surface, pixel): (&SurfaceShape, u32),
+    memory: u64,
+) -> bool {
     if surface.tiling.is_none() {
         return rows.fit_linear(surface.pitch, memory);
     }
-    rows.end_of_row() <= u128::from(surface.pitch)
+    u128::from(surface.width) * u128::from(pixel) <= u128::from(surface.pitch)
+        && rows.end_of_row() <= u128::from(surface.pitch)
         && rows.end_of_rows() <= u128::from(surface.height)
         && backend.tiled_bytes(surface, rows.x, rows.y).is_some_and(|bytes| bytes <= memory)
 }
@@ -103,7 +112,8 @@ pub(super) fn picture_fits<B: Backend>(
     slot_memory: u64,
 ) -> bool {
     let rows = Rows::whole(picture.width, picture.height);
-    side_fits(backend, &rows, surface, memory) && rows.fit_linear(picture.pitch, slot_memory)
+    side_fits(backend, &rows, (surface, COPY_PIXEL_BYTES), memory)
+        && rows.fit_linear(picture.pitch, slot_memory)
 }
 
 /// Whether a copy of a rectangle stays inside both surfaces and their memory. Both sides are held to
@@ -119,8 +129,8 @@ pub(super) fn copy_fits<B: Backend>(
 ) -> bool {
     read.inside_pixels(source, pixel)
         && written.inside_pixels(target, pixel)
-        && side_fits(backend, read, source, source_memory)
-        && side_fits(backend, written, target, target_memory)
+        && side_fits(backend, read, (source, pixel), source_memory)
+        && side_fits(backend, written, (target, pixel), target_memory)
 }
 
 #[cfg(test)]
@@ -327,6 +337,51 @@ mod tests {
         assert!(!copies_to(&target, exact, whole, (0, 0), WIDE_PIXEL));
         let tiled_target = tiled(width, 1440, width * PIXEL);
         assert!(!copies_to(&tiled_target, u64::MAX, whole, (0, 0), WIDE_PIXEL));
+    }
+
+    /// A tiled surface 65535 pixels wide whose pitch says 64 bytes, in the 16 KiB that pitch fills.
+    fn wider_than_its_pitch() -> (SurfaceShape, u64) {
+        (SurfaceShape { tiling: Some(0), ..surface(65535, 256, 64) }, 64 * 256)
+    }
+
+    #[test]
+    fn a_tiled_source_wider_than_its_pitch_is_refused() {
+        let backend = StandIn::new();
+        let (source, memory) = wider_than_its_pitch();
+        let target = surface(16, 8, 64);
+        let area = rectangle(0, 248, 16, 256);
+        let read = Rows::read_by(&area, PIXEL).unwrap();
+        let written = Rows::written_by(&area, 0, 0, PIXEL).unwrap();
+        assert!(!copy_fits(&backend, PIXEL, &read, (&source, memory), &written, (&target, 64 * 8)));
+    }
+
+    #[test]
+    fn a_tiled_target_wider_than_its_pitch_is_refused() {
+        let backend = StandIn::new();
+        let (target, memory) = wider_than_its_pitch();
+        let source = surface(16, 8, 64);
+        let area = rectangle(0, 0, 16, 8);
+        let read = Rows::read_by(&area, PIXEL).unwrap();
+        let written = Rows::written_by(&area, 0, 248, PIXEL).unwrap();
+        assert!(!copy_fits(&backend, PIXEL, &read, (&source, 64 * 8), &written, (&target, memory)));
+    }
+
+    #[test]
+    fn a_tiled_pitch_rounded_up_past_the_width_still_fits() {
+        // 100 pixels are 400 bytes, and a Direct3D 9 surface's pitch is rounded up to 512.
+        let backend = StandIn::new();
+        let rounded = tiled(100, 64, 512);
+        let area = rectangle(0, 0, 100, 64);
+        let read = Rows::read_by(&area, PIXEL).unwrap();
+        let written = Rows::written_by(&area, 0, 0, PIXEL).unwrap();
+        let plenty = 1 << 20;
+        assert!(copy_fits(&backend, PIXEL, &read, (&rounded, plenty), &written, (&rounded, plenty)));
+        let wide = SurfaceShape { colour: guesthouse_backend_standin::WIDE_COLOUR, ..rounded };
+        let wide_read = Rows::read_by(&rectangle(0, 0, 10, 10), WIDE_PIXEL).unwrap();
+        assert!(
+            !copy_fits(&backend, WIDE_PIXEL, &wide_read, (&wide, plenty), &wide_read, (&rounded, plenty)),
+            "100 pixels of 8 bytes are past a pitch of 512"
+        );
     }
 
     #[test]

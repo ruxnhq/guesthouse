@@ -140,9 +140,13 @@ pub(crate) fn disk_in_use(disk: &str) -> bool {
     !looked.status.success() && String::from_utf8_lossy(&looked.stderr).contains("lock")
 }
 
-/// Refuses a disk another program has open to write.
-pub(crate) fn refuse_if_in_use(disk: &str) -> Result<()> {
-    if disk_in_use(disk) { Err(Failure::new(DISK_IN_USE)) } else { Ok(()) }
+/// Says why this machine's files can't go now. A running VM or task still needs them, and so does
+/// another program that has the disk open to write.
+pub(crate) fn removal_problem(context: &Context, machine: &Machine) -> Option<Failure> {
+    let current = status(context, machine);
+    let busy = current.state != State::Off || current.busy;
+    busy.then(|| Failure::new(SHUT_DOWN_FIRST))
+        .or_else(|| disk_in_use(&machine.disk).then(|| Failure::new(DISK_IN_USE)))
 }
 
 /// `path` in the copy's folder, if it was in the original's.

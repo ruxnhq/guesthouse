@@ -5,7 +5,7 @@
 //! replaying everything that was typed at it. Nothing here ever waits, as a hung QEMU must not freeze
 //! the window: the window holds the way out.
 
-use crate::capped_line::read_capped_line;
+use guesthouse_basics::capped_line::read_capped_line;
 use rustix::net::{self, AddressFamily, SendFlags, SocketAddrUnix, SocketFlags, SocketType};
 use serde_json::{Value, json};
 use std::collections::HashMap;

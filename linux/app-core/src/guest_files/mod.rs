@@ -16,8 +16,8 @@ mod tests;
 pub use fetching::{Entry, fetch};
 pub use sending::{DroppedFile, dropped_files, send};
 
-use crate::capped_line::read_capped_line;
 use crate::text::{base64_decode, base64_encode};
+use guesthouse_basics::capped_line::read_capped_line;
 use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;

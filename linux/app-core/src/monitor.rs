@@ -1,7 +1,7 @@
 //! QEMU's monitor, as a question and an answer.
 
-use crate::capped_line::read_capped_line;
 use crate::context::Context;
+use guesthouse_basics::capped_line::read_capped_line;
 use guesthouse_daemon::slot::Slot;
 use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
 use serde_json::{Value, json};

@@ -5,11 +5,11 @@
 //! down on its monitors just before it does. So while a machine runs, something listens on the
 //! watch monitor, which nothing else uses then, and keeps the last reason in the run folder.
 
-use crate::capped_line::read_capped_line;
 use crate::context::Context;
 use crate::monitor::LONGEST_LINE;
 use crate::monitor::WATCH_SOCKET;
 use crate::slots;
+use guesthouse_basics::capped_line::read_capped_line;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufReader, Write};

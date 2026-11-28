@@ -4,8 +4,8 @@
 
 use gtk::gio::prelude::*;
 use gtk::{gio, glib};
-use guesthouse_app_core::capped_line::read_capped_line;
 use guesthouse_app_core::monitor::LONGEST_LINE;
+use guesthouse_basics::capped_line::read_capped_line;
 use rustix::net::{
     self, AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
 };

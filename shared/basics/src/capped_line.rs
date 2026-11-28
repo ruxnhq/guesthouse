@@ -2,19 +2,28 @@
 
 use std::io::{self, BufRead, ErrorKind, Read};
 
-/// Reads one line of at most `most` bytes, without its line end. `Ok(None)` is the end of the stream.
-/// A longer line, or one that is not UTF-8, is an `InvalidData` error and nothing more than `most`
-/// bytes were held, so the caller drops that connection and carries on.
-pub fn read_capped_line(reader: &mut impl BufRead, most: usize) -> io::Result<Option<String>> {
+/// Reads one line as raw bytes, its line end included, of at most `most` bytes besides the end.
+/// `Ok(None)` is the end of the stream. A longer line is an `InvalidData` error and nothing more
+/// than `most + 1` bytes were held.
+pub fn read_capped_bytes(reader: &mut impl BufRead, most: usize) -> io::Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
     reader.by_ref().take(most as u64 + 1).read_until(b'\n', &mut bytes)?;
     if bytes.is_empty() {
         return Ok(None);
     }
+    if bytes.last() != Some(&b'\n') && bytes.len() > most {
+        return Err(io::Error::new(ErrorKind::InvalidData, "a line longer than allowed"));
+    }
+    Ok(Some(bytes))
+}
+
+/// Reads one line of at most `most` bytes, without its line end. `Ok(None)` is the end of the
+/// stream. A longer line, or one that is not UTF-8, is an `InvalidData` error and nothing more than
+/// `most` bytes were held, so the caller drops that connection and carries on.
+pub fn read_capped_line(reader: &mut impl BufRead, most: usize) -> io::Result<Option<String>> {
+    let Some(mut bytes) = read_capped_bytes(reader, most)? else { return Ok(None) };
     if bytes.last() == Some(&b'\n') {
         bytes.pop();
-    } else if bytes.len() > most {
-        return Err(io::Error::new(ErrorKind::InvalidData, "a line longer than allowed"));
     }
     String::from_utf8(bytes)
         .map(Some)

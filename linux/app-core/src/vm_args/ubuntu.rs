@@ -73,9 +73,12 @@ impl VmPlan {
             "-drive",
             &format!("file={},if=virtio,format=qcow2", qemu_value(&self.disk)),
             "-drive",
-            &format!("file={},media=cdrom,readonly=on", qemu_value(&install.iso)),
+            &format!("file={},format=raw,media=cdrom,readonly=on", qemu_value(&install.iso)),
             "-drive",
-            &format!("file={},media=cdrom,readonly=on", qemu_value(&install.seed.to_string_lossy())),
+            &format!(
+                "file={},format=raw,media=cdrom,readonly=on",
+                qemu_value(&install.seed.to_string_lossy())
+            ),
             "-nic",
             &self.ubuntu_nic(""),
             "-display",
@@ -388,7 +391,7 @@ mod tests {
         assert!(value_after(&arguments, "-append").starts_with("autoinstall ds=nocloud"));
         assert_eq!(value_after(&arguments, "-kernel"), "/m/boot/vmlinuz");
         assert_eq!(value_after(&arguments, "-m"), "8G");
-        assert!(arguments.iter().any(|word| word == "file=/iso/a,,b.iso,media=cdrom,readonly=on"));
+        assert!(arguments.iter().any(|word| word == "file=/iso/a,,b.iso,format=raw,media=cdrom,readonly=on"));
         assert!(arguments.iter().any(|word| word.ends_with("/install-serial.log")));
     }
 }

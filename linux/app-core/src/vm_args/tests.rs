@@ -354,10 +354,10 @@ fn an_install_boots_its_disc_with_the_answers_beside_it() {
     let (_scratch, plan) = plan(&Machine { installing: true, ..windows() }, boot);
     let arguments = plan.qemu_arguments();
     assert!(
-        has(&arguments, "if=none,id=cd0,media=cdrom,readonly=on,file=/iso/a,,b.iso"),
+        has(&arguments, "if=none,id=cd0,format=raw,media=cdrom,readonly=on,file=/iso/a,,b.iso"),
         "commas are doubled"
     );
-    assert!(has(&arguments, "if=none,id=cd1,media=cdrom,readonly=on,file=/m/answer.iso"));
+    assert!(has(&arguments, "if=none,id=cd1,format=raw,media=cdrom,readonly=on,file=/m/answer.iso"));
     assert!(!has(&arguments, "usb-mouse,bus=xhci.0"), "an install has no GPU yet");
 }
 
@@ -621,4 +621,36 @@ fn only_a_disk_nothing_is_kept_from_drops_the_guests_flushes() {
             disk_drive(&run)
         );
     }
+}
+
+/// QEMU guesses a disc's format from its first bytes unless told, and a disc is read as it is, so
+/// every drive with a disc in it is raw. An empty tray has nothing to name a format for.
+#[test]
+fn every_disc_is_read_as_raw() {
+    let install = UbuntuInstall {
+        iso: "/iso/ubuntu.iso".into(),
+        seed: "/m/seed/cidata.iso".into(),
+        kernel: "/m/boot/vmlinuz".into(),
+        initrd: "/m/boot/initrd".into(),
+    };
+    let boots = [
+        (plain_machine(), Boot::Plain { iso: "/iso/plain.iso".into() }),
+        (windows(), Boot::Install { iso: "/iso/win.iso".into(), answer: "/m/answer.iso".into() }),
+        (windows(), Boot::Gpu),
+        (windows(), Boot::UbuntuInstall(install)),
+    ];
+    let mut discs = 0;
+    for (machine, boot) in boots {
+        let (_scratch, mut plan) = plan(&machine, boot);
+        plan.driver_disc = Some("/m/driver.iso".into());
+        for word in plan.qemu_arguments().iter().filter(|word| word.contains("media=cdrom")) {
+            if word.contains("file=") {
+                discs += 1;
+                assert!(word.split(',').any(|part| part == "format=raw"), "{word}");
+            } else {
+                assert!(!word.contains("format="), "{word}");
+            }
+        }
+    }
+    assert_eq!(discs, 6, "the plain disc, the install's two, the driver disc, Ubuntu's two");
 }

@@ -165,10 +165,12 @@ impl VmPlan {
         ])
     }
 
+    /// A disc is raw: QEMU is told so, rather than guessing from its first bytes. An empty tray has no
+    /// format to name.
     fn cdrom(id: &str, file: &str) -> String {
         match file {
             "" => format!("if=none,id={id},media=cdrom,readonly=on"),
-            _ => format!("if=none,id={id},media=cdrom,readonly=on,file={}", qemu_value(file)),
+            _ => format!("if=none,id={id},format=raw,media=cdrom,readonly=on,file={}", qemu_value(file)),
         }
     }
 

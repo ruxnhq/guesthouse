@@ -71,7 +71,7 @@ function Test-CtlWords {
         if ($word -cnotmatch '\A[0-9a-z-]+\z') { return $false }
     }
     $fp = '[0-9a-f]{64}'
-    $grammar = "\A(status|pair (on|off|accept|decline)|revoke $fp|device $fp (allow (clipboard|files|sound|mic|camera) (on|off)|view-only (on|off))|allow (clipboard|files) (on|off)|set updates off|sharing on)\z"
+    $grammar = "\A(status|pair (on|off)|pair (accept|decline) $fp|revoke $fp|device $fp (allow (clipboard|files|sound|mic|camera) (on|off)|view-only (on|off))|allow (clipboard|files) (on|off)|set updates off|sharing on)\z"
     return ($Words -join ' ') -cmatch $grammar
 }
 
@@ -148,7 +148,25 @@ function Write-CtlLines {
     }
 }
 
-# Answers $Line if it is a request: true when it was one. remoteman's host is given 10 s, and the
+# remoteman's host answers whoever waits on a plain `pair accept` or `pair decline`, so the device
+# named is read from the host's status straight before, and only when it is the one waiting is the
+# answer sent. Otherwise nothing is run and the request is answered "another device is waiting now".
+function Invoke-CtlAnswer {
+    param([string]$Program, [string]$Answer, [string]$Fingerprint, [int]$Milliseconds)
+    $status = Invoke-Ctl -Program $Program -Arguments @('ctl', '--port', '7791', 'status') -Milliseconds $Milliseconds
+    if ($status.Failure) { return $status }
+    $waiting = $null
+    $said = @([System.Text.Encoding]::UTF8.GetString($status.Bytes) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_.StartsWith('{') })
+    if ($said.Count -gt 0) {
+        try { $pending = ($said[0] | ConvertFrom-Json).pending; if ($pending) { $waiting = [string]$pending.fingerprint } } catch { }
+    }
+    if (-not $waiting -or $waiting.ToLowerInvariant() -cne $Fingerprint) {
+        return [pscustomobject]@{ Failure = $null; Code = 1; Bytes = [System.Text.Encoding]::UTF8.GetBytes('another device is waiting now') }
+    }
+    return Invoke-Ctl -Program $Program -Arguments @('ctl', '--port', '7791', 'pair', $Answer) -Milliseconds $Milliseconds
+}
+
+# Answers $Line if it is a request: true when it was one. remoteman's host is given 10 s in all, and the
 # host waits longer than that for the answer.
 function Receive-CtlLine {
     param([string]$Line, $Port, $Lock, [string]$Program)
@@ -157,7 +175,11 @@ function Receive-CtlLine {
     if (-not $request.Valid) {
         $lines = @("guesthouse: ctl failed $($request.Id) refused")
     } else {
-        $ran = Invoke-Ctl -Program $Program -Arguments (@('ctl', '--port', '7791') + $request.Words) -Milliseconds 10000
+        if ($request.Words[0] -ceq 'pair' -and $request.Words.Count -eq 3) {
+            $ran = Invoke-CtlAnswer -Program $Program -Answer $request.Words[1] -Fingerprint $request.Words[2] -Milliseconds 5000
+        } else {
+            $ran = Invoke-Ctl -Program $Program -Arguments (@('ctl', '--port', '7791') + $request.Words) -Milliseconds 10000
+        }
         if ($ran.Failure) {
             $lines = @("guesthouse: ctl failed $($request.Id) $($ran.Failure)")
         } else {
@@ -171,7 +193,7 @@ function Receive-CtlLine {
 # remoteman's host's program, where its installer puts it (screen.ps1 has the same).
 $ctlHost = 'C:\Program Files\remoteman host\remoteman-host.exe'
 # The channel's functions as text, for the listener's thread, which starts with none of this script's.
-$ctlCode = (('Test-CtlWords', 'Read-CtlRequest', 'Get-CtlAnswerLines', 'Invoke-Ctl', 'Write-CtlLines', 'Receive-CtlLine') |
+$ctlCode = (('Test-CtlWords', 'Read-CtlRequest', 'Get-CtlAnswerLines', 'Invoke-Ctl', 'Invoke-CtlAnswer', 'Write-CtlLines', 'Receive-CtlLine') |
     ForEach-Object { "function $_ {$((Get-Item -LiteralPath "function:$_").Definition)}" }) -join "`n"
 # ctl channel: end
 
@@ -228,6 +250,132 @@ if ($smi) {
 
 foreach ($address in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue) {
     if ($address.IPAddress -ne '127.0.0.1') { Send-Line "address: $($address.IPAddress)" }
+}
+
+# Who may reach the ports Guesthouse lets in here, Remote Desktop's and the screen's: this PC alone.
+# The host writes hosts.txt before each start: the network the machine is on, shared or bridged,
+# then this PC's addresses, a line each. On the shared network this PC is the guest's default gateway
+# too, and that is the address its port forwards reach the guest from; the host may not know it, as
+# Windows makes that network's adapter as the machine starts. With no file, a network it doesn't
+# know or no address, nobody is let in.
+$hostsFile = 'C:\Guesthouse\hosts.txt'
+
+function Get-HostAddresses([string]$File, [string[]]$Gateways) {
+    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return @() }
+    $lines = @(Get-Content -LiteralPath $File | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($lines.Count -eq 0) { return @() }
+    $address = '^\d{1,3}(\.\d{1,3}){3}$'
+    $allowed = @($lines | Select-Object -Skip 1 | Where-Object { $_ -match $address })
+    switch ($lines[0]) {
+        'shared' { $allowed += @($Gateways | Where-Object { $_ -match $address -and $_ -ne '0.0.0.0' }) }
+        'bridged' { }
+        default { return @() }
+    }
+    return @($allowed | Select-Object -Unique)
+}
+
+# Who may reach Remote Desktop: $Allowed, and on a bridged network the rest of the network the guest
+# is on too, as there other devices reach it directly rather than through a forward.
+function Get-DesktopAddresses([string]$File, [string[]]$Allowed) {
+    $Allowed = @($Allowed | Where-Object { $_ })
+    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return $Allowed }
+    $first = @(Get-Content -LiteralPath $File | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 1)
+    if ($first.Count -and $first[0] -eq 'bridged') { return @($Allowed + 'LocalSubnet') }
+    return $Allowed
+}
+
+# The guest's default gateways. When it has a network adapter and no gateway yet, as its address
+# can come late, it waits up to $Seconds for one.
+function Get-Gateways([int]$Seconds) {
+    for ($waited = 0; ; $waited += 2) {
+        $found = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.NextHop } | Where-Object { $_ -and $_ -ne '0.0.0.0' })
+        if ($found.Count -or $waited -ge $Seconds -or -not @(Get-NetAdapter -ErrorAction SilentlyContinue).Count) {
+            return $found
+        }
+        Start-Sleep -Seconds 2
+    }
+}
+
+# Makes the inbound rule $Name, or puts it right, so it lets $Protocol port $Port in from $Allowed
+# alone, on every profile. It is made with its addresses, never open first. With no address the rule
+# is off, and a rule that can't be set is turned off. Says what it did.
+function Set-HostRule([string]$Name, [string]$Protocol, [int]$Port, [string[]]$Allowed) {
+    $Allowed = @($Allowed | Where-Object { $_ })
+    try {
+        $there = @(Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue).Count -gt 0
+        if ($Allowed.Count -eq 0) {
+            if ($there) { Disable-NetFirewallRule -DisplayName $Name -ErrorAction Stop }
+            return "$Name is off, as no address of this PC's is known"
+        }
+        if ($there) {
+            Set-NetFirewallRule -DisplayName $Name -Direction Inbound -Action Allow -Protocol $Protocol -LocalPort $Port `
+                -RemoteAddress $Allowed -Profile Any -Enabled True -ErrorAction Stop
+        } else {
+            New-NetFirewallRule -DisplayName $Name -Direction Inbound -Action Allow -Protocol $Protocol -LocalPort $Port `
+                -RemoteAddress $Allowed -Profile Any -Enabled True -ErrorAction Stop | Out-Null
+        }
+        "$Name lets $Protocol $Port in from $($Allowed -join ', ')"
+    } catch {
+        $why = $_.Exception.Message
+        try {
+            if (@(Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue).Count) {
+                Disable-NetFirewallRule -DisplayName $Name -ErrorAction Stop
+            }
+            "$Name is off, as it couldn't be set: $why"
+        } catch {
+            "$Name couldn't be set or turned off: $why; $($_.Exception.Message)"
+        }
+    }
+}
+
+# Lets only $Allowed in by the rules called $Name that another program makes, as remoteman's
+# installer does. With no address, or when they can't be set, they are turned off.
+function Limit-HostRule([string]$Name, [string[]]$Allowed) {
+    $Allowed = @($Allowed | Where-Object { $_ })
+    if (-not @(Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue).Count) { return "$Name isn't there" }
+    try {
+        if ($Allowed.Count -eq 0) { throw "no address of this PC's is known" }
+        Set-NetFirewallRule -DisplayName $Name -RemoteAddress $Allowed -ErrorAction Stop
+        "$Name lets in only $($Allowed -join ', ')"
+    } catch {
+        $why = $_.Exception.Message
+        try {
+            Disable-NetFirewallRule -DisplayName $Name -ErrorAction Stop
+            "$Name is off: $why"
+        } catch {
+            "$Name couldn't be set or turned off: $why; $($_.Exception.Message)"
+        }
+    }
+}
+
+# Remote Desktop, which SetupComplete.cmd turns on, by Guesthouse's own rule for TCP 3389 from the
+# addresses Get-DesktopAddresses gives. Windows' own rules for it, which let every address in, are turned off once, found by
+# their group's resource name, which is the same in every language. $Note says that was done, so one
+# turned on again by hand later is left as it is. A group Windows doesn't have counts as done; any
+# other failure to read it is tried again at the next start.
+function Set-RemoteDesktop([string[]]$Allowed, [string]$Rule, [string]$Note) {
+    if (-not (Test-Path -LiteralPath $Note)) {
+        $group = '@FirewallAPI.dll,-28752'
+        try {
+            $read = @(Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue -ErrorVariable missed)
+            $failed = @($missed | Where-Object { $_.CategoryInfo.Category -ne 'ObjectNotFound' })
+            if ($failed.Count) { throw $failed[0] }
+            $on = @($read | Where-Object { $_.Enabled -eq 'True' })
+            if ($on.Count) { Disable-NetFirewallRule -Group $group -ErrorAction Stop }
+            Set-Content -LiteralPath $Note -Value "Windows' own rules turned off" -Encoding ascii
+            "Windows' own rules are off ($($on.Count) were on)"
+        } catch {
+            "Windows' own rules couldn't be turned off: $($_.Exception.Message)"
+        }
+    }
+    Set-HostRule $Rule 'TCP' 3389 $Allowed
+}
+
+$hostAddresses = @(Get-HostAddresses $hostsFile (Get-Gateways 30))
+$desktopAddresses = @(Get-DesktopAddresses $hostsFile $hostAddresses)
+foreach ($said in @(Set-RemoteDesktop $desktopAddresses 'Guesthouse Remote Desktop' 'C:\Guesthouse\remote-desktop.txt')) {
+    Send-Line "remote desktop: $said"
 }
 
 # The guest's clock starts out twelve hours behind the host's: its hours are read as if the clock

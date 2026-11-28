@@ -5,6 +5,7 @@ use super::qemu_jail::{GLOBAL_SOCKET, PID_FILE, TPM_SOCKET, VGPU_SOCKET};
 use super::{Boot, DISPLAY_SOCKET, Sound, VmPlan};
 use crate::firmware::format_of;
 use crate::guest_memory::WINDOW_GIB;
+use crate::share::Access;
 use crate::text::qemu_value;
 use guesthouse_daemon::guest_memory::window_base;
 use guesthouse_daemon::handover::Part;
@@ -304,12 +305,20 @@ impl VmPlan {
         command
     }
 
-    /// What QEMU needs in its environment: the share's program finds its folder there. A jailed QEMU
+    /// What QEMU needs in its environment: the share's program finds its folder, key and access there,
+    /// out of QEMU's command line, which other users of the PC can read. A jailed QEMU
     /// gets this and no more, and the rest of the app's is cleared: see [`Self::clears_environment`].
     pub fn qemu_environment(&self) -> Vec<(String, String)> {
         let mut environment =
             self.jail.as_ref().map(|jail| self.jailed_environment(jail)).unwrap_or_default();
-        environment.extend(self.share.iter().map(|folder| ("SHARE".to_owned(), folder.clone())));
+        if let Some(folder) = &self.share {
+            let access = if self.share_read_only { Access::ReadOnly } else { Access::ReadWrite };
+            environment.extend([
+                ("SHARE".to_owned(), folder.clone()),
+                ("SHARE_KEY".to_owned(), self.share_key.clone()),
+                ("SHARE_ACCESS".to_owned(), access.word().to_owned()),
+            ]);
+        }
         environment.extend(self.amd_environment());
         environment.extend(self.macos_environment());
         environment.extend(self.android_environment());

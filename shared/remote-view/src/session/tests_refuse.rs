@@ -85,7 +85,7 @@ fn a_polled_pairing_sends_and_reads_the_clock_as_it_always_did() {
             "pair on",
             "status",
             "status",
-            "pair accept",
+            format!("pair accept {PHONE}").as_str(),
             "status",
             format!("device {PHONE} allow clipboard off").as_str(),
             format!("device {PHONE} allow files off").as_str(),

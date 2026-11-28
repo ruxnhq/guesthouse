@@ -76,6 +76,10 @@ pub struct Settings {
     /// the service starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_gb: Option<u64>,
+    /// The account, as a SID, of the user whose machine it is: the one who made it. A machine from
+    /// before this has none until a user takes it (see `requests::owners`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 fn on() -> bool {
@@ -103,6 +107,7 @@ impl Settings {
             nested_virtualization: false,
             ssh_port: None,
             size_gb: None,
+            owner: None,
         }
     }
 }

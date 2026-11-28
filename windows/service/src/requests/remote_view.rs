@@ -23,9 +23,7 @@ use guesthouse_control::Event as MachineEvent;
 use guesthouse_control::{Answer, NetworkMode};
 use guesthouse_host_windows::guest_ctl::GuestCtl;
 use guesthouse_host_windows::machine::Guest;
-use guesthouse_host_windows::network::{
-    Protocol, parse_view_rule_name, usable_guest_address, view_rule_name,
-};
+use guesthouse_host_windows::network::{Protocol, parse_view_rule_name, view_rule_name};
 use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::screen::{self, state_beside};
 use guesthouse_relay::{Lan, LanSettings, ShareState as RelayState};
@@ -450,11 +448,8 @@ impl<W: Work> Service<W> {
             return Err(standing(ShareState::Starting, None));
         }
         let said = said.ok_or_else(|| standing(ShareState::Starting, None))?;
-        let guest = usable_guest_address(&said).ok_or_else(|| {
-            standing(
-                ShareState::Failed,
-                Some(format!("The guest's address {said:?} isn't one other devices can be passed on to.")),
-            )
+        let guest = self.guest_address(name, &said).map_err(|reason| {
+            standing(ShareState::Failed, Some(format!("Other devices aren't passed on to it: {reason}.")))
         })?;
         // A bridged guest lets in only the addresses this PC had as it started. One this PC has
         // taken since, as a new lease or another network gives, is let in from its next start.

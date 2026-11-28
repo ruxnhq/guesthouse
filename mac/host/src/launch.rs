@@ -14,6 +14,7 @@
 //! scale its desktop should draw at, as a firmware file the guest reads (`SCALE_FILE`). A
 //! Windows machine's line is run.sh's, as before.
 
+use guesthouse_basics::text::qemu_value;
 use std::path::{Path, PathBuf};
 
 /// The modes the device offers when a machine names none, as in run.sh.
@@ -26,6 +27,9 @@ pub const LINUX: &str = "linux";
 /// firmware has no use for booting from the network, and QEMU then needs no `efi-virtio.rom`
 /// from its data folder, which a QEMU copied out of its build folder does not find.
 pub const NETWORK_DEVICE: &str = "virtio-net-pci,netdev=net,romfile=";
+/// QEMU's own NAT, with the Mac's loopback out of the guest's reach: 10.0.2.2 leads to no service on
+/// it. `host-loopback=off` is in qemu/mac/patches/0007-host-loopback.patch.
+pub const NETWORK: &str = "user,id=net,host-loopback=off";
 
 /// The firmware file (QEMU's `-fw_cfg`) a Linux guest reads its scale from: `1` or `2`.
 pub const SCALE_FILE: &str = "opt/com.ruxn.guesthouse/scale";
@@ -162,6 +166,8 @@ pub fn qemu_args(launch: &Launch) -> Vec<String> {
     let mut args = Vec::new();
     let mut add = |items: &[&str]| args.extend(items.iter().map(|item| item.to_string()));
     let path = |path: &Path| path.display().to_string();
+    // A path inside one of QEMU's `key=value,...` options, where a comma would end it.
+    let value = |path: &Path| qemu_value(&path.display().to_string());
 
     if launch.graphics == Graphics::Guarded {
         // Shared guest memory, which the graphics process maps too. run.sh puts these first,
@@ -172,15 +178,16 @@ pub fn qemu_args(launch: &Launch) -> Vec<String> {
     add(&["-M", "virt", "-accel", "hvf", "-cpu", "host"]);
     add(&["-m", &launch.memory_mb.to_string()]);
     add(&["-smp", &launch.cores.to_string()]);
-    add(&["-drive", &format!("if=pflash,format=raw,readonly=on,file={}", path(&launch.firmware_code))]);
-    add(&["-drive", &format!("if=pflash,format=raw,file={}", path(&launch.firmware_vars))]);
+    add(&["-drive", &format!("if=pflash,format=raw,readonly=on,file={}", value(&launch.firmware_code))]);
+    add(&["-drive", &format!("if=pflash,format=raw,file={}", value(&launch.firmware_vars))]);
     add(&["-display", "none"]);
-    add(&["-qmp", &format!("unix:{},server,nowait", path(&launch.control_socket))]);
+    add(&["-qmp", &format!("unix:{},server,nowait", value(&launch.control_socket))]);
+    // QEMU takes all after `file:` as the path, commas too.
     add(&["-serial", &format!("file:{}", path(&launch.run_dir.join("serial.log")))]);
     // Only a Linux machine has a network, and its scale as a file for the guest to read.
     let linux = launch.kind == LINUX;
     if linux {
-        add(&["-netdev", "user,id=net", "-device", NETWORK_DEVICE]);
+        add(&["-netdev", NETWORK, "-device", NETWORK_DEVICE]);
     } else {
         add(&["-nic", "none"]);
     }
@@ -189,18 +196,18 @@ pub fn qemu_args(launch: &Launch) -> Vec<String> {
     if linux {
         add(&["-fw_cfg", &format!("name={SCALE_FILE},string={}", launch.scale)]);
         if let Some(keyboard) = &launch.keyboard {
-            add(&["-fw_cfg", &format!("name={KEYBOARD_FILE},string={keyboard}")]);
+            add(&["-fw_cfg", &format!("name={KEYBOARD_FILE},string={}", qemu_value(keyboard))]);
         }
     }
     add(&["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd", "-device", "usb-tablet"]);
-    add(&["-drive", &format!("if=none,id=hd,format=raw,file={},discard=unmap", path(&launch.disk))]);
+    add(&["-drive", &format!("if=none,id=hd,format=raw,file={},discard=unmap", value(&launch.disk))]);
     add(&["-device", "nvme,drive=hd,serial=win0,bootindex=1"]);
     // No ramfb: Windows draws into the PV device's own framebuffer.
     // The installer boots first, as run.sh's WIN_ISO does; the answers are a second disc.
     if let Some(installer) = &launch.installer {
         add(&[
             "-drive",
-            &format!("if=none,id=cd,format=raw,media=cdrom,readonly=on,file={}", path(installer)),
+            &format!("if=none,id=cd,format=raw,media=cdrom,readonly=on,file={}", value(installer)),
         ]);
         add(&["-device", "usb-storage,drive=cd,bootindex=0"]);
     }
@@ -212,18 +219,18 @@ pub fn qemu_args(launch: &Launch) -> Vec<String> {
     if let Some(answers) = &launch.answer_disc {
         add(&[
             "-drive",
-            &format!("if=none,id=answers,format=raw,media=cdrom,readonly=on,file={}", path(answers)),
+            &format!("if=none,id=answers,format=raw,media=cdrom,readonly=on,file={}", value(answers)),
         ]);
         add(&["-device", "usb-storage,drive=answers"]);
     }
     if let Some(stick) = &launch.stick {
-        add(&["-drive", &format!("if=none,id=stick,format=raw,file={}", path(stick))]);
+        add(&["-drive", &format!("if=none,id=stick,format=raw,file={}", value(stick))]);
         add(&["-device", "usb-storage,drive=stick,removable=on"]);
     }
-    add(&["-qmp", &format!("unix:{},server,nowait", path(&launch.input_socket))]);
+    add(&["-qmp", &format!("unix:{},server,nowait", value(&launch.input_socket))]);
     // Always there, so the screen can be shared with a machine that is already running. With
     // nobody connected it costs nothing.
-    add(&["-qmp", &format!("unix:{},server,nowait", path(&launch.remote_socket))]);
+    add(&["-qmp", &format!("unix:{},server,nowait", value(&launch.remote_socket))]);
     match launch.graphics {
         Graphics::Qemu => add(&["-device", &graphics_device(launch)]),
         Graphics::Guarded => add(&["-device", &forwarding_device(launch)]),
@@ -249,9 +256,10 @@ pub fn host_args(launch: &Launch) -> Vec<String> {
 /// QEMU's end of the guarded path: it forwards the device's registers and interrupts to the
 /// graphics process, whose socket it names.
 fn forwarding_device(launch: &Launch) -> String {
-    let mut device = format!("pvg-fwd,id=pvg,socket={}", launch.host_socket.display());
+    let value = |path: &Path| qemu_value(&path.display().to_string());
+    let mut device = format!("pvg-fwd,id=pvg,socket={}", value(&launch.host_socket));
     if let Some(rom) = &launch.option_rom {
-        device += &format!(",romfile={}", rom.display());
+        device += &format!(",romfile={}", value(rom));
     }
     device
 }
@@ -440,7 +448,8 @@ mod tests {
             let nic = want.iter().position(|arg| arg == "-nic").unwrap();
             assert_eq!(want[nic + 1], "none");
             assert_eq!(want[nic + 2], "-rtc");
-            let network = ["-netdev", "user,id=net", "-device", "virtio-net-pci,netdev=net,romfile="];
+            let network =
+                ["-netdev", "user,id=net,host-loopback=off", "-device", "virtio-net-pci,netdev=net,romfile="];
             want.splice(nic..nic + 2, network.map(String::from));
             let rtc = want.iter().position(|arg| arg == "-rtc").unwrap();
             assert_eq!(want[rtc + 1], "base=localtime");
@@ -494,6 +503,59 @@ mod tests {
             ],
         );
         assert_eq!(got, want);
+    }
+
+    /// Every path in one of QEMU's `key=value,...` options has its commas doubled, so that a
+    /// file's name stays one value. The serial file's path is QEMU's as written.
+    #[test]
+    fn a_comma_in_a_path_stays_part_of_the_path() {
+        let folder = PathBuf::from("/m/a,b");
+        let at = |name: &str| folder.join(name);
+        let mut launch = Launch {
+            kind: LINUX.into(),
+            keyboard: Some("ch,fr".into()),
+            disk: at("win.img"),
+            firmware_code: at("code.fd"),
+            firmware_vars: at("vars.fd"),
+            stick: Some(at("stick.img")),
+            installer: Some(at("Windows 11, ARM.iso")),
+            answer_disc: Some(at("answers.iso")),
+            option_rom: Some(at("pvgfb.rom")),
+            run_dir: at("run"),
+            control_socket: at("qmp.sock"),
+            input_socket: at("input.sock"),
+            remote_socket: at("remote.sock"),
+            host_socket: at("host.sock"),
+            ..guarded()
+        };
+        let args = qemu_args(&launch);
+        let doubled = "/m/a,,b";
+        for (option, start) in [
+            ("-drive", "if=pflash,format=raw,readonly=on,file="),
+            ("-drive", "if=pflash,format=raw,file="),
+            ("-drive", "if=none,id=hd,format=raw,file="),
+            ("-drive", "if=none,id=answers,format=raw,media=cdrom,readonly=on,file="),
+            ("-drive", "if=none,id=stick,format=raw,file="),
+            ("-qmp", "unix:"),
+            ("-device", "pvg-fwd,id=pvg,socket="),
+        ] {
+            let found = args.windows(2).filter(|pair| pair[0] == option && pair[1].starts_with(start));
+            for pair in found {
+                assert!(pair[1].starts_with(&format!("{start}{doubled}/")), "{pair:?}");
+            }
+        }
+        let cd = "if=none,id=cd,format=raw,media=cdrom,readonly=on,file=/m/a,,b/Windows 11,, ARM.iso";
+        assert!(args.iter().any(|arg| arg == cd), "{args:?}");
+        assert!(args.iter().any(|arg| arg.ends_with(",romfile=/m/a,,b/pvgfb.rom")), "{args:?}");
+        assert!(
+            args.iter().any(|arg| arg == "name=opt/com.ruxn.guesthouse/keyboard,string=ch,,fr"),
+            "{args:?}"
+        );
+        assert!(args.iter().any(|arg| arg == "file:/m/a,b/run/serial.log"), "{args:?}");
+        // With QEMU's own device the ROM goes in JSON, which takes a comma as it is.
+        launch.graphics = Graphics::Qemu;
+        let device = qemu_args(&launch).last().cloned().unwrap_or_default();
+        assert!(device.contains(r#""romfile":"/m/a,b/pvgfb.rom""#), "{device}");
     }
 
     /// run.sh's WIN_ISO then WIN_STICK, after the disk: the installer boots first, and the answers

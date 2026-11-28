@@ -29,7 +29,7 @@ pub trait MachineControl {
     fn start(&mut self, id: &str) -> Result<(), String>;
     /// Where the machine stands (`running`, `stopped`, `failed`, ...) and why, if it failed.
     fn machine_state(&mut self, id: &str) -> (String, Option<String>);
-    /// Everything the guest has said on its serial port so far.
+    /// What the guest has said on its serial port: all of it, or at least the last few MiB.
     fn serial(&mut self, id: &str) -> String;
     /// Presses the key `qcode` names (`spc`) in the guest, as a person at its keyboard would.
     fn press_key(&mut self, id: &str, qcode: &str) -> Result<(), String>;
@@ -382,7 +382,24 @@ impl RealSteps<'_> {
         }
     }
 
+    /// The system installed from the installer and the answers disc. However the step ends, the
+    /// disc is gone afterwards: the answers hold the account's password, nothing after this step
+    /// reads them, and doing the step again makes a new disc.
     fn install_system(&mut self, progress: Progress) -> Result<Ended, StepError> {
+        let ended = self.install_system_from_answers(progress);
+        self.forget_answers()?;
+        ended
+    }
+
+    /// Takes the answers disc out of the machine's file, and its file off the Mac.
+    fn forget_answers(&self) -> Result<(), StepError> {
+        let folder = self.folder();
+        set_keys(&folder, &[("answer_disc", None)])?;
+        let _ = fs::remove_file(folder.join("answers.iso"));
+        Ok(())
+    }
+
+    fn install_system_from_answers(&mut self, progress: Progress) -> Result<Ended, StepError> {
         self.start_installer()?;
         let guest = self.setup.guest;
         let id = self.setup.id.clone();
@@ -446,10 +463,8 @@ impl RealSteps<'_> {
 
     fn first_start(&mut self, info: &InstallInfo, progress: Progress) -> Result<Ended, StepError> {
         let folder = self.folder();
-        set_keys(&folder, &[("installer", None), ("answer_disc", None), ("stick", None)])?;
-        // The answers hold the account's password. Once the disc is no longer in the machine
-        // nothing needs it, so it does not stay on the Mac.
-        let _ = fs::remove_file(folder.join("answers.iso"));
+        set_keys(&folder, &[("installer", None), ("stick", None)])?;
+        self.forget_answers()?;
         match self.setup.guest {
             Guest::Windows => {
                 // The guest restarts itself after the driver; its next start says it came up.

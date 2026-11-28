@@ -12,6 +12,7 @@ use crate::launch::Launch;
 use crate::protocol::{CloseReason, DeviceInfo, Pending};
 use crate::store::{self, MACHINE_FILE};
 use guesthouse_basics::json_file::write_json;
+use guesthouse_remote_view_core::ctl;
 use guesthouse_remote_view_core::events::PairingEvent;
 use std::fs;
 use std::net::UdpSocket;
@@ -171,9 +172,11 @@ pub fn rmhost_line(words: &[String]) -> Result<String, String> {
             seconds.parse().map(pair_open_line).map_err(|_| format!("{seconds} is not a number of seconds."))
         }
         ["pair", "off"] => Ok(PAIR_CLOSE_LINE.to_string()),
-        ["pair", "accept" | "decline"] | ["revoke", _] | ["drop"] | ["device", ..] => {
-            Ok(words.join(" ") + "\n")
+        ["pair", "accept" | "decline", fingerprint] => {
+            let fingerprint = ctl::check_fingerprint(fingerprint)?;
+            Ok(format!("pair {} {fingerprint}\n", words[1]))
         }
+        ["revoke", _] | ["drop"] | ["device", ..] => Ok(words.join(" ") + "\n"),
         _ => Err(format!("rmhost has no line for `{}`.", words.join(" "))),
     }
 }

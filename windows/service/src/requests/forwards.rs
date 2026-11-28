@@ -71,16 +71,11 @@ impl<W: Work> Service<W> {
             }
             (settings.forwards.clone(), entry.run_address.clone()?)
         };
-        match usable_guest_address(&said) {
-            Some(address) => Some((address, forwards)),
-            None => {
+        match self.guest_address(name, &said) {
+            Ok(address) => Some((address, forwards)),
+            Err(reason) => {
                 if refused_address.as_deref() != Some(said.as_str()) {
-                    self.machines.tell(
-                        name,
-                        Event::Problem(format!(
-                            "The guest's address {said:?} isn't one a port can be forwarded to, so no forwards are made."
-                        )),
-                    );
+                    self.machines.tell(name, Event::Problem(format!("No port forwards are made: {reason}.")));
                     *refused_address = Some(said);
                 }
                 None

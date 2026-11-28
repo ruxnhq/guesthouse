@@ -31,7 +31,7 @@ mac/build/rmhost/rmhost serve -p -l 127.0.0.1:7791 &   # -q QMP_SOCKET for input
 mac/build/rmhost/viewcheck -o /tmp/view.hevc 127.0.0.1:7791 /tmp/vstate 6
 ```
 
-`rmhost serve` takes lines on its standard input: `pair open SECONDS`, `pair accept`, `pair decline`, `pair close`, `device FINGERPRINT allow KIND on|off`, `revoke FINGERPRINT` and `drop`. It says what happens on its output, one line each: `rmhost: pairing open until UNIX_SECONDS`, `rmhost: pairing pending JSON`, `rmhost: paired FINGERPRINT NAME` and `rmhost: pairing closed: REASON`. The app reads those lines.
+`rmhost serve` takes lines on its standard input: `pair open SECONDS`, `pair accept FINGERPRINT`, `pair decline FINGERPRINT` (answered only when the device waiting has that fingerprint), `pair close`, `device FINGERPRINT allow KIND on|off`, `revoke FINGERPRINT` and `drop`. It says what happens on its output, one line each: `rmhost: pairing open until UNIX_SECONDS`, `rmhost: pairing pending JSON`, `rmhost: paired FINGERPRINT NAME` and `rmhost: pairing closed: REASON`. The app reads those lines.
 
 ## Licence
 

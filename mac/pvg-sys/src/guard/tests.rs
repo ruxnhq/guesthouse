@@ -6,6 +6,8 @@ use super::{Effect, Guard, Pass, Refusal, Shadow, Step, What, Why};
 use crate::memory::GuestMemory;
 use crate::profile::{PAGE_BYTES, PAGE_SHIFT, Profile};
 
+mod rings;
+
 const MEMORY_AT: u64 = 0x4000_0000;
 const MEMORY_BYTES: u64 = 16 << 20;
 const ROOT_PAGE: u64 = MEMORY_AT + 0x10_0000;
@@ -62,6 +64,11 @@ struct Play {
     faulted: bool,
     /// Whether the device refuses the next command it is passed alone.
     fails: bool,
+    /// Where the device has stopped reading the first ring, or `None` while it reads all it is
+    /// told, as it does unless a refused command holds it.
+    read: Option<u32>,
+    /// The same for child rings, by id.
+    child_read: Vec<(u32, u32)>,
 }
 
 impl Play {
@@ -80,6 +87,8 @@ impl Play {
             refused: Vec::new(),
             faulted: false,
             fails: false,
+            read: None,
+            child_read: Vec::new(),
         }
     }
 
@@ -155,7 +164,8 @@ impl Play {
             other => panic!("a kick was judged {other:?}"),
         }
         loop {
-            let step = self.guard.next_step(&self.memory, target, self.faulted, &mut self.refused);
+            let read = self.read.unwrap_or(self.guard.ring.passed);
+            let step = self.guard.next_step(&self.memory, target, read, self.faulted, &mut self.refused);
             self.passed.push(step.upto);
             if let Some(effect) = step.effect.clone() {
                 // The device's word for a user task in its root page, written as the device does.
@@ -259,6 +269,15 @@ impl Play {
             self.put(CHILD_RING + page * PAGE_BYTES + at % PAGE_BYTES, &[word]);
         }
         self.put(ROOT_PAGE + 0x400 + u64::from(id - 1) * 20, &[position + words.len() as u32 * 4]);
+        self.wake_written(id)
+    }
+
+    /// Wakes a child ring whose descriptor the guest has written. The device's read position in
+    /// the host's descriptor is where it stopped, or all the guard passed.
+    fn wake_written(&mut self, id: u32) -> Result<(), Why> {
+        let stopped = self.child_read.iter().find(|&&(ring, _)| ring == id).map(|&(_, at)| at);
+        let read = stopped.or_else(|| self.guard.children.get(&id).map(|child| child.passed)).unwrap_or(0);
+        self.shadow.memory().set_word(self.child_descriptor(id) + 4, read);
         let wake = self.profile.registers.wake;
         match self.write(wake, id).map_err(|refusal| refusal.why)? {
             Pass::Wake => {}
@@ -281,7 +300,22 @@ impl Play {
         self.send(number, &[0, page(at)])
     }
 
+    /// A cursor's picture at this address of the kernel task, 32 by 32 where the length mapped
+    /// holds that and one pixel otherwise.
     fn glyph(&mut self, address: u64, mapped_length: u64) -> Vec<Step> {
+        let side = if mapped_length >= 32 * 128 { 32 } else { 1 };
+        self.glyph_rows(address, mapped_length, side * 4, side, side)
+    }
+
+    /// The same, with rows of `row_bytes` each.
+    fn glyph_rows(
+        &mut self,
+        address: u64,
+        mapped_length: u64,
+        row_bytes: u32,
+        width: u32,
+        height: u32,
+    ) -> Vec<Step> {
         let number = self.profile.commands.cursor_glyph.number;
         let words = [
             0,
@@ -291,7 +325,7 @@ impl Play {
             mapped_length as u32,
             (mapped_length >> 32) as u32,
         ];
-        self.send(number, &[words.as_slice(), &[128, 0, 32 | 32 << 16, 0, 0]].concat())
+        self.send(number, &[words.as_slice(), &[row_bytes, 0, width | height << 16, 0, 0]].concat())
     }
 
     fn mapper(&mut self, offset: u64, value: u64, written_now: u64) -> Result<(), Why> {
@@ -815,10 +849,16 @@ fn only_a_plain_picture_in_the_guest_s_own_pages_is_mapped() {
     play.describe(1920, 1080);
     assert_eq!(play.mapper_command(0, map, 1), map, "a driver's surface is passed as it is");
     assert_eq!(play.why(), None);
-    // Letting a mapping go, and a command the mapper doesn't know, are the mapper's to answer.
-    assert_eq!(play.mapper_command(1, 2, 1), 2);
-    assert_eq!(play.mapper_command(2, 7, 1), 7);
+    // Letting a mapping go is passed as it is. Any other number is one the mapper answers
+    // "unsupported" to.
+    assert_eq!(play.mapper_command(1, play.profile.mapper.unmap, 1), play.profile.mapper.unmap);
     assert_eq!(play.why(), None);
+    assert_eq!(play.mapper_command(2, 7, 1), unsupported);
+    assert_eq!(play.why(), Some(Why::UnknownCommand));
+    for number in [3, 0x100, u32::MAX] {
+        assert_eq!(play.mapper_command(2, number, 1), unsupported, "{number:#x}");
+        assert_eq!(play.why(), Some(Why::UnknownCommand));
+    }
 
     // One word of the description changed at a time, each to something a picture doesn't have.
     let changes: [(u64, u32); 12] = [
@@ -964,6 +1004,50 @@ fn an_early_picture_has_to_fit_its_block() {
     play.early(early.bytes, 0x12_C000).expect("640 by 480");
     play.guard.reset().expect("a reset");
     assert_eq!(play.early(early.mode, 480 << 16 | 640), Err(Why::EarlyIsOff));
+}
+
+#[test]
+fn an_early_block_never_gets_shorter_than_the_picture_shown_from_it() {
+    let mut play = Play::new();
+    let early = play.profile.registers.early.clone();
+    let (big, small) = (800 << 16 | 1280, 480 << 16 | 640);
+    let (big_bytes, small_bytes) = (0x3E_8000, 0x12_C000);
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    play.early(early.bytes, big_bytes).expect("1280 by 800");
+    assert_eq!(play.early(early.mode, big), Ok(Pass::AsItIs));
+    // The block as long as a smaller picture, with the larger still shown.
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    assert_eq!(play.early(early.bytes, PAGE_BYTES as u32), Err(Why::EarlyBlock));
+    // On again while on keeps the picture, as the device may.
+    play.early(early.on, 1).expect("on");
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    // Another page holds the block as long as it was.
+    let last_page = page(MEMORY_AT + MEMORY_BYTES) - 1;
+    assert_eq!(play.early(early.page, last_page), Err(Why::EarlyBlock));
+    assert_eq!(play.early(early.page, page(EARLY_BLOCK + PAGE_BYTES)), Ok(Pass::AsItIs));
+
+    // A driver's change to the smaller picture, in its order: on, page, bytes, depth, mode. The
+    // shorter block waits for the smaller picture, and the picture changes all the same.
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    play.early(early.depth, 32).expect("the depth");
+    assert_eq!(play.early(early.mode, small), Ok(Pass::AsItIs));
+    assert_eq!(play.early(early.bytes, small_bytes), Ok(Pass::AsItIs));
+    // And back to the larger one.
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    assert_eq!(play.early(early.bytes, big_bytes), Ok(Pass::AsItIs));
+    play.early(early.depth, 32).expect("the depth");
+    assert_eq!(play.early(early.mode, big), Ok(Pass::AsItIs));
+
+    // Off forgets the picture. Writes while off are not kept either.
+    play.early(early.on, 0).expect("off");
+    assert_eq!(play.early(early.page, page(EARLY_BLOCK)), Err(Why::EarlyIsOff));
+    play.early(early.on, 1).expect("on");
+    assert_eq!(play.early(early.mode, small), Err(Why::EarlyMode));
+    assert_eq!(play.early(early.bytes, PAGE_BYTES as u32), Ok(Pass::AsItIs));
 }
 
 // A program's work: user tasks and the commands that name them.
@@ -1114,7 +1198,7 @@ fn a_user_task_s_table_is_the_host_s_copy_and_names_only_the_guest_s_pages() {
 
     // The driver places a buffer and takes one away: the next command that names the task
     // brings the copy up to date, and one for another task does not.
-    play.put(USER_LEAF + 4, &[page(SURFACE), 0, page(SURFACE + PAGE_BYTES)]);
+    play.put(USER_LEAF + 4, &[page(SURFACE), shape.writable, page(SURFACE + PAGE_BYTES)]);
     play.run(4, &[], &[(0x4000, 8)]);
     assert_eq!(play.why(), Some(Why::NoSuchTask));
     assert_eq!(ours.word(leaf + 4), Some(0));
@@ -1356,7 +1440,8 @@ fn the_kernel_task_s_table_is_copied_for_the_device_entry_by_entry() {
     let mut play = Play::with_ring();
     let shape = play.profile.task.clone();
     // The glyph's page, a page that is not the guest's, and a page the host may write.
-    play.put(TASK_TABLE, &[page(GLYPH), page(OUTSIDE), page(GLYPH) | shape.writable]);
+    // Then an entry of no page with only the bit for writing, which names nothing.
+    play.put(TASK_TABLE, &[page(GLYPH), page(OUTSIDE), page(GLYPH) | shape.writable, shape.writable]);
     play.put(TASK_ROOT, &[page(TASK_TABLE), 1]);
     let define = play.profile.commands.define_task.number;
     let position = play.written;
@@ -1370,298 +1455,14 @@ fn the_kernel_task_s_table_is_copied_for_the_device_entry_by_entry() {
     assert_eq!(ours.word(play.shadow.kernel_root() + shape.depth_at), Some(1));
     let table = play.shadow.kernel_table();
     assert_eq!(
-        [ours.word(table), ours.word(table + 4), ours.word(table + 8)],
-        [Some(page(GLYPH)), Some(0), Some(page(GLYPH) | shape.writable)]
+        [ours.word(table), ours.word(table + 4), ours.word(table + 8), ours.word(table + 12)],
+        [Some(page(GLYPH)), Some(0), Some(page(GLYPH) | shape.writable), Some(0)]
     );
+    let task = play.guard.kernel_task.clone().expect("the task");
+    assert_eq!([0, 1, 2, 3].map(|page| task.maps(page * PAGE_BYTES, 1)), [true, false, true, false]);
     // What the device would have written into the guest's pages, written for it.
     assert_eq!(play.memory.word(ROOT_PAGE), Some(page(TASK_ROOT)));
     assert_eq!(play.memory.word64(TASK_ROOT + shape.length_at), Some(u64::from(TASK_BYTES)));
-}
-
-// Child rings.
-
-#[test]
-fn a_child_ring_s_commands_are_copied_and_judged_as_the_first_ring_s() {
-    let mut play = Play::with_ring();
-    play.define_user_task(1);
-    let position = play.written;
-    let steps = play.define_ring(1);
-    assert_eq!(play.refused, []);
-    assert!(matches!(
-        steps.last().and_then(|step| step.effect.clone()),
-        Some(Effect::DefineRing { id: 1, .. })
-    ));
-    assert_eq!(play.guest_ring_word(position), play.profile.commands.define_ring.number);
-
-    // The device's descriptor names the host's pages, in a row, and starts empty.
-    let ours = play.shadow.memory().clone();
-    let descriptor = play.child_descriptor(1);
-    let number = |address: u64| (address >> PAGE_SHIFT) as u32;
-    assert_eq!(ours.word(descriptor + 16), Some(number(play.shadow.child_list(1))));
-    assert_eq!(
-        ours.word(play.shadow.child_list(1) + 4),
-        Some(number(play.shadow.child_ring(1) + PAGE_BYTES))
-    );
-    assert_eq!(ours.word(descriptor), Some(0));
-
-    // A command that hands over a buffer, one this host doesn't pass, and one that does nothing.
-    let run = play.profile.commands.run_buffers.number;
-    let nothing = play.profile.commands.nothing.number;
-    let commands = [run, 48, 0, 1, 1, 1, 1, 2, 0x4000, 0, 0x274, 0, 61, 20, 0, 0, 0, nothing, 12, 0];
-    assert_eq!(play.wake(1, 0, &commands), Ok(()));
-    assert_eq!(play.why(), Some(Why::UnknownCommand));
-    assert_eq!(play.child_word(1, 0), run);
-    assert_eq!(play.child_word(1, 48), play.profile.commands.refused);
-    assert_eq!(play.child_word(1, 68), nothing);
-    assert_eq!(ours.word(descriptor), Some(80), "the device is told how far the guest has written");
-    // The guest's own pages are as the guest wrote them.
-    assert_eq!(play.memory.word(CHILD_RING + 48), Some(61));
-}
-
-#[test]
-fn a_child_ring_is_copied_across_its_pages_and_its_end() {
-    let mut play = Play::with_ring();
-    play.define_ring(3);
-    let nothing = play.profile.commands.nothing.number;
-    // One command of four pages less twelve bytes, so that the next lies across the ring's end.
-    let long = 0x1_0000 - 12;
-    let mut first = vec![nothing, long, 0];
-    first.resize(long as usize / 4, 0x1111_1111);
-    assert_eq!(play.wake(3, 0, &first), Ok(()));
-    assert_eq!(play.wake(3, long, &[nothing, 20, 0, 0x2222_2222, 0x3333_3333]), Ok(()));
-    assert_eq!(play.refused, []);
-    assert_eq!(play.child_word(3, 0x4000), 0x1111_1111);
-    assert_eq!(play.child_word(3, long + 8), 0);
-    // The ring's first page again, after the end.
-    assert_eq!(play.child_word(3, 0), 0x2222_2222);
-    assert_eq!(play.child_word(3, 4), 0x3333_3333);
-    assert_eq!(play.shadow.memory().word(play.child_descriptor(3)), Some(long + 20));
-}
-
-#[test]
-fn a_child_ring_takes_no_command_that_changes_what_the_guard_keeps() {
-    let mut play = Play::with_ring();
-    play.define_ring(1);
-    play.put(USER_ROOT, &[page(USER_TABLE), 1]);
-    let commands = play.profile.commands.clone();
-    assert_eq!(
-        play.wake(1, 0, &[commands.define_task.number, 28, 0, 2 << 1, TASK_BYTES, 0, page(USER_ROOT)]),
-        Ok(())
-    );
-    assert_eq!(play.why(), Some(Why::NotInAChildRing));
-    assert_eq!(play.wake(1, 28, &[commands.state_page.number, 20, 0, 0, page(STATE_PAGE)]), Ok(()));
-    assert_eq!(play.why(), Some(Why::NotInAChildRing));
-    assert_eq!(play.child_word(1, 28), commands.refused);
-    // And a task that was never defined is none in a child ring either.
-    assert_eq!(play.wake(1, 48, &[commands.run_buffers.number, 24, 0, 2, 0, 0]), Ok(()));
-    assert_eq!(play.why(), Some(Why::NoSuchTask));
-}
-
-#[test]
-fn a_child_ring_s_position_is_read_once_and_only_goes_on() {
-    let mut play = Play::with_ring();
-    play.define_ring(1);
-    let nothing = play.profile.commands.nothing.number;
-    assert_eq!(play.wake(1, 0, &[nothing, 12, 0, nothing, 12, 0]), Ok(()));
-    let descriptor = play.child_descriptor(1);
-    assert_eq!(play.shadow.memory().word(descriptor), Some(24));
-    // Back, and further on than the ring has room for.
-    assert_eq!(play.wake(1, 0, &[nothing, 12, 0]), Err(Why::PositionWentBack));
-    play.put(ROOT_PAGE + 0x400, &[24 + 0x1_0004]);
-    let wake = play.profile.registers.wake;
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    let wide = play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why);
-    assert_eq!(wide, Err(Why::PositionTooFar));
-    assert_eq!(play.shadow.memory().word(descriptor), Some(24), "the device's position stands");
-    // A length that is no command's: the device is told of what lies before it.
-    assert_eq!(play.wake(1, 24, &[nothing, 12, 0, nothing, 7, 0]), Ok(()));
-    assert_eq!(play.why(), Some(Why::BrokenCommand));
-    assert_eq!(play.shadow.memory().word(descriptor), Some(36));
-}
-
-#[test]
-fn a_child_ring_has_an_id_a_cell_and_pages_in_guest_memory_and_starts_empty() {
-    let mut play = Play::with_ring();
-    let define = play.profile.commands.define_ring.number;
-    let wake = play.profile.registers.wake;
-    let resume = play.profile.registers.resume_child;
-    for id in [0, 64] {
-        play.send(define, &[id]);
-        assert_eq!(play.why(), Some(Why::RingId));
-    }
-    assert_eq!(play.write(wake, 1).map_err(|refusal| refusal.why), Err(Why::NoSuchRing));
-    assert_eq!(play.write(resume, 1).map_err(|refusal| refusal.why), Err(Why::NoSuchRing));
-    assert_eq!(play.write(resume, 0).map_err(|refusal| refusal.why), Err(Why::NoSuchRing));
-
-    let descriptor = ROOT_PAGE + 0x400 + 20;
-    play.put(CHILD_LIST, &[page(CHILD_RING); 4]);
-    let tries = [
-        // Commands that lie before the written position, the first ring's cell, a cell past the
-        // last, a bit above the index, a list outside the guest's memory.
-        ([12, 0, u32::MAX, 2, page(CHILD_LIST)], Why::ChildRingLayout),
-        ([0, 0, u32::MAX, 0, page(CHILD_LIST)], Why::ChildRingLayout),
-        ([0, 0, u32::MAX, 64, page(CHILD_LIST)], Why::ChildRingLayout),
-        ([0, 0, u32::MAX, 2 | 1 << 16, page(CHILD_LIST)], Why::ChildRingLayout),
-        ([0, 0, u32::MAX, 2, page(OUTSIDE)], Why::NotGuestMemory),
-    ];
-    for (words, why) in tries {
-        play.put(descriptor, &words);
-        play.send(define, &[2]);
-        assert_eq!(play.why(), Some(why), "{words:x?}");
-    }
-    // A page of the ring outside the guest's memory.
-    play.put(descriptor, &[0, 0, u32::MAX, 2, page(CHILD_LIST)]);
-    play.put(CHILD_LIST + 8, &[page(OUTSIDE)]);
-    play.send(define, &[2]);
-    assert_eq!(play.why(), Some(Why::NotGuestMemory));
-
-    play.define_ring(2);
-    assert_eq!(play.refused, []);
-    play.define_ring(2);
-    assert_eq!(play.why(), Some(Why::RingExists));
-    assert_eq!(play.write(resume, 2), Ok(Pass::AsItIs));
-    // Deleted, it is woken no more, and can be defined again.
-    let delete = play.profile.commands.delete_ring.number;
-    play.send(delete, &[2]);
-    assert_eq!(play.refused, []);
-    assert_eq!(play.write(wake, 2).map_err(|refusal| refusal.why), Err(Why::NoSuchRing));
-    play.send(delete, &[2]);
-    assert_eq!(play.why(), Some(Why::NoSuchRing));
-    play.define_ring(2);
-    assert_eq!(play.refused, []);
-}
-
-#[test]
-fn what_the_device_writes_of_a_child_ring_reaches_the_guest_s_descriptor() {
-    let mut play = Play::with_ring();
-    play.define_ring(5);
-    let (ours, theirs) = (play.child_descriptor(5), ROOT_PAGE + 0x400 + 4 * 20);
-    let mirror = play.guard.mirror();
-    let mut mirror = mirror.lock().expect("the mirror");
-    mirror.to_guest();
-    assert_eq!(play.memory.word(theirs + 12), Some(5 | 1 << 16), "the bit that says it is defined");
-    // The device has read 24 bytes, refused the command at 12, and stamped the ring's cell.
-    let device = play.shadow.memory();
-    device.set_word(ours + 4, 24);
-    device.set_word(ours + 8, 12);
-    device.set_word(play.shadow.ring() + 5 * 4, 0x77);
-    mirror.to_guest();
-    assert_eq!(play.memory.word(theirs + 4), Some(24));
-    assert_eq!(play.memory.word(theirs + 8), Some(12));
-    assert_eq!(play.memory.word(RING + 5 * 4), Some(0x77));
-    assert_eq!(play.memory.word(theirs + 16), Some(page(CHILD_LIST)), "the guest's list stays the guest's");
-}
-
-#[test]
-fn a_cursor_s_picture_is_read_for_the_host_as_the_command_names_it() {
-    let mut play = Play::with_ring();
-    play.define_task();
-    // Rows of 128 bytes for 32 pixels: the second pixel of the third row.
-    play.put(GLYPH + 2 * 128 + 4, &[0xFF11_2233]);
-    play.glyph(0, 32 * 128);
-    let glyph = play.guard.take_glyph().expect("a picture");
-    assert_eq!((glyph.width, glyph.height, glyph.hot_x, glyph.hot_y), (32, 32, 0, 0));
-    assert_eq!(glyph.pixels.len(), 32 * 32 * 4);
-    assert_eq!(glyph.pixels[(2 * 32 + 1) * 4..][..4], 0xFF11_2233u32.to_le_bytes());
-    assert_eq!(play.guard.take_glyph(), None, "taken once");
-    // A picture that its memory doesn't hold is a command for the device and no picture here.
-    play.glyph(0, 31 * 128);
-    assert_eq!(play.refused, []);
-    assert_eq!(play.guard.take_glyph(), None);
-}
-
-#[test]
-fn the_mapper_is_told_the_host_s_ring_and_table_and_the_guest_reads_its_own() {
-    let mut play = Play::new();
-    let mapper = play.profile.mapper.clone();
-    assert_eq!(play.mapper_told(mapper.ring, MAPPER_RING, 0), Ok(play.shadow.mapper_ring()));
-    assert_eq!(play.mapper_told(mapper.slots, mapper.slots_unit, 0), Ok(mapper.slots_unit));
-    assert_eq!(play.mapper_told(mapper.table, MAPPER_TABLE, 0), Ok(play.shadow.mapper_table()));
-    assert_eq!(play.guard.mapper_reads_as(mapper.ring), Some(MAPPER_RING));
-    assert_eq!(play.guard.mapper_reads_as(mapper.table), Some(MAPPER_TABLE));
-    assert_eq!(play.guard.mapper_reads_as(mapper.done), None);
-    // The host's pages are the mapper's alone: neither the guest's memory nor the device's.
-    let host = play.shadow.mapper_memory();
-    assert!(!play.memory.holds(play.shadow.mapper_ring(), PAGE_BYTES));
-    assert!(!play.shadow.memory().holds(play.shadow.mapper_ring(), PAGE_BYTES));
-    assert!(host.holds(play.shadow.mapper_ring(), mapper.most_slots * mapper.slot_bytes));
-    assert!(host.holds(play.shadow.page_list(mapper.most_id), PAGE_BYTES));
-    // The host's table names the host's pages of descriptions, whatever the guest's names.
-    let entry = host.word(play.shadow.mapper_table() + 4 * 255);
-    assert_eq!(entry, Some(mapper_page(play.shadow.mapper_descriptions(255))));
-}
-
-#[test]
-fn what_the_guest_writes_after_the_mapper_s_kick_is_not_what_the_mapper_reads() {
-    let mut play = Play::new();
-    let shape = play.profile.mapper.clone();
-    play.start_mapper();
-    play.describe(64, 64);
-    assert_eq!(play.mapper_command(0, shape.map, 1), shape.map);
-    assert_eq!(play.why(), None);
-    let host = play.shadow.mapper_memory().clone();
-    let description = play.shadow.mapper_descriptions(0) + 0x200;
-    let list = play.shadow.page_list(1);
-
-    // The mapper's copy names the host's page list, which names the guest's surface.
-    assert_eq!(host.word(description), Some(mapper_page(list)));
-    assert_eq!(host.word(description + 4), Some(u32::from_be_bytes(*b"BGRA")));
-    assert_eq!(host.word(description + 0x14), Some(64 << 8 | 1));
-    assert_eq!(host.word(list), Some(mapper_page(SURFACE)));
-    assert_eq!(host.word(list + 4), Some(0), "64 by 64 is one page");
-
-    // The other processor writes over the description and the list that were judged.
-    play.put(DESCRIPTION, &[mapper_page(SURFACE_LIST) & !1]);
-    play.put(DESCRIPTION + 0x14, &[16384 << 8 | 1]);
-    play.put(SURFACE_LIST, &[mapper_page(OUTSIDE)]);
-    play.put(MAPPER_TABLE, &[mapper_page(OUTSIDE)]);
-    play.put(MAPPER_RING, &[7]);
-    assert_eq!(host.word(description), Some(mapper_page(list)));
-    assert_eq!(host.word(description + 0x14), Some(64 << 8 | 1));
-    assert_eq!(host.word(list), Some(mapper_page(SURFACE)));
-    assert_eq!(host.word(play.shadow.mapper_ring()), Some(shape.map));
-    assert_eq!(host.word(play.shadow.mapper_table()), Some(mapper_page(play.shadow.mapper_descriptions(0))));
-
-    // A larger surface after a smaller one: the list is the new one's, and nothing of the old.
-    play.describe(1920, 1080);
-    play.put(SURFACE_LIST + 4 * 507, &[mapper_page(SURFACE)]);
-    assert_eq!(play.mapper_command(1, shape.map, 1), shape.map);
-    assert_eq!(host.word(list + 4 * 506), Some(mapper_page(SURFACE + 506 * PAGE_BYTES)));
-    assert_eq!(host.word(list + 4 * 507), Some(0), "507 pages, and the guest's next word is not copied");
-    play.describe(64, 64);
-    assert_eq!(play.mapper_command(2, shape.map, 1), shape.map);
-    assert_eq!(host.word(list + 4), Some(0));
-}
-
-#[test]
-fn the_mapper_s_outcome_reaches_the_guest_s_ring_before_the_guest_hears_it_is_done() {
-    let mut play = Play::new();
-    let shape = play.profile.mapper.clone();
-    play.start_mapper();
-    play.describe(64, 64);
-    assert_eq!(play.mapper_command(0, shape.map, 1), shape.map);
-    assert_eq!(play.mapper_command(1, 2, 1), 2);
-    let host = play.shadow.mapper_memory().clone();
-    let ring = play.shadow.mapper_ring();
-    let mirror = play.guard.mirror();
-    let mut mirror = mirror.lock().expect("the mirror");
-
-    // Nothing done yet: the guest's outcome words stay as the guest wrote them.
-    mirror.mapper_to_guest(None);
-    assert_eq!(play.memory.word(MAPPER_RING + 8), Some(u32::MAX));
-    // The mapper has done the first, and its interrupt comes.
-    host.set_word(ring + 8, 0);
-    mirror.mapper_to_guest(None);
-    assert_eq!(play.memory.word(MAPPER_RING + 8), Some(0));
-    // The second, and the guest reads the count of commands done.
-    host.set_word(ring + 16 + 8, 0xE000_02C2);
-    mirror.mapper_to_guest(Some(2));
-    assert_eq!(play.memory.word(MAPPER_RING + 16 + 8), Some(0xE000_02C2));
-    // Done with, both are forgotten: the guest may use the slots again for its own.
-    play.put(MAPPER_RING + 8, &[0x1234]);
-    host.set_word(ring + 8, 5);
-    mirror.mapper_to_guest(None);
-    assert_eq!(play.memory.word(MAPPER_RING + 8), Some(0x1234));
 }
 
 // The first ring turned off, and the positions' wrap at 2^32.
@@ -1822,9 +1623,7 @@ fn a_child_ring_s_positions_wrap_at_2_to_the_32() {
         play.put(CHILD_RING + page * PAGE_BYTES + at % PAGE_BYTES, &[word]);
     }
     play.put(ROOT_PAGE + 0x400, &[start.wrapping_add(24)]);
-    let wake = play.profile.registers.wake;
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    assert_eq!(play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why), Ok(()));
+    assert_eq!(play.wake_written(1), Ok(()));
     assert_eq!(play.refused, []);
     assert_eq!(play.child_word(1, 0x1_0000 - 12), nothing);
     assert_eq!(play.child_word(1, 0), 1);
@@ -1832,9 +1631,5 @@ fn a_child_ring_s_positions_wrap_at_2_to_the_32() {
     assert_eq!(play.shadow.memory().word(play.child_descriptor(1)), Some(12));
     // And back across it is back.
     play.put(ROOT_PAGE + 0x400, &[u32::MAX - 3]);
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    assert_eq!(
-        play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why),
-        Err(Why::PositionWentBack)
-    );
+    assert_eq!(play.wake_written(1), Err(Why::PositionWentBack));
 }

@@ -142,7 +142,7 @@ fn run(
     let hosts = settings
         .host_addresses
         .as_ref()
-        .map(|addresses| crate::screen::hosts_file(settings.bridge.is_some(), addresses));
+        .map(|addresses| crate::guest::hosts_file(settings.bridge.is_some(), addresses));
     match record.guest {
         Guest::Windows => refresh_windows_disk(
             &disk,
@@ -153,7 +153,14 @@ fn run(
             sink.as_ref(),
         )?,
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref(), &shares, record.installed, sink.as_ref())?;
+            linux::refresh_disk(
+                &files_disk(&disk),
+                card.as_ref(),
+                &shares,
+                record.installed,
+                hosts.as_deref(),
+                sink.as_ref(),
+            )?;
             if !record.installed {
                 sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }

@@ -161,6 +161,45 @@ fn the_most_devices_are_kept_and_the_one_over_is_counted_and_dropped() {
 }
 
 #[test]
+fn one_address_takes_no_more_than_four_places_and_another_still_gets_one() {
+    let (relay, forward) = relay_with(|_| {});
+    let devices: Vec<UdpSocket> = (0..5).map(|_| socket()).collect();
+    for device in &devices {
+        device.send_to(b"hi", relay.local_addr()).unwrap();
+    }
+    for _ in 0..4 {
+        receive(&forward);
+    }
+    wait_until("the refusal to be counted", || relay.counters().refused_full == 1);
+    assert_eq!(relay.clients().len(), 4);
+    let elsewhere = UdpSocket::bind("127.0.0.2:0").unwrap();
+    elsewhere.send_to(b"hi", relay.local_addr()).unwrap();
+    receive(&forward);
+    assert_eq!(relay.clients().len(), 5);
+}
+
+#[test]
+fn a_place_the_guest_never_answers_goes_within_seconds_and_an_answered_one_stays() {
+    let (relay, forward) = relay_with(|_| {});
+    let answered = socket();
+    answered.send_to(b"hi", relay.local_addr()).unwrap();
+    let (_, from) = receive(&forward);
+    forward.send_to(b"back", from).unwrap();
+    receive(&answered);
+    let unanswered = socket();
+    unanswered.send_to(b"hi", relay.local_addr()).unwrap();
+    receive(&forward);
+    let end = Instant::now() + Duration::from_secs(8);
+    while relay.counters().clients_expired == 0 {
+        assert!(Instant::now() < end, "the unanswered place is still held");
+        thread::sleep(Duration::from_millis(50));
+    }
+    let left = relay.clients();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].address, answered.local_addr().unwrap());
+}
+
+#[test]
 fn one_device_going_quiet_changes_nothing_for_another() {
     let (relay, forward) = relay_with(|config| config.idle_timeout = Duration::from_millis(300));
     let (quiet, busy) = (socket(), socket());

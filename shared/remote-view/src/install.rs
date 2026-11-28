@@ -27,6 +27,9 @@ pub const GUEST_STATE: &str = r"C:\ProgramData\remoteman\host";
 pub const FIREWALL_RULE: &str = "Guesthouse remote view";
 /// The only address the guest takes remoteman's port from: QEMU's, which is this PC.
 pub const FROM: &str = "10.0.2.2";
+/// The rule remoteman's installer makes for its host's program, open to every address, each time it
+/// runs.
+pub const INSTALLER_RULE: &str = "remoteman host";
 /// What the take-over script of the display driver has once it tells the drivers apart by their
 /// monitors (EDID) and not by their name, which remoteman's driver shares.
 pub const TAKE_OVER_MARK: &str = r"MONITOR\GHS0001";
@@ -101,6 +104,20 @@ fn ps(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+/// The PowerShell that lets only [`FROM`] in by [`INSTALLER_RULE`], or turns that rule off when it
+/// can't be set. It says nothing. The check runs it at every start, so a guest installed before has
+/// its rule narrowed too, and the install runs it after the installer.
+pub fn installer_rule_script() -> String {
+    format!(
+        "if (Get-NetFirewallRule -DisplayName {rule} -ea 0) {{\n\
+         \x20   try {{ Set-NetFirewallRule -DisplayName {rule} -RemoteAddress {from} -ErrorAction Stop }}\n\
+         \x20   catch {{ Disable-NetFirewallRule -DisplayName {rule} -ea 0 }}\n\
+         }}\n",
+        rule = ps(INSTALLER_RULE),
+        from = ps(FROM),
+    )
+}
+
 /// What the check script said, as what has to be done.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Check {
@@ -133,10 +150,11 @@ pub fn read_check(said: &str) -> Check {
 /// The script that says what has to be done: [`CURRENT`], [`UPDATES_ON`] when the host is the right
 /// one but its `updates.json` doesn't say `off`, [`NEEDED`] (with the folder the installer is sent to
 /// made), or [`OLD_TAKE_OVER`] when the guest's take-over script would take remoteman's monitor for
-/// ours.
+/// ours. It narrows remoteman's installer's rule first ([`installer_rule_script`]).
 pub fn check_script(version: &str, encoder: &str) -> String {
     format!(
-        "$take = 'C:\\gpupv\\idd\\take-over-display.ps1'\n\
+        "{narrow}\
+         $take = 'C:\\gpupv\\idd\\take-over-display.ps1'\n\
          if ((Test-Path -LiteralPath $take) -and -not (Select-String -LiteralPath $take -SimpleMatch {mark} -Quiet)) {{ '{OLD_TAKE_OVER}'; return }}\n\
          $note = Join-Path {folder} 'installed.txt'\n\
          $have = if (Test-Path -LiteralPath $note) {{ (Get-Content -LiteralPath $note -Raw).Trim() }} else {{ '' }}\n\
@@ -147,6 +165,7 @@ pub fn check_script(version: &str, encoder: &str) -> String {
          }}\n\
          New-Item -ItemType Directory -Force -Path {folder} | Out-Null\n\
          '{NEEDED}'\n",
+        narrow = installer_rule_script(),
         mark = ps(TAKE_OVER_MARK),
         folder = ps(GUEST_FOLDER),
         host = ps(GUEST_HOST),
@@ -156,7 +175,7 @@ pub fn check_script(version: &str, encoder: &str) -> String {
 }
 
 /// The script that runs the installer sent to [`GUEST_INSTALLER`], lets remoteman's port in from
-/// this PC only, and notes what it installed. It says [`INSTALLED`] and the host's fingerprint, or
+/// this PC only, by its own rule and the installer's, and notes what it installed. It says [`INSTALLED`] and the host's fingerprint, or
 /// what went wrong.
 pub fn install_script(version: &str, encoder: &str) -> String {
     format!(
@@ -164,6 +183,7 @@ pub fn install_script(version: &str, encoder: &str) -> String {
          New-Item -ItemType Directory -Force -Path $folder | Out-Null\n\
          $log = Join-Path $folder 'remoteman-setup.log'\n\
          $run = Start-Process -FilePath {installer} -ArgumentList '--silent','--no-pair','--encoder',{encoder},'--log',('\"' + $log + '\"') -Wait -PassThru\n\
+         {narrow}\
          if ($run.ExitCode -ne 0) {{ \"remote view: the installer ended with $($run.ExitCode)\"; return }}\n\
          Get-NetFirewallRule -DisplayName {rule} -ea 0 | Remove-NetFirewallRule\n\
          New-NetFirewallRule -DisplayName {rule} -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7791 -RemoteAddress {from} -Profile Any | Out-Null\n\
@@ -173,6 +193,7 @@ pub fn install_script(version: &str, encoder: &str) -> String {
          & {host} fingerprint --state {state}\n",
         folder = ps(GUEST_FOLDER),
         installer = ps(GUEST_INSTALLER),
+        narrow = installer_rule_script(),
         encoder = ps(encoder),
         rule = ps(FIREWALL_RULE),
         from = ps(FROM),
@@ -184,9 +205,43 @@ pub fn install_script(version: &str, encoder: &str) -> String {
 
 /// The script that runs one `ctl` command: the words are each quoted, never joined unquoted, as a
 /// fingerprint comes from a person's device.
+///
+/// remoteman's host answers whoever waits on a plain `pair accept` or `pair decline`, so for those
+/// with a fingerprint the script reads the waiting device straight before and answers only when it
+/// is that one, and otherwise says [`crate::ctl::ANOTHER_DEVICE_WAITS`]. Any other `pair accept` or
+/// `pair decline` runs nothing.
 pub fn ctl_script(words: &[String]) -> String {
-    let quoted: Vec<String> = words.iter().map(|word| ps(word)).collect();
-    format!("& {} ctl --port {} {}\n", ps(GUEST_HOST), crate::PORT, quoted.join(" "))
+    match words {
+        [pair, answer, fingerprint] if pair == "pair" && (answer == "accept" || answer == "decline") => {
+            match crate::ctl::check_fingerprint(fingerprint) {
+                Ok(fingerprint) => answer_script(answer, &fingerprint),
+                Err(why) => format!("{}\n", ps(&why)),
+            }
+        }
+        [pair, answer, ..] if pair == "pair" && (answer == "accept" || answer == "decline") => {
+            format!("{}\n", ps(crate::ctl::NOT_A_FINGERPRINT))
+        }
+        _ => {
+            let quoted: Vec<String> = words.iter().map(|word| ps(word)).collect();
+            format!("& {} ctl --port {} {}\n", ps(GUEST_HOST), crate::PORT, quoted.join(" "))
+        }
+    }
+}
+
+/// `pair ANSWER` for the device with `fingerprint` only, which is checked to be one already. The
+/// status's first line that opens a JSON object is read, as [`crate::status::parse_reply`] does.
+fn answer_script(answer: &str, fingerprint: &str) -> String {
+    format!(
+        "$waiting = $null\n\
+         $said = @(& {host} ctl --port {port} status | ForEach-Object {{ \"$_\".Trim() }} | Where-Object {{ $_.StartsWith('{{') }})\n\
+         if ($said.Count -gt 0) {{ try {{ $pending = ($said[0] | ConvertFrom-Json).pending; if ($pending) {{ $waiting = [string]$pending.fingerprint }} }} catch {{ }} }}\n\
+         if ($waiting -and $waiting.ToLowerInvariant() -ceq {fingerprint}) {{ & {host} ctl --port {port} pair {answer} }} else {{ {another} }}\n",
+        host = ps(GUEST_HOST),
+        port = crate::PORT,
+        fingerprint = ps(fingerprint),
+        answer = ps(answer),
+        another = ps(crate::ctl::ANOTHER_DEVICE_WAITS),
+    )
 }
 
 /// The guest's fingerprint, from what [`install_script`] said.
@@ -208,6 +263,20 @@ mod tests {
         assert!(!script.contains("--trust"), "a person's devices are never replaced by a trust list");
         assert!(script.contains("-RemoteAddress '10.0.2.2'"), "only this PC reaches the port");
         assert!(script.contains("'0.1.9 d3d12'"));
+    }
+
+    /// remoteman's installer makes its own rule open to every address: the install narrows it right
+    /// after the installer, failed or not, and every start's check narrows it in a guest installed
+    /// before.
+    #[test]
+    fn the_installers_own_rule_lets_in_this_pc_only() {
+        let narrow = installer_rule_script();
+        assert!(narrow.contains("-DisplayName 'remoteman host' -RemoteAddress '10.0.2.2' -ErrorAction Stop"));
+        let install = install_script("0.1.9", "d3d12");
+        let ran = install.find("Start-Process").unwrap();
+        assert!(install.find(&narrow).is_some_and(|at| at > ran), "{install}");
+        assert!(install.find(&narrow).unwrap() < install.find("$run.ExitCode -ne 0").unwrap());
+        assert!(check_script("0.1.9", "auto").starts_with(&narrow));
     }
 
     #[test]

@@ -27,7 +27,13 @@ struct Pretend {
     logged: Mutex<Vec<String>>,
     /// The address of this PC's that packets to a guest leave from, when a test says.
     source: Mutex<Option<std::net::Ipv4Addr>>,
+    /// Who owns which file, where a test says; nobody's else. The profiles this PC keeps.
+    owners: Vec<(PathBuf, String)>,
+    profiles: Vec<String>,
 }
+
+/// The user who asks, in these tests, but where one says otherwise.
+const USER: &str = "S-1-5-21-1-2-3-1001";
 
 /// This PC's address on its network, in these tests.
 const THIS_PC: std::net::Ipv4Addr = std::net::Ipv4Addr::new(192, 168, 1, 20);
@@ -79,12 +85,10 @@ impl Model {
         match words.as_slice() {
             ["pair", "on"] => self.pairing = true,
             ["pair", "off"] => (self.pairing, self.pending) = (false, None),
-            ["pair", "accept"] => {
-                if let Some((name, fingerprint, _)) = self.pending.take() {
-                    self.devices.push((fingerprint, name, true, true));
-                }
+            ["pair", answer, named] if self.pending.as_ref().is_some_and(|waiting| waiting.1 == *named) => {
+                let (name, fingerprint, _) = self.pending.take().unwrap();
+                (*answer == "accept").then(|| self.devices.push((fingerprint, name, true, true)));
             }
-            ["pair", "decline"] => self.pending = None,
             ["allow", "clipboard", on] => self.clipboard = *on == "on",
             ["allow", "files", on] => self.files = *on == "on",
             ["device", fingerprint, "allow", what, on] => {
@@ -144,11 +148,12 @@ impl Work for Pretend {
         fs::write(&settings.disk, b"disk").unwrap();
         fs::write(settings.disk.with_extension("account.txt"), "user: guesthouse\npassword: secret\n")
             .unwrap();
+        // Its card is chosen as a first boot chooses it, and kept in its record.
+        let mut record = Record { mac: Some(network::GUEST_CARD.into()), ..Record::default() };
         if let Some(installer) = &self.linux_installer {
-            let record =
-                Record { guest: Guest::Linux, installer: Some(installer.clone()), ..Record::default() };
-            record.save(&settings.disk).unwrap();
+            record = Record { guest: Guest::Linux, installer: Some(installer.clone()), ..record };
         }
+        record.save(&settings.disk).unwrap();
         Ok(())
     }
 
@@ -184,8 +189,16 @@ impl Work for Pretend {
         self.ended.lock().unwrap().push(id.to_owned());
     }
 
-    fn console_access(&self) -> Vec<String> {
-        vec!["S-1-5-21-1-2-3-1001".into()]
+    fn files_owner(&self, path: &Path) -> Option<String> {
+        self.owners.iter().find(|(file, _)| file == path).map(|(_, owner)| owner.clone())
+    }
+
+    fn profiles(&self) -> Vec<String> {
+        self.profiles.clone()
+    }
+
+    fn console_access(&self, owner: Option<&str>) -> Vec<String> {
+        owner.map(str::to_owned).into_iter().collect()
     }
 
     fn grow(&self, _: &Path, size_gb: u64) -> Result<(), String> {
@@ -314,12 +327,13 @@ impl Connection for Window {
         self.gone
     }
 
-    fn may_read(&mut self, path: &Path) -> Result<(), String> {
-        if self.readable { Ok(()) } else { Err(format!("You may not read {}.", path.display())) }
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String> {
+        let refused = || format!("You may not read {}.", path.display());
+        self.readable.then(|| (path.to_owned(), Box::new(()) as Held)).ok_or_else(refused)
     }
 
     fn may_share(&mut self, path: &Path, _: bool) -> Result<Held, String> {
-        self.may_read(path).map(|()| Box::new(()) as Held)
+        self.may_read(path).map(|(_, held)| held)
     }
 
     /// A folder is kept in unless the user may not read it, or it's named `link`, as a link is.
@@ -327,7 +341,11 @@ impl Connection for Window {
         if path.file_name().is_some_and(|name| name == "link") {
             return Err(format!("{} is a link to another folder.", path.display()));
         }
-        self.may_read(path).map(|()| Box::new(()) as Held)
+        self.may_read(path).map(|(_, held)| held)
+    }
+
+    fn asker(&self) -> Asker {
+        Asker { user: USER.into(), administrator: false, administrators_account: true }
     }
 }
 
@@ -976,7 +994,7 @@ fn turning_the_network_off_forgets_the_guests_address() {
 fn set_up(setup: &Setup, name: &str) {
     ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
     let disk = setup.service.machines().store.disk(name);
-    Record { installed: true, ..Record::default() }.save(&disk).unwrap();
+    Record { installed: true, ..Record::load(&disk).unwrap() }.save(&disk).unwrap();
 }
 
 /// Waits for the service to finish what it's doing to a machine in the background.
@@ -1129,11 +1147,19 @@ fn a_report_for_a_machine_adds_only_its_allowed_files() {
     let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
-        ["service.log", "windows.txt", "machines.txt", "machine.json", "snapshots/index.json", "events.log"]
+        [
+            "service.log",
+            "windows.txt",
+            "machines.txt",
+            "machine.json",
+            "win.guesthouse.json",
+            "snapshots/index.json",
+            "events.log"
+        ]
     );
     assert!(files.iter().any(|(name, text)| name == "events.log" && text.contains("UTC note one")));
     let missing: Vec<&str> = missing.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(missing, ["crashes.txt", "win.guesthouse.json", "events.1.log"], "each is optional");
+    assert_eq!(missing, ["crashes.txt", "events.1.log"], "each is optional");
     let everything = format!("{files:?}");
     for secret in ["hunter2", "PRIVATE KEY", "account", "screen", "installer", "1.vhdx"] {
         assert!(!everything.contains(secret), "{secret} was handed over");
@@ -1180,22 +1206,6 @@ fn a_large_file_comes_in_pieces_a_line_can_hold_and_only_its_end() {
     assert!(text.len() <= 2 * 1024 * 1024 + 64);
 }
 
-#[test]
-fn a_machine_that_isnt_there_is_refused_before_anything_is_sent() {
-    let setup = setup("report-none", Pretend::default());
-    let answers = ask(&setup.service, Request::ReportFiles { machine: Some("nope".into()) });
-    assert_eq!(answers, [Answer::Refused { reason: "There is no machine called nope.".into() }]);
-}
-
-#[test]
-fn a_report_stops_when_the_window_has_gone() {
-    let setup = setup("report-gone", Pretend::default());
-    let (answers, received) = channel();
-    drop(received);
-    let mut window = Window { answers, readable: true, gone: true };
-    setup.service.answer(Request::ReportFiles { machine: None }, &mut window);
-}
-
 #[cfg(unix)]
 #[test]
 fn a_file_that_is_a_link_is_not_followed() {
@@ -1211,30 +1221,18 @@ fn a_file_that_is_a_link_is_not_followed() {
 }
 
 mod hyper_v;
+mod image;
+mod nested;
 mod network;
+mod owners;
 mod pairing;
 mod places;
 mod remote_view;
 mod remote_view_ports;
+mod reports;
 mod snapshot_labels;
 mod start_refusals;
 use network::FakeNet;
-#[test]
-fn nested_virtualization_is_off_until_asked_for_and_reaches_the_next_boot() {
-    let setup = setup("nested", Pretend::default());
-    let service = &setup.service;
-    ask(service, Request::Create { machine: new_machine(&setup, "win") });
-    assert!(!status(service)[0].nested_virtualization);
-    let on = MachineSettings { nested_virtualization: true, ..hardware(8192, Card::Default) };
-    assert_eq!(change(service, on), [Answer::Ok]);
-    assert!(status(service)[0].nested_virtualization);
-    assert!(service.machines().store.load()[0].1.nested_virtualization, "kept on disk");
-    assert_eq!(ask(service, Request::Start { name: "win".into() }), [Answer::Ok]);
-    wait_for(service, "win", State::Running);
-    assert!(service.work.booted.lock().unwrap()[0].nested_virtualization);
-    ask(service, Request::Stop { name: "win".into() });
-    wait_for(service, "win", State::Off);
-}
 
 /// A setup whose machines are all Ubuntu guests, with ports in `busy` taken by other programs.
 fn linux_setup(test: &str, busy: &[u16]) -> Setup {

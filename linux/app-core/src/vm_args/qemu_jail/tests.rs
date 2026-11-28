@@ -266,7 +266,7 @@ fn a_jailed_qemu_gets_a_clean_environment() {
     assert!(plan.clears_environment());
     let environment = plan.qemu_environment();
     let names: Vec<&str> = environment.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["PATH", "TMPDIR", "XDG_RUNTIME_DIR", "SHARE"]);
+    assert_eq!(names, ["PATH", "TMPDIR", "XDG_RUNTIME_DIR", "SHARE", "SHARE_KEY", "SHARE_ACCESS"]);
     let path: Vec<&str> = environment[0].1.split(':').collect();
     assert!(path.contains(&"/usr/bin"), "most systems' programs");
     assert!(path.contains(&"/run/current-system/sw/bin"), "NixOS's, for setarch and taskset");
@@ -306,7 +306,19 @@ fn a_shared_folder_gets_the_loopback_pair_its_program_is_reached_through() {
     assert_eq!(network.tcp_bind, Ports::Only(vec![8080, EPHEMERAL_PORT]));
     let restricted = Machine { share: "/home/me/Shared".into(), network_mode: Mode::None, ..windows() };
     let (_scratch, plan) = jailed(restricted, true);
-    assert_eq!(plan.qemu_jail_plan(&jail(true)).network.tcp_connect, Ports::Any);
+    let text = std::fs::read_to_string(LOCAL_PORTS_FILE).ok();
+    let Ports::Only(connect) = plan.qemu_jail_plan(&jail(true)).network.tcp_connect else {
+        panic!("a restricted machine with a share connects only to the kernel's local ports");
+    };
+    assert_eq!(connect, local_ports(text.as_deref()));
+    assert!(!connect.contains(&22) && !connect.contains(&631), "{:?}", connect.first());
+}
+
+#[test]
+fn the_local_ports_are_the_kernels_range() {
+    assert_eq!(local_ports(Some("40000\t40003\n")), [40000, 40001, 40002, 40003]);
+    assert_eq!(local_ports(Some("junk")).len(), 60999 - 32768 + 1);
+    assert_eq!(local_ports(None).first(), Some(&32768));
 }
 
 #[test]

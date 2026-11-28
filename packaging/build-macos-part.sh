@@ -87,6 +87,10 @@ fetch_sources() {
         git -C "$tree" submodule update -q --init --depth 1 vendor/qemu
     [ "$(git -C "$tree/vendor/qemu" rev-parse HEAD)" = "$REIMS_QEMU_COMMIT" ] ||
         die "reims-vgpu's QEMU is not the commit it should be"
+    # The app gives every machine on QEMU's own network host-loopback=off, which this patch adds.
+    # Applied once: a tree that has it already is left alone.
+    git -C "$tree/vendor/qemu" apply --reverse --check "$REPO/qemu/qemu-host-loopback.patch" 2>/dev/null ||
+        git -C "$tree/vendor/qemu" apply "$REPO/qemu/qemu-host-loopback.patch"
     [ -f "$tree/vendor/qemu/$FIRMWARE_SOURCE/src/Makefile" ] ||
         git -C "$tree/vendor/qemu" submodule update -q --init --depth 1 "$FIRMWARE_SOURCE"
 }

@@ -167,6 +167,7 @@ impl LocalHost<'_> {
     }
 
     fn spawn_qemu(&self, plan: &VmPlan, memory: Option<&GuestMemory>, handed: &Handed) -> Result<Child> {
+        super::qemu_probe::check(plan)?;
         self.spawn_tpm(plan)?;
         let output = File::create(self.run_file(OUTPUT_FILE))?;
         let command = plan.qemu_command();

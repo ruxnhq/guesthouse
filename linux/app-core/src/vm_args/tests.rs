@@ -154,10 +154,36 @@ fn nothing_set_is_the_line_every_machine_had() {
     let arguments = plan.qemu_arguments();
     assert_eq!(
         value_after(&arguments, "-nic"),
-        "user,model=e1000e,hostfwd=udp:127.0.0.1:0-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
+        "user,model=e1000e,host-loopback=off,hostfwd=udp:127.0.0.1:0-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
          hostfwd=tcp:127.0.0.1:0-:8767"
     );
     assert!(!has(&arguments, "-netdev"), "NAT has one adapter");
+}
+
+/// Every QEMU user network keeps the guest off the host's loopback, in every network mode and for
+/// every kind of boot made here. Ubuntu, macOS, Android and a Linux of the user's own check theirs
+/// beside their other words.
+#[test]
+fn every_user_network_keeps_the_guest_off_the_hosts_loopback() {
+    let modes = [
+        Machine { network_mode: Mode::Nat, ..windows() },
+        Machine { network_mode: Mode::Nat, passt: true, ..windows() },
+        Machine { network_mode: Mode::None, ..windows() },
+        Machine { network_mode: Mode::Bridged, ..windows() },
+        Machine { share: "/home/me/shared".into(), ..windows() },
+    ];
+    for machine in &modes {
+        let (_scratch, plan) = plan(machine, Boot::Gpu);
+        nic::assert_user_networks_keep_off_host_loopback(&plan.qemu_arguments());
+    }
+    let install = Boot::Install { iso: "/m/win.iso".into(), answer: "/m/answer.iso".into() };
+    for (machine, boot) in [(windows(), install), (plain_machine(), plain_boot())] {
+        let (_scratch, plan) = plan(&machine, boot);
+        nic::assert_user_networks_keep_off_host_loopback(&plan.qemu_arguments());
+    }
+    let (_scratch, held) = plan(&windows(), Boot::Gpu);
+    let held = VmPlan { network: held_to("wg0", true), ..held };
+    nic::assert_user_networks_keep_off_host_loopback(&held.qemu_arguments());
 }
 
 #[test]
@@ -222,6 +248,28 @@ fn an_interface_with_ipv6_binds_both_families_to_it() {
     assert!(words.windows(2).any(|two| two == ["--outbound-if4", "wg0"]), "{words:?}");
     assert!(words.windows(2).any(|two| two == ["--outbound-if6", "wg0"]), "{words:?}");
     assert!(!words.contains(&"--ipv4-only".to_owned()));
+}
+
+#[test]
+fn a_held_guest_asks_its_ipv6_dns_of_the_machines_resolver_and_gets_no_search_domains() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let network = NetworkPlan { resolver: Some("10.64.0.1".into()), ..held_to("wg0", true) };
+    let words = VmPlan { network, ..plan }.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--search", "none"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns", "fd00:3::3"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns-forward", "fd00:3::3"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns-host", "::ffff:10.64.0.1"]), "{words:?}");
+    let probe = only_through_probe_words();
+    assert!(probe.windows(2).any(|two| two == ["--search", "none"]), "{probe:?}");
+    assert!(probe.windows(2).any(|two| two == ["--dns-forward", "fd00:3::3"]), "{probe:?}");
+}
+
+#[test]
+fn a_held_guest_without_ipv6_gets_no_search_domains_either() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let words = VmPlan { network: held_to("tun0", false), ..plan }.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--search", "none"]), "{words:?}");
+    assert!(!words.contains(&"fd00:3::3".to_owned()), "{words:?}");
 }
 
 #[test]
@@ -376,7 +424,35 @@ fn a_share_starts_our_program_with_the_folder_in_its_environment() {
     let (_scratch, plan) = plan(&machine, plain_boot());
     let nic = value_after(&plan.qemu_arguments(), "-nic");
     assert!(nic.contains(",guestfwd=tcp:10.0.2.4:80-cmd:") && nic.contains("guesthouse-share"));
-    assert_eq!(plan.qemu_environment(), [("SHARE".to_owned(), "/home/me/shared".to_owned())]);
+    assert_eq!(
+        plan.qemu_environment(),
+        [
+            ("SHARE".to_owned(), "/home/me/shared".to_owned()),
+            ("SHARE_KEY".to_owned(), String::new()),
+            ("SHARE_ACCESS".to_owned(), "read-write".to_owned())
+        ]
+    );
+    assert!(!plan.qemu_arguments().iter().any(|word| word.contains("SHARE_KEY")));
+}
+
+#[test]
+fn a_share_is_served_under_the_machines_key_and_can_be_read_only() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { share: "/home/me/shared".into(), share_read_only: true, ..plain_machine() };
+    fs::create_dir_all(machine.folder(&context)).unwrap();
+    let plan = VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0);
+    let key = fs::read_to_string(machine.share_key_file(&context)).unwrap().trim().to_owned();
+    assert_eq!(key.len(), 32);
+    let environment = plan.qemu_environment();
+    assert!(environment.contains(&("SHARE_KEY".to_owned(), key.clone())), "{environment:?}");
+    assert!(environment.contains(&("SHARE_ACCESS".to_owned(), "read-only".to_owned())));
+    let again = VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0);
+    assert_eq!(again.share_key, key, "the key stays from one start to the next");
+    assert!(
+        !plan.qemu_arguments().iter().any(|word| word.contains(&key)),
+        "the key is not on QEMU's command line"
+    );
 }
 
 #[test]
@@ -541,7 +617,7 @@ fn app_windows_on_adds_one_forward_for_its_helper_after_the_files_helpers() {
     assert!(plan.app_windows_forward);
     assert_eq!(
         value_after(&plan.qemu_arguments(), "-nic"),
-        "user,model=e1000e,hostfwd=udp:127.0.0.1:0-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
+        "user,model=e1000e,host-loopback=off,hostfwd=udp:127.0.0.1:0-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
          hostfwd=tcp:127.0.0.1:0-:8767,hostfwd=tcp:127.0.0.1:0-:8769"
     );
 }

@@ -10,14 +10,8 @@ use std::path::{Path, PathBuf};
 const VIEWER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const PAIRED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// The functions the choice is made with.
-const FUNCTIONS: [&str; 6] = [
-    "Get-InstallNote",
-    "Test-NoteChanged",
-    "Get-SetupArguments",
-    "Test-NamesDevice",
-    "Get-ScreenHosts",
-    "Limit-ScreenRules",
-];
+const FUNCTIONS: [&str; 4] =
+    ["Get-InstallNote", "Test-NoteChanged", "Get-SetupArguments", "Test-NamesDevice"];
 /// How the script before viewer.txt made its note, word for word, with its trust list as `$trusted`.
 const NOTE_BEFORE: &str = "((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash, (Get-FileHash -LiteralPath $trusted -Algorithm SHA256).Hash, $encoder) -join ' '";
 
@@ -206,73 +200,6 @@ fn host_log_lines_that_name_a_device_are_left_out() {
     assert_eq!(said.code, Some(0), "{said}");
     let passed: Vec<&str> = said.lines().into_iter().filter_map(|line| line.strip_prefix("kept ")).collect();
     assert_eq!(passed, kept.iter().map(String::as_str).collect::<Vec<_>>(), "{said}");
-}
-
-/// Windows Firewall's two rules for the screen's port, as functions that stand in for its cmdlets
-/// (a function is found before a cmdlet of the same name): `$rules` holds each rule's remote
-/// addresses by its name.
-const FIREWALL: &str = "
-    $rules = @{ 'remoteman host' = 'Any'; 'Guesthouse screen' = 'Any' }
-    function Get-NetFirewallRule { [CmdletBinding()] param([string]$DisplayName) if ($rules.ContainsKey($DisplayName)) { $DisplayName } }
-    function Set-NetFirewallRule { [CmdletBinding()] param([string]$DisplayName, [string[]]$RemoteAddress) $rules[$DisplayName] = ($RemoteAddress -join ' ') }
-    function Show-Rules { foreach ($name in @('remoteman host', 'Guesthouse screen')) { Write-Output \"$name=$($rules[$name])\" } }
-";
-
-#[test]
-fn the_screens_port_is_for_this_pcs_addresses_and_on_the_shared_network_its_gateway() {
-    let Some(shell) = shell() else { return };
-    let folder = Folder::new(shell);
-    let hosts = |text: Option<&str>| {
-        match text {
-            Some(text) => folder.write("hosts.txt", text),
-            None => {
-                let _ = fs::remove_file(folder.path.join("hosts.txt"));
-            }
-        }
-        let said = folder
-            .run("Write-Output \"hosts $(@(Get-ScreenHosts $folder @('172.30.0.1', '0.0.0.0')) -join ',')\"");
-        assert_eq!(said.code, Some(0), "{said}");
-        said.last().strip_prefix("hosts").unwrap_or_default().trim().to_owned()
-    };
-    assert_eq!(hosts(Some("shared\n192.168.1.20\n")), "192.168.1.20,172.30.0.1");
-    assert_eq!(
-        hosts(Some("bridged\n192.168.1.20\n100.64.1.2\n")),
-        "192.168.1.20,100.64.1.2",
-        "never the router"
-    );
-    assert_eq!(hosts(Some("shared\n172.30.0.1\nnot an address; calc\n")), "172.30.0.1");
-    assert_eq!(hosts(Some("tunnel\n192.168.1.20\n")), "", "a network it doesn't know leaves the rules");
-    assert_eq!(hosts(Some("")), "");
-    assert_eq!(hosts(None), "", "a host from before this leaves the rules as they are");
-}
-
-#[test]
-fn both_rules_are_narrowed_and_remotemans_again_after_its_installer_opened_it() {
-    let Some(shell) = shell() else { return };
-    let folder = Folder::new(shell);
-    let said = folder.run(&format!(
-        "{FIREWALL}
-        Limit-ScreenRules @() @('remoteman host', 'Guesthouse screen')
-        Show-Rules
-        Limit-ScreenRules @('192.168.1.20', '172.30.0.1') @('remoteman host', 'Guesthouse screen', 'not there')
-        Show-Rules
-        $rules['remoteman host'] = 'Any'
-        Limit-ScreenRules @('192.168.1.20', '172.30.0.1') @('remoteman host', 'Guesthouse screen')
-        Show-Rules"
-    ));
-    assert_eq!(said.code, Some(0), "{said}");
-    assert_eq!(
-        said.lines(),
-        [
-            "remoteman host=Any",
-            "Guesthouse screen=Any",
-            "remoteman host=192.168.1.20 172.30.0.1",
-            "Guesthouse screen=192.168.1.20 172.30.0.1",
-            "remoteman host=192.168.1.20 172.30.0.1",
-            "Guesthouse screen=192.168.1.20 172.30.0.1"
-        ],
-        "{said}"
-    );
 }
 
 /// Runs the script's Set-SignIn on a stand-in for Winlogon's key, with `$values` its values to begin

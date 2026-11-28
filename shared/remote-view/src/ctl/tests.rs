@@ -12,8 +12,6 @@ fn the_commands_with_no_device_in_them() {
         (status(), "status"),
         (pair_open(), "pair on"),
         (pair_close(), "pair off"),
-        (pair_accept(), "pair accept"),
-        (pair_decline(), "pair decline"),
         (device_drop(), "drop"),
         (share(true), "sharing on"),
         (share(false), "sharing off"),
@@ -135,5 +133,15 @@ fn the_hosts_answers_are_told_apart() {
     ];
     for (answer, want) in table {
         assert_eq!(parse_ack(answer), want, "{answer:?}");
+    }
+}
+
+#[test]
+fn accept_and_decline_name_the_device_by_its_fingerprint() {
+    assert_eq!(line(&pair_accept(FP).unwrap()), format!("pair accept {FP}"));
+    assert_eq!(line(&pair_decline(&FP.to_ascii_uppercase()).unwrap()), format!("pair decline {FP}"));
+    for bad in ["", "0123", "Tablet", &format!("{FP}0")] {
+        assert_eq!(pair_accept(bad), Err(NOT_A_FINGERPRINT.to_string()), "{bad:?}");
+        assert_eq!(pair_decline(bad), Err(NOT_A_FINGERPRINT.to_string()), "{bad:?}");
     }
 }

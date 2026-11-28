@@ -4,6 +4,7 @@ use super::Shared;
 use crate::common::choose_folder;
 use crate::rows::{explain, info_button, row_button};
 use adw::prelude::*;
+use guesthouse_app_core::agent::{share_address, share_key};
 use guesthouse_app_core::machine::Kind;
 use guesthouse_app_core::start_checks::share_problem;
 use guesthouse_app_core::tasks::{State, Status};
@@ -14,20 +15,26 @@ struct Parts {
     shared: Shared,
     folder: adw::ActionRow,
     clear: gtk::Button,
+    read_only: adw::SwitchRow,
     off: Cell<bool>,
 }
 
 #[derive(Clone)]
 pub struct Sharing(Rc<Parts>);
 
-/// Where the guest finds the shared folder.
-fn place(machine: &guesthouse_app_core::machine::Machine) -> &'static str {
+/// Where the guest finds the shared folder. Its address holds the key the folder is served under,
+/// which a machine not made yet doesn't have.
+fn place(machine: &guesthouse_app_core::machine::Machine, address: Option<&str>) -> String {
     if machine.kind == Kind::Windows {
-        "as a drive, from its next start, for files up to 4 GiB"
-    } else if machine.macos() {
-        "in Finder, with Go, Connect to Server and http://10.0.2.4/"
+        return "as a drive, from its next start, for files up to 4 GiB".to_owned();
+    }
+    let Some(address) = address else {
+        return "at an address of its own, shown here once the machine is made".to_owned();
+    };
+    if machine.macos() {
+        format!("in Finder, with Go, Connect to Server and {address}")
     } else {
-        "at http://10.0.2.4/, through a WebDAV client"
+        format!("at {address}, through a WebDAV client")
     }
 }
 
@@ -73,13 +80,32 @@ impl Sharing {
         });
         group.add(&files);
         let folder = adw::ActionRow::builder().title("Shared Folder").subtitle_lines(2).build();
-        folder.add_suffix(&info_button(&format!("The guest sees it {}.", place(&machine))));
+        let key = (!shared.is_draft()).then(|| share_key(&shared.window.context(), &machine).ok()).flatten();
+        let address = key.as_deref().map(share_address);
+        folder
+            .add_suffix(&info_button(&format!("The guest sees it {}.", place(&machine, address.as_deref()))));
         let choose = row_button("Choose");
         let clear = row_button("Clear");
         folder.add_suffix(&choose);
         folder.add_suffix(&clear);
         group.add(&folder);
-        let this = Self(Rc::new(Parts { shared: shared.clone(), folder, clear, off: Cell::new(true) }));
+        let read_only = adw::SwitchRow::builder()
+            .title("Read Only")
+            .active(machine.share_read_only)
+            .subtitle("The guest can open the folder's files and not change them")
+            .build();
+        explain(
+            &read_only,
+            "The guest can read the shared folder and can't change, add or remove anything in it.",
+        );
+        let saving = shared.clone();
+        read_only.connect_active_notify(move |row| {
+            saving.machine.borrow_mut().share_read_only = row.is_active();
+            saving.save();
+        });
+        group.add(&read_only);
+        let this =
+            Self(Rc::new(Parts { shared: shared.clone(), folder, clear, read_only, off: Cell::new(true) }));
         let handle = this.clone();
         this.0.clear.connect_clicked(move |_| handle.set_folder(String::new()));
         let handle = this.clone();
@@ -99,6 +125,7 @@ impl Sharing {
         };
         self.0.folder.set_subtitle(&gtk::glib::markup_escape_text(&text));
         self.0.clear.set_visible(!share.is_empty());
+        self.0.read_only.set_visible(!share.is_empty());
     }
 
     fn on_choose(&self) {
@@ -126,6 +153,7 @@ impl Sharing {
     pub fn set_status(&self, status: &Status) {
         self.0.off.set(status.state == State::Off);
         self.0.folder.set_sensitive(super::is_off(status));
+        self.0.read_only.set_sensitive(super::is_off(status));
         self.show_folder();
     }
 }

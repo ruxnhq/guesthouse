@@ -166,8 +166,8 @@ fn device_lines_are_the_crates_words_and_only_from_a_fingerprint_and_a_known_per
     assert!(policy.device_allow("", "files", true).is_err());
     assert_eq!(line(policy.device_revoke(FP)), format!("revoke {FP}\n"));
     assert_eq!(rmhost_line(&ctl::device_drop()).unwrap(), "drop\n");
-    assert_eq!(rmhost_line(&ctl::pair_accept()).unwrap(), "pair accept\n");
-    assert_eq!(rmhost_line(&ctl::pair_decline()).unwrap(), "pair decline\n");
+    assert_eq!(rmhost_line(&ctl::pair_accept(FP).unwrap()).unwrap(), format!("pair accept {FP}\n"));
+    assert_eq!(rmhost_line(&ctl::pair_decline(FP).unwrap()).unwrap(), format!("pair decline {FP}\n"));
     // A short one is not a fingerprint: the real ones are 64 hex digits.
     assert!(policy.device_revoke("ab12").is_err());
     assert!(policy.device_revoke("zz").is_err());
@@ -181,10 +181,20 @@ fn words(line: &str) -> Vec<String> {
 fn the_pairings_words_become_the_lines_rmhost_reads() {
     assert_eq!(rmhost_line(&words("pair on 120")).unwrap(), "pair open 120\n");
     assert_eq!(rmhost_line(&words("pair off")).unwrap(), "pair close\n");
-    assert_eq!(rmhost_line(&words("pair accept")).unwrap(), "pair accept\n");
-    assert_eq!(rmhost_line(&words("pair decline")).unwrap(), "pair decline\n");
-    assert_eq!(rmhost_line(&words("drop")).unwrap(), "drop\n");
     let fingerprint = "ab".repeat(32);
+    assert_eq!(
+        rmhost_line(&words(&format!("pair accept {fingerprint}"))).unwrap(),
+        format!("pair accept {fingerprint}\n")
+    );
+    assert_eq!(
+        rmhost_line(&words(&format!("pair decline {fingerprint}"))).unwrap(),
+        format!("pair decline {fingerprint}\n")
+    );
+    // A device is named for an answer: rmhost is never asked to answer whoever waits.
+    assert!(rmhost_line(&words("pair accept")).is_err());
+    assert!(rmhost_line(&words("pair decline")).is_err());
+    assert!(rmhost_line(&words("pair accept Tablet")).is_err());
+    assert_eq!(rmhost_line(&words("drop")).unwrap(), "drop\n");
     assert_eq!(
         rmhost_line(&words(&format!("device {fingerprint} view-only on"))).unwrap(),
         format!("device {fingerprint} view-only on\n")

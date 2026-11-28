@@ -18,7 +18,7 @@ const RULE: &str = "Guesthouse remote view win 7792";
 pub(super) fn windows_machine(setup: &Setup, name: &str) {
     ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
     let disk = setup.service.machines().store.disk(name);
-    let record = Record { installed: true, screen: Some(HOST.into()), ..Record::default() };
+    let record = Record { installed: true, screen: Some(HOST.into()), ..Record::load(&disk).unwrap() };
     record.save(&disk).unwrap();
     let client = guesthouse_host_windows::screen::state_beside(&disk).join("client");
     fs::create_dir_all(&client).unwrap();
@@ -293,6 +293,24 @@ fn the_relay_follows_the_guests_address_and_waits_for_this_runs() {
 }
 
 #[test]
+fn the_relay_leads_only_to_an_address_where_the_machines_own_card_answers() {
+    let work = Pretend { net: FakeNet::with(|net| net.elsewhere = vec![THIS_PC]), ..Pretend::default() };
+    let setup = setup("view-card", work);
+    let service = &setup.service;
+    windows_machine(&setup, "win");
+    share(service, "win", Some(true));
+    start_and_run(service, "win");
+    wait_view(service, "win", ShareState::Listening);
+    service.machines().tell("win", Event::Report(format!("address: {THIS_PC}")));
+    wait_view(service, "win", ShareState::Failed);
+    assert!(net(service).views.is_empty());
+    assert!(!net(service).calls.iter().any(|call| call.contains("192.168.1.20")), "{:?}", net(service).calls);
+    let reason = shown(service, "win").reason.unwrap_or_default();
+    assert!(reason.contains("not the machine's"), "{reason}");
+    stop(service, "win");
+}
+
+#[test]
 fn a_relay_that_cant_listen_fails_once_and_takes_its_rule_away() {
     let setup = setup(
         "view-fails",
@@ -439,7 +457,8 @@ fn a_device_found_waiting_is_shown_and_nothing_it_said_reaches_a_log() {
     says(service, "");
     assert_eq!(info(share(service, "win", Some(false))).state, ShareState::Off);
     let asked = service.work.remoteman.asked();
-    assert_eq!(asked[4..], ["pair decline", "allow clipboard on", "allow files on", "status"]);
+    let decline = format!("pair decline {PHONE}");
+    assert_eq!(asked[4..], [decline.as_str(), "allow clipboard on", "allow files on", "status"]);
     for line in &asked {
         assert!(!line.starts_with("sharing") && line != "drop" && !line.contains(&viewer()), "{line}");
     }

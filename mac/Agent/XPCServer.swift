@@ -17,9 +17,8 @@ func serveXPC(agent: OpaquePointer) -> Never {
     let server = XPCServer(agent: handle)
     let listener = NSXPCListener(machServiceName: agentMachService)
     listener.delegate = server
-    // Only our own app may talk to the agent. Identifier only for now: ad hoc code has no team.
-    // With Developer ID this becomes the app's team and certificate chain.
-    listener.setConnectionCodeSigningRequirement(#"identifier "com.ruxn.guesthouse""#)
+    // Only our own app may talk to the agent: its identifier, signed by the agent's own team.
+    listener.setConnectionCodeSigningRequirement(peerRequirement(identifier: "com.ruxn.guesthouse"))
     listener.resume()
     Thread.detachNewThread {
         var idleSeconds = 0

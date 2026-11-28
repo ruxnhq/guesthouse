@@ -130,7 +130,9 @@ fn ubuntu_is_downloaded_checked_installed_and_stops_at_the_driver_when_it_could_
     let (label, text) = &control.discs[0];
     assert_eq!(label, "CIDATA");
     assert!(text.contains("username: nick") && text.contains("instance-id: guesthouse-m"));
-    assert_eq!(file["answer_disc"], "answers.iso");
+    // Once the system is installed the disc, with the password in it, is gone.
+    assert!(file.get("answer_disc").is_none());
+    assert!(!folder.join("answers.iso").exists());
 
     // It stopped at the driver step, saying why the package was not got, with its choices.
     assert_eq!(info.state, Phase::Failed);
@@ -229,6 +231,68 @@ fn a_chosen_file_that_is_not_an_installer_is_refused_before_anything_starts() {
     let failure = info.failure.unwrap();
     assert_eq!((failure.step, failure.code.as_deref()), (Step::Fetch, Some("bad_installer")));
     assert!(failure.reason.contains("too small"));
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn the_answers_disc_is_gone_however_the_system_step_ends() {
+    let gone = |world: &World| {
+        let folder = world.machines.join("m");
+        !folder.join("answers.iso").exists() && machine_file(world).get("answer_disc").is_none()
+    };
+    // The guest never says it finished.
+    let world = World::new("answers-timeout");
+    let mut control = Control::default();
+    let info = run(&world, Guest::Windows, Source::File { path: world.big_iso() }, &mut control, true, None);
+    assert_eq!(info.failure.map(|failure| failure.step), Some(Step::InstallSystem));
+    assert_eq!(control.discs.len(), 1, "the disc was made");
+    assert!(gone(&world));
+    let _ = fs::remove_dir_all(world.root);
+    // The machine fails.
+    let world = World::new("answers-failed");
+    let mut control = Control { fails: Some("QEMU stopped".into()), ..Control::default() };
+    let info = run(&world, Guest::Ubuntu, Source::Download, &mut control, false, None);
+    assert_eq!(info.failure.map(|failure| failure.step), Some(Step::InstallSystem));
+    assert!(gone(&world));
+    let _ = fs::remove_dir_all(world.root);
+    // The install is stopped while the system step runs.
+    let world = World::new("answers-stopped");
+    let mut control = Control::default();
+    let mut steps = RealSteps {
+        setup: world.setup(Guest::Ubuntu, false),
+        transport: &mut Network,
+        control: &mut control,
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&cancel);
+    let mut changed = |info: &InstallInfo| {
+        if info.status_of(Step::InstallSystem) == StepStatus::Running {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    };
+    let clock = || 0;
+    let mut runner = Runner {
+        folder: world.machines.join("m"),
+        info: InstallInfo::new("m", &Plan::for_guest(Guest::Ubuntu), Source::Download),
+        cancel,
+        clock: &clock,
+        changed: &mut changed,
+    };
+    runner.run(&mut steps);
+    assert_eq!(runner.info.state, Phase::Cancelled);
+    assert_eq!(control.discs.len(), 1, "the disc was made");
+    assert!(gone(&world));
+    let _ = fs::remove_dir_all(world.root);
+    // The system installed, and the driver step failed after it.
+    let world = World::new("answers-driver");
+    let mut control = Control::default();
+    control.says = vec![
+        (1_000, windows::marker::SYSTEM_INSTALLED.into()),
+        (2_000, format!("{} 0x800b0109", windows::marker::DRIVER_FAILED)),
+    ];
+    let info = run(&world, Guest::Windows, Source::File { path: world.big_iso() }, &mut control, true, None);
+    assert_eq!(info.failure.map(|failure| failure.step), Some(Step::InstallDriver));
+    assert!(gone(&world));
     let _ = fs::remove_dir_all(world.root);
 }
 

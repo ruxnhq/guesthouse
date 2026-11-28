@@ -126,7 +126,7 @@ fn a_linux_machine_starts_with_a_network_and_the_scale_it_was_given() {
         wait_state(&agent, id, "running");
     }
     let deb = support.run_file("deb", "fake-qemu.args");
-    assert!(has_pair(&deb, "-netdev", "user,id=net"));
+    assert!(has_pair(&deb, "-netdev", "user,id=net,host-loopback=off"));
     assert!(has_pair(&deb, "-device", "virtio-net-pci,netdev=net,romfile="));
     assert!(has_pair(&deb, "-fw_cfg", "name=opt/com.ruxn.guesthouse/scale,string=2"));
     let std = support.run_file("std", "fake-qemu.args");

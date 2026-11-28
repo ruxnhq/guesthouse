@@ -104,7 +104,7 @@ fn a_device_pairs_waits_with_its_code_is_accepted_limited_and_pairing_closes_aft
     assert_eq!(
         sent(service, before),
         [
-            "pair accept".to_owned(),
+            format!("pair accept {PHONE}"),
             format!("device {PHONE} allow clipboard off"),
             format!("device {PHONE} allow files off"),
             "allow clipboard on".to_owned(),
@@ -149,7 +149,10 @@ fn a_device_declined_or_left_to_run_out_or_stopped_gives_the_switches_back() {
     ask_info(service, Request::PairDecline { name: "win".into() });
     let declined = wait_until(service, "declined", |info| info.closed_reason.is_some());
     assert_eq!(declined.closed_reason, Some(CloseReason::Declined));
-    assert_eq!(sent(service, before), ["pair decline", "allow clipboard on", "allow files on"]);
+    assert_eq!(
+        sent(service, before),
+        [format!("pair decline {KITCHEN}"), "allow clipboard on".into(), "allow files on".into()]
+    );
 
     // Run out: pairing for a second, and nobody comes.
     let before = asked_count(service);

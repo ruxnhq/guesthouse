@@ -36,13 +36,23 @@ struct GuestSignIn: View {
         }
     }
 
+    /// Copies the password for this Mac only, marked as a secret for clipboard tools (the
+    /// nspasteboard.org marker), and takes it off the pasteboard after a minute unless something
+    /// else was copied since.
     private func copy(_ password: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(password, forType: .string)
+        let pasteboard = NSPasteboard.general
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
+        pasteboard.setString(password, forType: .string)
+        pasteboard.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        let ours = pasteboard.changeCount
         copied = true
         Task {
             try? await Task.sleep(for: .seconds(2))
             copied = false
+            try? await Task.sleep(for: .seconds(58))
+            if pasteboard.changeCount == ours {
+                pasteboard.clearContents()
+            }
         }
     }
 }

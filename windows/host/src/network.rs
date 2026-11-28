@@ -246,6 +246,8 @@ pub trait Network: Send + Sync {
     fn port_free(&self, port: u16) -> bool;
     /// Whether IP Helper (iphlpsvc) runs, which listens for every portproxy entry.
     fn ip_helper_running(&self) -> bool;
+    /// The network card that answers at `address`, written as a machine's record keeps its own.
+    fn card_at(&self, address: Ipv4Addr) -> Result<String, String>;
     /// Whether a machine can be bridged, and onto which adapters, with where Hyper-V stands. Its
     /// feature is read only while its service isn't there, as that read takes seconds.
     fn bridging(&self) -> Bridging;

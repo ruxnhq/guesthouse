@@ -15,21 +15,6 @@ pub fn state_beside(disk: &Path) -> PathBuf {
     disk.with_extension("screen")
 }
 
-/// The file in the guest's screen folder that says who may reach remoteman's port.
-pub const HOSTS_FILE: &str = "hosts.txt";
-
-/// What [`HOSTS_FILE`] holds: the network the machine is on, `shared` or `bridged`, then this PC's
-/// addresses, a line each. On the shared network the guest also lets in its default gateway, which
-/// is this PC on that network and may not have an address yet when the file is written, as Windows
-/// makes the network's adapter as the machine starts.
-pub fn hosts_file(bridged: bool, addresses: &[Ipv4Addr]) -> String {
-    let mut text = String::from(if bridged { "bridged\n" } else { "shared\n" });
-    for address in addresses {
-        text.push_str(&format!("{address}\n"));
-    }
-    text
-}
-
 /// Whether `address` can be one of this PC's own addresses that a guest sees packets come from.
 pub fn own_address(address: Ipv4Addr) -> bool {
     !(address.is_loopback()
@@ -71,11 +56,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_guest_is_told_its_network_and_this_pcs_addresses_a_line_each() {
-        let addresses = [Ipv4Addr::new(192, 168, 1, 20), Ipv4Addr::new(172, 30, 0, 1)];
-        assert_eq!(hosts_file(true, &addresses), "bridged\n192.168.1.20\n172.30.0.1\n");
-        assert_eq!(hosts_file(false, &[]), "shared\n");
-        assert!(SCRIPT.contains(&format!("'{HOSTS_FILE}'")), "the guest reads the file by this name");
+    fn the_screen_reads_the_hosts_file_where_the_host_writes_it() {
+        assert!(SCRIPT.contains(&format!(r"'C:\{}'", crate::guest::HOSTS_PATH)));
+    }
+
+    /// The screen's script changes firewall rules only through the report's functions, which make a
+    /// rule with its addresses and turn it off when none is known, and the report defines each one
+    /// before it runs the script.
+    #[test]
+    fn the_screen_changes_its_rules_only_through_the_reports_functions() {
+        for cmdlet in ["New-NetFirewallRule", "Set-NetFirewallRule", "Enable-NetFirewallRule"] {
+            assert!(!SCRIPT.contains(cmdlet), "{cmdlet}");
+        }
+        let runs = crate::guest::REPORT.find(". $screenScript").unwrap();
+        for function in ["Get-HostAddresses", "Get-Gateways", "Set-HostRule", "Limit-HostRule"] {
+            assert!(SCRIPT.contains(&format!("{function} ")), "{function}");
+            let defined = crate::guest::REPORT.find(&format!("function {function}(")).unwrap();
+            assert!(defined < runs, "{function}");
+        }
+        let script = SCRIPT.replace("\r\n", "\n");
+        let first_rule = script.find("Set-HostRule $rule").unwrap();
+        for way_out in ["\n    return\n", "\n        return\n"] {
+            assert!(script.find(way_out).is_none_or(|at| at > first_rule), "a return before the rule is set");
+        }
     }
 
     #[test]

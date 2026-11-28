@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{self, ErrorKind, copy};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const IN_ROOT: ResolveFlags = ResolveFlags::IN_ROOT.union(ResolveFlags::NO_MAGICLINKS);
 const NEW_FILE: Mode = Mode::from_raw_mode(0o666);
@@ -84,6 +84,18 @@ fn remove_at(parent: &OwnedFd, name: &OsStr) -> io::Result<()> {
     Ok(unlinkat(parent, name, AtFlags::REMOVEDIR)?)
 }
 
+/// Only a regular file is read or written: a pipe or a device the PC put in the folder would hold the
+/// connection, or be written to. `NONBLOCK` makes the open of one return at once, and its kind is
+/// checked on the open handle.
+fn plain_file(file: OwnedFd) -> io::Result<File> {
+    if FileType::from_raw_mode(fstat(&file)?.st_mode) != FileType::RegularFile {
+        return Err(ErrorKind::PermissionDenied.into());
+    }
+    Ok(File::from(file))
+}
+
+const FILE_OPEN: OFlags = OFlags::NONBLOCK.union(OFlags::NOCTTY);
+
 /// Keeps links as links: following one could lead out of the share.
 fn copy_at(from: &OwnedFd, name: &OsStr, to: &OwnedFd, new_name: &OsStr) -> io::Result<()> {
     let found = statat(from, name, AtFlags::SYMLINK_NOFOLLOW)?;
@@ -105,15 +117,51 @@ fn copy_at(from: &OwnedFd, name: &OsStr, to: &OwnedFd, new_name: &OsStr) -> io::
             }
             Ok(())
         }
-        _ => {
-            let read = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-            let write = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-            let mut source = File::from(openat(from, name, read, Mode::empty())?);
-            let mut target = File::from(openat(to, new_name, write, NEW_FILE)?);
+        FileType::RegularFile => {
+            let read = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | FILE_OPEN;
+            let write = OFlags::WRONLY
+                | OFlags::CREATE
+                | OFlags::TRUNC
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | FILE_OPEN;
+            let mut source = plain_file(openat(from, name, read, Mode::empty())?)?;
+            let mut target = plain_file(openat(to, new_name, write, NEW_FILE)?)?;
             copy(&mut source, &mut target).map(|_| ())
         }
+        _ => Err(ErrorKind::PermissionDenied.into()),
     }
 }
+
+/// Every link at or under an entry: where it is from the entry, and what it says.
+fn links_at(
+    parent: &OwnedFd,
+    name: &OsStr,
+    place: &Path,
+    found: &mut Vec<(PathBuf, PathBuf)>,
+) -> io::Result<()> {
+    match FileType::from_raw_mode(statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?.st_mode) {
+        FileType::Symlink => {
+            let text = readlinkat(parent, name, Vec::new())?;
+            found.push((place.to_owned(), PathBuf::from(OsStr::from_bytes(text.as_bytes()))));
+        }
+        FileType::Directory => {
+            let folder = folder_at(parent, name)?;
+            for (child, _) in names_in(&folder)? {
+                links_at(&folder, &child, &place.join(&child), found)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn same_entry(one: &rustix::fs::Stat, other: &rustix::fs::Stat) -> bool {
+    one.st_dev == other.st_dev && one.st_ino == other.st_ino
+}
+
+/// Past this many folders up from a copy's target the root still wasn't met, which can't be right.
+const MOST_DEPTH: u32 = 4096;
 
 impl Root {
     pub fn new(folder: &Path) -> io::Result<Self> {
@@ -146,17 +194,18 @@ impl Root {
     }
 
     pub fn read(&self, path: &Path) -> io::Result<File> {
-        Ok(File::from(self.open(path, OFlags::RDONLY, Mode::empty())?))
+        plain_file(self.open(path, OFlags::RDONLY | FILE_OPEN, Mode::empty())?)
     }
 
     pub fn create(&self, path: &Path) -> io::Result<File> {
-        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC;
-        Ok(File::from(self.open(path, flags, NEW_FILE)?))
+        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | FILE_OPEN;
+        plain_file(self.open(path, flags, NEW_FILE)?)
     }
 
     /// Makes an empty file, and leaves one that's there as it is.
     pub fn touch(&self, path: &Path) -> io::Result<()> {
-        self.open(path, OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND, NEW_FILE).map(|_| ())
+        plain_file(self.open(path, OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND | FILE_OPEN, NEW_FILE)?)
+            .map(|_| ())
     }
 
     pub fn names(&self, path: &Path) -> io::Result<Vec<OsString>> {
@@ -179,9 +228,47 @@ impl Root {
         Ok(renameat(&source, name, &target, new_name)?)
     }
 
+    /// A folder is never copied into itself, however the target's path is written: its folders are
+    /// followed up to the root, and none may be the source.
     pub fn copy(&self, from: &Path, to: &Path) -> io::Result<()> {
         let ((source, name), (target, new_name)) = (self.parent_of(from)?, self.parent_of(to)?);
+        let found = statat(&source, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        if FileType::from_raw_mode(found.st_mode) == FileType::Directory && self.lies_in(&found, &target)? {
+            return Err(ErrorKind::PermissionDenied.into());
+        }
         copy_at(&source, name, &target, new_name)
+    }
+
+    /// Whether `folder` is `at` or one of the folders above it, up to the root.
+    fn lies_in(&self, folder: &rustix::fs::Stat, at: &OwnedFd) -> io::Result<bool> {
+        let root = fstat(&self.handle)?;
+        let mut here = fstat(at)?;
+        let mut handle: Option<OwnedFd> = None;
+        for _ in 0..MOST_DEPTH {
+            if same_entry(&here, folder) {
+                return Ok(true);
+            }
+            if same_entry(&here, &root) {
+                return Ok(false);
+            }
+            let up = openat(
+                handle.as_ref().map_or(at.as_fd(), AsFd::as_fd),
+                "..",
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+            here = fstat(&up)?;
+            handle = Some(up);
+        }
+        Ok(true)
+    }
+
+    /// Every link at or under `path`, not followed: where each is from `path`, and what it says.
+    pub fn links(&self, path: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
+        let (parent, name) = self.parent_of(path)?;
+        let mut found = Vec::new();
+        links_at(&parent, name, Path::new(""), &mut found)?;
+        Ok(found)
     }
 }
 

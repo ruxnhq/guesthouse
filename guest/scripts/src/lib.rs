@@ -12,6 +12,7 @@
 
 mod agent;
 mod ctl_channel;
+mod display_settings;
 mod guest_rights;
 mod nv_files;
 mod nv_store;

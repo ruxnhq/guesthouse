@@ -6,6 +6,7 @@
 mod amd;
 mod android;
 mod arguments;
+mod disk_node;
 mod drives;
 mod forwarding_jail;
 mod macos;
@@ -19,6 +20,7 @@ mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
 pub use android::{AndroidBoot, AndroidCard, LOGCAT_FILE};
+pub use disk_node::names_disk_file;
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
 pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;

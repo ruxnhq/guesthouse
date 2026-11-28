@@ -3,6 +3,7 @@
 //! whether or not it gets the GPU.
 
 use super::arguments::{RELATIVE_MOUSE, words};
+use super::disk_node::{DiskOptions, disk_node};
 use super::{Boot, UbuntuBoot, UbuntuInstall, VmPlan};
 use crate::linux::card::ForwardedCard;
 use crate::text::qemu_value;
@@ -70,8 +71,10 @@ impl VmPlan {
             &install.initrd.to_string_lossy(),
             "-append",
             INSTALL_COMMAND_LINE,
-            "-drive",
-            &format!("file={},if=virtio,format=qcow2", qemu_value(&self.disk)),
+            "-blockdev",
+            &disk_node("system", &self.disk, &self.disk_chain(), DiskOptions::default()),
+            "-device",
+            "virtio-blk-pci,drive=system",
             "-drive",
             &format!("file={},format=raw,media=cdrom,readonly=on", qemu_value(&install.iso)),
             "-drive",
@@ -168,8 +171,8 @@ impl VmPlan {
             &self.ram,
             "-object",
             &format!("memory-backend-memfd,id=ram0,size={},share=on", self.ram),
-            "-drive",
-            &format!("if=none,id=system,file={},format=qcow2", qemu_value(&self.disk)),
+            "-blockdev",
+            &disk_node("system", &self.disk, &self.disk_chain(), DiskOptions::default()),
             "-device",
             "virtio-blk-pci,drive=system,bootindex=1",
             "-nic",
@@ -314,7 +317,9 @@ mod tests {
         let scratch = Scratch::new();
         let arguments = plan(&scratch_context(&scratch), with_gpu()).qemu_arguments();
         assert!(arguments.iter().any(|word| word == "virtio-blk-pci,drive=system,bootindex=1"));
-        assert!(arguments.iter().any(|word| word.contains("file=/m/disk.qcow2,")));
+        assert!(
+            arguments.iter().any(|word| crate::vm_args::names_disk_file(word.as_bytes(), "/m/disk.qcow2"))
+        );
         assert!(arguments.iter().any(|word| word.contains("/run/qmp.sock,")));
     }
 

@@ -8,9 +8,11 @@
 
 use super::amd::{RENDER_SERVER, SHADER_CACHE, VULKAN_DRIVER_FOLDERS, mesa_egl, radv_manifest};
 use super::arguments::words;
+use super::disk_node::{DiskOptions, disk_node};
 use super::forwarding_jail::{DEVICES, gpu_nodes};
 use super::macos::UDMABUF;
 use super::{Boot, VmPlan};
+use crate::disk_image::backing::{BackingFile, DISK_FORMAT};
 use crate::firmware::format_of;
 use crate::gpu_maker::GpuMaker;
 use crate::linux::card::ForwardedCard;
@@ -112,6 +114,19 @@ pub struct AndroidBoot {
     pub play: bool,
 }
 
+impl AndroidBoot {
+    /// The files QEMU reads the data disk through: a throwaway run's is an overlay on the machine's
+    /// own, which stands alone.
+    pub(super) fn data_chain(&self) -> Vec<BackingFile> {
+        let base = self.data_base.iter();
+        base.map(|base| BackingFile {
+            path: base.to_string_lossy().into_owned(),
+            format: DISK_FORMAT.to_owned(),
+        })
+        .collect()
+    }
+}
+
 impl VmPlan {
     pub(super) fn android_boot(&self) -> Option<&AndroidBoot> {
         match &self.boot {
@@ -152,15 +167,16 @@ impl VmPlan {
             &format!("if=pflash,format={format},unit=0,readonly=on,file={}", self.firmware.code.display()),
             "-drive",
             &format!("if=pflash,format={format},unit=1,file={}", qemu_value(&self.vars)),
-            "-drive",
-            // The file before the format, which is how a running VM is known by its disk.
-            &format!("if=none,id=vda,file={},format=qcow2,discard=unmap", qemu_value(&self.disk)),
+            "-blockdev",
+            &disk_node("vda", &self.disk, &self.disk_chain(), DiskOptions { cache: None, discard: true }),
             "-device",
             "virtio-blk-pci,drive=vda,bootindex=0",
-            "-drive",
-            &format!(
-                "if=none,id=vdb,file={},format=qcow2,discard=unmap",
-                qemu_value(&boot.data.to_string_lossy())
+            "-blockdev",
+            &disk_node(
+                "vdb",
+                &boot.data.to_string_lossy(),
+                &boot.data_chain(),
+                DiskOptions { cache: None, discard: true },
             ),
             "-device",
             "virtio-blk-pci,drive=vdb",
@@ -319,9 +335,13 @@ mod tests {
     #[test]
     fn it_boots_its_two_disks_on_virtio_and_draws_on_the_card_through_venus() {
         let arguments = plan(GpuMaker::Amd).qemu_arguments();
-        let disk = value_after(&arguments, "-drive", "if=none,id=vda").unwrap();
-        assert!(disk.contains("file=/m/droid/disk.qcow2"), "{disk}");
-        assert!(value_after(&arguments, "-drive", "if=none,id=vdb").unwrap().contains("data.qcow2"));
+        let disk = value_after(&arguments, "-blockdev", "{").unwrap();
+        assert!(
+            disk.contains(r#""filename":"/m/droid/disk.qcow2""#) && disk.contains(r#""node-name":"vda""#)
+        );
+        let nodes: Vec<&String> =
+            arguments.windows(2).filter(|two| two[0] == "-blockdev").map(|two| &two[1]).collect();
+        assert!(nodes[1].contains("data.qcow2") && nodes[1].contains(r#""node-name":"vdb""#), "{nodes:?}");
         for setting in ["venus=on", "blob=on", "resource_uuid=on", "hostmem=4G"] {
             assert!(arguments.contains(&format!("virtio-vga-gl.{setting}")), "{setting}");
         }

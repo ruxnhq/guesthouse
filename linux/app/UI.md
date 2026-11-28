@@ -29,6 +29,24 @@ styles in `data/style/own.css`.
   to scroll keeps its buttons in a bottom bar that doesn't.
 - Cards and rows use the app's hairline (`@hairline`) and the 20px corner of `machine-card`.
 
+## Looks
+
+One setting, Look, picks who draws the app (`src/theme`). Automatic picks by what the desktop says it is:
+
+- Tide on a tiling compositor (Hyprland, Sway, niri and the like): compact, no bar of its own when the
+  window is tiled, machines down a sidebar, and the frame and sidebar see-through only where the compositor
+  says it blurs. A machine's card says how it stands by the classes `running`, `attention` and `failed`
+  (`src/window/weight.rs`), which Tide moves and colours. Its styles are `tide.css` on `tide-dark.css` or
+  `tide-light.css`, and `glass.css` where there is blur.
+- KDE on Plasma: Breeze's colours, or the user's from `kdeglobals`, KWin's button order and smaller corners
+  (`kde.css`).
+- System everywhere else: the desktop's GTK theme, with only the app's own widgets styled (`desktop.css`).
+
+Nothing in any look is drawn over or behind the guest's screen. `page_shots` checks that GTK reads every
+look's stylesheet whole, so a property GTK doesn't have fails there.
+
+A build with the `preview` feature shows a machine in each state without a VM: see `src/preview.rs`.
+
 ## Checking
 
 `page-shots.sh` draws every page in software. Look at the pictures after any change to a page, and keep a

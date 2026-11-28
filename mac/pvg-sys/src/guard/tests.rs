@@ -298,7 +298,22 @@ impl Play {
         self.send(number, &[0, page(at)])
     }
 
+    /// A cursor's picture at this address of the kernel task, 32 by 32 where the length mapped
+    /// holds that and one pixel otherwise.
     fn glyph(&mut self, address: u64, mapped_length: u64) -> Vec<Step> {
+        let side = if mapped_length >= 32 * 128 { 32 } else { 1 };
+        self.glyph_rows(address, mapped_length, side * 4, side, side)
+    }
+
+    /// The same, with rows of `row_bytes` each.
+    fn glyph_rows(
+        &mut self,
+        address: u64,
+        mapped_length: u64,
+        row_bytes: u32,
+        width: u32,
+        height: u32,
+    ) -> Vec<Step> {
         let number = self.profile.commands.cursor_glyph.number;
         let words = [
             0,
@@ -308,7 +323,7 @@ impl Play {
             mapped_length as u32,
             (mapped_length >> 32) as u32,
         ];
-        self.send(number, &[words.as_slice(), &[128, 0, 32 | 32 << 16, 0, 0]].concat())
+        self.send(number, &[words.as_slice(), &[row_bytes, 0, width | height << 16, 0, 0]].concat())
     }
 
     fn mapper(&mut self, offset: u64, value: u64, written_now: u64) -> Result<(), Why> {
@@ -1692,9 +1707,22 @@ fn a_cursor_s_picture_is_read_for_the_host_as_the_command_names_it() {
     assert_eq!(glyph.pixels.len(), 32 * 32 * 4);
     assert_eq!(glyph.pixels[(2 * 32 + 1) * 4..][..4], 0xFF11_2233u32.to_le_bytes());
     assert_eq!(play.guard.take_glyph(), None, "taken once");
-    // A picture that its memory doesn't hold is a command for the device and no picture here.
-    play.glyph(0, 31 * 128);
-    assert_eq!(play.refused, []);
+    // A picture longer than the length mapped is refused, at the row length the command gives.
+    let position = play.written;
+    play.glyph_rows(0, 31 * 128, 128, 32, 32);
+    assert_eq!(play.why(), Some(Why::PictureNotMapped));
+    assert_eq!(play.ring_word(position), play.profile.commands.refused);
+    assert_eq!(play.guard.take_glyph(), None);
+    play.glyph_rows(0, 32 * 128, 256, 32, 32);
+    assert_eq!(play.why(), Some(Why::PictureNotMapped));
+    play.glyph_rows(0, 32 * 128, u32::MAX, 32, 2);
+    assert_eq!(play.why(), Some(Why::PictureNotMapped));
+    // Rows with a gap between them that end within it are read, and so is no picture at all.
+    play.glyph_rows(0, 31 * 128 + 64, 128, 16, 32);
+    assert_eq!(play.why(), None);
+    assert_eq!(play.guard.take_glyph().map(|glyph| (glyph.width, glyph.height)), Some((16, 32)));
+    play.glyph_rows(0, 16, 0, 0, 0);
+    assert_eq!(play.why(), None);
     assert_eq!(play.guard.take_glyph(), None);
 }
 

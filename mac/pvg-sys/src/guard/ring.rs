@@ -451,6 +451,20 @@ impl Guard {
         if !task.maps(address, mapped_length) {
             return Err(Why::PictureNotMapped);
         }
+        // The device reads each row at the command's row length, so the picture's last row has
+        // to end within the length the task maps.
+        let row_bytes = words.payload64(6).ok_or(Why::RingLayout)?;
+        let size = words.payload(8).ok_or(Why::RingLayout)?;
+        let (width, height) = (u64::from(size & 0xFFFF), u64::from(size >> 16));
+        let reach = match height.checked_sub(1) {
+            Some(rows_before) if width != 0 => {
+                row_bytes.checked_mul(rows_before).and_then(|at| at.checked_add(width * GLYPH_PIXEL_BYTES))
+            }
+            _ => Some(0),
+        };
+        if reach.is_none_or(|reach| reach > mapped_length) {
+            return Err(Why::PictureNotMapped);
+        }
         *self.glyph.borrow_mut() = self.read_glyph(words, address, mapped_length);
         Ok(Judged::Plain)
     }

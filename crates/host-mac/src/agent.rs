@@ -134,6 +134,8 @@ struct Shared {
     pairing: guesthouse_remote_view_core::session::Sessions,
     subscribers: Mutex<Vec<(u64, Sender<String>)>>,
     next_subscriber: Mutex<u64>,
+    /// Which build this agent is, told by the program that made it (`set_build`).
+    build: std::sync::OnceLock<crate::agent_build::Identity>,
 }
 
 /// The agent. Cloning gives another handle on the same machines.
@@ -164,11 +166,23 @@ impl Agent {
                 pairing: guesthouse_remote_view_core::session::Sessions::default(),
                 subscribers: Mutex::new(Vec::new()),
                 next_subscriber: Mutex::new(0),
+                build: std::sync::OnceLock::new(),
             }),
         };
         agent.adopt_running();
         agent.resume_installs();
         agent
+    }
+
+    /// Tells the agent which build it is, from the bundle's version and build number: the
+    /// identity (`agent_build`) of this program as it is now. Said once, when it starts.
+    pub fn set_build(&self, version: &str, build: &str) {
+        let identity = std::env::current_exe()
+            .ok()
+            .and_then(|program| crate::agent_build::identity_of(&program, version, build));
+        if let Some(identity) = identity {
+            let _ = self.shared.build.set(identity);
+        }
     }
 
     /// Answers one request line with one answer line. Never waits on QEMU.
@@ -184,6 +198,7 @@ impl Agent {
                 response.machines = Some(self.list());
                 response.shares = Some(self.shares());
                 response.installs = Some(self.installs());
+                response.agent = self.shared.build.get().cloned();
                 return response.to_line();
             }
             Op::Start { machine, qemu, rmhost, pvg_host, scale } => {

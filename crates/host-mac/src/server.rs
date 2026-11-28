@@ -162,6 +162,24 @@ impl Connection {
         Ok(Connection { output: stream, lines })
     }
 
+    /// The process id of the agent at the other end of the socket.
+    pub fn peer_pid(&self) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        let mut pid: libc::pid_t = 0;
+        let mut size = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        // SAFETY: the socket is open for as long as `self`, and `pid` has room for its answer.
+        let failed = unsafe {
+            libc::getsockopt(
+                self.output.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut size,
+            )
+        } != 0;
+        (!failed && pid > 0).then_some(pid)
+    }
+
     pub fn send(&self, line: &str) -> io::Result<()> {
         (&self.output).write_all(format!("{line}\n").as_bytes())
     }

@@ -18,6 +18,13 @@ guard let agent = guesthouse_agent_new() else {
     fputs("guesthouse-agent: no home folder\n", stderr)
     exit(1)
 }
+// Which build this is, so the app can tell its own agent from one an older app left running.
+let bundleInfo = Bundle.main.infoDictionary
+guesthouse_agent_set_build(
+    agent,
+    bundleInfo?["CFBundleShortVersionString"] as? String ?? "0",
+    bundleInfo?["CFBundleVersion"] as? String ?? "0"
+)
 let arguments = CommandLine.arguments
 
 if arguments.contains("--print-state") {

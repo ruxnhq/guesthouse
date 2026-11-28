@@ -7,6 +7,8 @@ import GuesthouseCore
 nonisolated protocol AgentLink: AnyObject, Sendable {
     func send(_ line: String)
     func close()
+    /// The process id of the agent at the other end, or 0 when it cannot be told.
+    var peerPID: Int32 { get }
 }
 
 /// The agent's Unix socket, for an agent the app started itself.
@@ -14,11 +16,13 @@ nonisolated final class SocketLink: AgentLink, @unchecked Sendable {
     private let lock = NSLock()
     private nonisolated(unsafe) var connection: OpaquePointer?
     private var closing = false
+    nonisolated let peerPID: Int32
 
     /// nil when no agent is listening on `path`.
     init?(path: String, onLine: @escaping @Sendable (String) -> Void, onClose: @escaping @Sendable () -> Void) {
         guard let opened = guesthouse_connection_open(path) else { return nil }
         connection = opened
+        peerPID = guesthouse_connection_peer_pid(opened)
         let handle = ConnectionHandle(raw: opened)
         // The thread owns the connection's end of life: it closes it once `close()` was called
         // or the agent hung up, so no send can be using a freed connection.
@@ -65,6 +69,9 @@ nonisolated final class SocketLink: AgentLink, @unchecked Sendable {
 nonisolated final class XPCLink: NSObject, AgentLink, AgentListener, @unchecked Sendable {
     private let connection: NSXPCConnection
     private let onLine: @Sendable (String) -> Void
+
+    /// Known once the service has answered something.
+    var peerPID: Int32 { connection.processIdentifier }
 
     init(onLine: @escaping @Sendable (String) -> Void, onClose: @escaping @Sendable () -> Void) {
         self.onLine = onLine

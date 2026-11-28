@@ -13,10 +13,24 @@ nonisolated struct AgentAnswer {
     /// For a listing or `install_status`: the installs. For `install`: the new machine's id.
     var installs: [String: InstallStatus]? = nil
     var machine: String? = nil
+    /// The line the answer came in, for what reads it again (which build the agent is).
+    var line = ""
 
     static func failure(_ text: String) -> AgentAnswer {
         AgentAnswer(ok: false, error: text, statuses: nil)
     }
+}
+
+/// An agent of another build that is still running machines.
+nonisolated struct OlderAgent: Equatable {
+    /// Its build, as the person reads it.
+    let older: String
+    /// The machines running in it, by the agent's name for them (the folder's name).
+    let machines: [String]
+    /// Those of them that are being installed.
+    let installing: [String]
+    /// Whether this app can work with it for now.
+    let canContinue: Bool
 }
 
 /// The app's side of the agent: finds or starts it, sends what the user asks, and keeps the
@@ -34,11 +48,20 @@ final class AgentModel {
     @ObservationIgnored var onChange: () -> Void = {}
     /// How the agent is reached, for Settings: what is live and why not the other.
     private(set) var route = String(localized: "Not connected")
+    /// An agent of another build that has machines running: what it holds, until the person
+    /// has chosen. nil when the agent is this app's own or has been replaced.
+    private(set) var olderAgent: OlderAgent?
+    /// Told when an older agent with machines is found, so the library can say so in the window.
+    @ObservationIgnored var onOlderAgent: (OlderAgent) -> Void = { _ in }
 
     @ObservationIgnored private var link: AgentLink?
     @ObservationIgnored private var nextID = 0
     @ObservationIgnored private var pending: [Int: CheckedContinuation<AgentAnswer, Never>] = [:]
     @ObservationIgnored private var maintaining = false
+    /// An older agent this app cannot work with is connected, only to shut its machines down.
+    @ObservationIgnored private var awaitingOlder = false
+    @ObservationIgnored private var olderPID: Int32 = 0
+    @ObservationIgnored private var askedAboutOlder = false
     @ObservationIgnored private let log = Logger(subsystem: "com.ruxn.guesthouse", category: "agent")
 
     func status(of machine: Machine) -> MachineStatus {
@@ -60,7 +83,7 @@ final class AgentModel {
         maintaining = true
         Task {
             while true {
-                if !connected { await establish() }
+                if !connected && !awaitingOlder { await establish() }
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -157,36 +180,58 @@ final class AgentModel {
 
     // MARK: Connecting
 
+    private enum Adoption { case taken, none, replaced }
+
+    /// Connects to an agent that is this app's own. An older one with nothing running is
+    /// replaced, which needs a second look at what is there. When launchd starts another copy's
+    /// agent again after it was replaced (two copies of Guesthouse on the Mac with one bundle
+    /// identifier, such as one in Downloads: launchd finds the agent's program by that
+    /// identifier and may pick the other copy), launchd is given up for this run and the app
+    /// starts its own agent from its own bundle, over the socket.
     private func establish() async {
-        var why: String?
-        if AgentLauncher.preferLaunchd {
+        var launchd = AgentLauncher.preferLaunchd
+        var patience = LaunchdPatience()
+        for _ in 0..<5 {
+            guard await establishOnce(launchd: launchd) == .replaced else { return }
+            if launchd && patience.replacedOne() { launchd = false }
+        }
+    }
+
+    private func establishOnce(launchd: Bool) async -> Adoption {
+        var why: String? = launchd || !AgentLauncher.preferLaunchd
+            ? nil : String(localized: "launchd starts the agent of another copy of Guesthouse")
+        if launchd {
             switch AgentLauncher.registerWithLaunchd() {
             case .ready:
-                if await adopt(XPCLink(onLine: lineHandler, onClose: closeHandler), route: String(localized: "launchd, over XPC")) {
-                    return
+                switch await adopt(XPCLink(onLine: lineHandler, onClose: closeHandler), route: String(localized: "launchd, over XPC")) {
+                case .taken: return .taken
+                case .replaced: return .replaced
+                case .none: why = String(localized: "launchd's agent did not answer")
                 }
-                why = String(localized: "launchd's agent did not answer")
             case .failed(let reason):
                 why = reason
             }
             log.notice("Not using launchd: \(why ?? "", privacy: .public)")
         }
         let socket = Core.agentSocketPath
-        if let socket, await adopt(SocketLink(path: socket, onLine: lineHandler, onClose: closeHandler), route: socketRoute(why)) {
-            return
+        if let socket {
+            let found = await adopt(SocketLink(path: socket, onLine: lineHandler, onClose: closeHandler), route: socketRoute(why))
+            if found != .none { return found }
         }
         if let support = Core.supportFolder, let problem = AgentLauncher.startDetached(supportFolder: support) {
             route = problem
-            return
+            return .none
         }
         // The agent needs a moment to open its socket.
         for _ in 0..<30 {
             try? await Task.sleep(for: .milliseconds(100))
-            if let socket, await adopt(SocketLink(path: socket, onLine: lineHandler, onClose: closeHandler), route: socketRoute(why)) {
-                return
+            if let socket {
+                let found = await adopt(SocketLink(path: socket, onLine: lineHandler, onClose: closeHandler), route: socketRoute(why))
+                if found != .none { return found }
             }
         }
         route = String(localized: "The agent did not start")
+        return .none
     }
 
     private func socketRoute(_ why: String?) -> String {
@@ -194,15 +239,50 @@ final class AgentModel {
         return why.map { "\(base) (\($0))" } ?? base
     }
 
-    /// Takes `link` if the agent answers a listing through it.
-    private func adopt(_ candidate: (any AgentLink)?, route: String) async -> Bool {
-        guard let candidate else { return false }
+    /// Takes `link` if the agent answers a listing through it and is this app's own. Another
+    /// build with nothing running is ended (`.replaced`); one with machines running is told to
+    /// the person (`olderAgent`) and is kept while the app can work with it.
+    private func adopt(_ candidate: (any AgentLink)?, route: String) async -> Adoption {
+        guard let candidate else { return .none }
         link = candidate
         let answer = await ask(["op": "list"], timeout: .seconds(3))
         guard answer.ok, let listed = answer.statuses else {
             candidate.close()
             link = nil
-            return false
+            return .none
+        }
+        var route = route
+        switch AgentBuild.verdict(ofListing: answer.line) {
+        case .own:
+            break
+        case .replace(let older):
+            log.notice("Replacing the agent of \(older, privacy: .public) with this app's own")
+            if LaunchOptions.printStates { print("older agent: \(older), nothing running, replacing it") }
+            if await AgentLauncher.retire(pid: candidate.peerPID) {
+                candidate.close()
+                link = nil
+                return .replaced
+            }
+            log.notice("The agent of \(older, privacy: .public) would not leave; using it")
+            route += " " + String(localized: "(an older build that would not leave)")
+        case .busy(let older, let running, let installing, let canContinue):
+            olderPID = candidate.peerPID
+            let found = OlderAgent(older: older, machines: running, installing: installing, canContinue: canContinue)
+            olderAgent = found
+            if LaunchOptions.printStates {
+                print("older agent: \(older) running \(running.joined(separator: ", ")); can continue: \(canContinue)")
+            }
+            if !askedAboutOlder {
+                askedAboutOlder = true
+                onOlderAgent(found)
+            }
+            route = String(localized: "an older Guesthouse's agent (\(older)) that is still running machines")
+            if !canContinue {
+                // Only to shut its machines down; nothing else is shown from it.
+                awaitingOlder = true
+                self.route = route
+                return .taken
+            }
         }
         statuses = listed.filter { $0.value != .off }
         shares = answer.shares ?? [:]
@@ -218,7 +298,7 @@ final class AgentModel {
         connected = true
         self.route = route
         onChange()
-        return true
+        return .taken
     }
 
     private var lineHandler: @Sendable (String) -> Void {
@@ -230,11 +310,58 @@ final class AgentModel {
     }
 
     private func lost() {
+        if awaitingOlder {
+            awaitingOlder = false
+            olderAgent = nil
+            link?.close()
+            link = nil
+            return
+        }
         guard connected else { return }
         connected = false
         route = String(localized: "Not connected")
         link?.close()
         link = nil
+    }
+
+    // MARK: An older agent
+
+    /// Not Now: the older agent is kept as it is while the app can work with it. When it cannot,
+    /// the app stays without machines and says why.
+    func keepOlderAgent() {
+        if awaitingOlder, let older = olderAgent {
+            route = String(localized: "An older Guesthouse is running \(ListFormatter.localizedString(byJoining: older.machines)); shut it down to use this version")
+        }
+    }
+
+    /// Shut Them Down and Update: asks each machine the older agent holds to shut down the
+    /// ordinary way, waits for them, and when they are all off ends the older agent and starts
+    /// this app's own. Nothing is forced.
+    func shutDownAndUpdate() {
+        guard let older = olderAgent, older.installing.isEmpty else { return }
+        Task {
+            for machine in older.machines { _ = await ask(["op": "shutdown", "machine": machine]) }
+            for _ in 0..<90 {
+                try? await Task.sleep(for: .seconds(1))
+                let answer = await ask(["op": "list"], timeout: .seconds(3))
+                guard answer.ok else { break }
+                if case .replace = AgentBuild.verdict(ofListing: answer.line) {
+                    log.notice("The older agent has nothing running; replacing it")
+                    let pid = olderPID
+                    link?.close()
+                    link = nil
+                    awaitingOlder = false
+                    olderAgent = nil
+                    connected = false
+                    _ = await AgentLauncher.retire(pid: pid)
+                    await establish()
+                    return
+                }
+            }
+            // Some machine did not shut down in time: the person is told again, and may try again.
+            askedAboutOlder = false
+            route = String(localized: "A machine in the older Guesthouse did not shut down")
+        }
     }
 
     // MARK: Lines
@@ -321,7 +448,8 @@ final class AgentModel {
             statuses: listed,
             shares: shared,
             installs: installed,
-            machine: object["machine"] as? String
+            machine: object["machine"] as? String,
+            line: line
         ))
     }
 

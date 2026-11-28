@@ -39,6 +39,45 @@ nonisolated enum AgentLauncher {
         }
     }
 
+    /// The launchd label of the agent, which is also its mach service.
+    private static let label = "com.ruxn.guesthouse.agent"
+
+    /// Ends an agent that has nothing running, so this app's own can take its place: it is taken
+    /// out of launchd (this bundle's registration, then whatever job holds the label, which may
+    /// be another bundle's) and, if it was not launchd's, sent SIGTERM. Waits for it to be gone,
+    /// and says so if it is not. It never sends SIGKILL.
+    static func retire(pid: Int32) async -> Bool {
+        let service = SMAppService.agent(plistName: plistName)
+        try? await service.unregister()
+        if await run("/bin/launchctl", ["print", "gui/\(getuid())/\(label)"]) {
+            _ = await run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
+        }
+        if await gone(pid, within: 3) { return true }
+        if pid > 1 { kill(pid, SIGTERM) }
+        return await gone(pid, within: 5)
+    }
+
+    private static func gone(_ pid: Int32, within seconds: Int) async -> Bool {
+        for _ in 0..<(seconds * 10) {
+            if pid <= 1 || (kill(pid, 0) != 0 && errno == ESRCH) { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return pid <= 1 || (kill(pid, 0) != 0 && errno == ESRCH)
+    }
+
+    /// Runs a program and says whether it ended well.
+    private static func run(_ program: String, _ arguments: [String]) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(filePath: program)
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus == 0) }
+            do { try process.run() } catch { continuation.resume(returning: false) }
+        }
+    }
+
     /// Takes the agent out of launchd again: for `--unregister-agent`.
     static func unregisterFromLaunchd() -> String {
         let service = SMAppService.agent(plistName: plistName)

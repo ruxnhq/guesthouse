@@ -65,6 +65,24 @@ pub unsafe extern "C" fn guesthouse_agent_handle(agent: *const Agent, line: *con
     }
 }
 
+/// Tells the agent which build it is: the bundle's version and build number, from which it makes
+/// its identity (`agent_build`) and says it in every listing.
+///
+/// # Safety
+/// `agent` came from `guesthouse_agent_new`; `version` and `build` are nul-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn guesthouse_agent_set_build(
+    agent: *const Agent,
+    version: *const c_char,
+    build: *const c_char,
+) {
+    // SAFETY: as the caller promises.
+    let (agent, version, build) = unsafe { (agent.as_ref(), from_c(version), from_c(build)) };
+    if let (Some(agent), Some(version), Some(build)) = (agent, version, build) {
+        agent.set_build(version, build);
+    }
+}
+
 /// Whether the agent has nothing running and nobody listening.
 ///
 /// # Safety
@@ -94,6 +112,20 @@ pub unsafe extern "C" fn guesthouse_agent_serve(agent: *const Agent, path: *cons
             eprintln!("guesthouse-agent: {path}: {error}");
             -1
         }
+    }
+}
+
+/// Answers a question about agent builds (see `agent_build::answer`): the identity of the agent
+/// program in the app's own bundle, and what to do about the agent that answered a listing.
+///
+/// # Safety
+/// `request` is a nul-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn guesthouse_agent_build(request: *const c_char) -> *mut c_char {
+    // SAFETY: as the caller promises.
+    match unsafe { from_c(request) } {
+        Some(request) => to_c(crate::agent_build::answer(request)),
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -204,6 +236,16 @@ pub unsafe extern "C" fn guesthouse_connection_receive(
             std::ptr::null_mut()
         }
     }
+}
+
+/// The process id of the agent at the other end, or 0 when it cannot be told.
+///
+/// # Safety
+/// `connection` is null or open.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn guesthouse_connection_peer_pid(connection: *const Connection) -> i32 {
+    // SAFETY: as the caller promises.
+    unsafe { connection.as_ref() }.and_then(Connection::peer_pid).unwrap_or(0)
 }
 
 /// Closes the connection.

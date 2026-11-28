@@ -330,3 +330,17 @@ fn the_socket_carries_answers_and_events_and_the_agent_leaves_when_idle() {
     assert!(started.elapsed() < Duration::from_secs(20));
     assert!(!Path::new(&socket).exists());
 }
+
+#[test]
+fn a_listing_says_which_build_the_agent_is_once_it_was_told() {
+    let support = Support::new();
+    let agent = support.agent();
+    let listing = || request(&agent, r#"{"v":1,"id":1,"op":"list"}"#);
+    assert!(listing().agent.is_none(), "an agent not told its build says none");
+    agent.set_build("0.1.2", "42");
+    let said = listing().agent.expect("the build is in the listing");
+    assert_eq!((said.version.as_str(), said.build.as_str()), ("0.1.2", "42"));
+    // It is the program running the test, which is what the agent says it is.
+    let own = std::env::current_exe().unwrap().canonicalize().unwrap();
+    assert_eq!(said.path, own.to_str().unwrap());
+}

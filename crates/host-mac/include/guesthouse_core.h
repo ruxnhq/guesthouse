@@ -149,6 +149,15 @@ GuesthouseAgent *guesthouse_agent_new(void);
 /* Answers one request line with one answer line. Does not wait on QEMU. */
 char *guesthouse_agent_handle(const GuesthouseAgent *agent, const char *line);
 
+/* Tells the agent which build it is: the bundle's version and build number. It makes its identity
+ * from them, its own program's path, size and time of change, and says it in every listing. */
+void guesthouse_agent_set_build(const GuesthouseAgent *agent, const char *version, const char *build);
+
+/* A question about agent builds, as JSON: {"what":"identity","program","version","build"} answers
+ * {"identity": {...}|null}; {"what":"judge","expected","answer"} answers what to do about the agent
+ * that gave a listing ("own", "replace" or "busy", with the machines running in it). */
+char *guesthouse_agent_build(const char *request);
+
 /* True when nothing is running and nobody is listening. */
 bool guesthouse_agent_is_idle(const GuesthouseAgent *agent);
 
@@ -174,5 +183,8 @@ bool guesthouse_connection_send(GuesthouseConnection *connection, const char *li
  * the agent hung up. */
 char *guesthouse_connection_receive(GuesthouseConnection *connection, uint32_t timeout_ms, bool *closed);
 void guesthouse_connection_close(GuesthouseConnection *connection);
+
+/* The process id of the agent at the other end of an open connection, or 0. */
+int32_t guesthouse_connection_peer_pid(const GuesthouseConnection *connection);
 
 #endif

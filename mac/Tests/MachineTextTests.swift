@@ -455,4 +455,28 @@ struct ProblemFromCoreTests {
         #expect(Problem.from(core: "{}") == nil)
         #expect(Problem.from(core: "garbled") == nil)
     }
+
+    @Test func theCoresVerdictOnAnotherAgentIsRead() {
+        #expect(AgentVerdict.from(core: #"{"verdict":"own"}"#) == .own)
+        #expect(AgentVerdict.from(core: #"{"verdict":"replace","older":"0.1.1 (1)"}"#) == .replace(older: "0.1.1 (1)"))
+        #expect(AgentVerdict.from(core: #"{"verdict":"busy","older":"an older build","running":["a","b"],"installing":[],"can_continue":true}"#)
+            == .busy(older: "an older build", running: ["a", "b"], installing: [], canContinue: true))
+        #expect(AgentVerdict.from(core: #"{"error":"x"}"#) == nil)
+    }
+
+    @Test func theOlderAgentSheetNamesTheMachinesAndWhatEachChoiceDoes() {
+        let problem = Problem.olderAgent(older: "0.1.1 (1)", machines: ["Windows 11", "Ubuntu"], installing: [], canContinue: true)
+        #expect(problem.title == "An older Guesthouse is still running machines")
+        #expect(problem.message.contains("Guesthouse 0.1.1 (1) is still running Windows 11 and Ubuntu."))
+        #expect(problem.message.contains("works with the older one until you quit"))
+        let stuck = Problem.olderAgent(older: "0.1.1 (1)", machines: ["Windows 11"], installing: ["Windows 11"], canContinue: false)
+        #expect(stuck.message.contains("Windows 11 is being installed"))
+        #expect(stuck.message.contains("shows no machines until they are shut down"))
+    }
+
+    @Test func launchdIsGivenUpAfterTwoAgentsOfAnotherCopyInARow() {
+        var patience = LaunchdPatience()
+        #expect(patience.replacedOne() == false)
+        #expect(patience.replacedOne() == true)
+    }
 }

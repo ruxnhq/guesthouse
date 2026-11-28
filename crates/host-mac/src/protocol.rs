@@ -189,6 +189,10 @@ pub struct Response {
     /// For `install`: the new machine's folder name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// For `list`: which build this agent is (`agent_build::Identity`), left out by an agent
+    /// that was not told its build, and by every older one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agent_build::Identity>,
 }
 
 impl Response {
@@ -202,6 +206,7 @@ impl Response {
             shares: None,
             installs: None,
             machine: None,
+            agent: None,
         }
     }
 
@@ -215,6 +220,7 @@ impl Response {
             shares: None,
             installs: None,
             machine: None,
+            agent: None,
         }
     }
 

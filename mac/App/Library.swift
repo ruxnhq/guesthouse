@@ -55,6 +55,13 @@ final class Library {
             self?.watchStarts()
             self?.repairInstalls()
         }
+        agent.onOlderAgent = { [weak self] older in
+            guard let self else { return }
+            let name = { (id: String) in self.machines.first { $0.agentID == id }?.name ?? id }
+            self.attention = .olderAgent(
+                older: older.older, machines: older.machines.map(name), installing: older.installing.map(name),
+                canContinue: older.canContinue)
+        }
         graphicsTimer = Timer.scheduledTimer(withTimeInterval: Self.graphicsEvery, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.readGraphics() }
         }

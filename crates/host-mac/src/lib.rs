@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod agent_api;
+pub mod agent_build;
 pub mod control;
 pub mod create;
 pub mod driver_version;

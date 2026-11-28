@@ -30,6 +30,7 @@ struct ProblemSheet: View {
 
     private var symbol: String {
         if case .didNotStart = problem { return "exclamationmark.circle" }
+        if case .olderAgent = problem { return "arrow.triangle.2.circlepath" }
         return "exclamationmark.triangle"
     }
 
@@ -93,6 +94,18 @@ struct ProblemSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(true)
                 .help("Needs the guest's help, which is not built yet")
+        case .olderAgent(_, _, let installing, _):
+            Button("Not Now") {
+                library.agent.keepOlderAgent()
+                dismiss()
+            }
+            if installing.isEmpty {
+                Button("Shut Them Down and Update") {
+                    library.agent.shutDownAndUpdate()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
         case .didNotStart(_, let machineID):
             if let target = library.machines.first(where: { $0.id == machineID }) {
                 Button("Send Report") { library.report(machine: target, kind: .wontStart) }

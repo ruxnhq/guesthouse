@@ -234,6 +234,7 @@ fn run(
     let line_sink = Arc::clone(sink);
     let line_stop = Arc::clone(&stop);
     let mut marked = false;
+    let mut screen_kept = false;
     let on_line = move |line: &str| {
         heard_here.store(true, Ordering::SeqCst);
         // The same as Ctrl+C: the guest is asked to shut down, and stopped if it won't.
@@ -248,10 +249,9 @@ fn run(
         };
         // Each change is made to the record as it is on the disk now, so neither undoes the other.
         if let Some(fingerprint) = crate::screen::fingerprint_in(line) {
-            let kept =
-                Record::load(&disk).and_then(|kept| Record { screen: Some(fingerprint), ..kept }.save(&disk));
-            match kept {
-                Ok(()) => line_sink.note("The guest's screen is ready, and the viewer knows it."),
+            match Record::keep_screen(&disk, fingerprint, &mut screen_kept) {
+                Ok(true) => line_sink.note("The guest's screen is ready, and the viewer knows it."),
+                Ok(false) => {}
                 Err(error) => line_sink.problem(error),
             }
         }

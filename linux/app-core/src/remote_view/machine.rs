@@ -510,9 +510,10 @@ pub fn share(
     set_allowed(context, machine, on)?;
     let Some(slot) = running_slot(context, machine) else { return Ok(info(context, machine)) };
     if !on {
+        // The LAN side closes first; the guest hears of it after.
+        close_helper(context, slot);
         step(context, machine, slot, StepEvent::Plain(Event::SwitchOff));
         let _ = run_ctl(context, machine, slot, &ctl::share(false));
-        close_helper(context, slot);
         return Ok(info(context, machine));
     }
     if !was || pid(context, Some(slot)).is_none() || !helper_listening(context, slot) {

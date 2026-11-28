@@ -105,16 +105,19 @@ pub fn qemu_has_device(program: &Path, device: &str) -> bool {
 /// What the graphics process says to `status`: a line such as `ok picture 1024x768 presented 9
 /// read 3 frames 803 refused 0 spoiled false published 803 skipped 0 dropped 0 failed 0`,
 /// as JSON: every word followed by a number becomes a number, `picture` stays "WxH".
+/// The longest status line taken from the graphics process.
+const LONGEST_STATUS: usize = 64 * 1024;
+
 pub fn graphics_status(control: &Path) -> Result<serde_json::Value, String> {
-    use std::io::{BufRead, BufReader, Write};
+    use guesthouse_basics::capped_line::read_capped_line;
+    use std::io::{BufReader, Write};
     let mut stream = std::os::unix::net::UnixStream::connect(control)
         .map_err(|e| format!("the graphics process is not answering: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     stream.write_all(b"status\n").map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).map_err(|e| e.to_string())?;
-    Ok(parse_status(&line))
+    let line = read_capped_line(&mut BufReader::new(stream), LONGEST_STATUS).map_err(|e| e.to_string())?;
+    Ok(parse_status(&line.unwrap_or_default()))
 }
 
 fn parse_status(line: &str) -> serde_json::Value {

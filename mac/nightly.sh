@@ -7,6 +7,13 @@
 # it, and guesthouse-macos-nightly.json into the output folder.
 #
 #   sh mac/nightly.sh [--out FOLDER] [--helpers FOLDER]
+#   sh mac/nightly.sh --stage FOLDER [--helpers FOLDER]
+#   sh mac/nightly.sh --from-stage FOLDER [--out FOLDER]
+#
+# It works in two parts. The first builds the app and puts what it runs inside it, unsigned apart
+# from the build's own ad hoc signature, and needs no key: --stage stops there and leaves Guesthouse.app
+# in FOLDER. The second signs that app, makes the disk image and notarises: --from-stage starts there,
+# from a FOLDER that --stage made, and runs no build tool. With neither, both run in turn.
 #
 # Everything private comes from the environment, and none of it is ever printed or kept:
 #   GUESTHOUSE_SIGN_IDENTITY       the identity to sign with (a name or a SHA-1), or `-` for ad hoc.
@@ -36,14 +43,23 @@ here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 out=$here/build/nightly
 helpers=${GUESTHOUSE_HELPERS_DIR:-}
+stage_to=
+stage_from=
 while [ $# -gt 0 ]; do
     case $1 in
         --out) out=${2:?--out wants a folder}; shift 2 ;;
         --helpers) helpers=${2:?--helpers wants a folder}; shift 2 ;;
-        -h | --help) sed -n 2,28p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --stage) stage_to=${2:?--stage wants a folder}; shift 2 ;;
+        --from-stage) stage_from=${2:?--from-stage wants a folder}; shift 2 ;;
+        -h | --help) sed -n 2,34p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "nightly.sh: unknown argument $1" >&2; exit 2 ;;
     esac
 done
+
+[ -z "$stage_to" ] || [ -z "$stage_from" ] || { echo "nightly.sh: --stage and --from-stage are two parts of one run, not given together" >&2; exit 2; }
+[ -z "$stage_from" ] || [ -z "$helpers" ] || { echo "nightly.sh: --helpers goes into the part that builds, not into --from-stage" >&2; exit 2; }
+do_build=yes
+[ -z "$stage_from" ] || do_build=no
 
 work=$(mktemp -d)
 keychain=
@@ -170,6 +186,90 @@ developer_id_chain() {
     say "chain: the intermediate (checked against its pinned SHA-256) is in the build keychain"
 }
 
+# --- Build ---------------------------------------------------------------------------------
+# This part runs the build tools and the dependencies' build scripts, and gives them no key: with
+# --stage it is the whole run.
+if [ "$do_build" = yes ]; then
+say "building $name (version $version)"
+# No key goes to the build, even when a whole run has been given them.
+env -u GUESTHOUSE_SIGN_P12 -u GUESTHOUSE_SIGN_P12_PASSWORD -u GUESTHOUSE_KEYCHAIN -u GUESTHOUSE_KEYCHAIN_PASSWORD \
+    -u GUESTHOUSE_NOTARY_KEY_ID -u GUESTHOUSE_NOTARY_ISSUER_ID -u GUESTHOUSE_NOTARY_KEY_PATH \
+    GUESTHOUSE_XCODEBUILD_SETTINGS="MARKETING_VERSION=$version CURRENT_PROJECT_VERSION=$date_stamp" \
+    sh ./build.sh >"$work/build.log" 2>&1 || { tail -n 30 "$work/build.log" >&2; exit 1; }
+app_src=$here/build/dd/Build/Products/Release/Guesthouse.app
+[ -d "$app_src" ] || { echo "nightly.sh: the build left no app" >&2; exit 1; }
+if [ -n "$stage_to" ]; then
+    stage=$stage_to
+    rm -rf "$stage/Guesthouse.app"
+else
+    stage=$work/stage
+fi
+mkdir -p "$stage"
+ditto "$app_src" "$stage/Guesthouse.app"
+app=$stage/Guesthouse.app
+
+if [ -n "$helpers" ]; then
+    [ -d "$helpers" ] || { echo "nightly.sh: no helpers folder $helpers" >&2; exit 1; }
+    mkdir -p "$app/Contents/Helpers"
+    for item in "$helpers"/*; do
+        [ -e "$item" ] || continue
+        case $(basename "$item") in
+            Resources) ditto "$item" "$app/Contents/Resources" ;;
+            Frameworks) ditto "$item" "$app/Contents/Frameworks" ;;
+            *) ditto "$item" "$app/Contents/Helpers/$(basename "$item")" ;;
+        esac
+    done
+    say "helpers: $(ls "$app/Contents/Helpers" | tr '\n' ' ')"
+    if [ -d "$helpers/Resources" ]; then
+        say "resources: $(find "$helpers/Resources" -type f | wc -l | tr -d ' ') files"
+    fi
+fi
+
+# --- The notice: what is in the app, under what licence, and where its source is ----------------
+# It is inside the app, so it is sealed by the signature, and the disk image carries it too.
+mkdir -p "$app/Contents/Resources/licences"
+licence_file=$here/../LICENSE
+[ -f "$licence_file" ] || licence_file=$here/LICENSE
+cp "$licence_file" "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt"
+{
+    echo "Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse"
+    echo
+    echo "Guesthouse itself (the app, its agent and, if it is here, guesthouse-pvg-host) is free software"
+    echo "under GPL-2.0-or-later. That repository at that commit is its source: mac/, mac/host,"
+    echo "mac/pvg-host and mac/pvg-sys. The licence is Contents/Resources/licences/Guesthouse-GPL-2.0.txt."
+    if [ -f "$app/Contents/Helpers/rmhost" ]; then
+        remoteman_version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
+        remoteman_commit=$(sed -n 's/^ *"commit": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
+        echo
+        echo "rmhost (Contents/Helpers/rmhost) is built from mac/rmhost, which is MIT, with remoteman's core,"
+        echo "version $remoteman_version at commit $remoteman_commit of https://github.com/ruxnlabs/remoteman,"
+        echo "which is GPL-3.0-or-later. The program as a whole is under GPL-3.0-or-later, and the licence is"
+        echo "Contents/Resources/licences/remoteman-GPL-3.0.txt. Its source is mac/rmhost of the repository above and remoteman at"
+        echo "that commit."
+    fi
+    if [ -f "$app/Contents/Helpers/qemu-system-aarch64" ]; then
+        echo
+        echo "QEMU (Contents/Helpers/qemu-system-aarch64), its firmware (Contents/Resources/qemu) and the"
+        echo "libraries in Contents/Frameworks: Contents/Resources/qemu/SOURCE.txt says what each is and where its"
+        echo "source is (QEMU at the commit it names, with the patches in qemu/mac/patches of the repository"
+        echo "above, built by qemu/mac/build.sh), and their licences are in Contents/Resources/qemu/licences."
+    fi
+} >"$app/Contents/Resources/NOTICE.txt"
+
+if [ -n "$stage_to" ]; then
+    say "staged: $app (version $version, commit $commit), not signed"
+    exit 0
+fi
+else
+# --- The part that signs: the app comes from a folder --stage made, and nothing is built -------
+[ -d "$stage_from/Guesthouse.app/Contents" ] || { echo "nightly.sh: no Guesthouse.app in $stage_from" >&2; exit 1; }
+stage=$work/stage
+mkdir -p "$stage"
+ditto "$stage_from/Guesthouse.app" "$stage/Guesthouse.app"
+app=$stage/Guesthouse.app
+fi
+mkdir -p "$out"
+
 # --- The identity -------------------------------------------------------------------------
 identity=${GUESTHOUSE_SIGN_IDENTITY:-}
 kc_args=
@@ -245,66 +345,6 @@ notarise() {
     xcrun notarytool submit "$1" --key "$GUESTHOUSE_NOTARY_KEY_PATH" \
         --key-id "$GUESTHOUSE_NOTARY_KEY_ID" --issuer "$GUESTHOUSE_NOTARY_ISSUER_ID" --wait
 }
-
-# --- Build ---------------------------------------------------------------------------------
-say "building $name (version $version)"
-GUESTHOUSE_XCODEBUILD_SETTINGS="MARKETING_VERSION=$version CURRENT_PROJECT_VERSION=$date_stamp" \
-    sh ./build.sh >"$work/build.log" 2>&1 || { tail -n 30 "$work/build.log" >&2; exit 1; }
-app_src=$here/build/dd/Build/Products/Release/Guesthouse.app
-[ -d "$app_src" ] || { echo "nightly.sh: the build left no app" >&2; exit 1; }
-mkdir -p "$out"
-stage=$work/stage
-mkdir -p "$stage"
-ditto "$app_src" "$stage/Guesthouse.app"
-app=$stage/Guesthouse.app
-
-if [ -n "$helpers" ]; then
-    [ -d "$helpers" ] || { echo "nightly.sh: no helpers folder $helpers" >&2; exit 1; }
-    mkdir -p "$app/Contents/Helpers"
-    for item in "$helpers"/*; do
-        [ -e "$item" ] || continue
-        case $(basename "$item") in
-            Resources) ditto "$item" "$app/Contents/Resources" ;;
-            Frameworks) ditto "$item" "$app/Contents/Frameworks" ;;
-            *) ditto "$item" "$app/Contents/Helpers/$(basename "$item")" ;;
-        esac
-    done
-    say "helpers: $(ls "$app/Contents/Helpers" | tr '\n' ' ')"
-    if [ -d "$helpers/Resources" ]; then
-        say "resources: $(find "$helpers/Resources" -type f | wc -l | tr -d ' ') files"
-    fi
-fi
-
-# --- The notice: what is in the app, under what licence, and where its source is ----------------
-# It is inside the app, so it is sealed by the signature, and the disk image carries it too.
-mkdir -p "$app/Contents/Resources/licences"
-licence_file=$here/../LICENSE
-[ -f "$licence_file" ] || licence_file=$here/LICENSE
-cp "$licence_file" "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt"
-{
-    echo "Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse"
-    echo
-    echo "Guesthouse itself (the app, its agent and, if it is here, guesthouse-pvg-host) is free software"
-    echo "under GPL-2.0-or-later. That repository at that commit is its source: mac/, mac/host,"
-    echo "mac/pvg-host and mac/pvg-sys. The licence is Contents/Resources/licences/Guesthouse-GPL-2.0.txt."
-    if [ -f "$app/Contents/Helpers/rmhost" ]; then
-        remoteman_version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
-        remoteman_commit=$(sed -n 's/^ *"commit": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
-        echo
-        echo "rmhost (Contents/Helpers/rmhost) is built from mac/rmhost, which is MIT, with remoteman's core,"
-        echo "version $remoteman_version at commit $remoteman_commit of https://github.com/ruxnlabs/remoteman,"
-        echo "which is GPL-3.0-or-later. The program as a whole is under GPL-3.0-or-later, and the licence is"
-        echo "Contents/Resources/licences/remoteman-GPL-3.0.txt. Its source is mac/rmhost of the repository above and remoteman at"
-        echo "that commit."
-    fi
-    if [ -f "$app/Contents/Helpers/qemu-system-aarch64" ]; then
-        echo
-        echo "QEMU (Contents/Helpers/qemu-system-aarch64), its firmware (Contents/Resources/qemu) and the"
-        echo "libraries in Contents/Frameworks: Contents/Resources/qemu/SOURCE.txt says what each is and where its"
-        echo "source is (QEMU at the commit it names, with the patches in qemu/mac/patches of the repository"
-        echo "above, built by qemu/mac/build.sh), and their licences are in Contents/Resources/qemu/licences."
-    fi
-} >"$app/Contents/Resources/NOTICE.txt"
 
 # --- Sign inside-out: every Mach-O file, deepest first, then the app ------------------------
 main_exec=$app/Contents/MacOS/Guesthouse

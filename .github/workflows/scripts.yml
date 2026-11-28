@@ -29,10 +29,16 @@ jobs:
       # Ubuntu's sh is dash, as Proxmox VE's is.
       - name: Proxmox's check, on made-up hosts
         run: bash tests/proxmox/run.sh
+      - name: Proxmox's setup, on made-up printed scripts
+        run: bash tests/proxmox/setup-vm.sh
       - name: The package page, against the docs
         run: bash tests/packages/page.sh
+      - name: The Windows graphics driver's sources
+        run: sh tests/windows-pvg/check-driver-sources.sh
       - name: Release notes, on a made-up repo
         run: python3 tests/release-notes/test.py
+      - name: Credits, with odd titles
+        run: python3 tests/release-credits/test.py
 
   psscriptanalyzer:
     name: PSScriptAnalyzer

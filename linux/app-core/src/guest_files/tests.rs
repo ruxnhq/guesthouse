@@ -2,6 +2,7 @@ use super::names::{for_windows, is_one_name, not_among};
 use super::*;
 use crate::testing::{QemuStandIn, Scratch};
 use std::fs;
+use std::io::BufRead;
 use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::symlink;
 use std::sync::atomic::AtomicBool;
@@ -234,4 +235,34 @@ fn each_name_maps_as_today() {
     ] {
         assert_eq!(is_one_name(part), one, "{part:?}");
     }
+}
+
+#[test]
+fn an_answer_with_no_end_is_refused_at_the_limit() {
+    let endless = std::io::repeat(b'a').take(LONGEST_LINE as u64 * 4);
+    assert_eq!(Helper::answer(endless).unwrap_err().kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_drag_with_a_line_past_the_limit_or_too_many_files_is_refused() {
+    let mut long = b"files\nfile 1 ".to_vec();
+    long.extend(std::iter::repeat_n(b'a', LONGEST_LINE * 2));
+    let (helper, _requests, _qemu) = fake_helper(&[&long]);
+    assert_eq!(helper.catch(Duration::from_millis(100)).unwrap_err().kind(), ErrorKind::InvalidData);
+
+    let mut many = b"files\n".to_vec();
+    for _ in 0..=MOST_ENTRIES {
+        many.extend_from_slice(b"file 1 Yi50eHQ=\n");
+    }
+    let (helper, _requests, _qemu) = fake_helper(&[&many]);
+    assert_eq!(helper.catch(Duration::from_millis(100)).unwrap_err().kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_length_line_with_no_end_is_refused() {
+    let mut long = b"ok ".to_vec();
+    long.extend(std::iter::repeat_n(b'1', LONGEST_LINE * 2));
+    let (helper, _requests, _qemu) = fake_helper(&[&long]);
+    let error = helper.get("a.txt", &mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
 }

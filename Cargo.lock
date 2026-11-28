@@ -907,6 +907,7 @@ dependencies = [
  "glib-unix",
  "gtk4",
  "guesthouse-app-core",
+ "guesthouse-basics",
  "guesthouse-daemon",
  "guesthouse-frame-socket",
  "guesthouse-remote-view-core",
@@ -1263,6 +1264,7 @@ version = "0.12.0"
 name = "guesthouse-pvg-host"
 version = "0.12.0"
 dependencies = [
+ "guesthouse-basics",
  "guesthouse-pvg-sys",
  "libc",
 ]

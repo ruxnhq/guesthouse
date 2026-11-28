@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "name": "guesthouse-site",
+  "dependencies": {
+    "cf": "1.0.0-rc.2"
+  }
+}

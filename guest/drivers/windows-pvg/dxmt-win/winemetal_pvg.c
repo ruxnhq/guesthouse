@@ -31,9 +31,8 @@ static uint32_t next_number = 1;
 
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static bool to_stderr = true;	// the test programs' own console
-// Inside the user-mode driver with no log file (a sandboxed process, such as
-// Edge's GPU process, may not write C:\ruxnlog): each line goes to the
-// kernel driver, which keeps it while Parameters\SandboxLog is 1 (klog.c).
+// Inside the user-mode driver (no file is written there): each line goes to
+// the kernel driver, which keeps it while Parameters\SandboxLog is 1 (klog.c).
 static bool to_kernel;
 
 // Failures said on this thread since the user-mode driver last asked
@@ -139,8 +138,8 @@ bool wm_lab_log_on(void)
 }
 
 // Beside the DLL, or, when it is loaded from the driver store (inside
-// ruxnwddm's user-mode driver, where nothing can be written beside it), in
-// the lab's folder C:\ruxnlog as wm-PID.log, if that folder exists.
+// ruxnwddm's user-mode driver, where nothing can be written beside it), to
+// the kernel driver's log only.
 static void open_log(HINSTANCE self)
 {
 	WCHAR path[MAX_PATH];
@@ -154,13 +153,6 @@ static void open_log(HINSTANCE self)
 	if (wcsstr(path, L"DriverStore")) {
 		to_stderr = false;
 		to_kernel = true;
-		if (GetFileAttributesW(L"C:\\ruxnlog") == INVALID_FILE_ATTRIBUTES)
-			return;
-		swprintf(path, MAX_PATH, L"C:\\ruxnlog\\wm-%lu.log", GetCurrentProcessId());
-		// Written through, so that a guest ended at once after a GPU
-		// fault still has the lines on its disk (run rn79 lost them).
-		log_file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-				       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
 		return;
 	}
 	slash = wcsrchr(path, L'\\');

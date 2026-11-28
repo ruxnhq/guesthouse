@@ -37,3 +37,4 @@ __pycache__/
 .env
 .token
 token.txt
+site/node_modules/

@@ -148,9 +148,6 @@ static void APIENTRY destroy_device(D3D10DDI_HDEVICE h)
 		(f)->pfnDispatch = (void *)count_draw;			\
 		(f)->pfnClearRenderTargetView = (void *)count_draw;	\
 		(f)->pfnClearView = (void *)count_draw;			\
-		(f)->pfnCreateVertexShader = (void *)umd_capture_vertex;	\
-		(f)->pfnCreateGeometryShader = (void *)umd_capture_geometry;	\
-		(f)->pfnCreatePixelShader = (void *)umd_capture_pixel;	\
 	} while (0)
 
 // Every entry a stub that does nothing first (umd_stubs.c): the tables

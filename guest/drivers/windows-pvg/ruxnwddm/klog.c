@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 //
 // A log kept in the kernel for processes that cannot write one: Edge's GPU
-// process runs in a sandbox that may not open C:\ruxnlog, so its winemetal
+// process runs in a sandbox that may not write files, so its winemetal
 // lines (and its refused command buffers) were lost (run rn71, where it was
 // most likely the process whose command buffers faulted the GPU). Any
 // process may still send escapes to our adapter, so such a process sends

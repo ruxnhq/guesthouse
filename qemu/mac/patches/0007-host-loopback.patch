@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Fri, 27 Nov 2026 22:54:59 -0800
+Subject: net/slirp: host-loopback=off for a user network
+
+QEMU's user network gives the guest the host's loopback through the host's
+guest-visible addresses, 10.0.2.2 and the IPv6 prefix. libslirp can turn that
+off, and QEMU had no word for it. host-loopback=off sets libslirp's
+disable_host_loopback, and also drops the guest's packets to a loopback or
+unspecified address, IPv4, IPv6 or IPv4 mapped into IPv6. Forwards from the
+host, the guest forwards and DNS work as before. The default stays on.
+---
+ net/slirp.c     | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ qapi/net.json   |  7 +++++++
+ qemu-options.hx | 10 +++++++++-
+ 3 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/net/slirp.c b/net/slirp.c
+index 9e9941f..76362f7 100644
+--- a/net/slirp.c
++++ b/net/slirp.c
+@@ -97,6 +97,8 @@ typedef struct SlirpState {
+     gchar *smb_dir;
+ #endif
+     GSList *fwd;
++    /* The guest's packets to a loopback or unspecified address are dropped. */
++    bool no_host_loopback;
+ } SlirpState;
+ 
+ static struct slirp_config_str *slirp_configs;
+@@ -131,10 +133,50 @@ static ssize_t net_slirp_send_packet(const void *pkt, size_t pkt_len,
+     return qemu_send_packet(&s->nc, pkt, pkt_len);
+ }
+ 
++/*
++ * Whether an Ethernet frame from the guest is an IPv4 or IPv6 packet to an
++ * address on the host itself by its own names: 127.0.0.0/8, 0.0.0.0/8, ::1,
++ * :: or those two IPv4 blocks mapped into IPv6.
++ */
++static bool slirp_frame_to_host_loopback(const uint8_t *buf, size_t size)
++{
++    static const uint8_t mapped[12] = {
++        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
++    };
++    const uint8_t *dst;
++    uint16_t proto;
++
++    if (size < ETH_HLEN) {
++        return false;
++    }
++    proto = lduw_be_p(buf + 12);
++    if (proto == ETH_P_IP) {
++        if (size < ETH_HLEN + 20) {
++            return false;
++        }
++        dst = buf + ETH_HLEN + 16;
++        return dst[0] == 127 || dst[0] == 0;
++    }
++    if (proto == ETH_P_IPV6) {
++        if (size < ETH_HLEN + 40) {
++            return false;
++        }
++        dst = buf + ETH_HLEN + 24;
++        if (memcmp(dst, mapped, sizeof(mapped)) == 0) {
++            return dst[12] == 127 || dst[12] == 0;
++        }
++        return buffer_is_zero(dst, 15) && (dst[15] == 0 || dst[15] == 1);
++    }
++    return false;
++}
++
+ static ssize_t net_slirp_receive(NetClientState *nc, const uint8_t *buf, size_t size)
+ {
+     SlirpState *s = DO_UPCAST(SlirpState, nc, nc);
+ 
++    if (s->no_host_loopback && slirp_frame_to_host_loopback(buf, size)) {
++        return size;
++    }
+     slirp_input(s->slirp, buf, size);
+ 
+     return size;
+@@ -431,6 +473,7 @@ static SaveVMHandlers savevm_slirp_state = {
+ 
+ static int net_slirp_init(NetClientState *peer, const char *model,
+                           const char *name, int restricted,
++                          bool host_loopback,
+                           bool ipv4, const char *vnetwork, const char *vhost,
+                           bool ipv6, const char *vprefix6, int vprefix6_len,
+                           const char *vhost6,
+@@ -641,11 +684,13 @@ static int net_slirp_init(NetClientState *peer, const char *model,
+                       restricted ? "on" : "off");
+ 
+     s = DO_UPCAST(SlirpState, nc, nc);
++    s->no_host_loopback = !host_loopback;
+ 
+     cfg.version =
+          SLIRP_CHECK_VERSION(4, 9, 0) ? 6 :
+          SLIRP_CHECK_VERSION(4, 7, 0) ? 4 : 1;
+     cfg.restricted = restricted;
++    cfg.disable_host_loopback = !host_loopback;
+     cfg.in_enabled = ipv4;
+     cfg.vnetwork = net;
+     cfg.vnetmask = mask;
+@@ -1305,6 +1350,7 @@ int net_init_slirp(const Netdev *netdev, const char *name,
+     net_init_slirp_configs_guest(user->guestfwd);
+ 
+     ret = net_slirp_init(peer, "user", name, user->q_restrict,
++                         user->has_host_loopback ? user->host_loopback : true,
+                          ipv4, vnet, user->host,
+                          ipv6, user->ipv6_prefix, user->ipv6_prefixlen,
+                          user->ipv6_host, user->hostname, user->tftp,
+diff --git a/qapi/net.json b/qapi/net.json
+index 1a63828..ee6cc23 100644
+--- a/qapi/net.json
++++ b/qapi/net.json
+@@ -309,6 +309,12 @@
+ #
+ # @restrict: isolate the guest from the host
+ #
++# @host-loopback: whether the guest reaches the host's loopback
++#     through the host's guest-visible addresses, default true.  Off,
++#     the guest's packets to those addresses and to loopback or
++#     unspecified addresses are dropped, and forwards from the host
++#     still work.
++#
+ # @ipv4: whether to support IPv4, default true for enabled (since 2.6)
+ #
+ # @ipv6: whether to support IPv6, default true for enabled (since 2.6)
+@@ -366,6 +372,7 @@
+   'data': {
+     '*hostname':  'str',
+     '*restrict':  'bool',
++    '*host-loopback': 'bool',
+     '*ipv4':      'bool',
+     '*ipv6':      'bool',
+     '*ip':        'str',
+diff --git a/qemu-options.hx b/qemu-options.hx
+index 34970ff..a11fd65 100644
+--- a/qemu-options.hx
++++ b/qemu-options.hx
+@@ -2992,7 +2992,7 @@ DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
+ #ifdef CONFIG_SLIRP
+     "-netdev user,id=str[,ipv4=on|off][,net=addr[/mask]][,host=addr]\n"
+     "         [,ipv6=on|off][,ipv6-net=addr[/int]][,ipv6-host=addr]\n"
+-    "         [,restrict=on|off][,hostname=host][,dhcpstart=addr]\n"
++    "         [,restrict=on|off][,host-loopback=on|off][,hostname=host][,dhcpstart=addr]\n"
+     "         [,dns=addr][,ipv6-dns=addr][,dnssearch=domain][,domainname=domain]\n"
+     "         [,tftp=dir][,tftp-server-name=name][,bootfile=f][,hostfwd=rule][,guestfwd=rule]"
+ #ifndef _WIN32
+@@ -3388,6 +3388,14 @@ SRST
+         will be routed over the host to the outside. This option does
+         not affect any explicitly set forwarding rules.
+ 
++    ``host-loopback=on|off``
++        Off, the guest can't reach services on the host's loopback
++        through the host's guest-visible addresses (10.0.2.2 and the
++        IPv6 prefix by default), and its packets to a loopback or
++        unspecified address are dropped. Connections from the host
++        through ``hostfwd`` still arrive from the host's address. On
++        is the default.
++
+     ``hostname=name``
+         Specifies the client hostname reported by the built-in DHCP
+         server.
+-- 
+2.56.1
+

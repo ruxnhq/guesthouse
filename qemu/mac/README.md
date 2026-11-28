@@ -7,12 +7,13 @@ The Mac host runs its machines in QEMU on Hypervisor.framework, with the guest's
 | `0001` to `0004` | Lucas Amaral | Patches 1 to 4 of Mohamed Mediouni's series "[RFC PATCH v8 00/10] vmapple: making it work on the latest macOS host releases" on qemu-devel, 2026-09-16. When a guest touches a device's memory with an instruction Hypervisor.framework doesn't decode for QEMU (an access with no syndrome, such as a load or store of a pair of registers), QEMU used to stop the machine. With these it decodes the instruction itself and carries on. |
 | `0005` | Mohamed Mediouni | Patch 5 of the same series, "vmapple: apple-gfx: make it work on the latest macOS release". macOS 27 removed the old way of handing the framework a guest's memory, and without this patch QEMU's `apple-gfx` doesn't build against the macOS 27 SDK. |
 | `0006` | s3k000 | `pvg-fwd`, a PCI device that shows the guest what `apple-gfx-pci` shows and forwards its registers and interrupts over a socket to the process that has the device. |
+| `0007` | xnixy | `host-loopback=off` for QEMU's user network, the same as `qemu/qemu-host-loopback.patch` for the Linux host. A Linux machine's network has it, so the guest reaches no service on the Mac's loopback through 10.0.2.2. |
 
 Each of the list's patches is as its author sent it, with his name, date, message and sign-off, and none of them is in QEMU yet. Patches 6 to 10 of the series are about QEMU's machine for macOS guests, which the Mac host doesn't use, so they aren't here.
 
 The first four are here because the Windows guest has only ever been run on a QEMU that has them. A Linux guest with our driver runs without them: its register accesses are all single loads and stores.
 
-None of this goes to QEMU. `pvg-fwd` has no Signed-off-by for that reason, as its message says.
+None of this goes to QEMU. `pvg-fwd` and `0007` have no Signed-off-by for that reason.
 
 ## Building it
 

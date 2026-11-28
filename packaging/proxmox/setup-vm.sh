@@ -86,10 +86,9 @@ qemu_words() {
 root_owned() {
     for path in "$@"; do
         while :; do
-            # shellcheck disable=SC2012
-            set -- $(ls -ldn -- "$path" 2>/dev/null | awk '{ print $1, $3 }')
-            [ "${2:-}" = 0 ] || return 1
-            case $1 in
+            info=$(stat -c '%u %A' -- "$path" 2>/dev/null) || return 1
+            [ "${info%% *}" = 0 ] || return 1
+            case ${info#* } in
                 ?????w????* | ????????w?*)
                     # A folder writable by all with its sticky bit, like /tmp, still keeps others' files apart, but not this.
                     return 1

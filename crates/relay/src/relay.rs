@@ -129,7 +129,7 @@ impl Drop for Relay {
 fn carry_in(shared: &Arc<Shared>) {
     let mut buffer = vec![0u8; LARGEST_DATAGRAM];
     while !shared.stop.load(Ordering::Acquire) {
-        let (length, from) = match shared.lan.recv_from(&mut buffer) {
+        let (length, from) = match sockets::receive(&shared.lan, &mut buffer, LOOK_AGAIN) {
             Ok(got) => got,
             Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
                 continue;

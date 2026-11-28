@@ -3,6 +3,7 @@
 use socket2::SockRef;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::time::Duration;
 
 /// A burst of video is up to 139 datagrams of about 1200 bytes back to back, which the kernel's usual
 /// 212 KB default holds only just. The kernel caps what is asked for at its own limit, so this is a wish.
@@ -37,6 +38,46 @@ fn local_for(upstream: IpAddr) -> IpAddr {
         (IpAddr::V4(_), false) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         (IpAddr::V6(_), false) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     }
+}
+
+/// The next datagram, if one comes within `within`, and `TimedOut` if none does.
+///
+/// It waits for the socket to have a datagram and only then receives it. On Windows, a receive whose
+/// read timeout runs out just as a datagram arrives can lose that datagram, and the relay's threads,
+/// which look again every [`crate::relay::LOOK_AGAIN`], would lose one now and then that way. The
+/// socket's own read timeout stays, so that a receive told wrongly that something is there still ends.
+pub(crate) fn receive(
+    socket: &UdpSocket,
+    buffer: &mut [u8],
+    within: Duration,
+) -> io::Result<(usize, SocketAddr)> {
+    if !readable(socket, within) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    socket.recv_from(buffer)
+}
+
+/// Whether the socket has something to read, or something to say, within `within`. Only a wait that
+/// ran out says no: when the wait itself fails, the receive after it finds out why.
+#[cfg(unix)]
+fn readable(socket: &UdpSocket, within: Duration) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut wanted = libc::pollfd { fd: socket.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    let milliseconds = libc::c_int::try_from(within.as_millis()).unwrap_or(libc::c_int::MAX);
+    // SAFETY: one pollfd, which lives for the call, for a socket that stays open for it.
+    let found = unsafe { libc::poll(&mut wanted, 1, milliseconds) };
+    found != 0
+}
+
+#[cfg(windows)]
+fn readable(socket: &UdpSocket, within: Duration) -> bool {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{POLLRDNORM, WSAPOLLFD, WSAPoll};
+    let mut wanted = WSAPOLLFD { fd: socket.as_raw_socket() as usize, events: POLLRDNORM, revents: 0 };
+    let milliseconds = i32::try_from(within.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: one WSAPOLLFD, which lives for the call, for a socket that stays open for it.
+    let found = unsafe { WSAPoll(&mut wanted, 1, milliseconds) };
+    found != 0
 }
 
 fn enlarge(socket: &UdpSocket) {

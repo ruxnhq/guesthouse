@@ -130,7 +130,7 @@ fn start(shared: &Arc<Shared>, peer: SocketAddr) -> io::Result<Arc<Client>> {
 fn carry_out(shared: &Arc<Shared>, client: &Arc<Client>) {
     let mut buffer = vec![0u8; 65_535];
     loop {
-        match client.upstream.recv_from(&mut buffer) {
+        match sockets::receive(&client.upstream, &mut buffer, LOOK_AGAIN) {
             Ok((_, from)) if shared.config.only_upstream_answers && from != shared.config.upstream => {
                 shared.stats.stranger();
             }

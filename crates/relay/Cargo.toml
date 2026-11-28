@@ -16,8 +16,13 @@ socket2 = "0.6"
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
-# sigaction, for ending on SIGTERM.
+# sigaction, for ending on SIGTERM, and poll, for waiting for a datagram.
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+# WSAPoll, for waiting for a datagram.
+version = "0.61"
+features = ["Win32_Networking_WinSock"]
 
 [dev-dependencies]
 # The requests' wording on the wire, which a test holds.

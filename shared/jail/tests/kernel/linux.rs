@@ -74,6 +74,18 @@ fn daemon_calls() {
     assert_eq!(fork, -1, "no new process");
     let traced = unsafe { libc::ptrace(libc::PTRACE_ATTACH, libc::getppid(), 0, 0) };
     assert_eq!((traced, std::io::Error::last_os_error().raw_os_error()), (-1, Some(libc::ENOSYS)));
+    let (reader, _writer) = std::io::pipe().unwrap();
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&reader);
+    for command in [libc::F_SETOWN, 10] {
+        assert_eq!(unsafe { libc::fcntl(fd, command, libc::getppid()) }, -1, "no process signalled for it");
+    }
+    let owner = unsafe { libc::getppid() };
+    assert_eq!(unsafe { libc::ioctl(fd, 0x8901, &raw const owner) }, -1);
+    assert!(unsafe { libc::fcntl(fd, libc::F_GETFL) } >= 0, "other commands still work");
+    let mut pair = [0; 2];
+    let datagrams = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, pair.as_mut_ptr()) };
+    assert_eq!(datagrams, -1, "no datagram pair");
+    assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr()) }, 0);
     let thread = std::thread::spawn(|| 7).join();
     assert_eq!(thread.ok(), Some(7), "threads still start");
     let status = fs::read_to_string("/proc/self/status").unwrap();

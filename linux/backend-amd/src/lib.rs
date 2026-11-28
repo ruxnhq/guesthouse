@@ -428,7 +428,7 @@ impl AmdBackend {
         let source = self.cpu_address(copy.own_space, copy.source_address, plan.source_end())?;
         let target = self.cpu_address(copy.own_space, copy.target_address, plan.target_end())?;
         // SAFETY: each address is good for the bytes asked of `cpu_address`, which are the plan's
-        // ends, and the two surfaces are different allocations.
+        // ends. The two may be one allocation, which `run` takes.
         unsafe { plan.run(source, target) };
         Ok(())
     }

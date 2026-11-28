@@ -13,15 +13,19 @@
 //!
 //! 1. **the starter** (src/launch.rs), what was opened: asks Windows to run the same file
 //!    elevated (the one UAC prompt; with `--dry-run`, not elevated), waits, and returns its exit
-//!    code. It stays unelevated, so it is what opens Guesthouse afterwards, as the user.
-//!    Run from the install folder (the uninstaller), it first copies itself out of it.
-//! 2. **the elevated part** (`--stage2`, src/launch.rs): unpacks the runtime and a copy of the
-//!    bare exe into a new folder that only Administrators and SYSTEM can write to, runs the
-//!    pages from there and waits; deletes the folder after. With `--silent` it runs the steps
-//!    itself, with no pages and no runtime.
+//!    code. It stays unelevated, so it is what opens Guesthouse afterwards, as the user. Run
+//!    from the install folder (the uninstaller), it doesn't wait, unless silent.
+//! 2. **the elevated part** (`--stage2`, src/launch.rs): copies its own file, read once, into a
+//!    new folder that only Administrators and SYSTEM can write to; from then on that copy is the
+//!    only file it reads. Run from the install folder, it hands over to that copy
+//!    (`--temp-copy`) and ends, so that the folder can be deleted. It unpacks the runtime and the
+//!    bare exe into another such folder, runs the pages from there and waits; deletes the
+//!    folders after. With `--silent` it runs the steps itself, with no pages and no runtime. The
+//!    DLLs the exe imports come from System32 only (build.rs), and so does every DLL it loads.
 //! 3. **the pages** (`--ui --source FILE`, src/ui.rs): WinUI 3 through windows-reactor, the
 //!    runtime beside it (the manifest `windows-reactor-setup` embeds finds it there), the steps
-//!    (src/engine.rs) on a thread of their own, the files read from FILE.
+//!    (src/engine.rs) on a thread of their own, the files read from FILE, the elevated part's
+//!    copy.
 //!
 //! `--dry-run` shows every page and walks every step without elevation and without changing
 //! the system: what would be done is logged, and the files are unpacked into
@@ -30,7 +34,8 @@
 //! entries). `--delete-machines`, with `--uninstall`, also deletes the machines in
 //! `%ProgramData%\Guesthouse`; without it they stay. `--silent` has no pages and ends with 0
 //! (done) or 1 (failed). The log is `%TEMP%\guesthouse-setup.log` unless `--log` says otherwise; the install's own lines also
-//! go to `setup.log` in the install folder, beside setup.ps1's.
+//! go to `setup.log` in the install folder, beside setup.ps1's. The starter makes the log as the
+//! user; an elevated process adds to it only while it is a plain file the user owns (src/log.rs).
 //!
 //! Also, for the build (scripts/windows-setup.ps1):
 //!
@@ -75,8 +80,8 @@ pub struct Args {
     pub ui: bool,
     /// The file the pages read the files to install from.
     pub source: Option<std::path::PathBuf>,
-    /// The elevated part runs from a copy the starter made (out of the install folder), which
-    /// it deletes when it is done.
+    /// The elevated part runs from the copy of itself it made in its own folder (out of the
+    /// install folder), which it deletes when it is done.
     pub temp_copy: bool,
     pub pack: bool,
     pub runtime: Option<std::path::PathBuf>,

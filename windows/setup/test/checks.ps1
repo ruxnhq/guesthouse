@@ -3,10 +3,11 @@
 # 1. a silent install: exit 0, and every file of the payload arrived in the dry run's install
 #    folder with its size and SHA-256, beside uninstall.exe and setup.log, and nothing else;
 # 2. a silent install that fails (--fail-at setup): exit 1, the reason in the log;
-# 3. the uninstaller in that folder, silent: it copies itself out of the folder, waits, ends with
-#    0, and the folder is gone (its own file, held by the waiting copy, moved out);
+# 3. the uninstaller in that folder, silent: its elevated part hands over to a copy of itself out
+#    of the folder, waits, ends with 0, and the folder is gone (its own file, held while it
+#    waits, moved out);
 # 4. the uninstaller again, with its pages: the starter ends at once, the pages remove the folder,
-#    and the copy it ran from is deleted after it;
+#    and the copy they ran from is deleted after it;
 # 5. the pages' Windows App Runtime: every Microsoft.UI* / WindowsAppRuntime / WinUI DLL the pages
 #    have loaded is from their own folder, none from the runtime installed on the PC (WindowsApps,
 #    SystemApps), and without Microsoft.ui.xaml.dll beside it the window doesn't open at all.
@@ -58,7 +59,7 @@ $log = "$Out\checks-silent-uninstall.log"; Remove-Item $log -ErrorAction Silentl
 $code = Run (Join-Path $dry 'uninstall.exe') "--uninstall --silent --dry-run --log `"$log`""
 Check ($code -eq 0) "the silent uninstaller ends with 0 ($code)"
 Check ([bool](Select-String -Path $log -SimpleMatch "(from the install folder)" -Quiet)) "it knew it ran from the install folder"
-$second = Select-String -Path $log -Pattern "elevated part: (.+?) \(elevated" | Select-Object -First 1
+$second = Select-String -Path $log -Pattern "hands over to its copy (.+)$" | Select-Object -First 1
 Check ($second -and -not $second.Matches[0].Groups[1].Value.StartsWith($dry, [StringComparison]::OrdinalIgnoreCase)) "the rest ran from a copy outside it ($(if ($second) { $second.Matches[0].Groups[1].Value }))"
 Check (-not (Test-Path $dry)) "the install folder is gone"
 Select-String -Path $log -Pattern "deleted when Windows restarts|Deleted" | ForEach-Object { Ui-Say ("   " + $_.Line) }
@@ -75,7 +76,7 @@ $null = Ui-Wait "Guesthouse is removed" 60
 Ui-Invoke "Close"
 Start-Sleep 8
 Check (-not (Test-Path $dry)) "the install folder is gone"
-$copy = Select-String -Path $log -Pattern "elevated part: (.+?) \(elevated" | Select-Object -First 1
+$copy = Select-String -Path $log -Pattern "hands over to its copy (.+)$" | Select-Object -First 1
 if ($copy) {
   $copyDir = Split-Path $copy.Matches[0].Groups[1].Value
   Check (-not (Test-Path $copyDir)) "the copy it ran from ($copyDir) was deleted after it ended"

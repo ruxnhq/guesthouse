@@ -695,8 +695,12 @@ pub fn delete_at_restart(path: &Path) -> io::Result<()> {
 }
 
 /// After this process has ended, `dir` is deleted (by a hidden cmd.exe that waits a moment), and
-/// failing that when Windows restarts.
-pub fn delete_after_exit(dir: &Path) {
+/// failing that when Windows restarts. Only a folder `private_dir(elevated)` made: whether it was
+/// one.
+pub fn delete_after_exit(dir: &Path, elevated: bool) -> bool {
+    if !is_private_dir(dir, elevated) {
+        return false;
+    }
     let line = format!("/d /c \"ping -n 4 127.0.0.1 >nul & rd /s /q \"{}\"\"", dir.display());
     let _ = std::process::Command::new(windows_dir().join(r"System32\cmd.exe"))
         .raw_arg(line)
@@ -709,22 +713,47 @@ pub fn delete_after_exit(dir: &Path) {
         }
     }
     let _ = delete_at_restart(dir);
+    true
 }
 
-/// Whether `file` is a plain file of the user this process runs as: owned by them, with no other name (hard link) and no reparse point. What they own they may change
-/// anyway, so an elevated process that writes only to such a file writes nothing they couldn't.
+/// Whether the owner of the file or folder `handle` is open on passes `test`.
+fn owner_is(handle: HANDLE, test: impl Fn(windows::Win32::Security::PSID) -> bool) -> io::Result<bool> {
+    use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, PSID};
+    let mut owner = PSID::default();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: the owner points into the security descriptor, which is freed after the test.
+    unsafe {
+        let code = GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(&mut owner),
+            None,
+            None,
+            None,
+            Some(&mut sd),
+        );
+        win32(code, "the owner")?;
+        let passed = test(owner);
+        let _ = LocalFree(Some(HLOCAL(sd.0)));
+        Ok(passed)
+    }
+}
+
+/// Whether `file` is a plain file of the user this process runs as: owned by them, with no other
+/// name (hard link) and no reparse point. What they own they may change anyway, so an elevated
+/// process that writes only to such a file writes nothing they couldn't.
 pub fn plain_and_owned(file: &std::fs::File) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::HLOCAL;
-    use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
-    use windows::Win32::Security::{EqualSid, OWNER_SECURITY_INFORMATION, PSID, TOKEN_USER, TokenUser};
+    use windows::Win32::Security::{EqualSid, TOKEN_USER, TokenUser};
     use windows::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         GetFileInformationByHandle,
     };
     let handle = HANDLE(file.as_raw_handle());
-    // SAFETY: the structure is the size Windows writes; the security descriptor and the token
-    // are freed and closed; the buffer outlives the SIDs read from it.
+    // SAFETY: the structures are the sizes Windows writes; the token is closed; the buffer
+    // outlives the SID read from it.
     unsafe {
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         GetFileInformationByHandle(handle, &mut info).map_err(io::Error::other)?;
@@ -748,26 +777,91 @@ pub fn plain_and_owned(file: &std::fs::File) -> io::Result<()> {
         let _ = CloseHandle(token);
         read.map_err(io::Error::other)?;
         let me = (*(user.as_ptr() as *const TOKEN_USER)).User.Sid;
-        let mut owner = PSID::default();
-        let mut sd = PSECURITY_DESCRIPTOR::default();
-        let code = GetSecurityInfo(
-            handle,
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION,
-            Some(&mut owner),
-            None,
-            None,
-            None,
-            Some(&mut sd),
-        );
-        win32(code, "the file's owner")?;
-        let same = EqualSid(owner, me).is_ok();
-        let _ = LocalFree(Some(HLOCAL(sd.0)));
-        if !same {
+        if !owner_is(handle, |owner| EqualSid(owner, me).is_ok())? {
             return Err(io::Error::other("the file is someone else's"));
         }
     }
     Ok(())
+}
+
+/// The file this program runs from, opened by `path` so that while it is open nobody can change,
+/// rename or delete it, and only if it is that file (not another one put at `path` since).
+pub fn open_own_file(path: &Path) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, GetFileInformationByHandle,
+    };
+    use windows::Win32::System::Threading::PROCESS_NAME_NATIVE;
+    let id = |file: &std::fs::File| -> io::Result<(u32, u32, u32)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the structure is the size Windows writes.
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+            .map_err(io::Error::other)?;
+        Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+    };
+    let file = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ.0).open(path)?;
+    // The program's own file, by the name Windows has for it now.
+    let mut buffer = [0u16; 1024];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer is the length given.
+    unsafe {
+        QueryFullProcessImageNameW(
+            GetCurrentProcess(),
+            PROCESS_NAME_NATIVE,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+    }
+    .map_err(io::Error::other)?;
+    let image = format!(r"\\?\GLOBALROOT{}", String::from_utf16_lossy(&buffer[..size as usize]));
+    let running = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+        .open(&image)?;
+    if id(&file)? != id(&running)? {
+        return Err(io::Error::other(format!("{} isn't the file this program runs from", path.display())));
+    }
+    Ok(file)
+}
+
+/// Whether `dir` is one `private_dir(elevated)` made: a `guesthouse-setup-*` folder right in its
+/// Temp, a folder and not a link, and, elevated, owned by Administrators or SYSTEM.
+pub fn is_private_dir(dir: &Path, elevated: bool) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Security::{IsWellKnownSid, WinBuiltinAdministratorsSid, WinLocalSystemSid};
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let base = if elevated { windows_dir().join("Temp") } else { std::env::temp_dir() };
+    let named = dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("guesthouse-setup-"));
+    if !named || !dir.parent().is_some_and(|p| same_path(p, &base)) {
+        return false;
+    }
+    let Ok(meta) = std::fs::symlink_metadata(dir) else { return false };
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return false;
+    }
+    if !elevated {
+        return true;
+    }
+    let Ok(folder) = std::fs::OpenOptions::new()
+        .access_mode((READ_CONTROL | FILE_READ_ATTRIBUTES).0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+        .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
+        .open(dir)
+    else {
+        return false;
+    };
+    // SAFETY: plain calls on the owner's SID.
+    owner_is(HANDLE(folder.as_raw_handle()), |owner| unsafe {
+        IsWellKnownSid(owner, WinBuiltinAdministratorsSid).as_bool()
+            || IsWellKnownSid(owner, WinLocalSystemSid).as_bool()
+    })
+    .unwrap_or(false)
 }
 
 /// A shortcut (`.lnk`) to `target`.

@@ -78,9 +78,20 @@ fn run(
     driver: bool,
     info: Option<InstallInfo>,
 ) -> InstallInfo {
-    let mut network = Network;
+    run_on(world, guest, source, control, driver, info, &mut Network)
+}
+
+fn run_on(
+    world: &World,
+    guest: Guest,
+    source: Source,
+    control: &mut Control,
+    driver: bool,
+    info: Option<InstallInfo>,
+    network: &mut dyn Transport,
+) -> InstallInfo {
     let setup = world.setup(guest, driver);
-    let mut steps = RealSteps { setup, transport: &mut network, control };
+    let mut steps = RealSteps { setup, transport: network, control };
     let mut changed = |_: &InstallInfo| {};
     let clock = || 0;
     let mut runner = Runner {
@@ -99,7 +110,7 @@ fn machine_file(world: &World) -> serde_json::Value {
 }
 
 #[test]
-fn ubuntu_is_downloaded_checked_installed_and_stops_at_the_driver_that_is_not_packaged() {
+fn ubuntu_is_downloaded_checked_installed_and_stops_at_the_driver_when_it_could_not_be_downloaded() {
     let world = World::new("ubuntu");
     let mut control = Control::default();
     control.says = vec![(60_000, ubuntu::FINISHED.into())];
@@ -121,12 +132,19 @@ fn ubuntu_is_downloaded_checked_installed_and_stops_at_the_driver_that_is_not_pa
     assert!(text.contains("username: nick") && text.contains("instance-id: guesthouse-m"));
     assert_eq!(file["answer_disc"], "answers.iso");
 
-    // It stopped where the placeholder says, with its choices.
+    // It stopped at the driver step, saying why the package was not got, with its choices.
     assert_eq!(info.state, Phase::Failed);
     let failure = info.failure.clone().unwrap();
-    assert_eq!((failure.step, failure.code.as_deref()), (Step::InstallDriver, Some("no_package")));
-    assert!(failure.reason.contains("not packaged yet"));
+    assert_eq!((failure.step, failure.code.as_deref()), (Step::InstallDriver, Some("driver_download")));
+    assert!(failure.reason.contains("could not be downloaded"), "{}", failure.reason);
+    assert!(
+        failure.reason.contains("is not somewhere the stand-in knows"),
+        "the reason is kept: {}",
+        failure.reason
+    );
+    assert!(!failure.reason.contains("not packaged"));
     assert!(failure.choices.contains(&Choice::OpenWithoutDriver));
+    assert!(failure.choices.contains(&Choice::TryAgain));
 
     // Open without it: the first start boots the disk alone and the install is done.
     let mut after = info;
@@ -361,5 +379,30 @@ fn a_qemu_in_an_app_bundle_finds_its_firmware_in_the_bundles_resources() {
     fs::write(resources.join("edk2-aarch64-vars.fd"), b"vars").unwrap();
     let found = find_firmware(&firmware_dirs_of(&qemu)).unwrap();
     assert_eq!(found, (b"code".to_vec(), b"vars".to_vec()));
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn try_again_at_the_driver_step_fetches_the_package_again() {
+    use crate::install::fake::FakeSite;
+    let world = World::new("again");
+    let mut control = Control::default();
+    control.says = vec![(60_000, ubuntu::FINISHED.into())];
+    control.stops_at = Some(90_000);
+    // The first time the file site has no Linux package: the install stops at the driver step.
+    let first = run(&world, Guest::Ubuntu, Source::Download, &mut control, false, None);
+    assert_eq!(first.failure.as_ref().and_then(|f| f.code.as_deref()), Some("driver_download"));
+    // The site has it now, and gives no length to a HEAD. Try Again fetches it and goes on.
+    let mut again = first;
+    assert!(again.retry());
+    let mut control = Control { now: 200_000, ..Control::default() };
+    let mut site = FakeSite { no_length: true };
+    let second = run_on(&world, Guest::Ubuntu, Source::Download, &mut control, false, Some(again), &mut site);
+    assert!(
+        second.failure.as_ref().is_none_or(|f| f.code.as_deref() != Some("driver_download")),
+        "{:?}",
+        second.failure
+    );
+    assert!(control.stick_files.iter().any(|name| name == driver::LINUX_SCRIPT), "{:?}", control.stick_files);
     let _ = fs::remove_dir_all(world.root);
 }

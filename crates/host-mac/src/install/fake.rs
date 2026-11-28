@@ -49,7 +49,7 @@ impl FakeNetwork {
 
 impl Transport for FakeNetwork {
     fn head(&mut self, url: &str) -> Result<Head, FetchError> {
-        Ok(Head { length: Self::body(url).len() as u64, ranges: true })
+        Ok(Head { length: Some(Self::body(url).len() as u64), ranges: true })
     }
 
     fn get_from(
@@ -88,6 +88,70 @@ impl Transport for FakeNetwork {
             return Err(FetchError::new(format!("{url} is not somewhere the stand-in knows.")));
         }
         Ok(format!("{} *ubuntu-26.04-live-server-arm64.iso\n", sha256_hex(UBUNTU_BYTES)))
+    }
+}
+
+/// The file site as the real one answers: both driver packages, the Linux one as well as the
+/// Windows one, and a HEAD that gives no length, as files.ruxn.com does, when `no_length`. The
+/// Ubuntu disc and its list are `FakeNetwork`'s.
+#[derive(Default)]
+pub struct FakeSite {
+    pub no_length: bool,
+}
+
+/// The Linux package's version the stand-in site publishes.
+pub const FAKE_LINUX_VERSION: &str = "0.0.1-fake";
+
+fn linux_name(package_name: &str) -> String {
+    format!("guesthouse-linux-driver-{FAKE_LINUX_VERSION}-{package_name}")
+}
+
+impl FakeSite {
+    /// What the Linux package's `install.sh` is, the only file it must hold.
+    fn linux_bytes(name: &str) -> Vec<u8> {
+        format!("#!/bin/sh\n# pretend this is {name}\n").into_bytes()
+    }
+}
+
+impl Transport for FakeSite {
+    fn head(&mut self, url: &str) -> Result<Head, FetchError> {
+        if self.no_length {
+            return Ok(Head { length: None, ranges: true });
+        }
+        match url.strip_prefix(driver::LINUX_BASE_URL) {
+            Some(name) => Ok(Head { length: Some(Self::linux_bytes(name).len() as u64), ranges: true }),
+            None => FakeNetwork.head(url),
+        }
+    }
+
+    fn get_from(
+        &mut self,
+        url: &str,
+        from: u64,
+        out: &mut dyn Write,
+        progress: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<(), FetchError> {
+        match url.strip_prefix(driver::LINUX_BASE_URL) {
+            Some(name) => {
+                out.write_all(&Self::linux_bytes(name)[from as usize..])
+                    .map_err(|e| FetchError::new(e.to_string()))?;
+                progress(0);
+                Ok(())
+            }
+            None => FakeNetwork.get_from(url, from, out, progress),
+        }
+    }
+
+    fn text(&mut self, url: &str) -> Result<String, FetchError> {
+        if url == format!("{}{}", driver::LINUX_BASE_URL, driver::LINUX.manifest) {
+            let name = linux_name(driver::LINUX_SCRIPT);
+            return Ok(format!(
+                r#"{{"version":"{FAKE_LINUX_VERSION}","files":[{{"name":"{name}","as":"{}","sha256":"{}"}}]}}"#,
+                driver::LINUX_SCRIPT,
+                sha256_hex(&Self::linux_bytes(&name))
+            ));
+        }
+        FakeNetwork.text(url)
     }
 }
 

@@ -113,6 +113,11 @@ pub struct Entry {
     #[serde(rename = "as")]
     pub package_name: String,
     pub sha256: String,
+    /// The file's size in bytes, when the publisher says (a manifest may leave it out, as the
+    /// first ones did): it lets a download be checked for room and shown progress when the file
+    /// site will not say how big a file is.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 impl Manifest {
@@ -184,7 +189,8 @@ pub fn fetch_package_of(
     let parts = folder.join("parts");
     for entry in &manifest.files {
         let url = format!("{}{}", package.base, entry.name);
-        let request = Request { url: &url, folder: &parts, name: &entry.name, sha256: &entry.sha256 };
+        let request =
+            Request { url: &url, folder: &parts, name: &entry.name, sha256: &entry.sha256, size: entry.size };
         match fetch::download(transport, &request, &mut |_, _| true)? {
             Outcome::Done(path) => {
                 fs::copy(&path, folder.join(&entry.package_name))

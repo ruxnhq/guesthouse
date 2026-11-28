@@ -94,8 +94,17 @@ impl RealSteps<'_> {
     /// answers put in installs it and says how it went; it restarts into the desktop when it
     /// worked and turns the machine off when it did not, so Try Again starts it once more.
     pub(super) fn ubuntu_driver(&mut self, progress: Progress) -> Result<Ended, StepError> {
-        let dir =
-            self.linux_package().ok_or_else(|| StepError::coded("no_package", ubuntu::DRIVER_PLACEHOLDER))?;
+        let dir = match self.linux_package() {
+            Some(dir) => dir,
+            // Not fetched with the installer, or that failed: fetched now, so that Try Again
+            // fetches again, and a failure says why it failed.
+            None => driver::fetch_package_of(&LINUX, self.transport, &self.setup.downloads).map_err(|e| {
+                StepError::coded(
+                    e.code.as_deref().unwrap_or("driver_download"),
+                    ubuntu::driver_download_failed(&e.message),
+                )
+            })?,
+        };
         let files = driver::package_files_of(&LINUX, &dir).map_err(|m| StepError::coded("no_driver", m))?;
         let folder = self.folder();
         self.control

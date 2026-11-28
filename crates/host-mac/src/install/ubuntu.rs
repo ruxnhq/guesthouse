@@ -11,8 +11,8 @@
 //! The graphics driver comes as a package (`driver::LINUX`) on a small disk labelled `RUXN`, as
 //! the Windows driver does. The answers put a service into the installed system that installs it
 //! from that disk when it is there, once for each version (`DRIVER_SERVICE`, `DRIVER_RUNNER`).
-//! With no package, the driver step says so (`DRIVER_PLACEHOLDER`) and offers to open Ubuntu
-//! without it.
+//! When the package cannot be fetched, the driver step says why (`driver_download_failed`), fetches
+//! again on Try Again, and offers to open Ubuntu without it.
 
 /// Ubuntu's release folder for arm64 and its checksum list.
 pub const RELEASE_URL: &str = "https://cdimage.ubuntu.com/ubuntu/releases/26.04/release/";
@@ -120,7 +120,13 @@ fi
 "#;
 
 /// Said at the driver step when there is no package for Ubuntu: none published, none named.
-pub const DRIVER_PLACEHOLDER: &str = "The Guesthouse graphics driver for Ubuntu is not packaged yet, so it cannot be installed. Open Ubuntu without it for now.";
+/// What the driver step says when the package could not be fetched: the reason, so a person can
+/// tell a connection that dropped from a site that is down.
+pub fn driver_download_failed(reason: &str) -> String {
+    format!(
+        "The Guesthouse graphics driver for Ubuntu could not be downloaded: {reason} Try again, or open Ubuntu without it for now."
+    )
+}
 
 /// The image to fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]

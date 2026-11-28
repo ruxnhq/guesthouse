@@ -76,8 +76,13 @@ fn the_seed_names_the_instance() {
 }
 
 #[test]
-fn the_driver_step_says_plainly_what_is_missing() {
-    assert!(DRIVER_PLACEHOLDER.contains("not packaged yet"));
+fn the_driver_step_says_why_the_download_failed() {
+    let said = driver_download_failed("https://files.ruxn.com/x could not be reached: timed out.");
+    assert!(
+        said.contains("could not be downloaded: https://files.ruxn.com/x could not be reached: timed out.")
+    );
+    assert!(said.contains("open Ubuntu without it"));
+    assert!(!said.contains("not packaged"));
 }
 
 #[test]

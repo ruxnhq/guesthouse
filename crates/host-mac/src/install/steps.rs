@@ -8,7 +8,7 @@
 //! be proved this way is a real guest's side of it, which has not been run.
 
 use super::fetch::{self, FetchError, Outcome, Request, Transport};
-use super::plan::{Guest, Step, space_needed_gb};
+use super::plan::{Guest, Step, space_needed_after_installer_gb};
 use super::runner::{Ended, Progress, Report, StepError, Steps};
 use super::state::{InstallInfo, Source, StepStatus};
 use super::{driver, password, ubuntu, windows};
@@ -183,8 +183,13 @@ impl RealSteps<'_> {
                     .map_err(from_fetch)?;
                 let image = ubuntu::pick_image(&sums).map_err(StepError::new)?;
                 let folder = self.setup.downloads.join("ubuntu");
-                let request =
-                    Request { url: &image.url, folder: &folder, name: &image.name, sha256: &image.sha256 };
+                let request = Request {
+                    url: &image.url,
+                    folder: &folder,
+                    name: &image.name,
+                    sha256: &image.sha256,
+                    size: None,
+                };
                 match fetch::download(self.transport, &request, &mut |done, total| {
                     progress(Report::Bytes(done, Some(total)))
                 })
@@ -216,7 +221,7 @@ impl RealSteps<'_> {
         let folder = self.folder();
         fs::create_dir_all(&folder)
             .map_err(|e| StepError::new(format!("Cannot make {}: {e}", folder.display())))?;
-        let need = space_needed_gb(self.setup.guest, self.setup.disk_gb);
+        let need = space_needed_after_installer_gb(self.setup.guest, self.setup.disk_gb);
         if let Some(free) = fetch::free_bytes(&folder).filter(|_| self.setup.check_space) {
             room_for(need, free)?;
         }

@@ -116,7 +116,7 @@ impl Published {
 impl Transport for Published {
     fn head(&mut self, url: &str) -> Result<fetch::Head, FetchError> {
         let length = fs::metadata(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))?.len();
-        Ok(fetch::Head { length, ranges: true })
+        Ok(fetch::Head { length: Some(length), ranges: true })
     }
 
     fn get_from(
@@ -214,4 +214,27 @@ fn the_linux_manifest_the_package_scripts_write_is_one_the_app_takes() {
     assert_eq!(manifest.files[2].name, "guesthouse-linux-driver-0.1.7-pvg-mesa_0.1.7_arm64.deb");
     assert_eq!(LINUX.manifest, "guesthouse-linux-driver-latest.json");
     assert_eq!(LINUX.base, "https://files.ruxn.com/p/guesthouse-linux-driver/");
+}
+
+#[test]
+fn both_packages_are_fetched_from_a_site_that_gives_no_length() {
+    use crate::install::fake::FakeSite;
+    let downloads = scratch("nolength");
+    let mut site = FakeSite { no_length: true };
+    let windows = fetch_package_of(&WINDOWS, &mut site, &downloads).unwrap();
+    assert_eq!(kept_package_of(&WINDOWS, &downloads), Some(windows));
+    let linux = fetch_package_of(&LINUX, &mut site, &downloads).unwrap();
+    assert_eq!(kept_package_of(&LINUX, &downloads), Some(linux.clone()));
+    assert!(fs::read_to_string(linux.join(LINUX_SCRIPT)).unwrap().contains("pretend"));
+    let _ = fs::remove_dir_all(downloads);
+}
+
+#[test]
+fn a_manifest_may_give_each_files_size_and_the_first_ones_did_not() {
+    let without = manifest_with(&REQUIRED.iter().map(|n| (*n, SUM)).collect::<Vec<_>>());
+    let parsed = Manifest::parse(&without).unwrap();
+    assert!(parsed.files.iter().all(|e| e.size.is_none()));
+    let with = without.replace(r#""sha256":"#, r#""size":123,"sha256":"#);
+    let parsed = Manifest::parse(&with).unwrap();
+    assert!(parsed.files.iter().all(|e| e.size == Some(123)));
 }

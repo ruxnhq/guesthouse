@@ -99,15 +99,27 @@ const UBUNTU_INSTALLER_GB: u64 = 3;
 const UBUNTU_SYSTEM_GB: u64 = 12;
 const INSTALL_MARGIN_GB: u64 = 5;
 
-/// The room an install needs on the Mac, in gigabytes: the installer, what the system writes
-/// (never more than the disk holds) and the margin. The app counts it the same way
-/// (`InstallGuest.spaceNeededGB`) and says separately when the whole disk would not fit.
+/// The room an install needs on the Mac before it has fetched anything, in gigabytes: the
+/// installer, what the system writes (never more than the disk holds) and the margin. The app
+/// counts it the same way (`InstallGuest.spaceNeededGB`) and says separately when the whole disk
+/// would not fit.
 pub fn space_needed_gb(guest: Guest, disk_gb: u64) -> u64 {
-    let (installer, system) = match guest {
-        Guest::Windows => (WINDOWS_INSTALLER_GB, WINDOWS_SYSTEM_GB),
-        Guest::Ubuntu => (UBUNTU_INSTALLER_GB, UBUNTU_SYSTEM_GB),
+    let installer = match guest {
+        Guest::Windows => WINDOWS_INSTALLER_GB,
+        Guest::Ubuntu => UBUNTU_INSTALLER_GB,
     };
-    installer + system.min(disk_gb) + INSTALL_MARGIN_GB
+    installer + space_needed_after_installer_gb(guest, disk_gb)
+}
+
+/// What is still needed once the installer is on the Mac, which is when the disk is made: what the
+/// system writes and the margin. The installer is already in the free space measured then, so it
+/// is not asked for twice.
+pub fn space_needed_after_installer_gb(guest: Guest, disk_gb: u64) -> u64 {
+    let system = match guest {
+        Guest::Windows => WINDOWS_SYSTEM_GB,
+        Guest::Ubuntu => UBUNTU_SYSTEM_GB,
+    };
+    system.min(disk_gb) + INSTALL_MARGIN_GB
 }
 
 #[cfg(test)]
@@ -141,5 +153,8 @@ mod tests {
         // A disk bigger or smaller than the system changes it only when it is the smaller.
         assert_eq!(space_needed_gb(Guest::Windows, 256), 36);
         assert_eq!(space_needed_gb(Guest::Ubuntu, 8), 3 + 8 + 5);
+        // After the download the installer is on the disk already and is not asked for again.
+        assert_eq!(space_needed_after_installer_gb(Guest::Ubuntu, 32), 17);
+        assert_eq!(space_needed_after_installer_gb(Guest::Windows, 64), 30);
     }
 }

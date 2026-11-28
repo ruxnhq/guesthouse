@@ -111,10 +111,10 @@ fn ubuntu_installs_to_the_driver_step_and_opens_without_it_and_every_change_is_t
     let id = made.machine.unwrap();
     assert_eq!(id, "ubuntu");
 
-    // It goes through the download and the install and stops at the driver, which is not packaged.
+    // It goes through the download and the install and stops at the driver, whose package the stand-in site does not have.
     let stopped = wait_for(&agent, &id, "the driver step to fail", |i| i.failure.is_some());
     assert_eq!(stopped.failure.as_ref().unwrap().step, Step::InstallDriver);
-    assert_eq!(stopped.failure.as_ref().unwrap().code.as_deref(), Some("no_package"));
+    assert_eq!(stopped.failure.as_ref().unwrap().code.as_deref(), Some("driver_download"));
     assert_eq!(stopped.status_of(Step::InstallSystem), StepStatus::Done);
     assert!(support.0.join("Downloads/ubuntu/ubuntu-26.04-live-server-arm64.iso").is_file());
 
@@ -130,7 +130,7 @@ fn ubuntu_installs_to_the_driver_step_and_opens_without_it_and_every_change_is_t
         .filter(|v: &serde_json::Value| v["event"] == "install")
         .collect();
     assert!(told.len() > 5, "{}", told.len());
-    assert!(told.iter().any(|v| v["failure"]["code"] == "no_package"));
+    assert!(told.iter().any(|v| v["failure"]["code"] == "driver_download"));
     // A listing has it too.
     let listed = request(&agent, r#"{"v":1,"id":2,"op":"list"}"#).installs.unwrap();
     assert_eq!(listed[0].machine, id);

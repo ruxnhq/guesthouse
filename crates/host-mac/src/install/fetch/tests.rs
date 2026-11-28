@@ -19,7 +19,7 @@ impl Fake {
 
 impl Transport for Fake {
     fn head(&mut self, _url: &str) -> Result<Head, FetchError> {
-        Ok(Head { length: self.content.len() as u64, ranges: self.ranges })
+        Ok(Head { length: Some(self.content.len() as u64), ranges: self.ranges })
     }
 
     fn get_from(
@@ -60,7 +60,7 @@ fn folder(name: &str) -> PathBuf {
 }
 
 fn request<'a>(folder: &'a Path, sha: &'a str) -> Request<'a> {
-    Request { url: "https://example.test/file.iso", folder, name: "file.iso", sha256: sha }
+    Request { url: "https://example.test/file.iso", folder, name: "file.iso", sha256: sha, size: None }
 }
 
 const CONTENT: &[u8] = b"an installer, as far as these tests go, with some length to it";
@@ -148,7 +148,7 @@ fn not_enough_room_is_said_with_how_much_more_is_needed_before_anything_is_fetch
     struct Huge(Fake);
     impl Transport for Huge {
         fn head(&mut self, _: &str) -> Result<Head, FetchError> {
-            Ok(Head { length: u64::MAX / 4, ranges: true })
+            Ok(Head { length: Some(u64::MAX / 4), ranges: true })
         }
         fn get_from(
             &mut self,
@@ -226,4 +226,91 @@ fn the_real_transport_refuses_http_without_starting_curl() {
     let mut sink = Vec::new();
     let refused = transport.get_from("http://example.test/x", 0, &mut sink, &mut |_| true);
     assert_eq!(refused.unwrap_err().code.as_deref(), Some(NOT_HTTPS));
+}
+
+/// A server that takes ranges and says nothing of the file's size to a HEAD, as files.ruxn.com
+/// does.
+struct Silent(Fake);
+
+impl Transport for Silent {
+    fn head(&mut self, _url: &str) -> Result<Head, FetchError> {
+        Ok(Head { length: None, ranges: true })
+    }
+
+    fn get_from(
+        &mut self,
+        url: &str,
+        from: u64,
+        out: &mut dyn Write,
+        progress: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<(), FetchError> {
+        self.0.get_from(url, from, out, progress)
+    }
+
+    fn text(&mut self, url: &str) -> Result<String, FetchError> {
+        self.0.text(url)
+    }
+}
+
+#[test]
+fn a_file_is_fetched_when_the_server_gives_no_length_and_the_checksum_is_the_proof() {
+    let dir = folder("silent");
+    let mut silent = Silent(Fake::new(CONTENT));
+    let done = download(&mut silent, &request(&dir, &sum(CONTENT)), &mut |_, total| {
+        assert_eq!(total, 0, "no size is known, so none is told");
+        true
+    })
+    .unwrap();
+    let Outcome::Done(path) = done else { panic!("{done:?}") };
+    assert_eq!(fs::read(path).unwrap(), CONTENT);
+    // The wrong bytes are thrown away all the same.
+    let other = folder("silent-wrong");
+    let mut wrong = Silent(Fake::new(b"not the file"));
+    let error = download(&mut wrong, &request(&other, &sum(CONTENT)), &mut |_, _| true).unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("checksum"));
+    let _ = (fs::remove_dir_all(dir), fs::remove_dir_all(other));
+}
+
+#[test]
+fn a_part_from_a_server_with_no_length_is_begun_again_unless_the_manifest_gives_the_size() {
+    let dir = folder("silent-part");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("file.iso.part"), &CONTENT[..6]).unwrap();
+    let mut silent = Silent(Fake::new(CONTENT));
+    // Nothing known of its size: the part may be of another file, so it is fetched from the start.
+    assert!(matches!(
+        download(&mut silent, &request(&dir, &sum(CONTENT)), &mut |_, _| true),
+        Ok(Outcome::Done(_))
+    ));
+    assert_eq!(silent.0.calls, vec![0]);
+    // With the size from the manifest it goes on from where it stopped.
+    let dir2 = folder("silent-size");
+    fs::create_dir_all(&dir2).unwrap();
+    fs::write(dir2.join("file.iso.part"), &CONTENT[..6]).unwrap();
+    let mut counted = Silent(Fake::new(CONTENT));
+    let size = Some(CONTENT.len() as u64);
+    let expected = sum(CONTENT);
+    let sized = Request { size, ..request(&dir2, &expected) };
+    let done = download(&mut counted, &sized, &mut |_, total| {
+        assert_eq!(total, CONTENT.len() as u64);
+        true
+    });
+    assert!(matches!(done, Ok(Outcome::Done(_))));
+    assert_eq!(counted.0.calls, vec![6]);
+    let _ = (fs::remove_dir_all(dir), fs::remove_dir_all(dir2));
+}
+
+#[test]
+fn what_curl_is_told_is_read_for_the_size_and_for_ranges() {
+    // A HEAD with a length, and one with none.
+    let plain = read_head("HTTP/2 200\r\ncontent-length: 2048\r\naccept-ranges: bytes\r\n\r\n");
+    assert_eq!((plain.length, plain.ranges), (Some(2048), true));
+    let silent = read_head("HTTP/2 200\r\naccept-ranges: bytes\r\n\r\n");
+    assert_eq!((silent.length, silent.ranges), (None, true));
+    // The first byte of a file: its own length is 1, and the file's is after the slash.
+    let first = read_head("HTTP/2 206\r\ncontent-length: 1\r\ncontent-range: bytes 0-0/20669952\r\n\r\n");
+    assert_eq!((first.length, first.ranges), (Some(20_669_952), true));
+    // Redirects: the last answer counts.
+    let moved = read_head("HTTP/2 302\r\ncontent-length: 0\r\n\r\nHTTP/2 200\r\ncontent-length: 77\r\n\r\n");
+    assert_eq!(moved.length, Some(77));
 }

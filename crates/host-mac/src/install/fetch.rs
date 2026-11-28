@@ -26,7 +26,10 @@ impl FetchError {
 /// What a server says about a file before it is fetched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Head {
-    pub length: u64,
+    /// The file's size, when the server says it honestly (`Content-Length` of a HEAD, or the
+    /// total in the `Content-Range` of a request for the first byte). Some servers say neither
+    /// to a HEAD; then the manifest's size, if it has one, or none: the checksum is the proof.
+    pub length: Option<u64>,
     /// Whether it takes a request for the part from a given byte on.
     pub ranges: bool,
 }
@@ -81,6 +84,9 @@ pub struct Request<'a> {
     pub name: &'a str,
     /// The file's SHA-256 as its publisher gives it, in hex.
     pub sha256: &'a str,
+    /// Its size as the publisher gives it, when the publisher does (a manifest's optional
+    /// `size`): used for the room check and the progress when the server will not say.
+    pub size: Option<u64>,
 }
 
 fn checked_marker(file: &Path) -> PathBuf {
@@ -127,12 +133,16 @@ pub fn download(
     let head = transport.head(request.url)?;
     let part = request.folder.join(format!("{}.part", request.name));
     let mut have = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    // What the server says, else what the publisher says, else nothing: with nothing the file is
+    // fetched from its beginning to its end and the checksum says whether it is the one.
+    let total = head.length.or(request.size);
     // A part that cannot be gone on from, or is longer than the file, is begun again.
-    if have > head.length || (have > 0 && !head.ranges) {
+    if total.is_some_and(|total| have > total) || (have > 0 && !head.ranges) || (have > 0 && total.is_none())
+    {
         let _ = fs::remove_file(&part);
         have = 0;
     }
-    let needed = head.length - have + ROOM_MARGIN;
+    let needed = total.map_or(0, |total| total.saturating_sub(have)) + ROOM_MARGIN;
     if let Some(free) = free_bytes(request.folder)
         && free < needed
     {
@@ -145,7 +155,7 @@ pub fn download(
             ),
         });
     }
-    if have < head.length {
+    if total.is_none_or(|total| have < total) {
         let mut out = OpenOptions::new()
             .create(true)
             .append(true)
@@ -153,7 +163,7 @@ pub fn download(
             .map_err(|e| FetchError::new(format!("Cannot write {}: {e}", part.display())))?;
         let mut go_on = true;
         transport.get_from(request.url, have, &mut out, &mut |written| {
-            go_on = progress(have + written, head.length);
+            go_on = progress(have + written, total.unwrap_or(0));
             go_on
         })?;
         out.flush().map_err(|e| FetchError::new(e.to_string()))?;
@@ -162,8 +172,13 @@ pub fn download(
         }
     }
     let got = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-    if got != head.length {
-        return Err(FetchError::new(format!("The download stopped at {got} of {} bytes.", head.length)));
+    // Only what the server itself said is held against what arrived; a publisher's size, or none,
+    // leaves it to the checksum.
+    if head.length.is_some_and(|length| got != length) {
+        return Err(FetchError::new(format!(
+            "The download stopped at {got} of {} bytes.",
+            head.length.unwrap_or(0)
+        )));
     }
     let sum =
         sha256_of(&part).map_err(|e| FetchError::new(format!("Cannot read {}: {e}", part.display())))?;
@@ -217,6 +232,38 @@ impl CurlTransport {
     }
 }
 
+impl CurlTransport {
+    /// What a request for the file's first byte answers: `206` with `Content-Range: bytes 0-0/SIZE`
+    /// for a server that takes ranges. None when it answers otherwise, or not at all.
+    fn first_byte(&mut self, url: &str) -> Option<Head> {
+        let output = Self::curl()
+            .args(["--range", "0-0", "--dump-header", "-", "--output", "/dev/null", url])
+            .output()
+            .ok()?;
+        output.status.success().then(|| read_head(&String::from_utf8_lossy(&output.stdout)))
+    }
+}
+
+/// What a server's headers say of the file: its size from `Content-Length` or, for a part, the
+/// total after the slash in `Content-Range`, and whether it takes ranges. After redirects the last
+/// answer's headers count, so they are read from the end.
+fn read_head(headers: &str) -> Head {
+    let headers = headers.to_ascii_lowercase();
+    let from_range = headers
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("content-range:")?.rsplit('/').next()?.trim().parse::<u64>().ok());
+    let from_length = headers
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("content-length:")?.trim().parse::<u64>().ok());
+    // A part's own `Content-Length` is its length, not the file's, so the range's total goes first.
+    let ranged = headers.lines().any(|line| line.starts_with("content-range:"));
+    let length = if ranged { from_range } else { from_length };
+    let ranges = ranged || headers.lines().any(|line| line.trim() == "accept-ranges: bytes");
+    Head { length, ranges }
+}
+
 impl Transport for CurlTransport {
     fn head(&mut self, url: &str) -> Result<Head, FetchError> {
         require_https(url)?;
@@ -224,21 +271,22 @@ impl Transport for CurlTransport {
             .args(["--head", url])
             .output()
             .map_err(|e| FetchError::new(format!("curl could not be started: {e}")))?;
-        if !output.status.success() {
-            return Err(FetchError::new(format!(
+        let headed = output.status.success().then(|| read_head(&String::from_utf8_lossy(&output.stdout)));
+        if let Some(Head { length: Some(_), .. }) = headed {
+            return Ok(headed.unwrap_or(Head { length: None, ranges: false }));
+        }
+        // No length to a HEAD (files.ruxn.com sends none; some servers refuse HEAD): ask for the
+        // first byte, which says the whole size in its `Content-Range`.
+        if let Some(ranged) = self.first_byte(url) {
+            return Ok(ranged);
+        }
+        match headed {
+            Some(head) => Ok(head),
+            None => Err(FetchError::new(format!(
                 "{url} could not be reached: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
-            )));
+            ))),
         }
-        let headers = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        // After redirects the last answer's headers count, so read from the end.
-        let length = headers
-            .lines()
-            .rev()
-            .find_map(|line| line.strip_prefix("content-length:")?.trim().parse::<u64>().ok())
-            .ok_or_else(|| FetchError::new(format!("{url} did not say how big it is.")))?;
-        let ranges = headers.lines().any(|line| line.trim() == "accept-ranges: bytes");
-        Ok(Head { length, ranges })
     }
 
     fn get_from(

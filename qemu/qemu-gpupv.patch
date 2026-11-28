@@ -10011,3 +10011,197 @@ index 2226ba8..d258fcc 100644
 -- 
 2.56.1
 
+From f11d58bab7e28cd6eb30099308b73bf6dc2d3f89 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:22:45 -0800
+Subject: [PATCH] hw/hyperv: hold a bounded amount of the backend's frames, and
+ take a backend only from its owner
+
+The device stops reading the backend's socket once the frames held for
+the guest come to 16 MiB, and reads again as the guest takes them. With
+owner=UID, the device closes a connection whose other end runs as anyone
+else, and neither reads from it nor writes to it.
+---
+ hw/hyperv/gpupv.c | 80 ++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 76 insertions(+), 4 deletions(-)
+
+diff --git a/hw/hyperv/gpupv.c b/hw/hyperv/gpupv.c
+index 23bd512..1d86ffb 100644
+--- a/hw/hyperv/gpupv.c
++++ b/hw/hyperv/gpupv.c
+@@ -33,6 +33,7 @@
+ #include "qemu/uuid.h"
+ #include "qapi/error.h"
+ #include "chardev/char-fe.h"
++#include "chardev/char-socket.h"
+ #include "hw/core/qdev-properties.h"
+ #include "hw/core/qdev-properties-system.h"
+ #include "hw/hyperv/vmbus.h"
+@@ -57,6 +58,10 @@
+ #define GPUPV_EVT_ARENA     0xf010
+ 
+ #define GPUPV_MAX_FRAME     (4 * 1024 * 1024)
++/* The most of the backend's frames held for the guest. Past it the socket is not read. */
++#define GPUPV_MAX_QUEUED    (16 * 1024 * 1024)
++/* No owner given: any peer the socket reaches. */
++#define GPUPV_ANY_OWNER     UINT32_MAX
+ 
+ typedef struct QEMU_PACKED GpupvFrame {
+     uint32_t len;
+@@ -81,6 +86,12 @@ struct GpupvChannel {
+     CharFrontend chr;
+     GByteArray *rx;
+     GQueue out;
++    /* What the frames in out hold, in bytes. */
++    size_t out_bytes;
++
++    /* The user the backend must run as, when QEMU runs as another, and whether this connection's is. */
++    uint32_t owner;
++    bool peer_ok;
+ 
+     /* Memory shared with the backend, for fences. Only the global channel has it. */
+     HostMemoryBackend *iomem;
+@@ -104,7 +115,7 @@ static void gpupv_send_frame(GpupvChannel *s, uint16_t type, uint16_t flags,
+         .tid = cpu_to_le64(tid),
+     };
+ 
+-    if (!qemu_chr_fe_backend_connected(&s->chr)) {
++    if (!qemu_chr_fe_backend_connected(&s->chr) || !s->peer_ok) {
+         return;
+     }
+     qemu_chr_fe_write_all(&s->chr, (uint8_t *)&f, sizeof(f));
+@@ -120,6 +131,7 @@ static void gpupv_send_frame(GpupvChannel *s, uint16_t type, uint16_t flags,
+ static void gpupv_flush(GpupvChannel *s)
+ {
+     VMBusChannel *chan = vmbus_device_channel(VMBUS_DEVICE(s), 0);
++    bool was_full = s->out_bytes >= GPUPV_MAX_QUEUED;
+     GpupvOut *o;
+ 
+     if (!chan || !vmbus_channel_is_open(chan)) {
+@@ -129,15 +141,19 @@ static void gpupv_flush(GpupvChannel *s)
+     while ((o = g_queue_peek_head(&s->out))) {
+         /* On failure VMBus calls chan_notify_cb once the guest frees space. */
+         if (vmbus_channel_reserve(chan, 0, o->len)) {
+-            return;
++            break;
+         }
+         if (vmbus_channel_send(chan, o->type, NULL, 0, o->data, o->len,
+                                o->need_comp, o->tid) < 0) {
+             error_report("gpupv: send to guest failed");
+         }
+         g_queue_pop_head(&s->out);
++        s->out_bytes -= o->len;
+         g_free(o);
+     }
++    if (was_full && s->out_bytes < GPUPV_MAX_QUEUED) {
++        qemu_chr_fe_accept_input(&s->chr);
++    }
+ }
+ 
+ static void gpupv_forward(GpupvChannel *s, VMBusChanReq *req)
+@@ -234,7 +250,52 @@ static void gpupv_map_arena(GpupvChannel *s, const uint8_t *data, uint32_t len)
+ 
+ static int gpupv_chr_can_read(void *opaque)
+ {
+-    return 64 * 1024;
++    GpupvChannel *s = opaque;
++
++    return s->out_bytes < GPUPV_MAX_QUEUED ? 64 * 1024 : 0;
++}
++
++/* Whether the socket's other end runs as the owner, when one is given. */
++static bool gpupv_peer_is_owner(GpupvChannel *s)
++{
++    Chardev *chr = qemu_chr_fe_get_driver(&s->chr);
++    SocketChardev *sc;
++    struct ucred cred;
++    socklen_t len = sizeof(cred);
++
++    if (s->owner == GPUPV_ANY_OWNER) {
++        return true;
++    }
++    if (!chr || !object_dynamic_cast(OBJECT(chr), TYPE_CHARDEV_SOCKET)) {
++        return false;
++    }
++    sc = SOCKET_CHARDEV(chr);
++    if (!sc->sioc ||
++        getsockopt(sc->sioc->fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
++        return false;
++    }
++    return cred.uid == s->owner;
++}
++
++static void gpupv_chr_event(void *opaque, QEMUChrEvent event)
++{
++    GpupvChannel *s = opaque;
++
++    switch (event) {
++    case CHR_EVENT_OPENED:
++        s->peer_ok = gpupv_peer_is_owner(s);
++        if (!s->peer_ok) {
++            warn_report_once("gpupv: the backend's socket is not the owner's, "
++                             "so it is closed");
++            qemu_chr_fe_disconnect(&s->chr);
++        }
++        break;
++    case CHR_EVENT_CLOSED:
++        s->peer_ok = false;
++        break;
++    default:
++        break;
++    }
+ }
+ 
+ static void gpupv_chr_read(void *opaque, const uint8_t *buf, int size)
+@@ -242,6 +303,12 @@ static void gpupv_chr_read(void *opaque, const uint8_t *buf, int size)
+     GpupvChannel *s = opaque;
+     int fd = qemu_chr_fe_get_msgfd(&s->chr);
+ 
++    if (!s->peer_ok) {
++        if (fd >= 0) {
++            close(fd);
++        }
++        return;
++    }
+     /* The socket keeps a passed file only until its next read, so take it now. */
+     if (fd >= 0) {
+         if (s->arena_fd >= 0) {
+@@ -280,6 +347,7 @@ static void gpupv_chr_read(void *opaque, const uint8_t *buf, int size)
+         o->len = len;
+         memcpy(o->data, s->rx->data + sizeof(f), len);
+         g_queue_push_tail(&s->out, o);
++        s->out_bytes += len;
+ 
+         g_byte_array_remove_range(s->rx, 0, sizeof(f) + len);
+     }
+@@ -294,6 +362,8 @@ static void gpupv_drop_pending(GpupvChannel *s)
+     while ((o = g_queue_pop_head(&s->out))) {
+         g_free(o);
+     }
++    s->out_bytes = 0;
++    qemu_chr_fe_accept_input(&s->chr);
+ }
+ 
+ static int gpupv_open_channel(VMBusChannel *chan)
+@@ -323,8 +393,9 @@ static void gpupv_vmdev_realize(VMBusDevice *vdev, Error **errp)
+     s->rx = g_byte_array_new();
+     s->arena_fd = -1;
+     g_queue_init(&s->out);
++    s->peer_ok = s->owner == GPUPV_ANY_OWNER;
+     qemu_chr_fe_set_handlers(&s->chr, gpupv_chr_can_read, gpupv_chr_read,
+-                             NULL, NULL, s, NULL, true);
++                             gpupv_chr_event, NULL, s, NULL, true);
+     if (s->iomem) {
+         MemoryRegion *mr = host_memory_backend_get_memory(s->iomem);
+ 
+@@ -355,6 +426,7 @@ static const Property gpupv_channel_props[] = {
+     DEFINE_PROP_CHR("chardev", GpupvChannel, chr),
+     DEFINE_PROP_LINK("iomem", GpupvChannel, iomem, TYPE_MEMORY_BACKEND, HostMemoryBackend *),
+     DEFINE_PROP_UINT64("iomem-base", GpupvChannel, iomem_base, 0),
++    DEFINE_PROP_UINT32("owner", GpupvChannel, owner, GPUPV_ANY_OWNER),
+ };
+ 
+ static void gpupv_channel_class_init(ObjectClass *klass, const void *data)
+-- 
+2.56.1
+

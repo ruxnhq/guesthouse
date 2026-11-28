@@ -92,6 +92,10 @@ test_a_script_as_guesthouse_prints_it_gives_this_vms_words() {
     grep -qx -e '-device gpupv-render,channel=7a1e2f30-4c55-4d6e-9f10-0123456789ab,hostcaps=1,bus=pcie.0,addr=0x6' "$T/out" ||
         { expect "the render device has no address"; return 1; }
     grep -qx 'daemon_env=GUESTHOUSE_AMD_CARD=0000:c4:00.0' "$T/out" || { expect "the daemon's environment is wrong"; return 1; }
+    grep -qx -e '-device gpupv-vgpu,chardev=gpv,instanceid=7a1e2f30-4c55-4d6e-9f10-0123456789ab,owner=1000' "$T/out" ||
+        { expect "the vGPU channel doesn't name its owner"; return 1; }
+    grep -qx -e '-device gpupv-global,chardev=gpg,instanceid=711dad3a-73ce-468b-90a9-ede6906841b2,iomem=gpio,iomem-base=0x10000000000,owner=1000' "$T/out" ||
+        { expect "the global channel doesn't name its owner"; return 1; }
 }
 
 # Each of the three values with something in it that is no part of a path, which would end a pattern of sed's

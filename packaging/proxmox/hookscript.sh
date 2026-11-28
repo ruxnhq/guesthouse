@@ -85,7 +85,9 @@ load() {
 clean_up() {
     systemctl stop "$unit" 2>/dev/null
     systemctl reset-failed "$unit" 2>/dev/null
-    rm -f "$ram_file" "$window_file" "$run/vgpu.sock" "$run/global.sock"
+    rm -f "$ram_file" "$window_file"
+    # As the user, since the folder is the user's, and root follows no link of theirs.
+    runuser -u "$user" -- rm -f "$run/vgpu.sock" "$run/global.sock" 2>/dev/null
 }
 
 # The config's lines that have to agree with this file. Without them QEMU would start on other files or sockets.
@@ -95,7 +97,7 @@ check_config() {
     [ "$memory" = $((gib * 1024)) ] || die "memory: is ${memory:-unset}, and ram=$ram needs $((gib * 1024))."
     args=$(printf '%s\n' "$config" | sed -n 's/^args: //p')
     for word in "id=ram0,size=$ram,mem-path=$ram_file,share=on" "id=gpio,size=64G,mem-path=$window_file,share=on" \
-        "path=$run/global.sock," "path=$run/vgpu.sock,"; do
+        "path=$run/global.sock," "path=$run/vgpu.sock," "iomem-base=" ",owner=$uid "; do
         case " $args " in
             *"$word"*) ;;
             *) die "args: has no $word. Run setup-vm.sh again." ;;

@@ -22,6 +22,8 @@ The six patches in those packages are the `hw/hyperv` commits of `qemu/qemu-gpup
 packaging/proxmox/guesthouse-pve.sh check
 ```
 
+These scripts run as root, and `setup-vm.sh` copies the hookscript that Proxmox runs as root at every start. Clone Guesthouse as root into a folder only root can change, such as `/root/guesthouse`, and run them from there, not from a checkout of the Guesthouse user's.
+
 It runs as root and only reads. It says what the host has and lacks for a VM with the GPU, and then what to put right, in that order: Proxmox's enterprise repository left on without a subscription, a card that `vfio-pci` has or that its driver is kept off, Landlock with the `lsm=` line for the host's boot loader, the `pve-qemu-kvm` and what keeps it, a newer one from Proxmox, the user's groups, lingering and Guesthouse's GPU files, the packages for making a Windows guest and swtpm's AppArmor rules, and each VM's `args:`, `memory:` and file in `/etc/guesthouse/proxmox` against each other, as the hookscript checks them. For a VM on a bridge it notes that Remote Desktop is shut from the LAN, below. `guesthouse-check`'s own lines come after the user's. It ends with 1 if something stops a VM or the making of its guest. `--report` prints the same without the names of users, the host and VMs, and without users' paths, for an issue.
 
 It has run on the host here, where it found nothing to put right, and on made-up hosts in `tests/proxmox/run.sh`. `tests/proxmox/setup-vm.sh` feeds `setup-vm.sh` made-up printed scripts.
@@ -196,7 +198,7 @@ From amdgpu's counts in fdinfo, the two Windows guests had 49 % and 47 % of the 
 - **Remote Desktop on a bridge.** Guesthouse sets Windows' firewall up for its own network, and lets port 3389 in only from 10.0.2.2, the host there. A VM on a Proxmox bridge has no such host, so Remote Desktop from the LAN stays shut until a rule in Windows lets it in. A tester on Proxmox ran into this after `--remote-desktop on`. Proxmox's console is black after the boot, and Windows+P with Duplicate put the desktop there for him.
 - **Removing a VM** leaves its file in `/etc/guesthouse/proxmox`, and `setup-vm.sh` counts its slot as taken until the file goes.
 - **Four daemons at most** for one user at a time, one in each slot, and Guesthouse's own machines use the same slots.
-- **QEMU runs as root, without Guesthouse's jail.** That's how Proxmox runs every VM. The daemon is still jailed.
+- **QEMU runs as root, without Guesthouse's jail.** That's how Proxmox runs every VM. The daemon is still jailed. `setup-vm.sh` gives both channels the user's uid as `owner=`, and each takes a daemon only from that user's socket and holds at most 16 MiB of its frames for the guest. A `pve-qemu-kvm` built before that doesn't know `owner=`, so build it again with `build-pve-qemu-kvm.sh`, then run `setup-vm.sh` again.
 
 ## Not tried
 

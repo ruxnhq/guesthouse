@@ -378,6 +378,7 @@ fn make(
         notes.push(left_out_note(left_out));
     }
     guest_facts(&folder, machine.kind)?;
+    crate::remote_view::revoked::mark_imported(&folder)?;
     if machine.throwaway {
         crate::throwaway::keep_notes(&folder)?;
     }

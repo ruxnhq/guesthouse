@@ -386,6 +386,7 @@ pub fn bring_up(
             &format!("remote view: sharing on: {}", shown_short(said.trim(), GUEST_WORDS_LOGGED)),
         );
     }
+    revoke_removed(context, machine, ask);
     open_helper(context, machine, slot, port, fingerprint)
 }
 
@@ -552,7 +553,13 @@ pub fn pair_close(context: &Context, machine: &Machine) -> Result<ShareInfo> {
 
 /// Lets in the device that waits. Its clipboard and files go off as soon as it is seen.
 pub fn pair_accept(context: &Context, machine: &Machine) -> Result<ShareInfo> {
-    act(context, machine, Event::Accept)
+    let waiting = info(context, machine).pending.map(|pending| pending.fingerprint);
+    let shown = act(context, machine, Event::Accept)?;
+    // A device taken in again is no longer one that was removed.
+    if let Some(fingerprint) = waiting {
+        let _ = super::revoked::forget(&machine.folder(context), &fingerprint);
+    }
+    Ok(shown)
 }
 
 /// Turns away the device that waits.
@@ -585,7 +592,33 @@ pub fn device_allow(
 
 /// Stops trusting a device: it is disconnected and has to pair again.
 pub fn device_revoke(context: &Context, machine: &Machine, fingerprint: &str) -> Result<ShareInfo> {
-    device_command(context, machine, Policy::linux().device_revoke(fingerprint))
+    let shown = device_command(context, machine, Policy::linux().device_revoke(fingerprint))?;
+    // The guest keeps its own list, which a snapshot or an import can bring back: this PC's is told
+    // to it at every start.
+    let _ = super::revoked::add(&machine.folder(context), fingerprint);
+    Ok(shown)
+}
+
+/// Tells the guest again to stop trusting each device removed here, and, for a machine just imported,
+/// each device it came with.
+pub(super) fn revoke_removed(context: &Context, machine: &Machine, ask: &dyn Fn(&str, u64) -> String) {
+    let folder = machine.folder(context);
+    let mut each = super::revoked::removed(&folder);
+    if super::revoked::is_fresh(&folder) {
+        if let Reply::Status(status) = parse_reply(&ask(&install::ctl_script(&ctl::status()), CTL_SECONDS)) {
+            for device in &status.devices {
+                if !each.contains(&device.fingerprint) {
+                    each.push(device.fingerprint.clone());
+                }
+            }
+        }
+        super::revoked::clear_fresh(&folder);
+    }
+    for fingerprint in each {
+        if let Ok(words) = Policy::linux().device_revoke(&fingerprint) {
+            let _ = ask(&install::ctl_script(&words), CTL_SECONDS);
+        }
+    }
 }
 
 /// Disconnects the device viewing now. It stays paired.

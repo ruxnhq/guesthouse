@@ -4,7 +4,9 @@
 //! report and the card's driver go on it, and the first start finishes the rest. An Ubuntu ISO goes
 //! to `linux` instead, where Ubuntu's own installer does the work on the first boot.
 
-use super::{absolute, chosen_card, copy_into, linux, need_elevation, system_program, volumes};
+use super::{
+    absolute, chosen_card, copy_into, give_guest_folder, linux, need_elevation, system_program, volumes,
+};
 use crate::events::Sink;
 use crate::guest;
 use crate::machine::Guest;
@@ -13,6 +15,7 @@ use crate::settings::PrepareSettings;
 use crate::wim_info;
 use guesthouse_account_core::common::windows_name_problem;
 use guesthouse_hcs::disk::{self, Kind, VirtualDisk};
+use guesthouse_hcs::guest_volume::GuestVolume;
 use guesthouse_hcs::host;
 use std::fs;
 use std::os::windows::process::CommandExt;
@@ -141,12 +144,16 @@ fn fill(
     ]))?;
 
     let password = new_password()?;
-    write(&windows_root, guest::ANSWER_FILE_PATH, &guest::answer_file(&settings.user, &password))?;
-    write(&windows_root, guest::SETUP_COMPLETE_PATH, guest::SETUP_COMPLETE)?;
-    write(&windows_root, guest::REPORT_PATH, guest::REPORT)?;
+    let windows_volume =
+        GuestVolume::open(&windows_root).map_err(|error| format!("{}: {error}", windows_root.display()))?;
+    give_guest_folder(&windows_volume)?;
+    write(&windows_volume, guest::ANSWER_FILE_PATH, &guest::answer_file(&settings.user, &password))?;
+    write(&windows_volume, guest::SETUP_COMPLETE_PATH, guest::SETUP_COMPLETE)?;
+    write(&windows_volume, guest::REPORT_PATH, guest::REPORT)?;
     if let Some(folder) = driver {
-        copy_into(folder, &windows_root, true, sink)?;
+        copy_into(folder, &windows_volume, true, sink)?;
     }
+    drop(windows_volume);
 
     Record { guest: Guest::Windows, ..Record::default() }.save(disk_path)?;
     write_account(disk_path, &settings.user, &password, sink)?;
@@ -222,12 +229,9 @@ pub(super) fn diskpart(number: u32, steps: &str, letters: &[char]) -> Result<(),
     Ok(())
 }
 
-pub(super) fn write(root: &Path, relative: &str, contents: &str) -> Result<(), String> {
-    let path = root.join(relative);
-    if let Some(folder) = path.parent() {
-        fs::create_dir_all(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
-    }
-    fs::write(&path, contents).map_err(|error| format!("{}: {error}", path.display()))
+/// Writes `contents` as the file at `relative` on a guest's volume, making the folders on the way.
+pub(super) fn write(guest: &GuestVolume, relative: &str, contents: &str) -> Result<(), String> {
+    guest.write(relative, contents).map_err(|error| error.to_string())
 }
 
 fn run(command: &mut Command) -> Result<(), String> {

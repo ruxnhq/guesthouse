@@ -13,6 +13,8 @@
 //! - `disk`: virtdisk.dll, which makes, attaches and detaches a VHDX or an ISO, and the volumes on them.
 //! - `gpu`: the host's cards that can be shared with a guest, and their drivers' folders.
 //! - `drivers`: the copy of a card's driver a guest needs, put on its disk while the machine is off.
+//! - `guest_volume`: a guest's volume while its disk is attached to the host, the only way anything
+//!   on it is read, written or removed, which follows no links.
 //! - `hvsock`: Hyper-V sockets, which reach a guest with no network. Its IDs build everywhere.
 //! - `host`: whether this process is elevated, which HCS needs, and Ctrl+C.
 //! - `dns_sd`: announcing a service through Windows' own mDNS responder. What to do after each of
@@ -36,6 +38,8 @@ pub mod drivers;
 mod error;
 #[cfg(windows)]
 pub mod gpu;
+#[cfg(windows)]
+pub mod guest_volume;
 #[cfg(windows)]
 pub mod host;
 #[cfg(windows)]

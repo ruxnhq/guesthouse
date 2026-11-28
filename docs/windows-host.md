@@ -86,6 +86,8 @@ With a Pro guest, Remote Desktop to the address it prints shows its screen.
 - It's the installer's answer file, which cloud-init finds by its label.
 - It keeps the host's GPU files, which the guest mounts at `/usr/lib/wsl` as WSL does. These are WSL's own DXCore and D3D12 libraries, the libraries the driver puts in `lxss\lib`, and the driver's folder from the driver store.
 
+The guest has the files disk read-only, as everything on it is the host's. Before each start the host refreshes it only if it still has the one volume `prepare` made, FAT32 and labelled `CIDATA`, and says why it won't otherwise. As the installer can't write to it, the host takes the account file and `user-data` off it at the first start after the install, before the installed system first runs.
+
 The first `boot` installs Ubuntu. That takes a while, and the machine turns itself off when it's done. `boot` sees the guest say so, and stops attaching the installer. The next `boot` starts the installed system. The installer speaks on the serial port only when the files disk's menu started it, so an install boot that's silent for five minutes started something else, and `boot` stops it and says so.
 
 Stop and Ctrl+C ask an Ubuntu guest to shut down by writing `guesthouse: shutdown` on its serial port, as a Windows guest does. HCS's own request needs Hyper-V's integration services, which this guest doesn't have. `guesthouse-shutdown.service` reads the port at every start, for as long as the guest runs, and powers the guest off when the line comes. It masks the serial getty on that port, so nothing else reads it. A guest installed before the service existed gets it from the files disk at its next start, with no reinstall.
@@ -102,7 +104,9 @@ SSH to the address it prints, with the account in the file beside the disk, or [
 
 ### The jail
 
-What a guest writes to its serial port is the one thing on a Windows host that a Guesthouse program reads from a guest. The machine itself runs in Windows' own worker process, which Windows already keeps apart. So `boot` hands the port to `guesthouse-serial-relay`, which sits beside it and runs jailed, as QEMU does on Linux:
+A Guesthouse program reads two things from a guest on a Windows host: what it writes to its serial port, and its disk, which the service attaches before each start and after each stop to bring the guest's files up to date and read back the report, the guest's trust list and the list of driver files it placed. The disk is reached only through `windows/hcs/src/guest_volume.rs`: each path is opened a part at a time, each part relative to the folder before it, and a link or mount point on the way is refused, as the service follows no links on a guest's disk. A link where something is removed is removed itself. In a Windows guest, `C:\Guesthouse`, where the guest's SYSTEM runs `report.ps1`, the screen's script and the installers from, is set before each start to let only the guest's SYSTEM and administrators change it and what is in it, and a link found in it is removed.
+
+The machine itself runs in Windows' own worker process, which Windows already keeps apart. So `boot` hands the serial port to `guesthouse-serial-relay`, which sits beside it and runs jailed, as QEMU does on Linux:
 
 - In an AppContainer with no capabilities, it can open none of your files, and it has no network, not even loopback. That does what Landlock does on Linux.
 - Process mitigations block every win32k call, code made at run time, and DLLs from a share or a low-integrity file. That does what seccomp does.

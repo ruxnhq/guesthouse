@@ -11,12 +11,12 @@ mkdir -p "$target/usr/lib/guesthouse"
 cp -r "$files/guesthouse/." "$target/usr/lib/guesthouse/"
 rm -f "$target/usr/lib/guesthouse/account"
 
-# The account file holds "user password". It's deleted once read, so the password is kept nowhere
-# but the guest's own shadow file and the host's account file beside the disk.
+# The account file holds "user password". The guest has the files disk read-only, so the host
+# takes the file off it, with user-data, before the installed system first starts. The password is
+# then kept nowhere but the guest's own shadow file and the host's account file beside the disk.
 read -r user password < "$files/guesthouse/account"
 chroot "$target" useradd --create-home --shell /bin/bash --groups adm,sudo "$user"
 printf '%s:%s\n' "$user" "$password" | chroot "$target" chpasswd
-rm -f "$files/guesthouse/account" "$files/user-data"
 
 chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-gpu.service
 chroot "$target" systemctl enable /usr/lib/guesthouse/guesthouse-shutdown.service

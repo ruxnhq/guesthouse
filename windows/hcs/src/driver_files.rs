@@ -10,6 +10,7 @@
 //! them.
 
 use crate::error::{Error, Result};
+use crate::guest_volume::{Entry, GuestVolume};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -183,53 +184,56 @@ pub fn placements(driver_folder: &Path) -> Result<Vec<Placement>> {
         .collect())
 }
 
-/// Puts the files of `driver_folder` that its driver installs outside the driver store in the
-/// Windows volume at `guest_root`, where the driver puts them, leaving the guest's own files alone.
+/// The most of the list of placed files that is read: far more than any driver's files.
+const MOST_LIST_BYTES: u64 = 1024 * 1024;
+
+/// Puts the files of `driver_folder` that its driver installs outside the driver store on the
+/// guest's Windows volume, where the driver puts them, leaving the guest's own files alone: a file
+/// Guesthouse didn't put there, and a link or folder where one would go, whatever the list says.
 /// `nvapi_wrapper` is the NVAPI wrapper's file, which goes where NVIDIA's NVAPI would.
-pub fn place(driver_folder: &Path, guest_root: &Path, nvapi_wrapper: Option<&Path>) -> Result<Placed> {
-    let list = guest_root.join(PLACED_LIST);
-    let mut ours: BTreeSet<String> = fs::read_to_string(&list)
-        .unwrap_or_default()
+pub fn place(driver_folder: &Path, guest: &GuestVolume, nvapi_wrapper: Option<&Path>) -> Result<Placed> {
+    let list = guest.read(PLACED_LIST, MOST_LIST_BYTES).unwrap_or_default();
+    let mut ours: BTreeSet<String> = String::from_utf8_lossy(&list)
         .lines()
         .map(|line| line.trim().to_ascii_lowercase())
         .filter(|line| !line.is_empty())
         .collect();
     let mut placed = Placed::default();
-    let fail = |what: &Path, error| Error::io(format!("Placing {}", what.display()), error);
+    let fail = |what: &Path, error| Error::io(format!("Placing {}", guest.shown(what)), error);
     for mut placement in placements(driver_folder)? {
         if let Some(wrapper) = nvapi_wrapper
             && placement.target.to_string_lossy().eq_ignore_ascii_case(NVAPI_TARGET)
         {
             placement.source = wrapper.to_owned();
         }
-        let target = guest_root.join(&placement.target);
         let key = placement.target.to_string_lossy().to_ascii_lowercase();
-        if target.exists() {
-            if !ours.contains(&key) {
+        // What can't be looked at, as a folder on the way is a link, is the guest's as well.
+        match guest.entry(&placement.target) {
+            Ok(None) => {}
+            Ok(Some(Entry::File { len, .. })) if ours.contains(&key) => {
+                let source = fs::read(&placement.source);
+                if let Ok(source) = source
+                    && source.len() as u64 == len
+                    && guest.read(&placement.target, len + 1).is_ok_and(|there| there == source)
+                {
+                    placed.kept += 1;
+                    continue;
+                }
+            }
+            Ok(Some(_)) | Err(_) => {
                 placed.left.push(placement.target);
                 continue;
             }
-            let (source, there) = (fs::read(&placement.source), fs::read(&target));
-            if let (Ok(source), Ok(there)) = (source, there)
-                && source == there
-            {
-                placed.kept += 1;
-                continue;
-            }
         }
-        if let Some(folder) = target.parent() {
-            fs::create_dir_all(folder).map_err(|error| fail(folder, error))?;
-        }
-        fs::copy(&placement.source, &target).map_err(|error| fail(&target, error))?;
+        guest
+            .copy_in(&placement.source, &placement.target)
+            .map_err(|error| fail(&placement.target, error))?;
         ours.insert(key);
         placed.copied += 1;
     }
     if placed.copied > 0 {
-        if let Some(folder) = list.parent() {
-            fs::create_dir_all(folder).map_err(|error| fail(folder, error))?;
-        }
         let text: String = ours.iter().map(|line| format!("{line}\r\n")).collect();
-        fs::write(&list, text).map_err(|error| fail(&list, error))?;
+        guest.write(PLACED_LIST, text).map_err(|error| fail(Path::new(PLACED_LIST), error))?;
     }
     Ok(placed)
 }
@@ -237,6 +241,7 @@ pub fn place(driver_folder: &Path, guest_root: &Path, nvapi_wrapper: Option<&Pat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guest_volume::tests::junction;
 
     /// Parts of Intel's Arc driver's install file, as a tester's showed them.
     const INTEL: &str = "\
@@ -315,26 +320,28 @@ tool.exe
         .unwrap();
         fs::write(folder.join("sub").join("loader-64.dll"), b"loader one").unwrap();
         fs::write(folder.join("vc32.dll"), b"driver's runtime").unwrap();
-        let guest = scratch("guest");
-        fs::create_dir_all(guest.join(r"Windows\SysWOW64")).unwrap();
-        fs::write(guest.join(r"Windows\SysWOW64\vcruntime140.dll"), b"windows' own runtime").unwrap();
+        let guest_root = scratch("guest");
+        fs::create_dir_all(guest_root.join(r"Windows\SysWOW64")).unwrap();
+        fs::write(guest_root.join(r"Windows\SysWOW64\vcruntime140.dll"), b"windows' own runtime").unwrap();
+        let guest = GuestVolume::open(&guest_root).unwrap();
 
         let placed = place(&folder, &guest, None).unwrap();
         assert_eq!(placed.copied, 1);
         assert_eq!(placed.left, [PathBuf::from(r"Windows\SysWOW64\vcruntime140.dll")]);
-        assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader one");
+        assert_eq!(fs::read(guest_root.join(r"Windows\System32\loader.dll")).unwrap(), b"loader one");
         assert_eq!(
-            fs::read(guest.join(r"Windows\SysWOW64\vcruntime140.dll")).unwrap(),
+            fs::read(guest_root.join(r"Windows\SysWOW64\vcruntime140.dll")).unwrap(),
             b"windows' own runtime"
         );
 
         assert_eq!(place(&folder, &guest, None).unwrap().kept, 1);
         fs::write(folder.join("sub").join("loader-64.dll"), b"loader two").unwrap();
         assert_eq!(place(&folder, &guest, None).unwrap().copied, 1, "a newer driver's file replaces ours");
-        assert_eq!(fs::read(guest.join(r"Windows\System32\loader.dll")).unwrap(), b"loader two");
+        assert_eq!(fs::read(guest_root.join(r"Windows\System32\loader.dll")).unwrap(), b"loader two");
 
         let _ = fs::remove_dir_all(host);
-        let _ = fs::remove_dir_all(guest);
+        drop(guest);
+        let _ = fs::remove_dir_all(guest_root);
     }
 
     #[test]
@@ -351,17 +358,68 @@ tool.exe
         fs::write(folder.join("nvapi.dll"), b"nvidia's 32").unwrap();
         let wrapper = host.join("nvapi64-wrapper.dll");
         fs::write(&wrapper, b"wrapper").unwrap();
-        let guest = scratch("guest-nvapi");
+        let guest_root = scratch("guest-nvapi");
+        let guest = GuestVolume::open(&guest_root).unwrap();
 
         assert_eq!(place(&folder, &guest, None).unwrap().copied, 2);
-        assert_eq!(fs::read(guest.join(NVAPI_TARGET)).unwrap(), b"nvidia's 64");
+        assert_eq!(fs::read(guest_root.join(NVAPI_TARGET)).unwrap(), b"nvidia's 64");
         assert_eq!(place(&folder, &guest, Some(&wrapper)).unwrap().copied, 1, "ours, so it's replaced");
-        assert_eq!(fs::read(guest.join(NVAPI_TARGET)).unwrap(), b"wrapper");
-        assert_eq!(fs::read(guest.join(r"Windows\SysWOW64\nvapi.dll")).unwrap(), b"nvidia's 32");
+        assert_eq!(fs::read(guest_root.join(NVAPI_TARGET)).unwrap(), b"wrapper");
+        assert_eq!(fs::read(guest_root.join(r"Windows\SysWOW64\nvapi.dll")).unwrap(), b"nvidia's 32");
         assert_eq!(place(&folder, &guest, Some(&wrapper)).unwrap().kept, 2);
 
         let _ = fs::remove_dir_all(host);
-        let _ = fs::remove_dir_all(guest);
+        drop(guest);
+        let _ = fs::remove_dir_all(guest_root);
+    }
+
+    #[test]
+    fn a_link_where_a_file_goes_is_left_even_when_the_list_names_it() {
+        let host = scratch("host-links");
+        let folder = host.join("card.inf_amd64_0123456789abcdef");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("card.inf"),
+            "[DestinationDirs]\nA = 11\nB = 10,SysWOW64\n[A]\nloader.dll\n[B]\nruntime.dll\n",
+        )
+        .unwrap();
+        fs::write(folder.join("loader.dll"), b"driver's loader").unwrap();
+        fs::write(folder.join("runtime.dll"), b"driver's runtime").unwrap();
+        let elsewhere = host.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let hosts_own = host.join("hosts-own.dll");
+        fs::write(&hosts_own, b"the host's own").unwrap();
+        let guest_root = scratch("guest-links");
+        fs::create_dir_all(guest_root.join(r"Windows\System32")).unwrap();
+        fs::create_dir_all(guest_root.join("Guesthouse")).unwrap();
+        // The guest's list says both are Guesthouse's, so they'd be written over.
+        fs::write(
+            guest_root.join(PLACED_LIST),
+            "windows\\system32\\loader.dll\r\nwindows\\syswow64\\runtime.dll\r\n",
+        )
+        .unwrap();
+        std::os::windows::fs::symlink_file(&hosts_own, guest_root.join(r"Windows\System32\loader.dll"))
+            .unwrap();
+        junction(&guest_root.join(r"Windows\SysWOW64"), &elsewhere);
+        let guest = GuestVolume::open(&guest_root).unwrap();
+
+        let placed = place(&folder, &guest, None);
+        assert_eq!(
+            fs::read(&hosts_own).unwrap(),
+            b"the host's own",
+            "nothing was written through the file link"
+        );
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing was written through the junction");
+        let placed = placed.unwrap();
+        assert_eq!(placed.copied, 0);
+        assert_eq!(
+            placed.left,
+            [PathBuf::from(r"Windows\System32\loader.dll"), PathBuf::from(r"Windows\SysWOW64\runtime.dll")]
+        );
+
+        drop(guest);
+        let _ = fs::remove_dir_all(guest_root);
+        let _ = fs::remove_dir_all(host);
     }
 
     /// What this PC's own cards' drivers would place, printed: `cargo test -p guesthouse-hcs

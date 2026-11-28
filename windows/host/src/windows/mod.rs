@@ -15,9 +15,11 @@ use crate::settings::{BootSettings, GpuChoice, Share};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
 use guesthouse_hcs::gpu::{self, Card};
+use guesthouse_hcs::guest_volume::{Grant, GuestVolume};
 use guesthouse_hcs::host;
 use guesthouse_hcs::schema::{Attachment, AttachmentType};
 use guesthouse_remote_view_core::trust;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,6 +65,16 @@ const WINFSP_INSTALLER_NAME: &str = "winfsp.msi";
 /// its Windows volume, mounts each share as a drive and links the drive onto the desktop. Its lines
 /// are `crate::guest::share_marker`'s. With no share it isn't there.
 pub const SHARE_FILE: &str = r"Guesthouse\share.txt";
+
+/// The folder Guesthouse keeps its files in, from the root of a Windows guest's volume:
+/// `C:\Guesthouse`, where the guest's SYSTEM runs `report.ps1`, the screen's script and the
+/// installers from.
+const GUESTHOUSE_FOLDER: &str = "Guesthouse";
+/// Who may use that folder: the guest's SYSTEM and its administrators. Whoever owns a file in it
+/// may only read its permissions.
+const GUEST_FOLDER_GRANTS: [Grant; 3] = [("SY", "FA"), ("BA", "FA"), ("OW", "RC")];
+/// The most of a guest's report that is read back.
+const MOST_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Lets a stopped machine's disk grow to `size_gb`. The guest's own last partition is grown into
 /// the room at its next start: `report.ps1` does it in Windows, and `gpu.sh` in Ubuntu.
@@ -116,19 +128,20 @@ pub fn disk_size_gb(disk: &Path) -> Result<u64, String> {
     Ok(opened.size().map_err(|error| error.to_string())? / prepare::BYTES_PER_GB)
 }
 
-/// A Linux guest's files disk, and its installer until it has installed.
+/// A Linux guest's files disk, and its installer until it has installed. The guest only reads the
+/// files disk: what is on it is the host's, and the host reads it back before each start.
 fn more_disks(disk: &Path, record: &Record) -> Vec<Attachment> {
     if record.guest != Guest::Linux {
         return Vec::new();
     }
-    let attach = |kind, path: &Path| Attachment {
+    let attach = |kind, path: &Path, read_only| Attachment {
         r#type: kind,
         path: path.to_string_lossy().into_owned(),
-        read_only: None,
+        read_only,
     };
-    let mut disks = vec![attach(AttachmentType::VirtualDisk, &files_disk(disk))];
+    let mut disks = vec![attach(AttachmentType::VirtualDisk, &files_disk(disk), Some(true))];
     if let Some(installer) = record.installer.as_deref().filter(|_| !record.installed) {
-        disks.push(attach(AttachmentType::Iso, installer));
+        disks.push(attach(AttachmentType::Iso, installer, None));
     }
     disks
 }
@@ -203,8 +216,11 @@ fn refresh_windows_disk(
     attached.attach(false).map_err(|error| error.to_string())?;
     let windows = volumes(&attached)?
         .into_iter()
-        .find(|volume| volume.root.join(r"Windows\System32").is_dir())
+        .filter_map(|volume| GuestVolume::open(&volume.root).ok())
+        .find(|volume| volume.is_dir(r"Windows\System32"))
         .ok_or_else(|| format!("{} has no volume with Windows on it.", disk.display()))?;
+    // Before anything is written in it, at every start, so a guest made before it has it too.
+    give_guest_folder(&windows)?;
     if let Some(card) = card {
         let folder = card.driver_folder.as_ref().ok_or_else(|| {
             format!(
@@ -212,34 +228,36 @@ fn refresh_windows_disk(
                 card.name
             )
         })?;
-        copy_into(folder, &windows.root, nvapi_wrapper, sink)?;
+        copy_into(folder, &windows, nvapi_wrapper, sink)?;
     }
     // Written again at every boot, as guests made before it changed have an older one.
-    let report = windows.root.join(crate::guest::REPORT_PATH);
-    std::fs::write(&report, crate::guest::REPORT)
-        .map_err(|error| format!("{}: {error}", report.display()))?;
-    give_share(&windows.root, shares, sink)?;
+    windows.write(crate::guest::REPORT_PATH, crate::guest::REPORT).map_err(|error| error.to_string())?;
+    give_share(&windows, shares, sink)?;
     match setup {
-        Some(setup) => give_screen(disk, &windows.root, &setup, card, hosts, sink),
+        Some(setup) => give_screen(disk, &windows, &setup, card, hosts, sink),
         None => {
-            keep_trust(disk, &windows.root, sink);
+            keep_trust(disk, &windows, sink);
             Ok(())
         }
     }
 }
 
+/// Makes the guest's Guesthouse folder if it isn't there, and lets only the guest's SYSTEM and
+/// administrators change it and what is in it.
+pub(crate) fn give_guest_folder(guest: &GuestVolume) -> Result<(), String> {
+    guest.give_only(GUESTHOUSE_FOLDER, &GUEST_FOLDER_GRANTS).map_err(|error| error.to_string())
+}
+
 /// Tells the guest of its shares, with the marker `report.ps1` reads, and gives it the program that
 /// mounts them and WinFsp's installer. With no share the marker goes. A program or installer the
 /// host hasn't got is said and leaves the guest without a drive, never without a boot.
-fn give_share(root: &Path, shares: &[Share], sink: &dyn Sink) -> Result<(), String> {
-    let marker = root.join(SHARE_FILE);
+fn give_share(guest: &GuestVolume, shares: &[Share], sink: &dyn Sink) -> Result<(), String> {
     if shares.is_empty() {
-        let _ = std::fs::remove_file(&marker);
+        let _ = guest.remove_file(SHARE_FILE);
         return Ok(());
     }
-    std::fs::write(&marker, crate::guest::share_marker(shares))
-        .map_err(|error| format!("{}: {error}", marker.display()))?;
-    let folder = root.join(SHARE_FOLDER);
+    guest.write(SHARE_FILE, crate::guest::share_marker(shares)).map_err(|error| error.to_string())?;
+    let folder = Path::new(SHARE_FOLDER);
     let beside = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.to_path_buf()));
     for (from, name, what) in [
         (SHARE_PROGRAM, SHARE_PROGRAM_NAME, "Guesthouse's share program"),
@@ -252,10 +270,7 @@ fn give_share(root: &Path, shares: &[Share], sink: &dyn Sink) -> Result<(), Stri
             ));
             continue;
         };
-        let to = folder.join(name);
-        let copied = std::fs::create_dir_all(&folder)
-            .and_then(|()| copy_if_changed(&source, &to))
-            .map_err(|error| format!("{}: {error}", to.display()));
+        let copied = copy_if_changed(&source, guest, &folder.join(name)).map_err(|error| error.to_string());
         match copied {
             Ok(true) => sink.note(format!("The guest has {what}, from {}.", source.display())),
             Ok(false) => {}
@@ -273,13 +288,14 @@ fn screen_setup() -> Option<PathBuf> {
     beside.is_file().then_some(beside)
 }
 
-/// Copies a file unless the copy there has its size and time already. Gives whether it copied.
-fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<bool> {
-    let given = std::fs::metadata(from)?;
-    let same = std::fs::metadata(to)
-        .is_ok_and(|kept| kept.len() == given.len() && kept.modified().ok() == given.modified().ok());
+/// Copies the host's file `from` to `to` in the guest's Guesthouse folder, unless the copy there
+/// has its bytes already: the bytes are compared, not the size and time. Gives whether it copied.
+fn copy_if_changed(from: &Path, guest: &GuestVolume, to: &Path) -> io::Result<bool> {
+    let given = std::fs::read(from)
+        .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", from.display())))?;
+    let same = guest.read(to, given.len() as u64 + 1).is_ok_and(|kept| kept == given);
     if !same {
-        std::fs::copy(from, to)?;
+        guest.write(to, &given)?;
     }
     Ok(!same)
 }
@@ -289,42 +305,39 @@ fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<bool> {
 /// so it signs in by itself. The report, written before this, runs the script.
 fn give_screen(
     disk: &Path,
-    root: &Path,
+    guest: &GuestVolume,
     setup: &Path,
     card: Option<&Card>,
     hosts: Option<&str>,
     sink: &dyn Sink,
 ) -> Result<(), String> {
-    let folder = root.join(screen::GUEST_FOLDER);
-    let write = |name: &str, text: &str| {
-        let path = folder.join(name);
-        std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))
-    };
-    std::fs::create_dir_all(&folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    let folder = Path::new(screen::GUEST_FOLDER);
+    let write =
+        |name: &str, text: &str| guest.write(folder.join(name), text).map_err(|error| error.to_string());
+    guest.create_dir_all(folder).map_err(|error| error.to_string())?;
     let state = screen::state_beside(disk);
     let viewer = screen::viewer_identity(&state)?;
-    give_trust(&folder, root, &viewer)?;
+    give_trust(guest, &viewer)?;
     write("encoder.txt", card.map_or("auto", |card| screen::encoder_for(&card.instance_id)))?;
     write("screen.ps1", screen::SCRIPT)?;
     // Who may reach remoteman's port. Without it the guest leaves its rules as they are.
     match hosts {
         Some(text) => write(screen::HOSTS_FILE, text)?,
         None => {
-            let _ = std::fs::remove_file(folder.join(screen::HOSTS_FILE));
+            let _ = guest.remove_file(folder.join(screen::HOSTS_FILE));
         }
     }
     let account = disk.with_extension("account.txt");
     if let Ok(text) = std::fs::read_to_string(&account) {
         write("logon.txt", &text)?;
     }
-    let guest_setup = folder.join(screen::GUEST_SETUP);
-    let copied = copy_if_changed(setup, &guest_setup)
-        .map_err(|error| format!("{}: {error}", guest_setup.display()))?;
+    let copied = copy_if_changed(setup, guest, &folder.join(screen::GUEST_SETUP))
+        .map_err(|error| error.to_string())?;
     if copied {
         sink.note("remoteman's host's installer given to the guest.");
     }
     // A guest given remoteman's files before its installer could run unattended has them still.
-    let _ = std::fs::remove_dir_all(folder.join("remoteman-host"));
+    let _ = guest.remove_tree(folder.join("remoteman-host"));
     sink.note(format!("The guest has remoteman for its screen. The viewer's folder is {}.", state.display()));
     Ok(())
 }
@@ -332,11 +345,12 @@ fn give_screen(
 /// Writes whom the guest trusts in its screen folder: the viewer's line, which decides whether
 /// remoteman's installer runs again, and the list it's given when it does, the viewer and every
 /// device the guest has paired, read off its disk now (see `trust`).
-fn give_trust(folder: &Path, root: &Path, viewer: &str) -> Result<(), String> {
-    let given = trust::given(viewer, root)?;
+fn give_trust(guest: &GuestVolume, viewer: &str) -> Result<(), String> {
+    let current = guest.read(trust::GUEST_TRUST_FILE, trust::MOST_LIST_BYTES + 1).ok().map(trust::list_from);
+    let given = trust::given_from(viewer, current.as_deref())?;
     for (name, text) in [("viewer.txt", &given.viewer), ("trusted", &given.trusted)] {
-        let path = folder.join(name);
-        std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+        let path = Path::new(screen::GUEST_FOLDER).join(name);
+        guest.write(path, text).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -344,13 +358,12 @@ fn give_trust(folder: &Path, root: &Path, viewer: &str) -> Result<(), String> {
 /// With no installer to give, a guest given one before still runs its script, which runs the
 /// installer when remoteman's service has gone. Its list is made again from the guest's own, so the
 /// installer never gets the one from an earlier boot, with a device revoked since on it.
-fn keep_trust(disk: &Path, root: &Path, sink: &dyn Sink) {
-    let folder = root.join(screen::GUEST_FOLDER);
-    if !folder.join("screen.ps1").is_file() {
+fn keep_trust(disk: &Path, guest: &GuestVolume, sink: &dyn Sink) {
+    if !guest.is_file(Path::new(screen::GUEST_FOLDER).join("screen.ps1")) {
         return;
     }
-    let kept = screen::viewer_identity(&screen::state_beside(disk))
-        .and_then(|viewer| give_trust(&folder, root, &viewer));
+    let kept =
+        screen::viewer_identity(&screen::state_beside(disk)).and_then(|viewer| give_trust(guest, &viewer));
     if let Err(error) = kept {
         sink.problem(format!("The guest's list of devices to trust wasn't written: {error}"));
     }
@@ -365,15 +378,15 @@ fn nvapi_wrapper() -> Option<PathBuf> {
 
 /// With `nvapi_wrapper` off, NVIDIA's NVAPI goes where the wrapper was, as the placer replaces a
 /// file of its own that isn't the driver's.
-fn copy_into(folder: &Path, root: &Path, nvapi_wrapper: bool, sink: &dyn Sink) -> Result<(), String> {
-    let copied = copy_driver(folder, root).map_err(|error| error.to_string())?;
+fn copy_into(folder: &Path, guest: &GuestVolume, nvapi_wrapper: bool, sink: &dyn Sink) -> Result<(), String> {
+    let copied = copy_driver(folder, guest).map_err(|error| error.to_string())?;
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
     sink.note(format!("Driver {name}: {} files copied, {} already there.", copied.copied, copied.kept));
     // The files the driver installs outside the driver store, such as its Vulkan and OpenCL loaders
     // and its maker's media libraries. Not having them leaves the card working for Direct3D but
     // not for programs that load those, so a failure is told and the boot goes on.
     let wrapper = if nvapi_wrapper { self::nvapi_wrapper() } else { None };
-    match guesthouse_hcs::driver_files::place(folder, root, wrapper.as_deref()) {
+    match guesthouse_hcs::driver_files::place(folder, guest, wrapper.as_deref()) {
         Ok(placed) => {
             sink.note(format!(
                 "Driver {name}'s files outside the driver store: {} copied, {} already there.",
@@ -412,9 +425,9 @@ fn print_guest_report(disk: &Path, sink: &dyn Sink) {
     let report = volumes(&attached)
         .unwrap_or_default()
         .into_iter()
-        .map(|volume| volume.root.join(crate::guest::REPORT_FILE))
-        .find(|path| path.is_file());
-    match report.map(std::fs::read) {
+        .filter_map(|volume| GuestVolume::open(&volume.root).ok())
+        .find(|volume| volume.is_file(crate::guest::REPORT_FILE));
+    match report.map(|volume| volume.read(crate::guest::REPORT_FILE, MOST_REPORT_BYTES)) {
         Some(Ok(bytes)) => {
             sink.note("The guest's report, from its disk:");
             for line in bytes.split(|&byte| byte == b'\n') {
@@ -458,7 +471,7 @@ mod tests {
         std::fs::create_dir_all(live.parent().unwrap()).unwrap();
         std::fs::write(&live, format!("{viewer} Guesthouse\r\n{PAIRED} Kitchen tablet\r\n")).unwrap();
         std::fs::create_dir_all(&folder).unwrap();
-        give_trust(&folder, &root, &viewer).unwrap();
+        give_trust(&GuestVolume::open(&root).unwrap(), &viewer).unwrap();
         assert_eq!(std::fs::read_to_string(folder.join("viewer.txt")).unwrap(), screen::trust_list(&viewer));
         assert_eq!(
             std::fs::read_to_string(folder.join("trusted")).unwrap(),
@@ -471,7 +484,8 @@ mod tests {
     fn with_no_installer_a_guest_given_a_screen_before_has_its_list_made_again() {
         let (disk, folder, root) = scratch("kept");
         let sink = Kept::default();
-        keep_trust(&disk, &root, &sink);
+        let guest = GuestVolume::open(&root).unwrap();
+        keep_trust(&disk, &guest, &sink);
         assert!(
             !folder.exists() && !screen::state_beside(&disk).exists(),
             "a guest with no screen is left alone"
@@ -479,11 +493,69 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("screen.ps1"), screen::SCRIPT).unwrap();
         std::fs::write(folder.join("trusted"), format!("{PAIRED} Revoked since\n")).unwrap();
-        keep_trust(&disk, &root, &sink);
+        keep_trust(&disk, &guest, &sink);
         let viewer = screen::viewer_identity(&screen::state_beside(&disk)).unwrap();
         assert_eq!(std::fs::read_to_string(folder.join("trusted")).unwrap(), screen::trust_list(&viewer));
         assert_eq!(std::fs::read_to_string(folder.join("viewer.txt")).unwrap(), screen::trust_list(&viewer));
         assert!(sink.0.lock().unwrap().is_empty());
+        drop(guest);
         let _ = std::fs::remove_dir_all(disk.parent().unwrap());
+    }
+
+    #[test]
+    fn a_linux_guest_has_its_files_disk_read_only() {
+        let record = Record {
+            guest: Guest::Linux,
+            installer: Some(PathBuf::from(r"D:\ubuntu.iso")),
+            ..Record::default()
+        };
+        let disks = more_disks(Path::new(r"D:\machines\ubuntu.vhdx"), &record);
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].path, r"D:\machines\ubuntu.files.vhdx");
+        assert_eq!(disks[0].read_only, Some(true));
+    }
+
+    /// A junction at `link` to the folder `target`, as anyone may make one.
+    pub(super) fn junction(link: &Path, target: &Path) {
+        let made = std::process::Command::new("cmd")
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "mklink /J: {}", String::from_utf8_lossy(&made.stderr));
+    }
+
+    #[test]
+    fn a_screen_folder_that_is_a_link_gets_nothing_written_through_it() {
+        let (disk, folder, root) = scratch("linked");
+        let elsewhere = disk.parent().unwrap().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("screen.ps1"), screen::SCRIPT).unwrap();
+        std::fs::create_dir_all(folder.parent().unwrap()).unwrap();
+        junction(&folder, &elsewhere);
+        let guest = GuestVolume::open(&root).unwrap();
+        keep_trust(&disk, &guest, &Kept::default());
+        let names: Vec<_> =
+            std::fs::read_dir(&elsewhere).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(names, ["screen.ps1"], "nothing was written through the junction");
+        drop(guest);
+        let _ = std::fs::remove_dir_all(disk.parent().unwrap());
+    }
+
+    #[test]
+    fn only_the_guests_system_and_administrators_may_change_its_guesthouse_folder() {
+        let writers: Vec<&str> = GUEST_FOLDER_GRANTS
+            .iter()
+            .filter(|(_, rights)| *rights != "RC")
+            .map(|(trustee, _)| *trustee)
+            .collect();
+        assert_eq!(writers, ["SY", "BA"]);
+        assert!(
+            GUEST_FOLDER_GRANTS.contains(&("OW", "RC")),
+            "an owner gets no more than reading permissions"
+        );
     }
 }

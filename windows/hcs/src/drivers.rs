@@ -4,7 +4,9 @@
 //! copied there whole, under the same name, while the guest's disk is attached to the host.
 
 use crate::error::{Error, Result};
+use crate::guest_volume::{Entry, GuestVolume};
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,38 +20,38 @@ pub struct Copied {
     pub kept: usize,
 }
 
-/// Copies `driver_folder` into the host driver store of the Windows volume at `guest_root`, under
-/// the same name. A file already there with the same size and time is left.
-pub fn copy_driver(driver_folder: &Path, guest_root: &Path) -> Result<Copied> {
+/// Copies `driver_folder` into the host driver store of the guest's Windows volume, under the same
+/// name. A file already there with the same size and time is left.
+pub fn copy_driver(driver_folder: &Path, guest: &GuestVolume) -> Result<Copied> {
     let name = driver_folder.file_name().ok_or_else(|| {
         Error::new(format!("Copying {}", driver_folder.display()), -1, Some("it has no folder name".into()))
     })?;
-    copy_folder(driver_folder, &guest_root.join(HOST_DRIVER_STORE).join(name))
+    copy_folder(driver_folder, guest, &Path::new(HOST_DRIVER_STORE).join(name))
 }
 
-/// Copies the folder `from` to `to`, with everything in it. A file already there with the same size
-/// and time is left.
-pub fn copy_folder(from: &Path, to: &Path) -> Result<Copied> {
+/// Copies the host's folder `from` to `to` on the guest's volume, with everything in it. A file
+/// already there with the same size and time is left.
+pub fn copy_folder(from: &Path, guest: &GuestVolume, to: &Path) -> Result<Copied> {
     let mut copied = Copied::default();
-    copy_tree(from, to, &mut copied)
-        .map_err(|error| Error::io(format!("Copying {} to {}", from.display(), to.display()), error))?;
+    copy_tree(from, guest, to, &mut copied)
+        .map_err(|error| Error::io(format!("Copying {} to {}", from.display(), guest.shown(to)), error))?;
     Ok(copied)
 }
 
-fn copy_tree(from: &Path, to: &Path, copied: &mut Copied) -> std::io::Result<()> {
-    fs::create_dir_all(to)?;
+fn copy_tree(from: &Path, guest: &GuestVolume, to: &Path, copied: &mut Copied) -> io::Result<()> {
+    guest.create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
         let kind = entry.file_type()?;
         if kind.is_dir() {
-            copy_tree(&entry.path(), &target, copied)?;
+            copy_tree(&entry.path(), guest, &target, copied)?;
         } else if kind.is_file() {
-            if same_file(&entry.metadata()?, &target) {
+            if same_file(&entry.metadata()?, guest.entry(&target)?) {
                 copied.kept += 1;
             } else {
-                // Windows' copy keeps the file's time, which is what the next run compares.
-                fs::copy(entry.path(), &target)?;
+                // The copy keeps the file's time, which is what the next run compares.
+                guest.copy_in(&entry.path(), &target)?;
                 copied.copied += 1;
             }
         }
@@ -61,16 +63,17 @@ fn copy_tree(from: &Path, to: &Path, copied: &mut Copied) -> std::io::Result<()>
 /// two times are this close.
 const TIME_SLACK: Duration = Duration::from_secs(2);
 
-fn same_file(source: &fs::Metadata, target: &Path) -> bool {
-    let Ok(there) = fs::metadata(target) else { return false };
-    let (Ok(new), Ok(old)) = (source.modified(), there.modified()) else { return false };
+fn same_file(source: &fs::Metadata, there: Option<Entry>) -> bool {
+    let Some(Entry::File { len, modified: old }) = there else { return false };
+    let Ok(new) = source.modified() else { return false };
     let apart = new.duration_since(old).or_else(|_| old.duration_since(new)).unwrap_or(Duration::MAX);
-    there.len() == source.len() && apart <= TIME_SLACK
+    len == source.len() && apart <= TIME_SLACK
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guest_volume::tests::junction;
     use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
@@ -87,10 +90,11 @@ mod tests {
         fs::create_dir_all(folder.join("sub")).unwrap();
         fs::write(folder.join("a.dll"), b"one").unwrap();
         fs::write(folder.join("sub").join("b.bin"), b"two").unwrap();
-        let guest = scratch("guest");
+        let guest_root = scratch("guest");
+        let guest = GuestVolume::open(&guest_root).unwrap();
 
         assert_eq!(copy_driver(&folder, &guest).unwrap(), Copied { copied: 2, kept: 0 });
-        let landed = guest.join(HOST_DRIVER_STORE).join("card.inf_amd64_0123456789abcdef");
+        let landed = guest_root.join(HOST_DRIVER_STORE).join("card.inf_amd64_0123456789abcdef");
         assert_eq!(fs::read(landed.join("a.dll")).unwrap(), b"one");
         assert_eq!(fs::read(landed.join("sub").join("b.bin")).unwrap(), b"two");
 
@@ -98,7 +102,29 @@ mod tests {
         fs::write(folder.join("a.dll"), b"newer").unwrap();
         assert_eq!(copy_driver(&folder, &guest).unwrap(), Copied { copied: 1, kept: 1 });
 
+        drop(guest);
         let _ = fs::remove_dir_all(host);
-        let _ = fs::remove_dir_all(guest);
+        let _ = fs::remove_dir_all(guest_root);
+    }
+
+    #[test]
+    fn a_driver_store_that_is_a_link_on_the_guests_disk_gets_nothing() {
+        let host = scratch("host-link");
+        let folder = host.join("card.inf_amd64_0123456789abcdef");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.dll"), b"one").unwrap();
+        let elsewhere = host.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let guest_root = scratch("guest-link");
+        fs::create_dir_all(guest_root.join(r"Windows\System32")).unwrap();
+        junction(&guest_root.join(r"Windows\System32\HostDriverStore"), &elsewhere);
+        let guest = GuestVolume::open(&guest_root).unwrap();
+
+        assert!(copy_driver(&folder, &guest).is_err());
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing was copied through the link");
+
+        drop(guest);
+        let _ = fs::remove_dir_all(guest_root);
+        let _ = fs::remove_dir_all(host);
     }
 }

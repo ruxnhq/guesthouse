@@ -25,7 +25,6 @@ PVE_REPOSITORY='http://download.proxmox.com/debian/pve trixie pve-no-subscriptio
 KEYRING_URL=https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
 KEYRING_SHA256=136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
 KEYRING=/usr/share/keyrings/proxmox-archive-keyring.gpg
-IMAGE=${IMAGE:-docker.io/library/debian:trixie}
 SUFFIX=+gpupv1
 # The devices a GPU-PV VM's args: name. The package's QEMU must know each, or the VM won't start on it.
 DEVICES='vmbus-bridge hv-timesync gpupv-global gpupv-vgpu gpupv-render'
@@ -230,8 +229,10 @@ main() {
     [ -z "$patches_only" ] || return 0
     [ $# -eq 1 ] || die "name what to build of pve-qemu.git, such as 11.1.3-4, or newest."
     find_engine
+    # Read here, on the host: the container has only this script's folder.
+    image=${IMAGE:-$(sh "$REPO/packaging/images/image-of.sh" debian)}
     "$ENGINE" run --rm --security-opt label=disable -e "OWNER=$OWNER" -e DEBFULLNAME -e DEBEMAIL -e DEB_BUILD_OPTIONS \
-        -v "$OUT:/build" -v "$REPO/packaging/proxmox:/script:ro" "$IMAGE" \
+        -v "$OUT:/build" -v "$REPO/packaging/proxmox:/script:ro" "$image" \
         sh /script/build-pve-qemu-kvm.sh --inside "$1" "$SUFFIX"
     say "the packages are in $OUT"
 }

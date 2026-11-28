@@ -1,7 +1,7 @@
 //! The display driver's settings folder, as `Set-SettingsFolder` in the driver's install script keeps it. The
-//! folder here stands in for C:\VirtualDisplayDriver, and the test account stands in for the account that
-//! owns it, as the test can't give it to the administrators' group: only SYSTEM, the administrators, the
-//! driver's own account and the readers named below have rights to it afterwards.
+//! folder here stands in for C:\VirtualDisplayDriver. Whoever owns a folder the test makes depends on whether
+//! the test runs elevated (the administrators' group) or not (the user), so each case names the owners the
+//! script may trust itself, and does not rely on the account the test runs as.
 #![cfg(windows)]
 
 use crate::{Scratch, functions_from, quote, run, shell};
@@ -45,14 +45,15 @@ Set-Acl -LiteralPath $root -AclObject $above
 New-Item -ItemType Junction -Path (Join-Path $root 'sub') -Target $outside | Out-Null
 "#;
 
-fn look(owners: &str) -> Vec<String> {
+/// The owners the script trusts: none of the folder's own, or whoever owns it as the test made it.
+fn look(trusted: &str) -> Vec<String> {
     let Some(shell) = shell() else { return Vec::new() };
     let scratch = Scratch::new();
     let (root, outside) = (scratch.path("VirtualDisplayDriver"), scratch.path("outside"));
     let said = run(
         shell,
         &format!(
-            "$ErrorActionPreference = 'Stop'\n{}$root = {}\n$outside = {}\n{MAKE}\ntry {{ Set-SettingsFolder $root {owners}\n{LOOK} }} finally {{ {GIVE_BACK} }}",
+            "$ErrorActionPreference = 'Stop'\n{}$root = {}\n$outside = {}\n{MAKE}\ntry {{ Set-SettingsFolder $root ({trusted})\n{LOOK} }} finally {{ {GIVE_BACK} }}",
             functions_from(&script(), &["Remove-InnerLinks", "Set-SettingsFolder"]),
             quote(&root),
             quote(&outside)
@@ -69,7 +70,7 @@ fn a_folder_someone_else_made_is_made_anew_for_the_system() {
     if shell().is_none() {
         return;
     }
-    let found = look("");
+    let found = look("'S-1-5-99'");
     assert_eq!(found, ["settings kept False", "extra kept False", "link there False", "outside kept True"]);
 }
 
@@ -79,6 +80,7 @@ fn a_folder_the_system_made_keeps_its_files_under_its_rules() {
     if shell().is_none() {
         return;
     }
-    let found = look("$me");
+    let found =
+        look("(Get-Acl -LiteralPath $root).GetOwner([System.Security.Principal.SecurityIdentifier]).Value");
     assert_eq!(found, ["settings kept True", "extra kept True", "link there False", "outside kept True"]);
 }

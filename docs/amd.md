@@ -84,4 +84,4 @@ Earlier test builds of the same work also ran AV1 decode, and sessions of a minu
 
 ## Linux guests on AMD
 
-That's a different route, through virtio-gpu's native context, and it's in [`linux/`](../linux/README.md#an-amd-card).
+That's a different route, through virtio-gpu's native context, and it's in [`guest/linux/`](../guest/linux/README.md#an-amd-card).

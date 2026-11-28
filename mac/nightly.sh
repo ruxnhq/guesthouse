@@ -285,8 +285,8 @@ cp "$licence_file" "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt"
     echo "Guesthouse nightly $version, built from commit $commit of https://github.com/ruxnlabs/guesthouse"
     echo
     echo "Guesthouse itself (the app, its agent and, if it is here, guesthouse-pvg-host) is free software"
-    echo "under GPL-2.0-or-later. That repository at that commit is its source: mac/, crates/host-mac,"
-    echo "crates/pvg-host and crates/pvg-sys. The licence is Contents/Resources/licences/Guesthouse-GPL-2.0.txt."
+    echo "under GPL-2.0-or-later. That repository at that commit is its source: mac/, mac/host,"
+    echo "mac/pvg-host and mac/pvg-sys. The licence is Contents/Resources/licences/Guesthouse-GPL-2.0.txt."
     if [ -f "$app/Contents/Helpers/rmhost" ]; then
         remoteman_version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")
         remoteman_commit=$(sed -n 's/^ *"commit": *"\([^"]*\)".*/\1/p' "$here/rmhost/remoteman-source.json")

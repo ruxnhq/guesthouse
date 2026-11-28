@@ -1,5 +1,5 @@
 # What Guesthouse's installer does once its files are in place, and what its uninstaller undoes.
-# Run by the installer (crates/installer-windows), elevated, hidden; never by hand except to repair:
+# Run by the installer (windows/setup), elevated, hidden; never by hand except to repair:
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 install
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 uninstall [-DeleteMachines]
 # install:   checks for Windows 11, and for the Virtual Machine Platform feature, which it turns on
@@ -23,7 +23,7 @@ $data = Join-Path $env:ProgramData 'Guesthouse'
 # Windows 11's first build.
 $firstWindows11 = 22000
 # The service asks each guest to shut down and gives it about a minute (GRACE in
-# crates/service-windows/src/windows/mod.rs); Windows is told to wait a little longer than that
+# windows/service/src/windows/mod.rs); Windows is told to wait a little longer than that
 # when the PC shuts down.
 $stopWaitSeconds = 90
 $preshutdownMs = 90000

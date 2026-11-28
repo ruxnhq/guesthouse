@@ -8,12 +8,12 @@ name: Linux graphics driver
 on:
   pull_request:
     paths:
-      - drivers/linux-pvg/**
+      - guest/drivers/linux-pvg/**
       - .github/workflows/linux-pvg.yml
   push:
     branches: [main]
     paths:
-      - drivers/linux-pvg/**
+      - guest/drivers/linux-pvg/**
       - .github/workflows/linux-pvg.yml
 
 permissions:
@@ -48,15 +48,15 @@ jobs:
       - name: Build with make
         run: |
           make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/drivers/linux-pvg/driver" modules
-          modinfo drivers/linux-pvg/driver/pvg.ko | grep -E '^(filename|license|vermagic|alias):'
+          modinfo guest/drivers/linux-pvg/driver/pvg.ko | grep -E '^(filename|license|vermagic|alias):'
           make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/drivers/linux-pvg/driver" clean
       - name: Build with DKMS, as the package's pvg-dkms does
         run: |
           version=0.0.0-ci
           src=/usr/src/pvg-$version
           mkdir -p "$src"
-          cp -R drivers/linux-pvg/driver drivers/linux-pvg/uapi "$src/"
-          sed "s|@VERSION@|$version|" drivers/linux-pvg/package/dkms/dkms.conf > "$src/dkms.conf"
+          cp -R guest/drivers/linux-pvg/driver guest/drivers/linux-pvg/uapi "$src/"
+          sed "s|@VERSION@|$version|" guest/drivers/linux-pvg/package/dkms/dkms.conf > "$src/dkms.conf"
           dkms add -m pvg -v "$version"
           dkms build -m pvg -v "$version" -k "$KERNEL" || {
             cat "/var/lib/dkms/pvg/$version/build/make.log"
@@ -75,6 +75,6 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          git ls-files -z drivers/linux-pvg/package |
+          git ls-files -z guest/drivers/linux-pvg/package |
             xargs -0 grep -lE '^#!/bin/(ba)?sh' | grep -v '\.sh$' |
             xargs shellcheck --severity=warning

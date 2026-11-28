@@ -10,21 +10,21 @@ on:
   pull_request:
     paths:
       - mac/**
-      - crates/host-mac/**
-      - crates/remote-view/**
-      - crates/report/**
-      - crates/state/**
-      - crates/account/**
-      - crates/answers/**
-      - crates/basics/**
-      - crates/update-check/**
+      - mac/host/**
+      - shared/remote-view/**
+      - shared/report/**
+      - shared/state/**
+      - shared/account/**
+      - shared/answers/**
+      - shared/basics/**
+      - shared/update-check/**
       - Cargo.lock
       - .github/workflows/mac-checks.yml
   push:
     branches: [main]
     paths:
       - mac/**
-      - crates/host-mac/**
+      - mac/host/**
       - .github/workflows/mac-checks.yml
 
 permissions:

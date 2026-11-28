@@ -29,7 +29,7 @@ CI builds it from the tag, and makes the GitHub release as a draft. I read the d
 
 3. **CI builds it.** The tag starts the `Release build` workflow (`.github/workflows/release-build.yml`). It does steps 3 to 6 of the by-hand way:
    - It stops if the tag isn't on `main`, or isn't the version in `Cargo.toml`.
-   - The display driver follows step 3's rule. If nothing compiled in `drivers/windows-display` changed since the release before, that release's DLL and INF go in again, checked against its `SHA256SUMS`. Otherwise a Windows runner builds it, with Visual Studio's WDK rather than the Enterprise WDK ISO. Then try the new driver in a guest before publishing.
+   - The display driver follows step 3's rule. If nothing compiled in `guest/drivers/windows-display` changed since the release before, that release's DLL and INF go in again, checked against its `SHA256SUMS`. Otherwise a Windows runner builds it, with Visual Studio's WDK rather than the Enterprise WDK ISO. Then try the new driver in a guest before publishing.
    - It runs `packaging/build-in-images.sh` in `/var/tmp/guesthouse-release`, then step 5's three tests on what it built.
    - It makes the release as a draft, with the five files and notes drafted by `scripts/release-notes.py`. The notes come from the pull requests merged since the release before, squashed or with a merge commit, under the area each title starts with. They're only this host's: a pull request whose title names another host ("Mac host: ...", "Windows app: ..."), or that touched only another host's files (`mac/`, `windows/`, a host's own crates), is left out, and so are release and version pull requests and the ones pointing the installer or the site at a release. Whatever is left out is listed with why in a comment at the end, to put back by hand. A comment at the top says whether the tests passed.
 
@@ -57,9 +57,9 @@ Below, `VERSION` is the version with no `v`, like `0.2.0`, and `BUILD_FOLDER` is
    git tag vVERSION
    ```
 
-3. **Build the display driver.** This one step is in Windows, as [drivers/windows-display/BUILDING.md](drivers/windows-display/BUILDING.md) says, from the tagged commit. Copy `GuesthouseDisplay.dll` and `GuesthouseDisplay.inf` to a folder on this PC, outside the repo. They never go in git.
+3. **Build the display driver.** This one step is in Windows, as [guest/drivers/windows-display/BUILDING.md](guest/drivers/windows-display/BUILDING.md) says, from the tagged commit. Copy `GuesthouseDisplay.dll` and `GuesthouseDisplay.inf` to a folder on this PC, outside the repo. They never go in git.
 
-   If nothing compiled in `drivers/windows-display` has changed since my last build, I reuse that build and skip Windows. `git diff LAST_BUILD vVERSION -- drivers/windows-display` shows it. The docs, the licences, `vdd_settings.xml` and the scripts in `setup/` don't count, as step 4 takes those from the tree.
+   If nothing compiled in `guest/drivers/windows-display` has changed since my last build, I reuse that build and skip Windows. `git diff LAST_BUILD vVERSION -- guest/drivers/windows-display` shows it. The docs, the licences, `vdd_settings.xml` and the scripts in `setup/` don't count, as step 4 takes those from the tree.
 
 4. **Build it in the images.** It needs podman or docker and no root, and takes a commit with nothing uncommitted. It stops if the release needs a glibc above 2.39, if the bundled source is missing, if it has no display driver, if it couldn't download OpenSSH for Windows, or if an archive has a link that points nowhere. The driver's licences go in beside it.
 

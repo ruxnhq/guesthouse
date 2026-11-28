@@ -1,6 +1,6 @@
 # What `guesthouse-check` prints
 
-`guesthouse-check` is what `install.sh` asks about this PC, and what scripts can ask too. It changes nothing and opens no device. Its lines are a stable format. They only change in a release whose notes say so, and a test in `crates/app-core/src/bin/check/linux.rs` holds them exactly, so a change would break CI first.
+`guesthouse-check` is what `install.sh` asks about this PC, and what scripts can ask too. It changes nothing and opens no device. Its lines are a stable format. They only change in a release whose notes say so, and a test in `linux/app-core/src/bin/check/linux.rs` holds them exactly, so a change would break CI first.
 
 Every line is split by tabs, with the line's name first.
 

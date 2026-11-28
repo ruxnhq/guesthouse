@@ -7,7 +7,7 @@
 #
 # The display driver can only be built on Windows, and every new build of it is a new package id that
 # each guest installs again (app-core's actions/display.rs). So, as by hand, the previous release's DLL and INF are used again,
-# checked against that release's SHA256SUMS, unless something compiled in drivers/windows-display
+# checked against that release's SHA256SUMS, unless something compiled in guest/drivers/windows-display
 # changed since that release. Then it's built here on a Windows runner.
 #
 # From the Actions tab it runs for a tag that's pushed already. With "release" off, it only builds and
@@ -94,7 +94,7 @@ jobs:
         env:
           PREVIOUS: ${{ steps.tag.outputs.previous }}
         run: |
-          D=drivers/windows-display
+          D=guest/drivers/windows-display
           if [ -z "$PREVIOUS" ]; then
             echo "There's no release before, so the driver is built."
             echo "driver=build" >>"$GITHUB_OUTPUT"

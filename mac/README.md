@@ -1,6 +1,6 @@
 # Guesthouse for macOS
 
-A Mac app that runs a Windows or Ubuntu virtual machine on Apple silicon, with the machine drawing on the Mac's own GPU. It is a SwiftUI app on a small Rust core. A background agent owns the running machines, so they carry on when the app quits. It shares its rules with the Linux and Windows hosts through the crates in `crates/`, and the Mac's part of it is `crates/host-mac`.
+A Mac app that runs a Windows or Ubuntu virtual machine on Apple silicon, with the machine drawing on the Mac's own GPU. It is a SwiftUI app on a small Rust core. A background agent owns the running machines, so they carry on when the app quits. It shares its rules with the Linux and Windows hosts through the crates in `crates/`, and the Mac's part of it is `mac/host`.
 
 I'm saying the awkward parts first, because you should know them before you build it.
 
@@ -29,13 +29,13 @@ I'm saying the awkward parts first, because you should know them before you buil
 
 ## Build
 
-You need Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The graphics process and QEMU with the `pvg-fwd` device are in `crates/pvg-host` and `qemu/mac/`, and `docs/mac-host.md` says how to build them. The nightly build carries them inside the app. An app you build yourself finds them through its Settings or an environment variable, or in `Contents/Helpers` if you put them there with `mac/nightly.sh --helpers`.
+You need Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The graphics process and QEMU with the `pvg-fwd` device are in `mac/pvg-host` and `qemu/mac/`, and `docs/mac-host.md` says how to build them. The nightly build carries them inside the app. An app you build yourself finds them through its Settings or an environment variable, or in `Contents/Helpers` if you put them there with `mac/nightly.sh --helpers`.
 
 ```sh
 ./build.sh
 ```
 
-That runs `build-core.sh` (the Rust core, `crates/host-mac`, built with cargo from the repo's root), `xcodegen generate` and `xcodebuild`. The app ends up in `build/dd/Build/Products/Release/Guesthouse.app`, signed ad hoc, or with your certificate if you set `GUESTHOUSE_SIGN_IDENTITY`.
+That runs `build-core.sh` (the Rust core, `mac/host`, built with cargo from the repo's root), `xcodegen generate` and `xcodebuild`. The app ends up in `build/dd/Build/Products/Release/Guesthouse.app`, signed ad hoc, or with your certificate if you set `GUESTHOUSE_SIGN_IDENTITY`.
 
 The core's tests run without a guest:
 
@@ -45,7 +45,7 @@ cargo test -p guesthouse-host-mac
 
 ## Where things are
 
-- `crates/host-mac/` is the Rust core: machines, the agent, installs, reports, the rules of the app's pages. Swift only draws and calls it through `crates/host-mac/include/guesthouse_core.h`.
+- `mac/host/` is the Rust core: machines, the agent, installs, reports, the rules of the app's pages. Swift only draws and calls it through `mac/host/include/guesthouse_core.h`.
 - `App/` is the SwiftUI app, `Agent/` the agent's program, `Shared/` what both use, `Launchd/` the agent's launchd file.
 - `Tests/` are the Swift tests of the app's wording. `rmframes/` is how the graphics process hands the screen to the app as IOSurfaces, MIT.
 

@@ -12,7 +12,7 @@ let
   firmware = pkgs.OVMFFull.fd;
   nvidia = config.hardware.nvidia.package;
   # The NVIDIA driver branches Guesthouse is tested on, from TESTED_VERSIONS in
-  # crates/app-core/src/linux/driver_versions.rs.
+  # linux/app-core/src/linux/driver_versions.rs.
   testedBranches = [
     "615"
     "620"

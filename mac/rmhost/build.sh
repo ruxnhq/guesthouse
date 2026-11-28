@@ -13,7 +13,7 @@
 #                     only records and counts, and has no remoteman code in it
 #
 # `rmhost serve` links remoteman's core, which is not in this repository. The one pin is
-# remoteman-source.json: the version crates/remote-view/remoteman.json names for the other hosts,
+# remoteman-source.json: the version shared/remote-view/remoteman.json names for the other hosts,
 # and the commit of remoteman's repository that released it. The build fetches exactly that commit
 # (git checks the hash), builds the core with cargo, --locked, into the output folder, and links it.
 # It is GPL-3.0-or-later, so an rmhost with `serve` in it is under that licence as a whole.
@@ -55,11 +55,11 @@ if [ "$serve" = yes ]; then
     version=$(pin version)
     commit=$(pin commit)
     # The version is the one the other hosts use, so the pins cannot drift apart.
-    shared=$here/../../crates/remote-view/remoteman.json
+    shared=$here/../../shared/remote-view/remoteman.json
     if [ -f "$shared" ]; then
         said=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$shared" | head -n 1)
         [ "$said" = "$version" ] || {
-            echo "build.sh: remoteman-source.json says $version and crates/remote-view/remoteman.json says $said" >&2
+            echo "build.sh: remoteman-source.json says $version and shared/remote-view/remoteman.json says $said" >&2
             exit 1
         }
     fi

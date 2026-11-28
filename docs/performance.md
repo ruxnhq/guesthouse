@@ -61,7 +61,7 @@ This is experimental. These numbers are from the integrated RDNA2 Radeon in the 
 
 ### Linux guests
 
-This route is in this repo, in [`linux/`](../linux/README.md), with how to try it.
+This route is in this repo, in [`guest/linux/`](../guest/linux/README.md), with how to try it.
 
 Linux takes a different route. The guest runs NVIDIA's real Linux driver and its calls get forwarded to the host's driver. Ubuntu 26.04.1 installs by itself, and a Linux you install yourself can have the GPU too. So far I've tried that on Fedora 45 Workstation and Fedora 45 KDE Plasma.
 
@@ -75,4 +75,4 @@ In theory this route isn't tied to the 5090 the way the Windows one is. It forwa
 
 Delay is where it's behind. A simple app takes about 20 to 30 ms from key press to picture, against about 11.5 on the host, and Godot takes 40 to 100 ms, more on Vulkan than OpenGL.
 
-An AMD card, built in or not, can give a Linux guest its 3D too, through virtio-gpu's native context: the guest runs Mesa's radeonsi and RADV on the real card. Ubuntu sets itself up for it, and a Linux you install yourself has a setup script. This is experimental: it has only run on one integrated Radeon here, so a discrete or older card may not work yet, and if it doesn't the guest falls back or boots without the GPU. Reports welcome. See [`linux/`](../linux/README.md#an-amd-card).
+An AMD card, built in or not, can give a Linux guest its 3D too, through virtio-gpu's native context: the guest runs Mesa's radeonsi and RADV on the real card. Ubuntu sets itself up for it, and a Linux you install yourself has a setup script. This is experimental: it has only run on one integrated Radeon here, so a discrete or older card may not work yet, and if it doesn't the guest falls back or boots without the GPU. Reports welcome. See [`guest/linux/`](../guest/linux/README.md#an-amd-card).

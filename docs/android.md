@@ -35,6 +35,6 @@ Most Android apps are built for ARM phones. Those built only for ARM64 run too, 
 
 ## The image
 
-It's built from LineageOS's sources with Guesthouse's setup app, microG and Digitalis added. [android/](../android/README.md) is how it's built, and each published image has the manifest of the sources it came from beside it. It's a userdebug build, which is how LineageOS lets microG stand in for Google's services, so root over adb is possible inside the guest.
+It's built from LineageOS's sources with Guesthouse's setup app, microG and Digitalis added. [guest/android/](../guest/android/README.md) is how it's built, and each published image has the manifest of the sources it came from beside it. It's a userdebug build, which is how LineageOS lets microG stand in for Google's services, so root over adb is possible inside the guest.
 
 It isn't an official LineageOS build, and it isn't from Google. Android and Google Play are trademarks of Google LLC, and LineageOS is a trademark of LineageOS. Guesthouse isn't made, endorsed or supported by either. [THIRD-PARTY.md](../THIRD-PARTY.md) has the licences.

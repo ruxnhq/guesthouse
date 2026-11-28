@@ -71,31 +71,31 @@ class Notes(unittest.TestCase):
         repo.squash("Start")
         repo.git("tag", "v0.1.0")
         repo.git("tag", "windows-v0.1.0")
-        repo.squash("Windows app: a gear in the title bar (#10)", "crates/app-windows/src/main.rs")
+        repo.squash("Windows app: a gear in the title bar (#10)", "windows/app/src/main.rs")
         repo.merge(
             "remote-view",
             "Merge pull request #11 from ruxnlabs/remote-view\n\nRemote view: a pairing step always ends\n\nMore words.",
-            "crates/remote-view/src/lib.rs",
+            "shared/remote-view/src/lib.rs",
         )
         repo.squash("Mac host: the app icon (#12)", "mac/Icon/icon.png")
         repo.merge(
             "mac-graphics",
             "Merge pull request #13 from ruxnlabs/mac-graphics\n\nThe graphics process",
             "mac/App/a.swift",
-            "crates/pvg-host/src/lib.rs",
+            "mac/pvg-host/src/lib.rs",
         )
         repo.merge(
             "only-windows",
             "Merge pull request #14 from ruxnlabs/only-windows\n\nKeep up with a chatty guest",
             "windows/setup.ps1",
-            "crates/host-windows/src/lib.rs",
+            "windows/host/src/lib.rs",
         )
         # A branch that took main in, then was merged: the merge of main isn't a pull request.
         repo.git("checkout", "-q", "-b", "catch-up")
-        repo.touch("crates/core/src/lib.rs")
+        repo.touch("linux/core/src/lib.rs")
         repo.git("commit", "-q", "-m", "Catch up")
         repo.git("checkout", "-q", "main")
-        repo.squash("Linux app: a new button (#15)", "crates/app/src/main.rs")
+        repo.squash("Linux app: a new button (#15)", "linux/app/src/main.rs")
         repo.git("checkout", "-q", "catch-up")
         repo.git("merge", "-q", "--no-ff", "-m", "Merge branch 'main' into catch-up", "main")
         repo.git("checkout", "-q", "main")
@@ -103,25 +103,25 @@ class Notes(unittest.TestCase):
         # The same pull request twice: a merge commit, then a squash with its number.
         # Its branch has a commit with the number too, as one squashed into it would.
         repo.git("checkout", "-q", "-b", "twice")
-        repo.touch("crates/idle/src/inner.rs")
+        repo.touch("shared/idle/src/inner.rs")
         repo.git("commit", "-q", "-m", "Move the idle rules into a crate every host can share (#16)")
         repo.git("checkout", "-q", "main")
         repo.merge(
             "twice",
             "Merge pull request #16 from ruxnlabs/twice\n\nMove the idle rules into a crate every host can share",
-            "crates/idle/src/lib.rs",
+            "shared/idle/src/lib.rs",
         )
-        repo.squash("Move the idle rules into a crate every host can share (#16)", "crates/idle/src/more.rs")
+        repo.squash("Move the idle rules into a crate every host can share (#16)", "shared/idle/src/more.rs")
         repo.squash("Docs and site: the Mac nightly (#17)", "site/mac.html")
-        repo.squash("Remote view: a host that times pairing itself (#18)", "crates/remote-view/src/time.rs")
+        repo.squash("Remote view: a host that times pairing itself (#18)", "shared/remote-view/src/time.rs")
         repo.squash(
             "Machine states: one list for every host, the Linux host's, and the Windows host's (#19)",
-            "crates/state/src/lib.rs",
+            "shared/state/src/lib.rs",
         )
-        repo.squash("Release Windows 0.2.0 (#20)", "crates/app-windows/Cargo.toml")
+        repo.squash("Release Windows 0.2.0 (#20)", "windows/app/Cargo.toml")
         repo.squash("Point the site at Windows 0.1.0 (#21)", "site/index.html")
         repo.squash("Bump a thing (#22)", "Cargo.lock", email="41898282+github-actions[bot]@users.noreply.github.com")
-        repo.squash("AMD: the fence block goes to the card (#23)", "crates/backend-amd/src/lib.rs", "Cargo.lock")
+        repo.squash("AMD: the fence block goes to the card (#23)", "linux/backend-amd/src/lib.rs", "Cargo.lock")
         repo.squash("Sign the CLA (#24)", "CLA-SIGNERS.md")
         repo.git("tag", "v0.2.0")
         repo.git("tag", "windows-v0.2.0")

@@ -1,21 +1,21 @@
 # What goes into a Linux guest keeps Linux's line endings on any checkout, Windows' included, as a
 # script with a carriage return after its first line won't run.
-crates/host-windows/guest/linux/** text eol=lf
+windows/host/guest/linux/** text eol=lf
 # Golden copies of what a report holds, compared byte for byte, so a checkout keeps them as they are.
-crates/app-core/tests/report-golden/** -text
-crates/control/tests/report-golden/** -text
-crates/app-core/tests/answers-golden/** -text
-crates/host-windows/tests/answers-golden/** -text
+linux/app-core/tests/report-golden/** -text
+shared/control/tests/report-golden/** -text
+linux/app-core/tests/answers-golden/** -text
+windows/host/tests/answers-golden/** -text
 # What a recipe and lean Windows show and keep, compared byte for byte.
-crates/app-core/tests/recipes/** -text
+linux/app-core/tests/recipes/** -text
 # App windows' lines between the host and the guest's helper, compared byte for byte.
-crates/app-core/tests/app_windows_lines/** -text
+linux/app-core/tests/app_windows_lines/** -text
 # The Windows host's snapshot index as its code writes it, compared byte for byte.
-crates/host-windows/tests/snapshot-golden/** -text
+windows/host/tests/snapshot-golden/** -text
 # The Linux host's answer-file templates and zone table, which the shared answers crate holds as text, keep
 # their line endings on any checkout.
-guest/autounattend.xml text eol=lf
-linux/setup/seed/** text eol=lf
-crates/answers/data/** text eol=lf
+guest/windows/autounattend.xml text eol=lf
+guest/linux/setup/seed/** text eol=lf
+shared/answers/data/** text eol=lf
 # The remote-view sentences as data, compared byte for byte with what the Rust wording makes.
-crates/remote-view/wording.json -text
+shared/remote-view/wording.json -text

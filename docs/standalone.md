@@ -210,6 +210,6 @@ The app stops a machine by asking Windows to shut down through its agent. Here u
 
 ## Linux guests
 
-A Linux guest doesn't use any of this. On an AMD card, it's upstream virtio-gpu with native context: the patched QEMU has a few changes for it, and [the QEMU patch](../qemu/README.md) and [AMD](amd.md) say what. On NVIDIA it's the `nvfwd` device, which [`linux/README.md`](../linux/README.md) describes. Neither is printed by `guesthouse-vm command` yet.
+A Linux guest doesn't use any of this. On an AMD card, it's upstream virtio-gpu with native context: the patched QEMU has a few changes for it, and [the QEMU patch](../qemu/README.md) and [AMD](amd.md) say what. On NVIDIA it's the `nvfwd` device, which [`guest/linux/README.md`](../guest/linux/README.md) describes. Neither is printed by `guesthouse-vm command` yet.
 
 If you're coming from GPU passthrough with a Windows you already have, I haven't tried that. That guest has NVIDIA's own driver on a PCI card, and my install expects to put its own in.

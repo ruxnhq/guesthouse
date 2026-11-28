@@ -1,5 +1,5 @@
 # Builds the Linux guest's driver package for the Mac host from this repo and ruxnlabs/mesa alone,
-# on an arm64 runner in an Ubuntu 26.04 container, with drivers/linux-pvg/package/build-here.sh: the
+# on an arm64 runner in an Ubuntu 26.04 container, with guest/drivers/linux-pvg/package/build-here.sh: the
 # module's DKMS package (built once by DKMS as a check), our Mesa in /opt/pvg-mesa, the desktop
 # packages, install.sh and the manifest. A pull request only builds it.
 #
@@ -8,18 +8,18 @@
 # and the files it names. It has no secret: the Worker takes the job's OIDC token
 # (scripts/files-publish.sh). A version is published once. When the manifest that's up already names
 # this version, nothing is sent, so a change that should reach the guests also raises
-# drivers/linux-pvg/package/version.txt.
+# guest/drivers/linux-pvg/package/version.txt.
 name: Linux driver package
 
 on:
   pull_request:
     paths:
-      - drivers/linux-pvg/**
+      - guest/drivers/linux-pvg/**
       - .github/workflows/linux-package.yml
   push:
     branches: [main]
     paths:
-      - drivers/linux-pvg/**
+      - guest/drivers/linux-pvg/**
       - .github/workflows/linux-package.yml
   workflow_dispatch:
 
@@ -43,11 +43,11 @@ jobs:
       - name: Install what the build needs
         env:
           PVG_HEADERS: linux-headers-generic
-        run: sh drivers/linux-pvg/package/vm-packages.sh
+        run: sh guest/drivers/linux-pvg/package/vm-packages.sh
       - name: Build the package
         env:
           PVG_WORK: /tmp/pvg-work
-        run: sh drivers/linux-pvg/package/build-here.sh "$PWD" target/linux-pvg/package
+        run: sh guest/drivers/linux-pvg/package/build-here.sh "$PWD" target/linux-pvg/package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-driver-package
@@ -74,9 +74,9 @@ jobs:
       - name: Check the package against its manifest
         run: |
           set -eu
-          . drivers/linux-pvg/package/lib.sh
+          . guest/drivers/linux-pvg/package/lib.sh
           version=$(jq -r .version "package/$pvg_manifest_name")
-          [ "$version" = "$(cat drivers/linux-pvg/package/version.txt)" ]
+          [ "$version" = "$(cat guest/drivers/linux-pvg/package/version.txt)" ]
           printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           for f in $(pvg_package_files "$version"); do
             want=$(jq -r --arg f "$f" '.files[] | select(.as == $f) | .sha256' "package/$pvg_manifest_name")
@@ -86,7 +86,7 @@ jobs:
       - name: Publish the files, then the manifest
         run: |
           set -eu
-          . drivers/linux-pvg/package/lib.sh
+          . guest/drivers/linux-pvg/package/lib.sh
           project=guesthouse-linux-driver
           site=https://files.ruxn.com/p/$project
           up=$(curl -fsSL "$site/$pvg_manifest_name" 2>/dev/null | jq -r .version 2>/dev/null || true)

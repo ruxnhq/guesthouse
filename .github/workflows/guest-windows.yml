@@ -6,15 +6,15 @@ name: Guest on Windows
 on:
   pull_request:
     paths:
-      - "guest/**"
-      - "crates/guest-scripts/**"
+      - "guest/windows/**"
+      - "guest/scripts/**"
       - "tests/windows/**"
       - ".github/workflows/guest-windows.yml"
       # The crates that send the scripts to a guest or build them in.
-      - "crates/app-core/**"
-      - "crates/app-windows/**"
-      - "crates/host-windows/**"
-      - "crates/remote-view/**"
+      - "linux/app-core/**"
+      - "windows/app/**"
+      - "windows/host/**"
+      - "shared/remote-view/**"
   push:
     branches: [main]
 

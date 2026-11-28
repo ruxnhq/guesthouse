@@ -15,9 +15,9 @@ cargo fmt --check
 cargo bench -p guesthouse-core
 ```
 
-`linux/README.md` says how to test what goes into a Linux guest, and the device in the QEMU patch.
+`guest/linux/README.md` says how to test what goes into a Linux guest, and the device in the QEMU patch.
 
-The desktop app in `crates/app` also needs GTK 4 and libadwaita's development files, so `cargo test` leaves it out. Build it with `cargo build -p guesthouse-app`. That needs GTK 4.16 for HDR. On GTK 4.14 and libadwaita 1.5, as Ubuntu 24.04 has, use `--no-default-features`, and the viewer shows SDR only. `crates/app/page-shots.sh` walks its pages on GTK's Broadway backend and saves a picture of each, with no desktop and no GPU.
+The desktop app in `linux/app` also needs GTK 4 and libadwaita's development files, so `cargo test` leaves it out. Build it with `cargo build -p guesthouse-app`. That needs GTK 4.16 for HDR. On GTK 4.14 and libadwaita 1.5, as Ubuntu 24.04 has, use `--no-default-features`, and the viewer shows SDR only. `linux/app/page-shots.sh` walks its pages on GTK's Broadway backend and saves a picture of each, with no desktop and no GPU.
 
 To try the sockets by hand, `cargo run -p guesthouse-daemon --features stand-in` answers messages with a pretend GPU behind them. It's for poking at, and it won't run a guest.
 
@@ -39,7 +39,7 @@ The checks on pull requests run on Linux only, so build a Windows change on Wind
 
 ### On a Mac
 
-You need macOS 27 on Apple silicon, Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The Mac host's core, `crates/host-mac`, builds on a Mac only: on Linux and Windows it is an empty crate, so `cargo test --workspace` works there, and it isn't one of the default members.
+You need macOS 27 on Apple silicon, Xcode 27, XcodeGen and Rust with the `aarch64-apple-darwin` target. The Mac host's core, `mac/host`, builds on a Mac only: on Linux and Windows it is an empty crate, so `cargo test --workspace` works there, and it isn't one of the default members.
 
 ```sh
 cargo test -p guesthouse-host-mac
@@ -47,7 +47,7 @@ cargo clippy -p guesthouse-host-mac --all-targets -- -D warnings
 mac/build.sh
 ```
 
-The graphics process, `crates/pvg-host`, and the guard in front of the framework's device, `crates/pvg-sys`, aren't default members either. Their calls into Apple's framework build on a Mac only. The guard builds on Linux too, so its tests run there as well. On Windows `pvg-sys` is an empty crate, as it maps the guest's memory with `mmap`. A few tests make the framework's real device (`tests/picture.rs` in pvg-sys, `tests/serve.rs` and `tests/export.rs` in pvg-host). They need a Mac on a macOS build the guard has a profile for, and on any other build they say so and pass without running. `qemu/mac/build.sh` builds the QEMU they run with. A pull request that changes any of this is also built on a GitHub-hosted Mac (`.github/workflows/mac-graphics.yml`).
+The graphics process, `mac/pvg-host`, and the guard in front of the framework's device, `mac/pvg-sys`, aren't default members either. Their calls into Apple's framework build on a Mac only. The guard builds on Linux too, so its tests run there as well. On Windows `pvg-sys` is an empty crate, as it maps the guest's memory with `mmap`. A few tests make the framework's real device (`tests/picture.rs` in pvg-sys, `tests/serve.rs` and `tests/export.rs` in pvg-host). They need a Mac on a macOS build the guard has a profile for, and on any other build they say so and pass without running. `qemu/mac/build.sh` builds the QEMU they run with. A pull request that changes any of this is also built on a GitHub-hosted Mac (`.github/workflows/mac-graphics.yml`).
 
 ```sh
 cargo test -p guesthouse-pvg-sys -p guesthouse-pvg-host

@@ -5982,7 +5982,7 @@ index 0000000..80376a3
 +/* SPDX-License-Identifier: GPL-2.0-or-later */
 +/*
 + * nvfwd, the device itself: its BARs and the kick that runs a call. See nvfwd.h, and
-+ * linux/README.md in the Guesthouse repository for the whole route.
++ * guest/linux/README.md in the Guesthouse repository for the whole route.
 + */
 +#include "qemu/osdep.h"
 +#include "qemu/units.h"
@@ -5992,7 +5992,7 @@ index 0000000..80376a3
 +#include <poll.h>
 +#include "nvfwd.h"
 +
-+/* Defaults for the settings of the same name. linux/README.md says how they were chosen. */
++/* Defaults for the settings of the same name. guest/linux/README.md says how they were chosen. */
 +#define DEFAULT_MAX_CALL_RATE 20000
 +#define DEFAULT_MAX_CALL_BURST 200000
 +#define DEFAULT_MAX_OBJECTS 65536

@@ -5,7 +5,7 @@ Subject: [PATCH] hw/display: add gh-frames, the guesthouse frame viewer
  console
 
 Connects to the guesthouse daemon's frame socket (GHFR protocol
-version 2, see crates/frame-socket in the guesthouse sources) and
+version 2, see linux/frame-socket in the guesthouse sources) and
 shows the GPU desktop as a QEMU graphic console, so any display
 backend (spice, vnc, dbus, gtk) streams the shared GPU's picture.
 
@@ -33,7 +33,7 @@ a row long, and its byte counts are computed in hwaddr (stride is a
 32-bit wire field, the multiply must not wrap); ring descriptors are
 closed right after mmap; ring and cursor messages are length-checked,
 and the cursor reads only pitch times height; frame bounds include
-the offset, the same math as Descriptor::fits in crates/frame-socket.
+the offset, the same math as Descriptor::fits in linux/frame-socket.
 Unrealize sets quit, breaks the socket, joins the reader and frees
 timer, bhs, surfaces and mappings - the bhs are kept as handles for
 that instead of anonymous oneshots.
@@ -73,7 +73,7 @@ index 0000000..c4b9e06
 + * gh-frames: guesthouse frame viewer console.
 + *
 + * Connects to the guesthouse daemon's frame socket (GHFR protocol
-+ * version 2, see crates/frame-socket in the guesthouse sources) and
++ * version 2, see linux/frame-socket in the guesthouse sources) and
 + * shows the GPU desktop as a QEMU graphic console, so any display
 + * backend (spice, vnc, dbus, gtk) streams the shared GPU's picture.
 + * The console exists from realize on, so display channels attach at
@@ -109,7 +109,7 @@ index 0000000..c4b9e06
 +#define TYPE_GH_FRAMES "gh-frames"
 +OBJECT_DECLARE_SIMPLE_TYPE(GHFramesState, GH_FRAMES)
 +
-+/* protocol constants (crates/frame-socket/src/message.rs) */
++/* protocol constants (linux/frame-socket/src/message.rs) */
 +#define GH_MAGIC 0x52464847u             /* "GHFR", little endian */
 +#define GH_VERSION 2u
 +#define GH_KIND_HELLO 1u
@@ -575,7 +575,7 @@ index 0000000..c4b9e06
 +    }
 +
 +    qemu_mutex_lock(&s->lock);
-+    /* the same math crates/frame-socket's Descriptor::fits does:
++    /* the same math linux/frame-socket's Descriptor::fits does:
 +     * stride * height + offset, all 64-bit - a 32-bit multiply here
 +     * would wrap for a big stride and let the blit read past the slot */
 +    uint64_t rows;

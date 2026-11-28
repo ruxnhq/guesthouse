@@ -59,12 +59,14 @@ EVERY_HOST = re.compile(r"\b(every|each|both|all) hosts?\b", re.I)
 # The files only one host builds. Cargo.lock, Cargo.toml and CLA-SIGNERS.md say nothing either way, and any
 # other file is every host's.
 HOST_FILES = {
+    # The old crates/ paths are kept for pull requests from before the folders moved (2026-11-27).
     "mac": re.compile(r"^(mac/|crates/(host-mac|pvg-host|pvg-sys)/)"),
     "windows": re.compile(
-        r"^(windows/|crates/((app|host|service|installer)-windows|hcs|control)/|tools/hcs-boot/|scripts/windows-)"
+        r"^(windows/|crates/((app|host|service|installer)-windows|hcs|control)/|shared/control/|tools/hcs-boot/"
+        r"|scripts/windows-)"
     ),
     "linux": re.compile(
-        r"^(crates/(app|app-core|core|daemon|backend|backend-[a-z]+|sensors|replay|frame-socket|transport)/"
+        r"^((crates|linux)/(app|app-core|core|daemon|backend|backend-[a-z]+|sensors|replay|frame-socket|transport)/"
         r"|packaging/|install\.sh$|uninstall\.sh$|tests/(install|proxmox)/|tools/card-check/)"
     ),
 }

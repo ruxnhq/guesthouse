@@ -1,54 +1,71 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "tools/card-check", "tools/hcs-boot"]
+members = [
+    "shared/*",
+    "linux/*",
+    "windows/app",
+    "windows/hcs",
+    "windows/host",
+    "windows/service",
+    "windows/setup",
+    "mac/host",
+    "mac/pvg-host",
+    "mac/pvg-sys",
+    "guest/nvapi-shim",
+    "guest/p9",
+    "guest/scripts",
+    "guest/share",
+    "tools/card-check",
+    "tools/hcs-boot",
+]
 # Microsoft's windows-reactor and the windows-rs crates it needs, vendored for the Windows app and
 # used by path from it. Not members: Windows only, and not this workspace's code.
 exclude = ["vendor/windows-reactor", "vendor/windows-rs"]
 # The app needs GTK's development files, which nothing else here does. Build it with `-p guesthouse-app`.
 default-members = [
-    "crates/account",
-    "crates/answers",
-    "crates/app-core",
-    "crates/backend",
-    "crates/backend-intel",
-    "crates/backend-nvidia",
-    "crates/backend-standin",
-    "crates/basics",
-    "crates/carry",
-    "crates/catalog",
-    "crates/clock-helper",
-    "crates/control",
-    "crates/core",
-    "crates/daemon",
-    "crates/daemon-shell",
-    "crates/download",
-    "crates/frame-socket",
-    "crates/guest-names",
-    "crates/guest-scripts",
-    "crates/hcs",
-    "crates/idle",
-    "crates/host-windows",
-    "crates/install-steps",
-    "crates/installer-windows",
-    "crates/jail",
-    "crates/messages",
-    "crates/p9",
-    "crates/recipes",
-    "crates/relay",
-    "crates/remote-view",
-    "crates/replay",
-    "crates/report",
-    "crates/sensors",
-    "crates/serial-words",
-    "crates/settings",
-    "crates/snapshot",
-    "crates/start-checks",
-    "crates/share-windows",
-    "crates/state",
-    "crates/service-windows",
-    "crates/transport",
-    "crates/update-check",
-    "crates/window-cells",
+    "shared/account",
+    "shared/answers",
+    "linux/app-core",
+    "linux/backend",
+    "linux/backend-intel",
+    "linux/backend-nvidia",
+    "linux/backend-standin",
+    "shared/basics",
+    "shared/carry",
+    "shared/catalog",
+    "linux/clock-helper",
+    "shared/control",
+    "linux/core",
+    "linux/daemon",
+    "linux/daemon-shell",
+    "shared/download",
+    "linux/frame-socket",
+    "shared/guest-names",
+    "guest/scripts",
+    "windows/hcs",
+    "shared/idle",
+    "windows/host",
+    "shared/install-steps",
+    "windows/setup",
+    "shared/jail",
+    "linux/messages",
+    "guest/p9",
+    "shared/recipes",
+    "shared/relay",
+    "shared/remote-view",
+    "linux/replay",
+    "shared/report",
+    "linux/sensors",
+    "shared/serial-words",
+    "shared/settings",
+    "shared/snapshot",
+    "shared/start-checks",
+    "guest/share",
+    "shared/state",
+    "windows/service",
+    "linux/transport",
+    "shared/update-check",
+    "shared/window-cells",
     "tools/card-check",
     "tools/hcs-boot",
 ]
@@ -61,46 +78,46 @@ publish = false
 license = "GPL-2.0-or-later"
 
 [workspace.dependencies]
-guesthouse-transport = { path = "crates/transport" }
-guesthouse-messages = { path = "crates/messages" }
-guesthouse-backend = { path = "crates/backend" }
-guesthouse-backend-standin = { path = "crates/backend-standin" }
-guesthouse-backend-amd = { path = "crates/backend-amd" }
-guesthouse-backend-intel = { path = "crates/backend-intel" }
-guesthouse-backend-nvidia = { path = "crates/backend-nvidia" }
-guesthouse-core = { path = "crates/core" }
-guesthouse-daemon = { path = "crates/daemon" }
-guesthouse-daemon-shell = { path = "crates/daemon-shell" }
-guesthouse-app-core = { path = "crates/app-core" }
-guesthouse-frame-socket = { path = "crates/frame-socket" }
-guesthouse-sensors = { path = "crates/sensors" }
-guesthouse-settings-core = { path = "crates/settings" }
-guesthouse-snapshot-core = { path = "crates/snapshot" }
-guesthouse-start-checks-core = { path = "crates/start-checks" }
-guesthouse-state-core = { path = "crates/state" }
-guesthouse-jail = { path = "crates/jail" }
+guesthouse-transport = { path = "linux/transport" }
+guesthouse-messages = { path = "linux/messages" }
+guesthouse-backend = { path = "linux/backend" }
+guesthouse-backend-standin = { path = "linux/backend-standin" }
+guesthouse-backend-amd = { path = "linux/backend-amd" }
+guesthouse-backend-intel = { path = "linux/backend-intel" }
+guesthouse-backend-nvidia = { path = "linux/backend-nvidia" }
+guesthouse-core = { path = "linux/core" }
+guesthouse-daemon = { path = "linux/daemon" }
+guesthouse-daemon-shell = { path = "linux/daemon-shell" }
+guesthouse-app-core = { path = "linux/app-core" }
+guesthouse-frame-socket = { path = "linux/frame-socket" }
+guesthouse-sensors = { path = "linux/sensors" }
+guesthouse-settings-core = { path = "shared/settings" }
+guesthouse-snapshot-core = { path = "shared/snapshot" }
+guesthouse-start-checks-core = { path = "shared/start-checks" }
+guesthouse-state-core = { path = "shared/state" }
+guesthouse-jail = { path = "shared/jail" }
 guesthouse-card-check = { path = "tools/card-check" }
-guesthouse-control = { path = "crates/control" }
-guesthouse-update-check = { path = "crates/update-check" }
-guesthouse-hcs = { path = "crates/hcs" }
-guesthouse-relay = { path = "crates/relay" }
-guesthouse-host-windows = { path = "crates/host-windows" }
-guesthouse-remote-view-core = { path = "crates/remote-view" }
-guesthouse-report-core = { path = "crates/report" }
-guesthouse-basics = { path = "crates/basics" }
-guesthouse-account-core = { path = "crates/account" }
-guesthouse-answers-core = { path = "crates/answers" }
-guesthouse-carry-core = { path = "crates/carry" }
-guesthouse-catalog-core = { path = "crates/catalog" }
-guesthouse-download-core = { path = "crates/download" }
-guesthouse-install-steps-core = { path = "crates/install-steps" }
-guesthouse-serial-words-core = { path = "crates/serial-words" }
-guesthouse-idle-core = { path = "crates/idle" }
-guesthouse-guest-names-core = { path = "crates/guest-names" }
-guesthouse-recipes-core = { path = "crates/recipes" }
-guesthouse-window-cells-core = { path = "crates/window-cells" }
+guesthouse-control = { path = "shared/control" }
+guesthouse-update-check = { path = "shared/update-check" }
+guesthouse-hcs = { path = "windows/hcs" }
+guesthouse-relay = { path = "shared/relay" }
+guesthouse-host-windows = { path = "windows/host" }
+guesthouse-remote-view-core = { path = "shared/remote-view" }
+guesthouse-report-core = { path = "shared/report" }
+guesthouse-basics = { path = "shared/basics" }
+guesthouse-account-core = { path = "shared/account" }
+guesthouse-answers-core = { path = "shared/answers" }
+guesthouse-carry-core = { path = "shared/carry" }
+guesthouse-catalog-core = { path = "shared/catalog" }
+guesthouse-download-core = { path = "shared/download" }
+guesthouse-install-steps-core = { path = "shared/install-steps" }
+guesthouse-serial-words-core = { path = "shared/serial-words" }
+guesthouse-idle-core = { path = "shared/idle" }
+guesthouse-guest-names-core = { path = "shared/guest-names" }
+guesthouse-recipes-core = { path = "shared/recipes" }
+guesthouse-window-cells-core = { path = "shared/window-cells" }
 # The Mac host's graphics process and the guard in front of the framework it calls.
-guesthouse-pvg-sys = { path = "crates/pvg-sys" }
+guesthouse-pvg-sys = { path = "mac/pvg-sys" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -12,7 +12,7 @@ sh mac/rmhost/build.sh
 
 That builds `rmhost`, `testsource`, `attacker` and `viewcheck` into `mac/build/rmhost`. `sh mac/rmhost/build.sh --helpers FOLDER` also puts `rmhost` in a folder, which `mac/nightly.sh --helpers` takes to put it in the app. `--no-serve` builds an `rmhost` that only records and counts, with no remoteman code in it.
 
-`rmhost serve` links remoteman's core, which isn't in this repository. `remoteman-source.json` is the pin: remoteman 0.1.10, the version `crates/remote-view/remoteman.json` names for the other hosts, and the commit of [remoteman](https://github.com/ruxnlabs/remoteman) that released it. The build fetches that commit, checks its hash, builds the core with `cargo build --locked`, and links it. If the two pins disagree the build stops, so they move together. It needs git, Rust with the `aarch64-apple-darwin` target and a network the first time.
+`rmhost serve` links remoteman's core, which isn't in this repository. `remoteman-source.json` is the pin: remoteman 0.1.10, the version `shared/remote-view/remoteman.json` names for the other hosts, and the commit of [remoteman](https://github.com/ruxnlabs/remoteman) that released it. The build fetches that commit, checks its hash, builds the core with `cargo build --locked`, and links it. If the two pins disagree the build stops, so they move together. It needs git, Rust with the `aarch64-apple-darwin` target and a network the first time.
 
 ## Test
 

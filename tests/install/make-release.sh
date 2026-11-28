@@ -52,8 +52,8 @@ printf 'amd\t%s\n' "${FAKE_AMD:-no}"
 printf 'intel\t%s\n' "${FAKE_INTEL:-no}"
 CHECK
 chmod +x "$tree"/guesthouse* "$tree/qemu/build/qemu-system-x86_64" "$tree/qemu/build/qemu-bridge-helper"
-cp "$repo/crates/app/data/io.github.xnixy.Guesthouse.desktop" "$tree/share/"
-cp -R "$repo/crates/app/data/icons" "$tree/share/"
+cp "$repo/linux/app/data/io.github.xnixy.Guesthouse.desktop" "$tree/share/"
+cp -R "$repo/linux/app/data/icons" "$tree/share/"
 for script in install.sh uninstall.sh; do
     for_tests "$repo/$script" >"$tree/$script"
 done

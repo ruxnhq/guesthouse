@@ -54,7 +54,7 @@
 #define MOST_VIDEO_MEMORY (1ULL << 40)
 
 /* The fields this program reads, for one driver branch. 617 matches RecordLayout in
- * crates/backend-nvidia/src/profile/guest.rs. An unproven row hasn't met a real record yet, so the
+ * linux/backend-nvidia/src/profile/guest.rs. An unproven row hasn't met a real record yet, so the
  * fields that moved on that branch are only read if they all pass moved_fields_hold. */
 typedef struct {
     const char *name;

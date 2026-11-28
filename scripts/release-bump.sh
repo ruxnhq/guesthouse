@@ -25,7 +25,8 @@ OLD=$(awk '/^\[workspace\.package\]/ {on=1; next} /^\[/ {on=0} on && /^version =
 [ -n "$OLD" ] || { echo "Cargo.toml has no version in [workspace.package]." >&2; exit 1; }
 # A crate with a version of its own wouldn't follow the workspace's. A dependency's
 # `version = "0.61"` is in another table, so only a [package] version counts.
-for F in crates/*/Cargo.toml; do
+for F in shared/*/Cargo.toml linux/*/Cargo.toml windows/*/Cargo.toml mac/*/Cargo.toml guest/*/Cargo.toml tools/*/Cargo.toml; do
+  [ -f "$F" ] || continue
   if awk '/^\[package\]/ {on=1; next} /^\[/ {on=0} on && /^version = "/ {found=1} END {exit !found}' "$F"; then
     echo "$F has a version of its own, so it won't follow the workspace's." >&2
     exit 1

@@ -4,7 +4,7 @@ Guesthouse needs some changes to QEMU. They're in `qemu-gpupv.patch`, on top of 
 
 For a Windows guest, QEMU knows nothing about any GPU. It offers the guest the devices and VMBus channels it expects on Hyper-V, and passes every packet to a separate daemon over a socket.
 
-For a Linux guest the patch adds a device, `nvfwd`, in `hw/misc/nvfwd`. It forwards the calls of NVIDIA's Linux driver to the host's. `linux/README.md` says how that works.
+For a Linux guest the patch adds a device, `nvfwd`, in `hw/misc/nvfwd`. It forwards the calls of NVIDIA's Linux driver to the host's. `guest/linux/README.md` says how that works.
 
 Two more changes are for a Linux guest on an AMD card. QEMU's D-Bus display reads the guest's GL frames back into shared memory for a viewer that takes no dmabufs, which the app's viewer doesn't, and `-vga virtio` makes the GL device on a GL display, in the VGA's place on the bus.
 

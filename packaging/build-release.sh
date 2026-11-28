@@ -22,7 +22,7 @@
 # this PC, which is what install.sh --from-source wants. QEMU_UPSTREAM can name a local clone of QEMU.
 #
 # The display driver can't be built here, as it needs Windows and Microsoft's kit, so --display-driver
-# names the folder holding what drivers/windows-display/BUILDING.md builds: GuesthouseDisplay.dll and
+# names the folder holding what guest/drivers/windows-display/BUILDING.md builds: GuesthouseDisplay.dll and
 # GuesthouseDisplay.inf. GUESTHOUSE_DISPLAY_DRIVER does the same. Without it a build for this PC still
 # works, and its Windows machines stay on the basic display. The source stage refuses, as that's a release.
 set -eu
@@ -45,7 +45,7 @@ VIRGL_SERVER=virgl_render_server
 APP_ID=io.github.xnixy.Guesthouse
 ARCH=x86_64
 DISPLAY_DRIVER=${GUESTHOUSE_DISPLAY_DRIVER:-}
-DRIVER_SOURCE=drivers/windows-display
+DRIVER_SOURCE=guest/drivers/windows-display
 # What the app wants in the program folder, in app-core's display.rs.
 DRIVER_FOLDER=display-driver
 DRIVER_BUILT='GuesthouseDisplay.dll GuesthouseDisplay.inf'
@@ -482,7 +482,7 @@ stage_bundled() {
 daemon_features() {
     features=""
     for vendor in nvidia amd intel; do
-        [ ! -d "$REPO/crates/backend-$vendor" ] || features="$features${features:+,}guesthouse-daemon/$vendor"
+        [ ! -d "$REPO/linux/backend-$vendor" ] || features="$features${features:+,}guesthouse-daemon/$vendor"
     done
     [ -z "$features" ] || printf '%s' "--features $features"
 }
@@ -497,7 +497,7 @@ write_symbol_needs() {
 # What a tester of an Intel card sends with the daemon's log. The task program runs it, from the
 # folder it is itself in.
 stage_intel_probe() {
-    [ -d "$REPO/crates/backend-intel" ] || return 0
+    [ -d "$REPO/linux/backend-intel" ] || return 0
     (cd "$REPO" && cargo build --release --locked -p guesthouse-backend-intel --bin intel-probe)
     cp "${CARGO_TARGET_DIR:-$REPO/target}/release/intel-probe" "$OUT/stage/"
 }
@@ -525,8 +525,8 @@ stage_app() {
     cp "$target_folder/release/guesthouse" "$OUT/stage/guesthouse-no-hdr"
     write_symbol_needs "$OUT/stage/guesthouse-no-hdr"
     mkdir -p "$OUT/stage/share"
-    cp "$REPO/crates/app/data/$APP_ID.desktop" "$OUT/stage/share/"
-    cp -R "$REPO/crates/app/data/icons" "$OUT/stage/share/"
+    cp "$REPO/linux/app/data/$APP_ID.desktop" "$OUT/stage/share/"
+    cp -R "$REPO/linux/app/data/icons" "$OUT/stage/share/"
     say "the app is in $OUT/stage"
 }
 
@@ -536,18 +536,25 @@ glibc_needed() {
         sed 's/GLIBC_//; s/\.$//' | sort -Vu | tail -n 1
 }
 
-# The folder names are the app's, in paths.rs and linux/mod.rs. The recipes are the app's own, and
-# each is a file of text that a person can read before it is used.
+# The folder names are the app's, in paths.rs and linux/mod.rs: the repo's guest/windows is the
+# program folder's guest, and guest/linux its linux. The recipes are the app's own, and each is a
+# file of text that a person can read before it is used.
 copy_guest_files() {
-    [ ! -d "$REPO/guest" ] || cp -R "$REPO/guest" "$OUT/stage/"
-    [ ! -d "$REPO/linux" ] || cp -R "$REPO/linux" "$OUT/stage/"
+    if [ -d "$REPO/guest/windows" ]; then
+        mkdir -p "$OUT/stage/guest"
+        cp -R "$REPO/guest/windows/." "$OUT/stage/guest/"
+    fi
+    if [ -d "$REPO/guest/linux" ]; then
+        mkdir -p "$OUT/stage/linux"
+        cp -R "$REPO/guest/linux/." "$OUT/stage/linux/"
+    fi
     [ ! -d "$REPO/recipes" ] || cp -R "$REPO/recipes" "$OUT/stage/"
 }
 
 # The NVAPI wrapper a Windows guest gets in System32, so DLSS finds a paravirtualized card. It goes
 # beside the guest's scripts, where the app takes it from.
 stage_nvapi_shim() {
-    "$REPO/tools/nvapi-shim.sh" "$OUT/stage/guest/nvapi64.dll" || die "The NVAPI wrapper didn't build."
+    "$REPO/guest/nvapi-shim/nvapi-shim.sh" "$OUT/stage/guest/nvapi64.dll" || die "The NVAPI wrapper didn't build."
 }
 
 # A build that isn't really one would only show up in a guest, much later.
@@ -690,8 +697,8 @@ stage_appimage() {
     cp "$REPO/packaging/appimage/AppRun.sh" "$folder/AppRun"
     chmod 755 "$folder/AppRun"
     # The desktop file and the icon at the top are what tools that list AppImages show.
-    cp "$REPO/crates/app/data/$APP_ID.desktop" "$folder/"
-    cp "$REPO/crates/app/data/icons/hicolor/scalable/apps/$APP_ID.svg" "$folder/"
+    cp "$REPO/linux/app/data/$APP_ID.desktop" "$folder/"
+    cp "$REPO/linux/app/data/icons/hicolor/scalable/apps/$APP_ID.svg" "$folder/"
     ln -s "$APP_ID.svg" "$folder/.DirIcon"
     rm -f "$OUT/$name" "$OUT/$name.squashfs"
     mksquashfs "$folder" "$OUT/$name.squashfs" -root-owned -noappend -comp zstd -quiet -no-progress

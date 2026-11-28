@@ -11,16 +11,16 @@ name: Mac graphics
 on:
   pull_request:
     paths:
-      - crates/pvg-sys/**
-      - crates/pvg-host/**
+      - mac/pvg-sys/**
+      - mac/pvg-host/**
       - qemu/mac/**
       - mac/build-pvg-host.sh
       - .github/workflows/mac-graphics.yml
   push:
     branches: [main]
     paths:
-      - crates/pvg-sys/**
-      - crates/pvg-host/**
+      - mac/pvg-sys/**
+      - mac/pvg-host/**
       - qemu/mac/**
       - mac/build-pvg-host.sh
       - .github/workflows/mac-graphics.yml

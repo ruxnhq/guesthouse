@@ -8,7 +8,7 @@ A Windows machine on AMD needs the card on amdgpu, and AMD's Windows installer f
 
 A Windows machine on an Intel card is experimental, on Lunar Lake, Battlemage, Panther Lake and Wildcat Lake: it needs the card on `xe` and Intel's Windows installer, which the app unpacks, or `guesthouse-vm new --intel-driver`. The card has drawn Windows' desktop on an Arc B580, and the other cards are untried. See [Intel](intel.md).
 
-A Linux machine's needs are in [`linux/`](../linux/README.md).
+A Linux machine's needs are in [`guest/linux/`](../guest/linux/README.md).
 
 A plain VM needs QEMU with its D-Bus display, which Fedora calls `qemu-ui-dbus`, plus `qemu-img`, `swtpm`, `genisoimage` and `7z` for installs. A QEMU built as `qemu/README.md` says has no `qemu-img` of its own, so install the system's.
 

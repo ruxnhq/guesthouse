@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Builds guesthouse-pvg-host, the graphics process (crates/pvg-host), for macOS on Apple silicon,
+# Builds guesthouse-pvg-host, the graphics process (mac/pvg-host), for macOS on Apple silicon,
 # and puts it in the helpers folder that mac/nightly.sh --helpers takes, beside the QEMU that
 # qemu/mac/build.sh makes: target/mac-helpers unless told otherwise. Run from anywhere. In the app
 # it is signed with the hardened runtime and no entitlements, which is all it needs.

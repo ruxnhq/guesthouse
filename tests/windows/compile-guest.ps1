@@ -10,7 +10,7 @@
 param([switch]$ListOnly)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$guest = Join-Path $repo 'guest'
+$guest = Join-Path $repo 'guest\windows'
 $inCi = $env:GITHUB_ACTIONS -eq 'true'
 $script:problems = 0
 
@@ -128,11 +128,11 @@ New-Item -ItemType Directory -Force $work | Out-Null
 
 # app-windows.cs with csc, for messages with the file's own lines.
 $csc = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-$appWindows = $sources | Where-Object { $_.Name -eq 'guest/app-windows.cs' }
+$appWindows = $sources | Where-Object { $_.Name -eq 'guest/windows/app-windows.cs' }
 if (-not $appWindows) {
-    Say-Problem 'guest/app-windows.ps1' 0 'its Add-Type of app-windows.cs was not found'
+    Say-Problem 'guest/windows/app-windows.ps1' 0 'its Add-Type of app-windows.cs was not found'
 } else {
-    Start-Group "csc: guest/app-windows.cs (C# 5, /warn:4 /warnaserror+)"
+    Start-Group "csc: guest/windows/app-windows.cs (C# 5, /warn:4 /warnaserror+)"
     $arguments = @('/nologo', '/target:library', '/warn:4', '/warnaserror+', "/out:$(Join-Path $work 'app-windows.dll')")
     $arguments += $appWindows.References | ForEach-Object { "/reference:$_" -replace '(?<!\.dll)$', '.dll' }
     $arguments += Join-Path $guest 'app-windows.cs'
@@ -142,10 +142,10 @@ if (-not $appWindows) {
     $said
     Stop-Group
     foreach ($message in $said) {
-        if ($message -match '\((\d+),\d+\): (error|warning) (.*)$') { Say-Problem 'guest/app-windows.cs' ([int]$Matches[1]) "$($Matches[2]) $($Matches[3])" }
+        if ($message -match '\((\d+),\d+\): (error|warning) (.*)$') { Say-Problem 'guest/windows/app-windows.cs' ([int]$Matches[1]) "$($Matches[2]) $($Matches[3])" }
     }
-    if ($code -ne 0 -and -not ($said -match '\(\d+,\d+\): (error|warning)')) { Say-Problem 'guest/app-windows.cs' 0 "csc stopped with exit code $code" }
-    if ($code -eq 0) { 'ok   csc guest/app-windows.cs' }
+    if ($code -ne 0 -and -not ($said -match '\(\d+,\d+\): (error|warning)')) { Say-Problem 'guest/windows/app-windows.cs' 0 "csc stopped with exit code $code" }
+    if ($code -eq 0) { 'ok   csc guest/windows/app-windows.cs' }
 }
 
 # Each source with Add-Type, in a PowerShell of its own.

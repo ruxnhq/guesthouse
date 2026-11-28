@@ -16,7 +16,7 @@ out=build/GuesthouseCore.xcframework
 headers=build/core-headers
 rm -rf "$out" "$headers"
 mkdir -p "$headers"
-cp ../crates/host-mac/include/guesthouse_core.h "$headers/"
+cp host/include/guesthouse_core.h "$headers/"
 cat > "$headers/module.modulemap" <<EOF
 module GuesthouseCore {
     header "guesthouse_core.h"
@@ -25,14 +25,14 @@ module GuesthouseCore {
 EOF
 
 # The remote-view crate's sentences, as data, from the pinned crate: the app and its tests read them.
-manifest=../crates/host-mac/Cargo.toml
+manifest=host/Cargo.toml
 cargo metadata --format-version 1 --manifest-path "$manifest" \
     | python3 -c 'import json,sys,os; m=json.load(sys.stdin); p=[x for x in m["packages"] if x["name"]=="guesthouse-remote-view-core"][0]; print(os.path.join(os.path.dirname(p["manifest_path"]),"wording.json"))' \
     > build/wording.path
 cp "$(cat build/wording.path)" build/wording.json
 rm build/wording.path
 
-cargo build --release --manifest-path ../crates/host-mac/Cargo.toml --target "$target"
+cargo build --release --manifest-path host/Cargo.toml --target "$target"
 xcodebuild -create-xcframework \
     -library "../target/$target/release/libguesthouse_core.a" -headers "$headers" \
     -output "$out"

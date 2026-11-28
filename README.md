@@ -56,7 +56,7 @@ Get the installer from **[guesthouse.ruxn.com](https://guesthouse.ruxn.com/#down
 
 **Mac** · Apple silicon · in development, not released
 
-A nightly build, for trying what is new and which may be broken, is on [the site](https://guesthouse.ruxn.com/#download). It carries QEMU, the graphics process and rmhost. The source is here, in `mac/`, `crates/host-mac`, `crates/pvg-host` and `qemu/mac`, and [the Mac host](docs/mac-host.md) says what it can do, and what it needs that isn't here yet: the guest's driver packages. It has been tried on one Mac. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.
+A nightly build, for trying what is new and which may be broken, is on [the site](https://guesthouse.ruxn.com/#download). It carries QEMU, the graphics process and rmhost. The source is here, in `mac/`, `mac/host`, `mac/pvg-host` and `qemu/mac`, and [the Mac host](docs/mac-host.md) says what it can do, and what it needs that isn't here yet: the guest's driver packages. It has been tried on one Mac. It uses three classes of Apple's ParavirtualizedGraphics framework that Apple doesn't declare, as QEMU's patch that lists them does, so a macOS update can break it. It isn't affiliated with Apple, and it won't be on the App Store.
 
 ## What a machine can do
 
@@ -102,7 +102,7 @@ cargo build --release -p guesthouse-service -p guesthouse-host-windows
 cargo run -p guesthouse-app-windows      # the window, which asks the service for everything
 ```
 
-The service is in `crates/service-windows`, and the serial relay it needs beside it comes from `crates/host-windows`. On Linux a VM also needs QEMU with the patch in `qemu/`, which cargo doesn't build.
+The service is in `windows/service`, and the serial relay it needs beside it comes from `windows/host`. On Linux a VM also needs QEMU with the patch in `qemu/`, which cargo doesn't build.
 
 On a Mac, with Rust and Xcode 27, only the Mac host builds: `cargo test -p guesthouse-host-mac`, and `mac/build.sh` for the app. On Linux and Windows its crate is empty. See [the Mac host](docs/mac-host.md).
 

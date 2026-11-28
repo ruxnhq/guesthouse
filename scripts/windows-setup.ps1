@@ -6,11 +6,11 @@
 #                                                                      [-NoScreen]
 # 1. builds the service, the serial relay and hcs-boot (cargo, release);
 # 2. finds the app's files, unless -NoApp says not to: -App FOLDER if given, else what
-#    crates\app-windows\stage.ps1 makes if that is there, else guesthouse-app.exe in target\release
+#    windows\app\stage.ps1 makes if that is there, else guesthouse-app.exe in target\release
 #    with the Windows App Runtime beside it. With none of those the installer is built without the
 #    app, and this says so;
 # 3. gets remoteman, for a Windows guest's screen, unless -NoScreen says not to: the two release
-#    files crates\remote-view\remoteman.json pins, remoteman's host's installer (remoteman-host-setup-V.exe)
+#    files shared\remote-view\remoteman.json pins, remoteman's host's installer (remoteman-host-setup-V.exe)
 #    and its Windows viewer (remoteman-viewer-windows-V.zip), downloaded from the pin's base into
 #    target\remoteman-cache\V\ (a cached file is used when its SHA-256 is the pin's, and downloaded
 #    again when it isn't), or taken from -RemotemanFrom FOLDER. Each file's SHA-256 has to be the
@@ -33,7 +33,7 @@
 #      guest\nvapi64.dll (the NVAPI wrapper the service gives a guest on an NVIDIA card),
 #      guest\guesthouse-guest-share.exe and guest\winfsp.msi (as it is) with guest\WinFsp-License.txt
 #      (what the service gives a guest with a shared folder), and WinFsp's licence in THIRD-PARTY.md;
-# 5. builds the installer (crates\installer-windows) and packs the Windows App Runtime its pages
+# 5. builds the installer (windows\setup) and packs the Windows App Runtime its pages
 #    need and the payload into it (guesthouse-setup --pack): the runtime is the same as the
 #    app's and is carried once. It's the out folder's guesthouse-setup-VERSION.exe (VERSION is
 #    the Windows host's, from windows\version.txt, unless -Version says otherwise), with
@@ -50,7 +50,7 @@ if (-not $Version) {
     # The Windows host's own version line, apart from the Linux host's in Cargo.toml.
     $Version = (Get-Content -Raw -LiteralPath (Join-Path $root 'windows\version.txt')).Trim()
 }
-$unpinnedWarning = "-RemotemanUnpinned: remoteman's files are NOT checked against crates\remote-view\remoteman.json. Only for trying a local build of remoteman; never hand this installer to anyone."
+$unpinnedWarning = "-RemotemanUnpinned: remoteman's files are NOT checked against shared\remote-view\remoteman.json. Only for trying a local build of remoteman; never hand this installer to anyone."
 if ($RemotemanUnpinned -and -not $NoScreen) {
     # Never unchecked from the network or the cache: only a local build, named by its folder.
     if (-not $RemotemanFrom) { throw '-RemotemanUnpinned is for a local build of remoteman only: give -RemotemanFrom FOLDER with it.' }
@@ -65,10 +65,10 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
 
 function Get-Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 
-# crates\remote-view\remoteman.json: the version of remoteman this installer carries, where its release files
+# shared\remote-view\remoteman.json: the version of remoteman this installer carries, where its release files
 # are, and each file's name and SHA-256.
 function Read-Pin {
-    $file = Join-Path $root 'crates\remote-view\remoteman.json'
+    $file = Join-Path $root 'shared\remote-view\remoteman.json'
     $pin = Get-Content -Raw $file | ConvertFrom-Json
     foreach ($key in 'host_setup', 'viewer_zip') {
         $entry = $pin.$key
@@ -97,7 +97,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
         if ($RemotemanUnpinned) {
             Write-Warning "$path is used unchecked (SHA-256 $(Get-Sha256 $path))."
         } elseif ((Get-Sha256 $path) -ne $want) {
-            throw "$path has SHA-256 $(Get-Sha256 $path), and crates\remote-view\remoteman.json pins $want. Refused."
+            throw "$path has SHA-256 $(Get-Sha256 $path), and shared\remote-view\remoteman.json pins $want. Refused."
         }
         return $path
     }
@@ -109,7 +109,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
             Write-Information "remoteman: $($Entry.file) from the cache, $cache." -InformationAction Continue
             return $path
         }
-        Write-Warning "The cached $path isn't what crates\remote-view\remoteman.json pins; downloading it again."
+        Write-Warning "The cached $path isn't what shared\remote-view\remoteman.json pins; downloading it again."
         Remove-Item -LiteralPath $path -Force
     }
     $url = $Pin.base.TrimEnd('/') + '/' + $Entry.file
@@ -128,7 +128,7 @@ function Get-RemotemanFile($Pin, $Entry, [string]$Pattern) {
     $got = Get-Sha256 $part
     if ($got -ne $want) {
         Remove-Item -LiteralPath $part -Force
-        throw "$url has SHA-256 $got, and crates\remote-view\remoteman.json pins $want. Refused: nothing of it is kept."
+        throw "$url has SHA-256 $got, and shared\remote-view\remoteman.json pins $want. Refused: nothing of it is kept."
     }
     Move-Item -LiteralPath $part $path -Force
     $path
@@ -161,7 +161,7 @@ function Add-Remoteman($Pin, [string]$To) {
     Write-Output "remoteman's viewer carries: $(($notices | ForEach-Object Name) -join ', ')."
 
     # The installer's THIRD-PARTY.md says which remoteman it carries.
-    $which = if ($RemotemanUnpinned) { 'remoteman (a trial build: NOT checked against crates\remote-view\remoteman.json)' } else { "remoteman $($Pin.version)" }
+    $which = if ($RemotemanUnpinned) { 'remoteman (a trial build: NOT checked against shared\remote-view\remoteman.json)' } else { "remoteman $($Pin.version)" }
     $lines = @(
         '',
         '## remoteman in this installer',
@@ -287,10 +287,10 @@ try {
         } elseif ($App) {
             if (-not (Test-Path (Join-Path $App 'guesthouse-app.exe'))) { throw "$App has no guesthouse-app.exe" }
             $appFolder = $App
-        } elseif (Test-Path (Join-Path $root 'crates\app-windows\stage.ps1')) {
+        } elseif (Test-Path (Join-Path $root 'windows\app\stage.ps1')) {
             $appFolder = Join-Path $Out 'app-folder'
             Invoke-Native "the app's stage.ps1" {
-                powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'crates\app-windows\stage.ps1') -Out $appFolder
+                powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'windows\app\stage.ps1') -Out $appFolder
             }
         } elseif (Test-Path (Join-Path $release 'guesthouse-app.exe')) {
             $appFolder = Join-Path $Out 'app-folder'
@@ -303,7 +303,7 @@ try {
             Write-Output "The app comes from $appFolder."
         } else {
             Write-Warning ('No app files were found, so this installer has the service and the tools only. ' +
-                'Build the app (crates\app-windows), then run this again, or give -App FOLDER, a folder with ' +
+                'Build the app (windows\app), then run this again, or give -App FOLDER, a folder with ' +
                 'guesthouse-app.exe and the Windows App Runtime beside it.')
         }
         $Payload = Join-Path $Out 'payload'

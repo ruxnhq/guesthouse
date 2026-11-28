@@ -8,7 +8,7 @@ The Mac host runs its machines in QEMU on Hypervisor.framework, with the guest's
 | `0005` | Mohamed Mediouni | Patch 5 of the same series, "vmapple: apple-gfx: make it work on the latest macOS release". macOS 27 removed the old way of handing the framework a guest's memory, and without this patch QEMU's `apple-gfx` doesn't build against the macOS 27 SDK. |
 | `0006` | s3k000 | `pvg-fwd`, a PCI device that shows the guest what `apple-gfx-pci` shows and forwards its registers and interrupts over a socket to the process that has the device. |
 | `0007` | xnixy | `host-loopback=off` for QEMU's user network, the same as `qemu/qemu-host-loopback.patch` for the Linux host. A Linux machine's network has it, so the guest reaches no service on the Mac's loopback through 10.0.2.2. |
-| `0007` | xnixy | Holds the decoding of `0001` to `0004` to the access that faulted. The instruction is read again from guest memory after the exit, so each access it makes has to lie in the faulting address's page and go the same way, read or write, or the guest gets a data abort. A failed decode is reported once. |
+| `0008` | xnixy | Holds the decoding of `0001` to `0004` to the access that faulted. The instruction is read again from guest memory after the exit, so each access it makes has to lie in the faulting address's page and go the same way, read or write, or the guest gets a data abort. A failed decode is reported once. |
 
 Each of the list's patches is as its author sent it, with his name, date, message and sign-off, and none of them is in QEMU yet. Patches 6 to 10 of the series are about QEMU's machine for macOS guests, which the Mac host doesn't use, so they aren't here.
 

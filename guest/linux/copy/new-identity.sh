@@ -29,7 +29,12 @@ fi
 made=$(mktemp -d "$root/etc/ssh/.guesthouse-keys.XXXXXX")
 mkdir -p "$made/etc/ssh"
 ssh-keygen -A -f "$made" >/dev/null
-rm -f "$root"/etc/ssh/ssh_host_*_key "$root"/etc/ssh/ssh_host_*_key.pub
+# Only key types not made again go first; the rest are replaced in one move each.
+for old in "$root"/etc/ssh/ssh_host_*_key "$root"/etc/ssh/ssh_host_*_key.pub; do
+    if [ -e "$old" ] && [ ! -e "$made/etc/ssh/${old##*/}" ]; then
+        rm -f "$old"
+    fi
+done
 mv "$made"/etc/ssh/ssh_host_* "$root/etc/ssh/"
 rm -rf "$made"
 

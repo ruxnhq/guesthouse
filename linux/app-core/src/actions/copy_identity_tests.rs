@@ -167,6 +167,7 @@ fn the_script_makes_new_host_keys_and_a_machine_id_and_restarts_the_guest() {
     let root = scratch.path("guest");
     scratch.write("guest/etc/ssh/ssh_host_ed25519_key", "the original's");
     scratch.write("guest/etc/ssh/ssh_host_ed25519_key.pub", "the original's");
+    scratch.write("guest/etc/ssh/ssh_host_rsa_key", "a type not made again");
     scratch.write("guest/etc/ssh/sshd_config", "kept");
     scratch.write("guest/etc/machine-id", "0123456789abcdef0123456789abcdef\n");
     scratch.write("guest/var/lib/dbus/machine-id", "0123456789abcdef0123456789abcdef\n");

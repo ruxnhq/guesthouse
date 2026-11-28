@@ -121,12 +121,13 @@ impl VmPlan {
             return Network { tcp_bind, tcp_connect: Ports::Any, udp_bind: Ports::Any, udp_send: Ports::Any };
         }
         // A restricted user network only answers forwards, and asks the host's resolver for names.
-        let mut udp_forwards = self.forwarded_ports(Protocol::Udp);
-        udp_forwards.extend(self.remote_view_port);
+        let udp_forwards = self.forwarded_ports(Protocol::Udp);
         // A UDP forward answers to whatever port the program on this PC sent from, such as
         // Moonlight's for Sunshine's video, so its replies can go to any port. The guest still
-        // can't start anything of its own: the restricted network drops it.
-        let udp_send = if udp_forwards.is_empty() { Ports::Only(vec![DNS_PORT]) } else { Ports::Any };
+        // can't start anything of its own: the restricted network drops it. The remote view's
+        // forward is on a port QEMU picks, which the first word lets it bind.
+        let any_udp_forward = !udp_forwards.is_empty() || self.remote_view_forward;
+        let udp_send = if any_udp_forward { Ports::Any } else { Ports::Only(vec![DNS_PORT]) };
         let mut udp_bind = vec![EPHEMERAL_PORT];
         udp_bind.extend(udp_forwards);
         let tcp_connect = if self.shared_folder().is_some() { Ports::Any } else { Ports::none() };

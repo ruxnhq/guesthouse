@@ -160,10 +160,12 @@ impl Drop for ActingQemu {
 
 /// QEMU's table of its user network's connections, with a line for each forward. QEMU lines its
 /// columns up with more spaces than one.
-fn usernet_table(forwards: &[(u16, u16)]) -> String {
+fn usernet_table(tcp: &[(u16, u16)], udp: &[(u16, u16)]) -> String {
     let mut table = "Protocol[State] FD Source-Address Port Dest.-Address Port RecvQ SendQ\n".to_owned();
-    for (guest, host) in forwards {
-        table += &format!("TCP[HOST_FORWARD] 13 127.0.0.1 {host} 10.0.2.15 {guest} 0 0\n");
+    for (kind, forwards) in [("TCP", tcp), ("UDP", udp)] {
+        for (guest, host) in forwards {
+            table += &format!("{kind}[HOST_FORWARD] 13 127.0.0.1 {host} 10.0.2.15 {guest} 0 0\n");
+        }
     }
     table
 }
@@ -191,6 +193,18 @@ pub fn act_as_qemu(
     slot: Option<Slot>,
     forwards: &[(u16, u16)],
 ) -> ActingQemu {
+    act_as_qemu_with_udp(context, machine, slot, forwards, &[])
+}
+
+/// The same, with UDP forwards too, each a guest port and the loopback port beside it.
+#[must_use]
+pub fn act_as_qemu_with_udp(
+    context: &Context,
+    machine: &Machine,
+    slot: Option<Slot>,
+    forwards: &[(u16, u16)],
+    udp: &[(u16, u16)],
+) -> ActingQemu {
     context.make_run_folder(slot).unwrap();
     let pid = std::process::id();
     let folder = context.processes.join(pid.to_string());
@@ -203,7 +217,7 @@ pub fn act_as_qemu(
     let _ = fs::remove_file(&monitor);
     let listener = UnixListener::bind(&monitor).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let (stopping, table) = (stop.clone(), usernet_table(forwards));
+    let (stopping, table) = (stop.clone(), usernet_table(forwards, udp));
     thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
             if stopping.load(Ordering::SeqCst) {

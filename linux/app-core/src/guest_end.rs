@@ -73,8 +73,7 @@ impl GuestEnd {
     /// The pid of the slot's QEMU, if it runs this machine, and the port on this PC it forwards to the
     /// guest's port.
     fn qemu(&self) -> io::Result<(u32, u16)> {
-        let usernet = Command::new("human-monitor-command", json!({"command-line": "info usernet"}));
-        let (pid, answer) = ask_with_listener(&self.monitor, &usernet)
+        let (pid, answer) = ask_with_listener(&self.monitor, &usernet())
             .ok_or_else(|| refused("no QEMU answers in the slot"))?;
         let words = fs::read(self.processes.join(pid.to_string()).join("cmdline"))?;
         let runs =
@@ -121,15 +120,32 @@ impl GuestEnd {
 /// connections, where a forward is a line like
 /// `  TCP[HOST_FORWARD]  14       127.0.0.1 40123       10.0.2.15  8765     0     0`.
 fn forwarded_port(table: &str, guest_port: u16) -> Option<u16> {
+    forwarded("TCP[HOST_FORWARD]", table, guest_port)
+}
+
+fn forwarded(kind: &str, table: &str, guest_port: u16) -> Option<u16> {
     table.lines().find_map(|line| {
         let fields: Vec<&str> = line.split_whitespace().collect();
         match fields.as_slice() {
-            ["TCP[HOST_FORWARD]", _, "127.0.0.1", port, _, guest, ..] if guest.parse() == Ok(guest_port) => {
+            [found, _, "127.0.0.1", port, _, guest, ..]
+                if *found == kind && guest.parse() == Ok(guest_port) =>
+            {
                 port.parse().ok().filter(|port| *port != 0)
             }
             _ => None,
         }
     })
+}
+
+/// The loopback port QEMU in `slot` forwards to `guest_port` in the guest over UDP, as its monitor
+/// says, or `None` when no QEMU answers there or it has no such forward.
+pub fn udp_forwarded_port(context: &Context, slot: Option<Slot>, guest_port: u16) -> Option<u16> {
+    let (_, answer) = ask_with_listener(&context.run_folder(slot).join(MAIN_SOCKET), &usernet())?;
+    forwarded("UDP[HOST_FORWARD]", answer["return"].as_str()?, guest_port)
+}
+
+fn usernet() -> Command {
+    Command::new("human-monitor-command", json!({"command-line": "info usernet"}))
 }
 
 /// Whether the far end has closed the connection, without taking anything it sent.
@@ -237,11 +253,12 @@ mod tests {
             \x20 TCP[HOST_FORWARD]   4       127.0.0.1 39763       10.0.2.15  8767     0     0\n\
             \x20 TCP[HOST_FORWARD]   3       127.0.0.1 42837       10.0.2.15  8765     0     0\n\
             \x20 TCP[ESTABLISHED]   20       10.0.2.15 49800        10.0.2.2   443     0     0\n\
-            \x20 UDP[HOST_FORWARD]   6       127.0.0.1 19065       10.0.2.15  8766     0     0\n";
+            \x20 UDP[HOST_FORWARD]   6       127.0.0.1 57822       10.0.2.15  7791     0     0\n";
         assert_eq!(forwarded_port(table, 8765), Some(42837));
         assert_eq!(forwarded_port(table, 8767), Some(39763));
         assert_eq!(forwarded_port(table, 8769), Some(45339));
-        assert_eq!(forwarded_port(table, 8766), None, "a UDP forward is not one");
+        assert_eq!(forwarded_port(table, 7791), None, "a UDP forward is not one");
+        assert_eq!(forwarded("UDP[HOST_FORWARD]", table, 7791), Some(57822));
         assert_eq!(forwarded_port(table, 443), None);
     }
     #[test]

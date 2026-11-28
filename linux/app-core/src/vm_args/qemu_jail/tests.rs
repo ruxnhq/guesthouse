@@ -86,7 +86,7 @@ fn a_restricted_network_reaches_nothing_but_names() {
     assert_eq!(network.tcp_connect, Ports::none());
     // A Windows machine's remote view forward is its one UDP forward, which answers whatever
     // port the relay sent from.
-    assert_eq!(network.udp_bind, Ports::Only(vec![0, plan.remote_view_port.unwrap()]));
+    assert_eq!(network.udp_bind, Ports::Only(vec![0]), "it binds a port the kernel picks");
     assert_eq!(network.udp_send, Ports::Any);
 }
 
@@ -95,7 +95,7 @@ fn a_udp_forward_answers_whatever_port_it_was_sent_from() {
     let (_scratch, plan) = jailed(Machine { network_mode: Mode::None, ..windows() }, true);
     let network = plan.qemu_jail_plan(&jail(true)).network;
     assert_eq!(network.tcp_connect, Ports::none());
-    assert_eq!(network.udp_bind, Ports::Only(vec![0, 9000, plan.remote_view_port.unwrap()]));
+    assert_eq!(network.udp_bind, Ports::Only(vec![0, 9000]));
     assert_eq!(network.udp_send, Ports::Any);
 }
 

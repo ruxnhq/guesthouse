@@ -106,6 +106,11 @@ pub fn picked_port_forward(guest: u16) -> String {
     format!("hostfwd=tcp:127.0.0.1:0-:{guest}")
 }
 
+/// The same for UDP.
+pub fn picked_udp_port_forward(guest: u16) -> String {
+    format!("hostfwd=udp:127.0.0.1:0-:{guest}")
+}
+
 impl VmPlan {
     fn passt_settings(&self) -> Vec<PasstSetting> {
         passt_settings(self.network.passt_age, self.network.resolver.as_deref())
@@ -146,8 +151,8 @@ impl VmPlan {
     /// their ports, so a port QEMU picks is never one of those.
     fn private_link(&self) -> String {
         let mut words = Vec::new();
-        if let Some(port) = self.remote_view_port {
-            words.push(format!("hostfwd=udp:127.0.0.1:{port}-:{REMOTEMAN_PORT}"));
+        if self.remote_view_forward {
+            words.push(picked_udp_port_forward(REMOTEMAN_PORT));
         }
         if self.share.is_some() {
             let program = shell_quote(&self.share_program.to_string_lossy());
@@ -156,7 +161,7 @@ impl VmPlan {
         // QEMU answers a guest's UDP from the first forward to its port, so a second one to
         // remoteman's port would take the remote view's replies: the remote view's is the one.
         let taken = |item: &&crate::network::Forward| {
-            self.remote_view_port.is_some()
+            self.remote_view_forward
                 && item.protocol == crate::network::Protocol::Udp
                 && item.guest == u32::from(REMOTEMAN_PORT)
         };

@@ -20,7 +20,9 @@ mod ubuntu;
 pub use amd::{AmdBoot, RENDER_SERVER};
 pub use android::{AndroidBoot, AndroidCard, LOGCAT_FILE};
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
-pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words, picked_port_forward};
+pub use nic::{
+    PASST_PID_FILE, only_through_probe_words, passt_probe_words, picked_port_forward, picked_udp_port_forward,
+};
 pub use passt_age::PasstAge;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
 pub use standalone::memory_files_in;
@@ -146,10 +148,10 @@ pub struct VmPlan {
     /// Whether the app reaches the app windows helper. Only a Windows machine that has app windows
     /// switched on has the forward: with it off, QEMU gets the same words it always did.
     pub app_windows_forward: bool,
-    /// The loopback port QEMU forwards the guest's remoteman port to, for the remote view helper.
-    /// Every Windows machine has it from its start, so its remote view can be switched on while it
-    /// runs; nothing but this PC can reach it.
-    pub remote_view_port: Option<u16>,
+    /// Whether QEMU forwards the guest's remoteman port from a loopback port, for the remote view
+    /// helper. Every Windows machine has it from its start, so its remote view can be switched on while
+    /// it runs; nothing but this PC can reach it. QEMU picks the port, and its monitor says which.
+    pub remote_view_forward: bool,
     pub cores: u32,
     pub ram: String,
     pub screen: String,
@@ -252,8 +254,7 @@ impl VmPlan {
             firmware: context.paths.firmware.clone(),
             files_forward: machine.kind == crate::machine::Kind::Windows,
             app_windows_forward: crate::app_windows::is_on(context, machine),
-            remote_view_port: (machine.kind == crate::machine::Kind::Windows)
-                .then(|| slot.remote_view_port()),
+            remote_view_forward: machine.kind == crate::machine::Kind::Windows,
             cores: machine.cores,
             ram: format!("{}G", machine.ram_gib),
             // Its device takes any size, where the VGA only has the firmware's.

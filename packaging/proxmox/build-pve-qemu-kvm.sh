@@ -95,6 +95,16 @@ extract_patches() {
     ' "$REPO/qemu/qemu-gpupv.patch"
 }
 
+# QEMU's user network with host-loopback=off, as every QEMU of Guesthouse's has. It changes nothing
+# unless a VM's network asks for it. Taken whole, after the hw/hyperv commits, without the version
+# line git format-patch ends it with.
+host_loopback_patch() {
+    count=$(find "$1" -name '*.patch' | wc -l)
+    name=$(printf '%s/%04d-host-loopback.patch' "$1" $((count + 1)))
+    sed '/^-- $/,$d' "$REPO/qemu/qemu-host-loopback.patch" >"$name"
+    say "${name##*/}  net/slirp: host-loopback=off for a user network"
+}
+
 find_engine() {
     ENGINE=$(command -v podman || command -v docker) || die "this needs podman or docker."
     # Podman without root maps the container's root to the caller already, and Docker's is root here.
@@ -227,6 +237,7 @@ main() {
     mkdir -p "$OUT"
     OUT=$(CDPATH='' cd -- "$OUT" && pwd)
     extract_patches "$OUT/patches"
+    host_loopback_patch "$OUT/patches"
     [ -z "$patches_only" ] || return 0
     [ $# -eq 1 ] || die "name what to build of pve-qemu.git, such as 11.1.3-4, or newest."
     find_engine

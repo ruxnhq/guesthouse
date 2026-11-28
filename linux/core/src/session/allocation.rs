@@ -194,7 +194,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             return Ok(());
         }
         let owner = MessageHeader::process_of(message)?;
-        let resource = self.handles.take();
+        let resource = self.take_handle()?;
         self.resources.insert(resource, Vec::with_capacity(request.count));
         CreateAllocationAnswer::set_resource(resource, out);
         if request.shared_by_global_handle() {
@@ -202,7 +202,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             CreateAllocationAnswer::set_global_share(resource, out);
         }
         for (index, (entry, shape)) in request.entries().zip(shapes).enumerate() {
-            let handle = self.handles.take();
+            let handle = self.take_handle()?;
             let mut allocation = Allocation {
                 owner,
                 resource,

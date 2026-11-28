@@ -39,7 +39,7 @@ fn program_name(message: &[u8]) -> String {
 
 impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn create_process(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
-        let handle = self.handles.take();
+        let handle = self.take_handle()?;
         if u8_at(message, PROCESS_FLAGS)? & PROCESS_32_BIT != 0 {
             self.processes_32_bit.insert(handle);
         }
@@ -199,7 +199,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             request.answer(message, 0, out);
             return Ok(());
         }
-        let handle = self.handles.take();
+        let handle = self.take_handle()?;
         log::debug!("context {handle:#x} on node {}, hint {:#x}", request.node, request.client_hint);
         self.context_nodes.insert(handle, request.node);
         self.context_hints.insert(handle, request.client_hint);
@@ -229,6 +229,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn destroy_device(&mut self, message: &[u8], out: &mut Vec<u8>) {
         if let Ok(device) = first_handle(message) {
             self.present_limits.remove(&device);
+            self.devices.remove(&device);
         }
         answer_status(Status::SUCCESS, out);
     }
@@ -252,8 +253,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn create_hardware_queue(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = CreateHardwareQueue::parse(message)?;
         request.begin_answer(message, out);
-        let queue = self.handles.take();
-        let progress = self.handles.take();
+        let queue = self.take_handle()?;
+        let progress = self.take_handle()?;
         let (fence, fence_gpu_address) = self.take_fence()?;
         let space = self.space_for(MessageHeader::process_of(message)?)?;
         self.queues.insert(queue, Queue::new(fence, fence_gpu_address, space, request.context));
@@ -290,7 +291,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             queues.retain(|&queue| queue != handle);
         }
         self.backend.close_queue(handle);
+        for item in &mut self.deferred {
+            item.waits.retain(|&(queue, _)| queue != handle);
+        }
         if let Some(queue) = closed {
+            // Its progress handle goes with it, as the fence it names is given back.
+            self.queue_progress.retain(|_, fence| *fence != queue.fence);
             self.fences.give_back((queue.fence, queue.fence_gpu_address));
         }
     }
@@ -330,7 +336,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// A context that has no queue gets one here, so what waits for it can treat it like any other.
     pub(super) fn queue_of_context(&mut self, context: u32, message: &[u8]) -> Result<u32, Failure> {
         if self.context_queues.get(&context).is_none_or(Vec::is_empty) {
-            let handle = self.handles.take();
+            let handle = self.take_handle()?;
             let (fence, fence_gpu_address) = self.take_fence()?;
             let space = self.space_for(MessageHeader::process_of(message)?)?;
             self.queues.insert(handle, Queue::new(fence, fence_gpu_address, space, context));

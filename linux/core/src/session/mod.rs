@@ -8,6 +8,7 @@ mod copies;
 mod copy_bounds;
 mod first_lock;
 mod frame_ring;
+mod handle_use;
 mod indirect;
 mod mapping;
 mod reserving;
@@ -142,6 +143,8 @@ pub struct Session<B, M> {
     /// Each process's program, by its file name, where the guest named it.
     pub(crate) programs: HashMap<u32, String>,
     pub(crate) spaces: HashMap<u32, SpaceId>,
+    /// The devices the guest has made and not destroyed.
+    pub(crate) devices: HashSet<u32>,
     /// The daemon's own address space, apart from `spaces` so that no message can name it.
     own_space: Option<SpaceId>,
     pub(crate) closed_spaces: HashSet<SpaceId>,
@@ -264,6 +267,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             fences: FencePool::new(),
             io_space: None,
             processes_32_bit: HashSet::new(),
+            devices: HashSet::new(),
             guest_pids: HashMap::new(),
             programs: HashMap::new(),
             spaces: HashMap::new(),
@@ -483,7 +487,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             Some(C::CreateProcess) => self.create_process(message, out)?,
             Some(C::DestroyProcess) => self.destroy_process(message, out)?,
             Some(C::CreateDevice) => {
-                let handle = self.handles.take();
+                let handle = self.take_handle()?;
+                self.devices.insert(handle);
                 put_u32(out, handle);
             }
 

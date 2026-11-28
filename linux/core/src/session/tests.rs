@@ -201,6 +201,7 @@ mod copy_bounds;
 mod failing;
 mod first_lock;
 mod frame_ring;
+mod handles;
 mod indirect;
 
 mod dispatch {

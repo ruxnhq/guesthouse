@@ -121,6 +121,13 @@ impl SyncTable {
         objects.find(monitored).map(|object| object.fence)
     }
 
+    /// Whether a handle names an object here, or a process that holds one.
+    pub fn mentions(&self, handle: u32) -> bool {
+        self.by_handle.contains_key(&handle)
+            || self.holders.contains_key(&handle)
+            || self.holders.values().any(|&process| process == handle)
+    }
+
     /// Removes a handle. Returns the object if that was its last.
     pub fn close(&mut self, handle: u32) -> Option<SyncObject> {
         self.holders.remove(&handle);

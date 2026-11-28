@@ -143,7 +143,16 @@ sandbox() {
     # Ubuntu, it leads to the one above, and bubblewrap can't mount onto a link.
     [ -L /etc/os-release ] || options+=(--ro-bind "$T/os-release" /etc/os-release)
     [ "$OSTREE" = no ] || options+=(--ro-bind "$T/os-release" /run/ostree-booted)
-    [ "$KVM_CLOSED" = no ] || options+=(--ro-bind "$T/closed-kvm" /dev/kvm)
+    # /dev/kvm is the test's own, so the PC's never decides what a test sees: one anyone can open,
+    # unless the test closed it. A runner's /dev/kvm is often root:kvm and closed to its user, which
+    # had install.sh ask root to add a group in every test that expects no root at all.
+    if [ "$KVM_CLOSED" = no ]; then
+        : >"$T/open-kvm"
+        chmod 666 "$T/open-kvm"
+        [ ! -e /dev/kvm ] || options+=(--bind "$T/open-kvm" /dev/kvm)
+    else
+        options+=(--ro-bind "$T/closed-kvm" /dev/kvm)
+    fi
     mkdir -p "$T/firmware"
     [ "$FIRMWARE_HERE" = no ] || printf '{"targets": [{"architecture": "x86_64"}]}' >"$T/firmware/x.json"
     options+=(--ro-bind "$T/firmware" /usr/share/qemu/firmware)

@@ -225,3 +225,11 @@ fn the_buttons_and_the_palette_agree_on_what_can_be_done() {
         assert!(!can_open_screen(&machine, false));
     }
 }
+
+#[test]
+fn a_machine_that_needs_an_owner_is_only_gone_to() {
+    let machines: Vec<Machine> =
+        machines().into_iter().map(|machine| Machine { needs_owner: true, ..machine }).collect();
+    let list = offered(Here::Machine("gaming".into(), Section::Overview), Some(&machines), false);
+    assert_eq!(keys(&list), ["go:media", "go:build-box", "go:office", "home", "new", "settings", "report"]);
+}

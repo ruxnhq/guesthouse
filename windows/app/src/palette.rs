@@ -24,19 +24,23 @@ pub const MOST_SHOWN: usize = 8;
 
 /// Whether a machine's Start can be pressed now, in its title bar and the palette.
 pub fn can_start(machine: &Machine) -> bool {
-    matches!(machine.state, State::Off | State::Failed) && machine.working.is_none()
+    matches!(machine.state, State::Off | State::Failed) && machine.working.is_none() && !machine.needs_owner
 }
 
 /// Whether a machine can be asked to shut down now: Stop, and not Stop now, which its button turns
 /// into once it's stopping, and which the palette doesn't offer.
 pub fn can_ask_to_stop(machine: &Machine) -> bool {
-    matches!(machine.state, State::Starting | State::Running)
+    matches!(machine.state, State::Starting | State::Running) && !machine.needs_owner
 }
 
 /// Whether a machine's screen can be opened now: a Windows guest that's running and set up, with
 /// an address, as remoteman's host is put in at the boots after its first.
 pub fn can_open_screen(machine: &Machine, has_address: bool) -> bool {
-    machine.system == System::Windows && has_address && machine.state == State::Running && machine.set_up
+    machine.system == System::Windows
+        && has_address
+        && machine.state == State::Running
+        && machine.set_up
+        && !machine.needs_owner
 }
 
 /// One thing a palette entry does, as the button that does it would: each is one of the app's
@@ -170,8 +174,10 @@ pub fn entries(now: &Now) -> Vec<Entry> {
         if can_ask_to_stop(machine) {
             add("stop", "Stop", "asks its guest to shut down", vec![Step::Stop]);
         }
-        for other in
-            Section::ALL.into_iter().filter(|other| other.offered(machine.system) && *other != section)
+        // One that needs an owner has no sections until it has one.
+        for other in Section::ALL
+            .into_iter()
+            .filter(|other| other.offered(machine.system) && *other != section && !machine.needs_owner)
         {
             add(&format!("section {}", other.label()), other.label(), "section", vec![Step::Section(other)]);
         }

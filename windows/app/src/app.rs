@@ -643,6 +643,12 @@ pub const DELETE_KEY: &str = "delete";
 /// The key of New machine in the machine switcher. It has a space, which no machine's name can.
 pub const NEW_TAG: &str = " new";
 
+/// The machines a report may be about: not one that needs an owner, whose files the service keeps
+/// for whoever it's given to.
+pub fn reportable(machines: &[Machine]) -> impl Iterator<Item = &Machine> {
+    machines.iter().filter(|machine| !machine.needs_owner)
+}
+
 /// The key of Report a problem in a machine's More menu.
 pub const REPORT_TAG: &str = " report";
 
@@ -1085,7 +1091,9 @@ impl Main {
         {
             self.report.machine = self.selected.clone().filter(|name| {
                 self.page == Page::Machine
-                    && self.status().is_some_and(|status| status.machines.iter().any(|m| &m.name == name))
+                    && self
+                        .status()
+                        .is_some_and(|status| reportable(&status.machines).any(|m| &m.name == name))
             });
         }
         self.go(Page::Report);
@@ -2006,7 +2014,7 @@ impl Component for Main {
             Message::ReportMachine(index) => {
                 let names: Vec<String> = self
                     .status()
-                    .map(|status| status.machines.iter().map(|machine| machine.name.clone()).collect())
+                    .map(|status| reportable(&status.machines).map(|machine| machine.name.clone()).collect())
                     .unwrap_or_default();
                 self.report.machine =
                     index.and_then(|index| index.checked_sub(1)).and_then(|n| names.get(n).cloned());
@@ -2326,7 +2334,15 @@ impl Component for Main {
             Message::MadeMine(name, ended) => {
                 self.assigning = None;
                 match ended {
-                    Ok(()) => self.tell(format!("{name} is yours now."), false),
+                    Ok(()) => {
+                        // Shown as given at once, before the next status says so.
+                        if let Ok(status) = &mut self.seen
+                            && let Some(machine) = status.machines.iter_mut().find(|m| m.name == name)
+                        {
+                            machine.needs_owner = false;
+                        }
+                        self.tell(format!("{name} is yours now."), false)
+                    }
                     Err(words) => self.tell(words, true),
                 }
             }

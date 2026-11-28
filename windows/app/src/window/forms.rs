@@ -265,7 +265,7 @@ fn report_form(main: &Main, problem: Option<&str>, context: &ViewContext<Main>, 
     let report = &main.report;
     let names: Vec<&str> = main
         .status()
-        .map(|status| status.machines.iter().map(|machine| machine.name.as_str()).collect())
+        .map(|status| crate::app::reportable(&status.machines).map(|machine| machine.name.as_str()).collect())
         .unwrap_or_default();
     let mut machines: Vec<String> = vec!["None, the PC itself".to_owned()];
     machines.extend(names.iter().map(|name| (*name).to_owned()));

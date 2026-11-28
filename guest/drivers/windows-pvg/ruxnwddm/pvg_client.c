@@ -229,9 +229,15 @@ NTSTATUS pvg_escape(RUXNWDDM_PVG *pvg, RUXNWDDM_CLIENT **client_slot, void *data
 	ULONG_PTR returned = 0;
 	UCHAR *in;
 	NTSTATUS status;
+	// Each of these is read once, and what is checked is what is used.
+	ULONG in_length, capacity, code;
 
-	if (size < sizeof(*esc) || esc->capacity != size - sizeof(*esc) ||
-	    esc->in_length > esc->capacity || esc->in_length > MAX_INPUT)
+	if (size < sizeof(*esc))
+		return STATUS_INVALID_PARAMETER;
+	in_length = esc->in_length;
+	capacity = esc->capacity;
+	code = esc->code;
+	if (capacity != size - sizeof(*esc) || in_length > capacity || in_length > MAX_INPUT)
 		return STATUS_INVALID_PARAMETER;
 	esc->out_length = 0;
 	if (!client_slot)
@@ -254,14 +260,13 @@ NTSTATUS pvg_escape(RUXNWDDM_PVG *pvg, RUXNWDDM_CLIENT **client_slot, void *data
 
 	// The input is copied before anything is written: the output goes
 	// into the same buffer.
-	in = ExAllocatePool2(POOL_FLAG_NON_PAGED, esc->in_length ? esc->in_length : 1,
+	in = ExAllocatePool2(POOL_FLAG_NON_PAGED, in_length ? in_length : 1,
 			     POOL_TAG_ESCAPE);
 	if (!in)
 		return STATUS_INSUFFICIENT_RESOURCES;
-	RtlCopyMemory(in, esc->data, esc->in_length);
+	RtlCopyMemory(in, esc->data, in_length);
 	ruxnwddm_lock(&client->lock);
-	status = pvg_task_dispatch(client, esc->code, in, esc->in_length, esc->data, esc->capacity,
-				   &returned);
+	status = pvg_task_dispatch(client, code, in, in_length, esc->data, capacity, &returned);
 	ruxnwddm_unlock(&client->lock);
 	ExFreePoolWithTag(in, POOL_TAG_ESCAPE);
 	esc->out_length = (unsigned int)returned;

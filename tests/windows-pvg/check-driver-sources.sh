@@ -73,5 +73,11 @@ if ! grep -q 'PsGetCurrentProcessId' "$drv/ruxnwddm/escape.c" ||
 	fail=1
 fi
 
+# A task control's lengths are read once from the escape's buffer.
+if [ "$(grep -c 'esc->in_length' "$drv/ruxnwddm/pvg_client.c")" != 1 ]; then
+	echo "FAIL: pvg_escape reads the escape's input length more than once"
+	fail=1
+fi
+
 [ "$fail" = 0 ] && echo "ok"
 exit "$fail"

@@ -379,7 +379,7 @@ impl RemoteView {
         parts.setting.set(true);
         parts.switch.set_active(now.allowed);
         parts.setting.set(false);
-        parts.switch.set_subtitle(&headline(now.allowed, now.running, info));
+        parts.switch.set_subtitle(&glib::markup_escape_text(&headline(now.allowed, now.running, info)));
         parts.connect.set_visible(false);
         // Nothing can be paired while the screen is not shared.
         let pairable = now.allowed && info.state != ShareState::Failed;
@@ -439,7 +439,7 @@ impl RemoteView {
         if let Some(fingerprint) = &info.fingerprint {
             let row = adw::ActionRow::builder()
                 .title("Fingerprint")
-                .subtitle(wording::short_fingerprint(fingerprint))
+                .subtitle(glib::markup_escape_text(&wording::short_fingerprint(fingerprint)))
                 .subtitle_selectable(true)
                 .tooltip_text(fingerprint)
                 .build();
@@ -522,7 +522,7 @@ impl RemoteView {
         };
         let row = adw::ExpanderRow::builder()
             .title(glib::markup_escape_text(&name))
-            .subtitle(wording::device_line(device))
+            .subtitle(glib::markup_escape_text(&wording::device_line(device)))
             .tooltip_text(&fingerprint)
             .build();
         row.set_expanded(self.0.expanded.borrow().get(&fingerprint).copied().unwrap_or(count <= OPEN_UP_TO));
@@ -578,9 +578,11 @@ fn button(label: &str) -> gtk::Button {
 }
 
 /// What a waiting device's row says: its code, which the person compares, and the time to answer in.
+/// The pairing row's second line as markup: the code is the guest's, so it is shown as it is written.
 fn pending_text(info: &ShareInfo, left: u64) -> String {
     let code = info.pending.as_ref().map_or("", |pending| pending.code.as_str());
-    format!("{}\n{}", wording::code_time_left(code, left), wording::COMPARE_CODE_LINE)
+    glib::markup_escape_text(&format!("{}\n{}", wording::code_time_left(code, left), wording::COMPARE_CODE_LINE))
+        .to_string()
 }
 
 #[cfg(test)]

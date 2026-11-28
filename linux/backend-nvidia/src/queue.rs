@@ -606,12 +606,12 @@ impl<R: Rm> NvidiaBackend<R> {
             log::warn!("queue {:#x} moved to ring {ring_address:#x} and stops: {why}", work.queue);
             WorkStart::QueueFailed
         };
-        let Some(RingMove { handle, entries: ring_entries }) = self.ring_moves.take(ring_address) else {
-            return Err(stop("no ring was asked for there"));
+        let handle = word(work.private, MOVE_HANDLE);
+        let Some(RingMove { entries: ring_entries, .. }) =
+            self.ring_moves.take(work.space, ring_address, handle)
+        else {
+            return Err(stop("no ring was asked for there under that handle"));
         };
-        if word(work.private, MOVE_HANDLE) != handle {
-            return Err(stop("the submission names another move"));
-        }
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
         let QueueChannel::Ring { channel, .. } = &queue.channel else {
             return Err(WorkStart::Finished);
@@ -1391,7 +1391,7 @@ mod tests {
             let started = backend.start_work(host, &ring_work(space, &first, 1));
             assert_eq!(started, WorkStart::Started { doorbell: 3, work: 2 });
             backend.ring_moves.answered(MemoryId(0x77), MOVE, NEW_RING_BYTES);
-            backend.ring_moves.mapped(MemoryId(0x77), NEW_RING);
+            backend.ring_moves.mapped(space, MemoryId(0x77), NEW_RING);
             (backend, space)
         }
 

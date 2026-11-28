@@ -470,6 +470,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn destroy_address_space(&mut self, space: SpaceId) {
         self.pool_mirror.forget_space(space);
+        self.ring_moves.forget_space(space);
         self.sked_pages.forget_space(space);
         if let Some(space) = self.spaces.remove(&space)
             && let Err(error) = self.device.destroy_address_space(&space)
@@ -497,7 +498,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
             log::warn!("the RM refused a map with a page kind ({error}), so it is made without");
             self.device.map(space, &rm::device::Mapping { page_kind: None, ..map }).map_err(memory_error)?;
         }
-        self.ring_moves.mapped(request.memory, request.address);
+        self.ring_moves.mapped(request.space, request.memory, request.address);
         Ok(())
     }
 

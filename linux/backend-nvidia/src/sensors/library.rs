@@ -1,6 +1,6 @@
 //! The vendor's management library, through its documented C API.
 //!
-//! It is loaded when the daemon starts and never linked, so a machine without it only goes without
+//! It is loaded when the card's sensors publisher starts and never linked, so a machine without it only goes without
 //! readings. Each getter is looked up alone, so an older library loses that reading and no more.
 
 use super::processes::{ProcessMemory, ProcessSource, Sample, Samples};
@@ -75,21 +75,14 @@ const _: () = assert!(mem::size_of::<UtilizationSample>() == 32);
 const _: () = assert!(mem::size_of::<ProcessInfo>() == 24);
 
 type Init = unsafe extern "C" fn() -> c_int;
-type HandleByUuid = unsafe extern "C" fn(*const c_char, *mut Device) -> c_int;
+type HandleByBus = unsafe extern "C" fn(*const c_char, *mut Device) -> c_int;
+type HandleByIndex = unsafe extern "C" fn(c_uint, *mut Device) -> c_int;
 type ReadWord = unsafe extern "C" fn(Device, *mut c_uint) -> c_int;
 type ReadWordOf = unsafe extern "C" fn(Device, c_int, *mut c_uint) -> c_int;
 type ReadMemory = unsafe extern "C" fn(Device, *mut MemoryInfo) -> c_int;
 type ReadUtilization = unsafe extern "C" fn(Device, *mut Utilization) -> c_int;
 type ReadSamples = unsafe extern "C" fn(Device, *mut UtilizationSample, *mut c_uint, u64) -> c_int;
 type ReadProcesses = unsafe extern "C" fn(Device, *mut c_uint, *mut ProcessInfo) -> c_int;
-
-/// The text form of a card's identity, as the library takes it.
-pub(super) fn uuid_text(bytes: &[u8; 16]) -> String {
-    let hex = |range: std::ops::Range<usize>| -> String {
-        bytes[range].iter().map(|byte| format!("{byte:02x}")).collect()
-    };
-    format!("GPU-{}-{}-{}-{}-{}", hex(0..4), hex(4..6), hex(6..8), hex(8..10), hex(10..16))
-}
 
 /// The library, set up for one card.
 pub(super) struct Library {
@@ -122,8 +115,10 @@ unsafe fn symbol<F: Copy>(library: *mut c_void, name: &CStr) -> Option<F> {
 }
 
 impl Library {
-    /// Loads the library and finds this card. `None` if any of that can't be done.
-    pub(super) fn open(name: &CStr, card_uuid: &str) -> Option<Self> {
+    /// Loads the library and finds the card at `card`, a PCI address as `0000:01:00.0`. With none,
+    /// it is the library's first card, as the driver's first device file is when its list of cards
+    /// can't be read. `None` if any of that can't be done.
+    pub(super) fn open(name: &CStr, card: Option<&str>) -> Option<Self> {
         // SAFETY: loading a library by name. Nothing else in this process depends on it.
         let library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         if library.is_null() {
@@ -132,13 +127,22 @@ impl Library {
         // SAFETY: each type below is that function's documented signature.
         unsafe {
             let init: Init = symbol(library, c"nvmlInit_v2")?;
-            let by_uuid: HandleByUuid = symbol(library, c"nvmlDeviceGetHandleByUUID")?;
             if init() != SUCCESS {
                 return None;
             }
-            let uuid = CString::new(card_uuid).ok()?;
             let mut device = ptr::null_mut();
-            if by_uuid(uuid.as_ptr(), &mut device) != SUCCESS {
+            let found = match card {
+                Some(card) => {
+                    let by_bus: HandleByBus = symbol(library, c"nvmlDeviceGetHandleByPciBusId_v2")?;
+                    let bus = CString::new(card).ok()?;
+                    by_bus(bus.as_ptr(), &mut device)
+                }
+                None => {
+                    let by_index: HandleByIndex = symbol(library, c"nvmlDeviceGetHandleByIndex_v2")?;
+                    by_index(0, &mut device)
+                }
+            };
+            if found != SUCCESS {
                 return None;
             }
             Some(Self {
@@ -291,12 +295,7 @@ mod tests {
 
     #[test]
     fn a_missing_library_is_simply_no_library() {
-        assert!(Library::open(c"/nonexistent/no-such-library.so", "GPU-0").is_none());
-    }
-
-    #[test]
-    fn an_identity_reads_in_the_usual_groups() {
-        let bytes: [u8; 16] = std::array::from_fn(|index| index as u8);
-        assert_eq!(uuid_text(&bytes), "GPU-00010203-0405-0607-0809-0a0b0c0d0e0f");
+        assert!(Library::open(c"/nonexistent/no-such-library.so", Some("0000:01:00.0")).is_none());
+        assert!(Library::open(c"/nonexistent/no-such-library.so", None).is_none());
     }
 }

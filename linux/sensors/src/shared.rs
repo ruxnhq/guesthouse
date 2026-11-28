@@ -1,4 +1,4 @@
-//! The snapshot in a small file in shared memory, written by one process and read by any. See
+//! The snapshot in a small file in the user's runtime folder, written by one process and read by any. See
 //! [`crate::words`] for how a reader never waits.
 
 use crate::words::SharedWords;
@@ -67,29 +67,20 @@ pub struct SharedSnapshot {
 }
 
 impl SharedSnapshot {
-    /// Opens the file, making it if needed. Anyone else's file at this path is refused.
+    /// The writer's open, which makes the file if needed. Only the process holding the writer's
+    /// turn for it opens it so: see [`crate::words::wait_for_writers_turn`]. Anyone else's file at
+    /// this path is refused.
     pub fn open(path: &Path) -> io::Result<Self> {
         Ok(Self { words: SharedWords::open(path)? })
     }
 
-    /// Opens a file a daemon has made, for a reader that must not make one.
+    /// A reader's open, which can't write and doesn't make the file. One made empty for a reader
+    /// reads as nothing until the writer's first publish.
     pub fn open_to_read(path: &Path) -> io::Result<Self> {
-        Ok(Self { words: SharedWords::open_existing(path)? })
+        Ok(Self { words: SharedWords::open_to_read(path)? })
     }
 
-    /// Another handle on the same snapshot, with a lock of its own, as it is a new open of the file.
-    /// Take the lock on one of these: the mapping keeps the first open alive, and a lock on that
-    /// would outlast the handle.
-    pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self { words: self.words.try_clone()? })
-    }
-
-    /// Waits until no other process is reading the card. The lock lasts until this process exits.
-    pub fn wait_for_lock(&self) -> io::Result<()> {
-        self.words.wait_for_lock()
-    }
-
-    /// Only the holder of the lock writes.
+    /// Only the holder of the writer's turn writes.
     pub fn publish(&self, snapshot: &Snapshot) {
         self.words.publish(to_words(snapshot));
     }
@@ -110,7 +101,6 @@ impl SnapshotReader for SharedSnapshot {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::fd::AsRawFd;
     use std::path::PathBuf;
 
     fn temporary(name: &str) -> PathBuf {
@@ -141,7 +131,7 @@ mod tests {
     fn a_second_process_sees_what_the_first_wrote() {
         let path = temporary("two");
         let writer = SharedSnapshot::open(&path).unwrap();
-        let reader = SharedSnapshot::open(&path).unwrap();
+        let reader = SharedSnapshot::open_to_read(&path).unwrap();
         let snapshot = now_snapshot();
         writer.publish(&snapshot);
         assert_eq!(reader.latest(), Some(snapshot));
@@ -186,21 +176,6 @@ mod tests {
         assert_eq!(shared.latest(), None);
         shared.publish(&now_snapshot());
         assert!(shared.latest().is_some());
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn a_clone_has_a_lock_of_its_own() {
-        let path = temporary("lock");
-        let opened = SharedSnapshot::open(&path).unwrap();
-        let first = opened.try_clone().unwrap();
-        let second = opened.try_clone().unwrap();
-        first.wait_for_lock().unwrap();
-        // SAFETY: a plain call on a file this owns.
-        let taken = unsafe { libc::flock(second.words.file().as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        assert_eq!(taken, -1, "the lock is held");
-        drop(first);
-        second.wait_for_lock().unwrap();
         fs::remove_file(path).unwrap();
     }
 

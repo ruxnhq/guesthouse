@@ -1,5 +1,5 @@
 //! What the daemon may call once it's serving. Everything it needs is open by then, so this is the
-//! short list of what the message loop, the sensor thread and the host's management library use.
+//! short list of what the message loop and the backends use.
 //! Anything else is refused with a line in the log, so a call missing here shows up there.
 
 use super::all;

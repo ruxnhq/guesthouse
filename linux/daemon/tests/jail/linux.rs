@@ -40,6 +40,36 @@ fn jailed(folder: &Path) {
     }
 }
 
+/// The card's readings, as a daemon's jail has them: the snapshot opens to be read, and nothing of
+/// the readings can be written, nor the writer's turn taken.
+fn readings(folder: &Path) {
+    use guesthouse_sensors::{SharedSnapshot, Snapshot, SnapshotReader, milliseconds_since_epoch};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let snapshot = folder.join("readings/gpupv-sensors");
+    let table = folder.join("readings/gpupv-processes");
+    // As the card's sensors publisher, outside the jail.
+    guesthouse_sensors::words::make_private_folder(&folder.join("readings")).unwrap();
+    let publisher = SharedSnapshot::open(&snapshot).unwrap();
+    let reading =
+        Snapshot { taken_at: milliseconds_since_epoch(), load_percent: Some(9), ..Snapshot::default() };
+    publisher.publish(&reading);
+    fs::write(&table, "").unwrap();
+    let needs =
+        Needs { run_folder: folder.join("run-2"), shared_files: vec![snapshot.clone()], ..Needs::default() };
+    needs.prepare().unwrap();
+    let locked = lock_files(&needs).unwrap();
+    lock_calls(locked).unwrap();
+    let read = SharedSnapshot::open_to_read(&snapshot).unwrap().latest();
+    assert_eq!(read.and_then(|read| read.load_percent), Some(9), "the snapshot reads");
+    let to_write = fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW).open(&snapshot);
+    assert!(refused(to_write), "the snapshot opened to write");
+    assert!(refused(SharedSnapshot::open(&snapshot)), "the snapshot opened as its writer");
+    assert!(refused(fs::write(&table, "9")), "the table of the card's processes");
+    let turn = guesthouse_sensors::words::wait_for_writers_turn(&snapshot);
+    assert!(refused(turn), "the writer's turn");
+}
+
 /// Setup runs `nvidia-smi` with its input on `/dev/null`, after the files' jail and before the filter.
 fn setup_runs_a_program(folder: &Path) {
     lock_files(&Needs { run_folder: folder.join("run-2"), ..Needs::default() }).unwrap();
@@ -136,6 +166,7 @@ type Case = (&'static str, fn(&Path));
 const CASES: &[Case] = &[
     ("jailed", jailed),
     ("setup_runs_a_program", setup_runs_a_program),
+    ("readings", readings),
     #[cfg(all(feature = "stand-in", not(feature = "nvidia")))]
     ("serving", serving),
     #[cfg(all(feature = "stand-in", not(feature = "nvidia")))]

@@ -49,7 +49,7 @@ impl SharedGuestUse {
 
     /// The app's end, which leaves a run folder without the file as it is.
     pub fn open_to_read(run_folder: &Path) -> io::Result<Self> {
-        Ok(Self(SharedWords::open_existing(&run_folder.join(FILE))?))
+        Ok(Self(SharedWords::open_to_read(&run_folder.join(FILE))?))
     }
 
     pub fn publish(&self, used: &GuestUse) {

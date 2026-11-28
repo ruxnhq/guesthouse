@@ -1,10 +1,13 @@
 //! The host card's newest readings, shared between processes.
 //!
-//! One process reads the card and publishes a [`Snapshot`] in a small file in shared memory. Any
-//! process of the same user can read it: a daemon answering a guest's performance queries, or the
-//! app showing the host's figures over a guest's screen. A reader takes no lock and never waits, and
-//! reads the file with positional reads, so it is never faulted by the file changing length.
-//! What reads the card, and when, is the reader's own business and lives elsewhere.
+//! One process reads the card and publishes a [`Snapshot`] in a small file in the user's runtime
+//! folder: the card's sensors publisher, which serves no guest and runs in no jail. Any process of
+//! the same user can read it: a daemon answering a guest's performance queries, or the app showing
+//! the host's figures over a guest's screen. A reader opens the file for reading only, takes no lock
+//! and never waits, and reads the file with positional reads, so it is never faulted by the file
+//! changing length. Several publishers can be started for one card, and the one holding the writer's
+//! turn ([`words::wait_for_writers_turn`]) is the only one that writes. What reads the card, and
+//! when, lives with the backends.
 //!
 //! [`guest_use`] is the same kind of file for one guest: the video memory its daemon's books say it
 //! holds, kept in its run folder for the app's share panel. [`card_processes`] is each process's part

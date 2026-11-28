@@ -1,11 +1,11 @@
 //! Each process's part of one card, as the card's own driver counts it: how busy it kept the card
-//! in the driver's last sample of it, and the video memory the driver charges it with. The daemon
-//! that reads the card's snapshot fills this too, for every process on the card, and the app looks
+//! in the driver's last sample of it, and the video memory the driver charges it with. The card's
+//! sensors publisher fills this beside the snapshot, for every process on the card, and the app looks
 //! up each machine's processes in it. It is for drivers that keep these figures per process and not
 //! per client, as NVIDIA's does.
 //!
-//! The daemon that writes it serves a guest, so the app takes nothing in it on trust: the count is
-//! held to the table's room and every share to a whole.
+//! The app still takes nothing in it on trust: the count is held to the table's room and every share
+//! to a whole.
 
 use crate::words::SharedWords;
 use crate::{AHEAD, milliseconds_since_epoch, snapshot_path};
@@ -155,10 +155,10 @@ impl SharedProcessTable {
 
     /// The app's end, which leaves a missing file missing.
     pub fn open_to_read(path: &Path) -> io::Result<Self> {
-        Ok(Self(SharedWords::open_existing(path)?))
+        Ok(Self(SharedWords::open_to_read(path)?))
     }
 
-    /// Only the daemon that reads the card writes, as with the snapshot.
+    /// Only the holder of the snapshot's writer's turn writes this, as it does the snapshot.
     pub fn publish(&self, table: &ProcessTable) {
         self.0.publish(to_words(table));
     }
@@ -205,14 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn the_app_reads_what_the_daemon_wrote() {
+    fn the_app_reads_what_the_publisher_wrote() {
         let path = temporary("both");
-        let daemon = SharedProcessTable::open(&path).unwrap();
+        let publisher = SharedProcessTable::open(&path).unwrap();
         let app = SharedProcessTable::open_to_read(&path).unwrap();
         assert_eq!(app.latest(), None, "nothing written yet");
         // One table, as a second would be taken a millisecond later when the clock moves between them.
         let table = measured();
-        daemon.publish(&table);
+        publisher.publish(&table);
         assert_eq!(app.latest(), Some(table));
         fs::remove_file(path).unwrap();
     }

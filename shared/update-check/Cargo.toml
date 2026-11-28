@@ -1,6 +1,6 @@
 [package]
 name = "guesthouse-update-check"
-description = "Whether a newer Guesthouse is out, from the small file a release publishes, for every host. Nothing here calls the OS or the network: each host fetches the file its own way."
+description = "Whether a newer Guesthouse is out, from the small file a release publishes, and whether a release key signed it, for every host. Nothing here calls the OS or the network: each host fetches the file its own way."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,8 @@ license.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Ed25519, to check that a release key signed a file. Already in the tree through rcgen.
+ring = { version = "0.17", default-features = false }
 
 [lints]
 workspace = true

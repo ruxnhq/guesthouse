@@ -8,7 +8,7 @@ use crate::gpu_support::{NO_GPU_PART, gpu_ready};
 use crate::held_memory::used_by_others;
 use crate::host::{self, GIB, physical_cores, ram_limit_for, vcache_cpus};
 use crate::host_drives::drive_problems;
-use crate::machine::{Kind, Machine};
+use crate::machine::{Kind, Machine, load_all};
 use crate::network_settings::{network_start_problems, other_machines};
 use crate::processes::{memory_taken, qemu_pid};
 use crate::screen_gpu::setup_card;
@@ -22,7 +22,7 @@ use guesthouse_start_checks_core::linux_host::{self, MachineFacts, StartFacts, j
 pub use guesthouse_start_checks_core::linux_host::{
     MEMORY_TAKEN, NO_SETUP, NO_TOKEN, SECOND_INSTANCE_REFUSAL, SHARE_REFUSAL, SharedFacts,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// [`SharedFacts`] read from the PC.
 pub trait FromThisPc: Sized {
@@ -84,15 +84,52 @@ pub fn video_cap(machine: &Machine, others: &[Machine], max_vram_gib: u32) -> u3
 /// user's home as a whole, the hidden folders in it, or what this app runs from.
 pub fn share_problem(context: &Context, folder: &str) -> Option<String> {
     let folder = Path::new(folder).canonicalize().ok()?;
+    let refused = place_problem(context, &folder);
+    refused.or_else(|| machine_file_in(&folder, &load_all(context).0))
+}
+
+/// As the file system finds a path, so neither a `..` nor a link in it hides where it is.
+fn real(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
+}
+
+/// The files a machine's QEMU opens: its disk and the files it's built on, its disc, its firmware
+/// settings, and OpenCore's and Android's disks.
+fn files_qemu_opens(machine: &Machine) -> impl Iterator<Item = &str> {
+    let own = [&machine.disk, &machine.iso, &machine.vars, &machine.opencore, &machine.android_data];
+    let backing = machine.backing_files.iter().map(|file| &file.path);
+    own.into_iter().chain(backing).map(String::as_str).filter(|path| !path.is_empty())
+}
+
+/// The first of these machines' files in the folder, which is found as the file system has it.
+fn file_in<'a>(folder: &Path, machines: &'a [Machine]) -> Option<(&'a Machine, &'a str)> {
+    machines.iter().find_map(|machine| {
+        let file = files_qemu_opens(machine).find(|file| real(Path::new(file)).starts_with(folder))?;
+        Some((machine, file))
+    })
+}
+
+/// Says which of these machines' files is in the folder, if one is.
+fn machine_file_in(folder: &Path, machines: &[Machine]) -> Option<String> {
+    file_in(folder, machines).map(|(machine, file)| {
+        format!(
+            "The shared folder holds {file}, which {} starts from, and the guest can change anything in it. \
+             Share a folder that holds no machine's disk, disc or firmware settings.",
+            machine.name
+        )
+    })
+}
+
+/// Whether the folder is the home folder, holds it or the app's own, or is a hidden one in home.
+fn place_problem(context: &Context, folder: &Path) -> Option<String> {
     let paths = &context.paths;
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_owned());
-    let home = canonical(&paths.home);
-    let ours = [&paths.store, &paths.config, &paths.state].map(|path| canonical(path));
-    let holds_ours = ours.iter().any(|path| path.starts_with(&folder) || folder.starts_with(path));
+    let home = real(&paths.home);
+    let ours = [&paths.store, &paths.config, &paths.state].map(|path| real(path));
+    let holds_ours = ours.iter().any(|path| path.starts_with(folder) || folder.starts_with(path));
     let hidden = folder.strip_prefix(&home).is_ok_and(|inside| {
         inside.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with('.'))
     });
-    (folder == home || home.starts_with(&folder) || holds_ours || hidden).then(|| SHARE_REFUSAL.to_owned())
+    (folder == home || home.starts_with(folder) || holds_ours || hidden).then(|| SHARE_REFUSAL.to_owned())
 }
 
 /// Says why a GPU machine can't start on its card, by the maker whose setup and card it needs.
@@ -118,7 +155,21 @@ fn start_facts(context: &Context, machine: &Machine) -> Result<StartFacts> {
     let missing_disc = missing(&machine.iso).then(|| machine.iso.clone());
     let missing_share =
         (!machine.share.is_empty() && !Path::new(&machine.share).is_dir()).then(|| machine.share.clone());
-    let share_problem = share_problem(context, &machine.share);
+    // Its own share holds no machine's files, and no other machine's share holds its own.
+    let in_another_share = || {
+        let others = load_all(context).0.into_iter().filter(|other| other.id != machine.id);
+        let shares = others.map(|other| other.share).filter(|share| !share.is_empty());
+        shares.filter_map(|share| Path::new(&share).canonicalize().ok()).find_map(|share| {
+            file_in(&share, std::slice::from_ref(machine)).map(|(_, file)| {
+                format!(
+                    "{file} is in another machine's shared folder, {}, and its guest can change anything in \
+                     it. Move it out, or share another folder there.",
+                    share.display()
+                )
+            })
+        })
+    };
+    let share_problem = share_problem(context, &machine.share).or_else(in_another_share);
     let no_gpu_part = (machine.kind == Kind::Windows && !gpu_ready(context)).then(|| NO_GPU_PART.to_owned());
     let reads_card = no_gpu_part.is_none() && machine.has_gpu();
     let card_problems = if reads_card { card_start_problems(context, machine) } else { Vec::new() };
@@ -216,6 +267,77 @@ mod tests {
         assert!(share_problem(&context, &hidden.display().to_string()).is_some());
         let machine = context.paths.machines.join("one").display().to_string();
         assert!(share_problem(&context, &machine).is_some());
+    }
+
+    /// A machine kept under `place`, with its disk, firmware settings and disc there.
+    fn kept_in(context: &Context, scratch: &Scratch, id: &str, place: &str) -> Machine {
+        let file = |name: &str| scratch.write(&format!("{place}/{name}"), "x").display().to_string();
+        let machine = Machine {
+            kind: Kind::Plain,
+            iso: file(&format!("{id}.iso")),
+            ..Machine::new(id, id, &file(&format!("{id}.qcow2")), &file(&format!("{id}-vars.fd")))
+        };
+        fs::create_dir_all(machine.folder(context)).unwrap();
+        machine.save(context).unwrap();
+        machine
+    }
+
+    #[test]
+    fn a_folder_that_holds_a_machines_files_cant_be_shared() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.paths.home = scratch.path("home");
+        kept_in(&context, &scratch, "lab", "home/VMs/lab");
+        let vms = scratch.path("home/VMs").display().to_string();
+        assert!(share_problem(&context, &vms).unwrap().contains("lab.qcow2"), "the disk");
+        // The same folder by a link to it.
+        std::os::unix::fs::symlink(scratch.path("home/VMs"), scratch.path("home/Linked")).unwrap();
+        assert!(share_problem(&context, &scratch.path("home/Linked").display().to_string()).is_some());
+        // A disk named through a link into the share.
+        fs::create_dir_all(scratch.path("home/Shared/real")).unwrap();
+        std::os::unix::fs::symlink(scratch.path("home/Shared/real"), scratch.path("home/Disks")).unwrap();
+        kept_in(&context, &scratch, "other", "home/Disks");
+        let shared = scratch.path("home/Shared").display().to_string();
+        assert!(share_problem(&context, &shared).unwrap().contains("other.qcow2"));
+        let backing = scratch.write("home/Bases/base.qcow2", "x");
+        let mut on_base = kept_in(&context, &scratch, "layered", "home/Layered");
+        on_base.backing_files = vec![crate::disk_image::backing::BackingFile {
+            path: backing.display().to_string(),
+            format: "qcow2".into(),
+        }];
+        on_base.save(&context).unwrap();
+        let bases = scratch.path("home/Bases").display().to_string();
+        assert!(share_problem(&context, &bases).unwrap().contains("base.qcow2"), "a backing file");
+    }
+
+    #[test]
+    fn a_start_is_refused_while_any_machines_share_holds_its_files() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.paths.home = scratch.path("home");
+        let lab = kept_in(&context, &scratch, "lab", "home/Downloads");
+        let mut own = lab.clone();
+        own.share = scratch.path("home/Downloads").display().to_string();
+        let found = start_problems(&context, &own).unwrap();
+        assert!(says(&found, "The shared folder holds"), "its own share holds its files: {found:?}");
+        // A disc alone in the share is refused too.
+        let disc_only = Machine {
+            disk: scratch.write("home/Other/lab2.qcow2", "x").display().to_string(),
+            ..lab.clone()
+        };
+        let disc_only = Machine { vars: String::new(), ..disc_only };
+        disc_only.save(&context).unwrap();
+        let found =
+            start_problems(&context, &Machine { share: own.share.clone(), ..disc_only.clone() }).unwrap();
+        assert!(says(&found, "lab.iso"), "{found:?}");
+        lab.save(&context).unwrap();
+        let mut other = kept_in(&context, &scratch, "other", "home/Other");
+        other.share = scratch.path("home/Downloads").display().to_string();
+        other.save(&context).unwrap();
+        assert!(
+            says(&start_problems(&context, &lab).unwrap(), "lab.qcow2"),
+            "another's share holds its disk"
+        );
     }
 
     #[test]

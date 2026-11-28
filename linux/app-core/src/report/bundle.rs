@@ -13,7 +13,9 @@ use crate::failure::{Failure, Result};
 use guesthouse_report_core::host::Host;
 use guesthouse_report_core::manifest::{DESCRIPTION_FILE, MANIFEST_FILE, SUMMARY_FILE, manifest_for};
 use jiff::ZonedDateTime;
-use std::fs;
+use std::fs::{self, DirBuilder, OpenOptions};
+use std::io::ErrorKind;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -25,6 +27,8 @@ const NAME_START: &str = "guesthouse-report-";
 const FIRST_MOST_FILE_BYTES: usize = 16 << 20;
 /// A bundle that's still too big tries again with every log at half the room, this many times.
 const SHRINK_ROUNDS: u32 = 6;
+/// How many names a staging folder is tried under before giving up.
+const STAGING_TRIES: u32 = 8;
 
 /// A written report.
 #[derive(Debug, Clone)]
@@ -53,10 +57,9 @@ pub fn write_bundle(
 ) -> Result<Bundle> {
     let name = format!("{NAME_START}{}", ZonedDateTime::now().strftime("%Y%m%d-%H%M%S"));
     let archive = folder.join(format!("{name}.{FORMAT}"));
-    let staging = folder.join(format!(".{name}-{}", std::process::id()));
     let mut most = FIRST_MOST_FILE_BYTES;
     for _ in 0..SHRINK_ROUNDS {
-        let _ = fs::remove_dir_all(&staging);
+        let staging = new_staging_folder(folder, &name)?;
         let written = write_files(collection, words, scrubber, &staging.join(&name), most);
         let packed = written.and_then(|bundle| {
             pack(&staging, &name, &archive)?;
@@ -72,6 +75,19 @@ pub fn write_bundle(
     }
     let _ = fs::remove_file(&archive);
     Err(Failure::new("The report stayed too big to send, however much of each log was left out."))
+}
+
+/// A new folder for the report's files to be written in before they are packed, that no one else
+/// has made or can open: a fresh name each time, made only if it isn't there, for this user alone.
+fn new_staging_folder(folder: &Path, name: &str) -> Result<PathBuf> {
+    for _ in 0..STAGING_TRIES {
+        let staging = folder.join(format!(".{name}-{}", crate::random::random_hex::<8>()));
+        match DirBuilder::new().mode(0o700).create(&staging) {
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            made => return made.map(|()| staging).map_err(Failure::from),
+        }
+    }
+    Err(Failure::new("A folder to write the report in could not be made."))
 }
 
 type Written = (Summary, Vec<(String, usize)>);
@@ -121,9 +137,18 @@ fn manifest(collection: &Collection, files: &[(String, usize)]) -> String {
 }
 
 fn pack(staging: &Path, name: &str, archive: &Path) -> Result<()> {
+    // The archive is opened here, for this user only and never through a link, and tar writes to it.
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(archive)
+        .map_err(|error| Failure(format!("The report's file could not be made: {error}")))?;
     let result = Command::new("tar")
-        .arg("-czf")
-        .arg(archive)
+        .args(["-czf", "-"])
+        .stdout(file)
         .arg("-C")
         .arg(staging)
         // The owners would say who made it, and say nothing about the bug.
@@ -149,6 +174,7 @@ mod tests {
     use super::*;
     use crate::report::collect::Item;
     use crate::testing::Scratch;
+    use std::os::unix::fs::PermissionsExt;
 
     fn collection() -> Collection {
         let mut collection = Collection::default();
@@ -164,6 +190,36 @@ mod tests {
 
     fn scrubber() -> Scrubber {
         Scrubber::new("quillon", "marrowbox", Path::new("/home/quillon"))
+    }
+
+    #[test]
+    fn a_folder_or_link_put_where_the_staging_folder_used_to_be_named_is_not_written_into() {
+        let scratch = Scratch::new();
+        let target = scratch.path("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        let now = ZonedDateTime::now();
+        let pid = std::process::id();
+        for second in -3..=3 {
+            let when = now.checked_add(jiff::SignedDuration::from_secs(second)).unwrap();
+            let name = format!("{NAME_START}{}", when.strftime("%Y%m%d-%H%M%S"));
+            std::os::unix::fs::symlink(&target, scratch.path(&format!(".{name}-{pid}"))).unwrap();
+            std::os::unix::fs::symlink(&target, scratch.path(&format!("{name}.{FORMAT}"))).unwrap();
+        }
+        let words = Words { description: "It went black.".into(), contact: String::new() };
+        let made = write_bundle(&collection(), &words, &scrubber(), scratch.root());
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0, "nothing went through a link");
+        assert!(made.is_err(), "an archive name that is a link is not opened");
+    }
+
+    #[test]
+    fn the_staging_folder_is_new_and_for_this_user_only() {
+        let scratch = Scratch::new();
+        let first = new_staging_folder(scratch.root(), "r").unwrap();
+        let second = new_staging_folder(scratch.root(), "r").unwrap();
+        assert_ne!(first, second);
+        for folder in [&first, &second] {
+            assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & 0o777, 0o700);
+        }
     }
 
     #[test]

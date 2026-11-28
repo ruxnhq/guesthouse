@@ -83,10 +83,15 @@ fn ask(question: &str) -> String {
     line.trim().to_owned()
 }
 
-/// Here, if this folder can be written to, and the temp folder if not.
-fn output_folder() -> PathBuf {
+/// Here, if this folder can be written to, and the app's own folder for its state if not, which only
+/// this user can open.
+fn output_folder(context: &Context) -> PathBuf {
     let here = env::current_dir().ok().filter(|folder| access(folder, Access::WRITE_OK).is_ok());
-    here.unwrap_or_else(env::temp_dir)
+    here.unwrap_or_else(|| {
+        let state = context.paths.state.join("reports");
+        let _ = guesthouse_app_core::context::make_private_folder(&state);
+        state
+    })
 }
 
 fn show_contents(collection: &Collection) {
@@ -166,7 +171,7 @@ fn run(context: &Context, options: Options) -> ExitCode {
         options.description.unwrap_or_else(|| ask("What went wrong? One line, or Enter to skip: "));
     let words = Words { description: description.clone(), contact: options.contact };
     let scrubber = scrubber_for(context, collection.machine.as_deref());
-    let bundle = match write_bundle(&collection, &words, &scrubber, &output_folder()) {
+    let bundle = match write_bundle(&collection, &words, &scrubber, &output_folder(context)) {
         Ok(bundle) => bundle,
         Err(failure) => {
             eprintln!("The report couldn't be written: {}", failure.0);

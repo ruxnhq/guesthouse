@@ -50,7 +50,7 @@ pub fn write_in_reports_folder(
     words: &Words,
 ) -> crate::Result<Bundle> {
     let folder = reports_folder(context);
-    fs::create_dir_all(&folder)?;
+    crate::context::make_private_folder(&folder)?;
     let scrubber = scrubber_for(context, collection.machine.as_deref());
     let bundle = write_bundle(collection, words, &scrubber, &folder)?;
     let mut kept: Vec<PathBuf> = fs::read_dir(&folder)?.flatten().map(|entry| entry.path()).collect();

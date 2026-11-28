@@ -35,7 +35,7 @@ fn first_present(paths: &[&str]) -> PathBuf {
 }
 
 /// A folder that already exists is made private too, as the first run could have made it otherwise.
-pub(crate) fn make_private_folder(folder: &Path) -> std::io::Result<()> {
+pub fn make_private_folder(folder: &Path) -> std::io::Result<()> {
     DirBuilder::new().recursive(true).mode(PRIVATE_FOLDER).create(folder)?;
     fs::set_permissions(folder, Permissions::from_mode(PRIVATE_FOLDER))
 }

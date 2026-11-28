@@ -331,7 +331,7 @@ fn an_install_in_progress_is_on_disk_and_a_failed_one_starts_again_from_nothing(
     assert_eq!((record.action.as_str(), record.step.as_str()), ("install", "Starting the installer"));
     assert_eq!(record.machine, vm.id);
     assert_eq!(record.pid, std::process::id());
-    let text = fs::read_to_string(context.run_folder(None).join("guesthouse-task.json")).unwrap();
+    let text = fs::read_to_string(crate::tasks::task_path(&context, None)).unwrap();
     let pid = std::process::id().to_string();
     assert_eq!(
         text.replace(&pid, "PID").replace(&vm.id, "ID"),

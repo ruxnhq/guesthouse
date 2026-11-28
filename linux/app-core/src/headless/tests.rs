@@ -268,7 +268,7 @@ fn a_task_that_fails_ends_the_command_with_its_error() {
     watching_real_tasks(&mut context);
     make(&context, "work", "Office PC", Kind::Plain);
     context.make_run_folder(None).unwrap();
-    let file = context.run_folder(None).join("guesthouse-task.json");
+    let file = crate::tasks::task_path(&context, None);
     let record = TaskRecord {
         action: "start".into(),
         machine: "work".into(),

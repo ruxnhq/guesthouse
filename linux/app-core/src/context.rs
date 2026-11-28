@@ -35,7 +35,7 @@ fn first_present(paths: &[&str]) -> PathBuf {
 }
 
 /// A folder that already exists is made private too, as the first run could have made it otherwise.
-fn make_private_folder(folder: &Path) -> std::io::Result<()> {
+pub(crate) fn make_private_folder(folder: &Path) -> std::io::Result<()> {
     DirBuilder::new().recursive(true).mode(PRIVATE_FOLDER).create(folder)?;
     fs::set_permissions(folder, Permissions::from_mode(PRIVATE_FOLDER))
 }
@@ -167,10 +167,17 @@ impl Context {
         self.paths.run_folder(slot.unwrap_or(self.slot))
     }
 
-    /// Makes a run folder that only this user can open, as its sockets give the run of a VM.
+    /// The app's own notes for a slot, beside its run folder: see [`crate::paths::notes_beside`].
+    pub fn notes_folder(&self, slot: Option<Slot>) -> PathBuf {
+        self.paths.notes_folder(slot.unwrap_or(self.slot))
+    }
+
+    /// Makes a run folder that only this user can open, as its sockets give the run of a VM, and the
+    /// notes folder beside it.
     pub fn make_run_folder(&self, slot: Option<Slot>) -> std::io::Result<()> {
         make_private_folder(&self.paths.runtime)?;
-        make_private_folder(&self.run_folder(slot))
+        make_private_folder(&self.run_folder(slot))?;
+        make_private_folder(&self.notes_folder(slot))
     }
 
     pub fn agent_port(&self, slot: Option<Slot>) -> u16 {
@@ -197,7 +204,7 @@ mod tests {
         fs::create_dir_all(context.run_folder(None)).unwrap();
         fs::set_permissions(&context.paths.runtime, Permissions::from_mode(0o755)).unwrap();
         context.make_run_folder(None).unwrap();
-        for folder in [context.paths.runtime.clone(), context.run_folder(None)] {
+        for folder in [context.paths.runtime.clone(), context.run_folder(None), context.notes_folder(None)] {
             assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & OTHERS, 0);
         }
     }

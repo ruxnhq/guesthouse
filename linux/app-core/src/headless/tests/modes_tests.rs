@@ -20,7 +20,7 @@ fn proc_with(scratch: &Scratch, pid: u32, comm: &str, words: &[&str]) -> std::pa
 /// The machine's viewer, as its lock and its recorded process id.
 fn viewer_runs(rig: &Rig, pid: u32) -> ViewerLock {
     let lock = viewer_lock::take(&rig.context, crate::slots::first()).unwrap().expect("no viewer yet");
-    fs::write(rig.context.run_folder(None).join("app-windows-viewer.lock"), pid.to_string()).unwrap();
+    fs::write(viewer_lock::lock_file(&rig.context, crate::slots::first()), pid.to_string()).unwrap();
     lock
 }
 
@@ -186,4 +186,22 @@ fn the_viewer_records_its_process_for_whoever_has_to_end_it() {
     let lock = viewer_lock::take(&rig.context, slot).unwrap().unwrap();
     lock.record_pid().unwrap();
     assert_eq!(viewer_lock::recorded_pid(&rig.context.run_folder(Some(slot))), Some(std::process::id()));
+}
+
+/// QEMU and the daemon may write anything in the run folder, so a lock and a pid there are not the
+/// viewer's.
+#[test]
+fn a_lock_in_the_run_folder_is_not_the_viewers() {
+    let scratch = Scratch::new();
+    let rig = rig(&scratch, Kind::Windows, true, &[]);
+    let proc = proc_with(&scratch, 4242, "guesthouse.real", &["/p/guesthouse.real", "--app-windows", "work"]);
+    rig.context.make_run_folder(None).unwrap();
+    let file = rig.context.run_folder(None).join("app-windows-viewer.lock");
+    fs::write(&file, "4242").unwrap();
+    let held = fs::File::open(&file).unwrap();
+    rustix::fs::flock(&held, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    let terminate =
+        |_: u32| -> std::io::Result<()> { panic!("a lock in the run folder is not the viewer's") };
+    let ending = Ending { proc: &proc, terminate: &terminate, wait: Duration::from_millis(300) };
+    assert_eq!(free(&rig, &ending), Ok(()));
 }

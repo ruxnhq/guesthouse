@@ -47,7 +47,7 @@ pub fn start(context: &Context, slot: Slot, settings: &Settings) -> Result<Child
 /// The running program of a slot, by the pid and start time it noted itself, so that a pid the system
 /// has given to something else since is not taken for it, and by its name.
 pub fn pid(context: &Context, slot: Option<Slot>) -> Option<u32> {
-    let noted = fs::read_to_string(context.run_folder(slot).join(PID_FILE)).ok()?;
+    let noted = fs::read_to_string(context.notes_folder(slot).join(PID_FILE)).ok()?;
     let (pid, started) = noted.trim().split_once(' ')?;
     let pid: u32 = pid.parse().ok()?;
     let process = context.processes.join(pid.to_string());
@@ -79,7 +79,7 @@ pub fn end(context: &Context, slot: Option<Slot>) {
     }
     if pid(context, slot).is_none() {
         let folder = context.run_folder(slot);
-        let _ = fs::remove_file(folder.join(PID_FILE));
+        let _ = fs::remove_file(pid_file(&folder));
         let _ = fs::remove_file(super::socket_path(&folder));
     }
 }
@@ -88,10 +88,16 @@ fn pid_still(context: &Context, slot: Option<Slot>) -> bool {
     pid(context, slot).is_some()
 }
 
+/// Where the program notes itself, in the notes folder beside the run folder, which no jail reaches.
+pub fn pid_file(run_folder: &Path) -> std::path::PathBuf {
+    crate::paths::notes_beside(run_folder).join(PID_FILE)
+}
+
 /// The program's own note of itself: its pid and start time, written once it is up. It refuses with
 /// an error when the file already names a running program, so two cannot share a run folder.
 pub fn write_pid_file(run_folder: &Path, processes: &Path) -> std::io::Result<()> {
-    let file = run_folder.join(PID_FILE);
+    crate::context::make_private_folder(&crate::paths::notes_beside(run_folder))?;
+    let file = pid_file(run_folder);
     if let Some((pid, started)) =
         fs::read_to_string(&file).ok().as_deref().and_then(|text| text.trim().split_once(' '))
     {
@@ -125,7 +131,7 @@ mod tests {
 
     fn note(context: &Context, text: &str) {
         context.make_run_folder(None).unwrap();
-        fs::write(context.run_folder(None).join(PID_FILE), text).unwrap();
+        fs::write(context.notes_folder(None).join(PID_FILE), text).unwrap();
     }
 
     #[test]
@@ -169,9 +175,36 @@ mod tests {
         let context = scratch_context(&scratch);
         fake_program(&context, 77, 5, "guesthouse-remote-view");
         context.make_run_folder(Some(slots::number(1))).unwrap();
-        fs::write(context.run_folder(Some(slots::number(1))).join(PID_FILE), "77 5\n").unwrap();
+        fs::write(context.notes_folder(Some(slots::number(1))).join(PID_FILE), "77 5\n").unwrap();
         assert_eq!(pid(&context, None), None);
         assert_eq!(pid(&context, Some(slots::number(1))), Some(77));
+    }
+
+    #[test]
+    fn a_note_in_the_run_folder_is_never_signalled() {
+        let scratch = Scratch::new();
+        let mut context = scratch_context(&scratch);
+        context.processes = "/proc".into();
+        context.make_run_folder(None).unwrap();
+        // A process of this user's that goes by the program's name.
+        let mut other =
+            Command::new("bash").args(["-c", &format!("exec -a {PROGRAM} sleep 60")]).spawn().unwrap();
+        let named =
+            || fs::read(format!("/proc/{}/cmdline", other.id())).unwrap().starts_with(PROGRAM.as_bytes());
+        let end_wait = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !named() && std::time::Instant::now() < end_wait {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let stat = fs::read_to_string(format!("/proc/{}/stat", other.id())).unwrap();
+        let started = start_time(&stat).unwrap();
+        fs::write(context.run_folder(None).join(PID_FILE), format!("{} {started}\n", other.id())).unwrap();
+        let found = pid(&context, None);
+        end(&context, None);
+        let left_alone = other.try_wait().unwrap().is_none();
+        let _ = other.kill();
+        let _ = other.wait();
+        assert_eq!(found, None);
+        assert!(left_alone, "the process was signalled");
     }
 
     #[test]
@@ -184,7 +217,7 @@ mod tests {
         let error = write_pid_file(&folder, Path::new("/proc")).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         // One that has gone is replaced.
-        fs::write(folder.join(PID_FILE), "999999 1\n").unwrap();
+        fs::write(pid_file(&folder), "999999 1\n").unwrap();
         write_pid_file(&folder, Path::new("/proc")).unwrap();
     }
 
@@ -195,7 +228,7 @@ mod tests {
         note(&context, "4242 987654\n");
         fs::write(super::super::socket_path(&context.run_folder(None)), "").unwrap();
         end(&context, None);
-        assert!(!context.run_folder(None).join(PID_FILE).exists());
+        assert!(!context.notes_folder(None).join(PID_FILE).exists());
         assert!(!super::super::socket_path(&context.run_folder(None)).exists());
     }
 

@@ -246,7 +246,7 @@ impl VmPlan {
         wanted.then(|| Passt {
             program: super::program_on_path(PASST).unwrap_or_else(|| PASST.into()),
             fd: PASST_FD,
-            pid_file: self.run_folder.join(super::PASST_PID_FILE),
+            pid_file: crate::paths::notes_beside(&self.run_folder).join(super::PASST_PID_FILE),
             words: self.passt_words(),
             only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
                 interface: through.interface.clone(),

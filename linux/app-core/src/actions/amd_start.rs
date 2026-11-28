@@ -119,6 +119,7 @@ mod tests {
         let started = task.now();
         assert_eq!(wait_for_guest(&mut task, &wanted), Waited::Done);
         assert!(task.now() - started >= Duration::from_secs(SAY_MINUTES * 60), "it gave up in time");
+        context.make_run_folder(None).unwrap();
         fs::write(wanted.run_folder.join("serial.log"), "guesthouse-amd building 5 5803\n").unwrap();
         let started = task.now();
         assert_eq!(wait_for_guest(&mut task, &wanted), Waited::Done);

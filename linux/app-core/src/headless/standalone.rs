@@ -148,7 +148,8 @@ pub(super) fn command(context: &Context, machine: &Machine, out: &mut dyn Write)
     writeln!(out, "# This starts nothing. Read it, and put in a script what you want.")?;
     show(out, &notes(context, machine))?;
     writeln!(out, "\n# The run folder holds the sockets, and what an earlier run left in it can't stay.")?;
-    writeln!(out, "mkdir -p {run_folder}")?;
+    let notes = path_word(&crate::paths::notes_beside(&plan.run_folder));
+    writeln!(out, "mkdir -p {run_folder} {notes}")?;
     let sockets = daemon::SOCKETS.iter().map(|name| path_word(&plan.run_folder.join(name)));
     writeln!(out, "rm -f {}", sockets.collect::<Vec<_>>().join(" "))?;
     if let Some(swtpm) = plan.swtpm_arguments() {

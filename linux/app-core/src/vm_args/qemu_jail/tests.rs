@@ -162,7 +162,8 @@ fn passt_is_started_by_the_launcher_and_qemu_gets_its_end() {
     let passt = command.iter().position(|word| word == "--passt").unwrap();
     assert!(command[passt + 1].ends_with("passt"));
     assert_eq!(command[passt + 2], PASST_FD.to_string());
-    assert_eq!(command[passt + 3], plan.run_folder.join(PASST_PID_FILE).display().to_string());
+    let notes = crate::paths::notes_beside(&plan.run_folder);
+    assert_eq!(command[passt + 3], notes.join(PASST_PID_FILE).display().to_string());
     let passt_words: Vec<&str> =
         command.windows(2).filter(|two| two[0] == "--passt-word").map(|two| two[1].as_str()).collect();
     assert_eq!(passt_words[..3], ["--quiet", "--mtu", "1500"]);
@@ -544,4 +545,22 @@ fn a_backing_file_the_settings_dont_name_is_refused_and_not_granted() {
     let (_plan_scratch, plan) = jailed(renamed_to(&scratch, &other), true);
     let refused = plan.with_backing_files(jail(true)).unwrap_err();
     assert!(refused.0.contains(&other.display().to_string()), "{}", refused.0);
+}
+
+/// The notes the app signals by are beside the run folder, where QEMU writes nothing.
+#[test]
+fn qemu_can_write_nothing_in_the_notes_folder() {
+    for namespaces in [false, true] {
+        let shared = Machine { share: "/home/u/Shared".into(), ..windows() };
+        let (_scratch, plan) = on_passt(shared, namespaces);
+        let notes = crate::paths::notes_beside(&plan.run_folder);
+        let rules = plan.qemu_jail_plan(plan.jail.as_ref().unwrap());
+        for (grant, path) in &rules.paths {
+            let writes = matches!(grant, Grant::Write | Grant::Own | Grant::Socket | Grant::Device);
+            assert!(!(writes && notes.starts_with(path)), "{grant:?} {}", path.display());
+        }
+        let command = plan.qemu_command();
+        let passt = command.iter().position(|word| word == "--passt").unwrap();
+        assert!(Path::new(&command[passt + 3]).starts_with(&notes));
+    }
 }

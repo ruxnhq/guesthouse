@@ -44,7 +44,7 @@ pub use machine::{
     set_allowed, share, stopped, stream_clocks_changed, sweep_clocks,
 };
 pub use mdns::Mdns;
-pub use process::{end, pid, start, write_pid_file};
+pub use process::{end, pid, pid_file, start, write_pid_file};
 pub use settings::{Settings, UsageError, Watched};
 
 /// What `guesthouse-vm set` calls the switch.

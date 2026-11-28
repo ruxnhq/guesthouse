@@ -86,7 +86,7 @@ pub fn qemu_pid(context: &Context, slot: Option<Slot>) -> Option<u32> {
 /// The passt a jailed QEMU of this slot was started with, by the pid and start time the launcher
 /// noted, so a pid the system has given to something else since isn't taken for it.
 pub fn passt_pid(context: &Context, slot: Option<Slot>) -> Option<u32> {
-    let pid_file = context.run_folder(slot).join(crate::vm_args::PASST_PID_FILE);
+    let pid_file = context.notes_folder(slot).join(crate::vm_args::PASST_PID_FILE);
     let noted = fs::read_to_string(&pid_file).ok()?;
     let (pid, started) = noted.trim().split_once(' ')?;
     let pid: u32 = pid.parse().ok()?;
@@ -213,7 +213,7 @@ mod tests {
     fn passt_is_found_by_its_pid_and_only_if_it_started_when_noted() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let folder = context.run_folder(None);
+        let folder = context.notes_folder(None);
         fs::create_dir_all(&folder).unwrap();
         assert_eq!(passt_pid(&context, None), None);
         fs::write(folder.join(crate::vm_args::PASST_PID_FILE), "4242 987654\n").unwrap();

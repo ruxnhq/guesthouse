@@ -256,7 +256,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         (own, Boot::Gpu)
     };
     let plan = VmPlan::new(&context, &own, boot, slots::number(3), 0);
-    fs::create_dir_all(&plan.run_folder).unwrap();
+    context.make_run_folder(Some(slots::number(3))).unwrap();
     // The daemon's sockets, which the launcher connects to for a Windows QEMU with no sound.
     let _daemon = (!forwarded).then(|| {
         ["global.sock", "vgpu.sock"].map(|name| UnixListener::bind(plan.run_folder.join(name)).unwrap())
@@ -319,7 +319,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .status()
         .unwrap();
     if passt {
-        let Some(pid) = pid_in(&plan.run_folder.join(PASST_PID_FILE)) else {
+        let Some(pid) = pid_in(&context.notes_folder(Some(slots::number(3))).join(PASST_PID_FILE)) else {
             eprintln!("passt left no pid file");
             return false;
         };

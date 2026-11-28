@@ -21,6 +21,12 @@ const DEFAULT_MAX_CLIENTS: usize = 16;
 /// Remoteman's transport sends a keep-alive every second and gives up on a connection after ten
 /// seconds of silence, so a device that has sent nothing for much longer than that is gone.
 const DEFAULT_IDLE: Duration = Duration::from_secs(60);
+/// Each device has an address of its own on a network, and one behind a router may share one with a
+/// few more. One address takes no more places than this, so it can't take every place.
+const DEFAULT_MAX_PER_ADDRESS: usize = 4;
+/// The guest answers a device's first datagrams at once. A place nothing has answered for this long
+/// is given up, and the device gets a new one with its next datagram.
+const DEFAULT_UNANSWERED: Duration = Duration::from_secs(5);
 const THREAD_STACK: usize = 128 * 1024;
 
 #[derive(Debug, Clone)]
@@ -33,6 +39,10 @@ pub struct Config {
     pub idle_timeout: Duration,
     /// The most devices at once. A datagram from one more is dropped.
     pub max_clients: usize,
+    /// The most devices at once from one address, each on a port of its own.
+    pub max_per_address: usize,
+    /// A device the guest has sent nothing back to for this long since its place was made loses it.
+    pub unanswered_timeout: Duration,
     /// Whether a device's socket takes answers only from `upstream` itself, and drops the rest. On by
     /// default for an upstream off loopback, whose sockets are on every network. Off for loopback, as
     /// QEMU's forward can answer from another port, and only this PC can reach those sockets.
@@ -46,6 +56,8 @@ impl Config {
             upstream,
             idle_timeout: DEFAULT_IDLE,
             max_clients: DEFAULT_MAX_CLIENTS,
+            max_per_address: DEFAULT_MAX_PER_ADDRESS,
+            unanswered_timeout: DEFAULT_UNANSWERED,
             only_upstream_answers: !upstream.ip().is_loopback(),
         }
     }

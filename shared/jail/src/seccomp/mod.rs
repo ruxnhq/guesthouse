@@ -37,6 +37,10 @@ pub enum Condition {
     HasAll(u8, u32),
     HasAny(u8, u32),
     HasNone(u8, u32),
+    /// The argument's bits under the mask are the value, as a socket's type is under its flags.
+    Masked(u8, u32, u32),
+    /// Every one of these holds, on whichever arguments each names.
+    All(&'static [Condition]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

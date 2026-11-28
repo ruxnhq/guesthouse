@@ -141,6 +141,8 @@ fn notes(context: &Context, machine: &Machine) -> Vec<String> {
 
 pub(super) fn command(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
     let plan = plan(context, machine)?;
+    // The QEMU this prints opens whatever the disk's header names.
+    plan.checked_backing_files()?;
     let run_folder = path_word(&plan.run_folder);
     writeln!(out, "# {} ({}), as it would start beside your own tools.", machine.name, machine.id)?;
     writeln!(out, "# This starts nothing. Read it, and put in a script what you want.")?;

@@ -157,12 +157,17 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `remote-view` | on or off: whether other devices on the network can view the machine through remoteman, a preview. A running machine is shared, or stops being shared, at once. Pairing a device is the app's. [Remote view](remote-view.md) | Windows |
 | `ssh` | on or off | Windows |
 | `vendor-id` | `retry`: a machine kept on Microsoft's vendor ID after starts without its GPU has its card maker's tried again at the next start. Some games will not start on Microsoft's. It counts from the next start. | Windows |
+| `backing-files` | the files a disk built by hand on another file is built on, nearest first, with a colon between them, or `none`. See [A disk built on another file](#a-disk-built-on-another-file) | all |
 
 These are the settings pages' own checks, and a running machine refuses what the page greys out, which is all of them except `screen`, `refresh`, `window-speed`, `dlss`, `remote-desktop`, `ssh`, `app-windows`, `remote-view`, `stream-clocks` and `vendor-id`. `app-windows` can be changed at any time, and a running machine has it from its next start. The first two take effect at once if Windows is up on the display driver, as they do in the app, and `window-speed` and `dlss` at the next start. `remote-desktop` and `ssh` reach Windows at once if it's running, and `set` waits for that and says how it went. Otherwise they reach it at the next start, or at the install of a machine that hasn't been installed yet. Everything else in a machine's settings is still the app's, such as HDR, V-Cache pinning, the clipboard, USB devices and snapshots.
 
 `auto-snapshot` can be changed at any time, and it counts from the next start. A machine that was never told is off, and `show` says which. A throwaway takes none, whatever it says, and `show` says so.
 
 `forward` adds or removes a port on this PC that reaches a port in the guest. It can only be changed while the machine is off.
+
+## A disk built on another file
+
+The disks Guesthouse makes stand alone. A disk you built on another file yourself, with `qemu-img create -b` or `qemu-img rebase`, starts only once the machine's settings name that file: `set NAME backing-files FILE`, with each file it's built on, nearest first, if there are more. `set` takes them only if they are the files the disk's header names, and records each with its format. A start compares the header with the settings and refuses a disk whose header names anything else, as QEMU writes the disk, header and all. A machine from before this setting names none, so its first start after an update says which file its disk names, and `set` records it. A copy of the machine names the same files.
 
 ## A snapshot before a risky start
 

@@ -103,6 +103,8 @@ impl AndroidCard {
 pub struct AndroidBoot {
     /// Android's own disk for its data, which the system disk's fstab names as the second one.
     pub data: PathBuf,
+    /// For a throwaway run, the machine's own data disk, which `data` is an overlay on.
+    pub data_base: Option<PathBuf>,
     pub card: AndroidCard,
     /// A folder of the machine's for the drivers' compiled shaders, so a start doesn't build them again.
     pub cache: PathBuf,
@@ -285,6 +287,7 @@ mod tests {
     fn boot(maker: GpuMaker) -> AndroidBoot {
         AndroidBoot {
             data: "/m/droid/data.qcow2".into(),
+            data_base: None,
             card: AndroidCard {
                 maker,
                 render_node: "/dev/dri/renderD129".into(),
@@ -346,5 +349,42 @@ mod tests {
         assert!(value(&amd, "__EGL_VENDOR_LIBRARY_FILENAMES").ends_with("50_mesa.json"));
         let intel = environment(GpuMaker::Intel);
         assert!(value(&intel, "VK_DRIVER_FILES").contains("intel_icd"));
+    }
+
+    /// The data disk is written by QEMU as the system disk is, so its header is checked the same way:
+    /// it stands alone, and a throwaway run's is an overlay on the machine's own and nothing else.
+    #[test]
+    fn the_data_disk_is_built_on_nothing_its_settings_dont_name() {
+        let scratch = Scratch::new();
+        let qemu_img = |words: &[&str]| {
+            assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+        };
+        let path = |name: &str| scratch.path(name).to_str().unwrap().to_owned();
+        let (disk, data, run_data) = (path("disk.qcow2"), path("data.qcow2"), path("run/data.qcow2"));
+        std::fs::create_dir_all(scratch.path("run")).unwrap();
+        qemu_img(&["create", "-q", "-f", "qcow2", &disk, "1G"]);
+        qemu_img(&["create", "-q", "-f", "qcow2", &data, "1G"]);
+        qemu_img(&["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", &data, &run_data]);
+        let base = VmPlan { disk: disk.clone(), ..plan(GpuMaker::Amd) };
+        let with = |data: &str, data_base: Option<&str>| VmPlan {
+            boot: Boot::Android(AndroidBoot {
+                data: data.into(),
+                data_base: data_base.map(Into::into),
+                ..boot(GpuMaker::Amd)
+            }),
+            ..base.clone()
+        };
+        assert_eq!(with(&data, None).checked_backing_files().unwrap(), Vec::<std::path::PathBuf>::new());
+        assert_eq!(
+            with(&run_data, Some(&data)).checked_backing_files().unwrap(),
+            [scratch.path("data.qcow2")]
+        );
+        let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+        let other = other.to_str().unwrap();
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, &data]);
+        assert!(with(&data, None).checked_backing_files().unwrap_err().0.contains(other));
+        assert!(with(&run_data, Some(&data)).checked_backing_files().unwrap_err().0.contains(other));
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, &run_data]);
+        assert!(with(&run_data, Some(&data)).checked_backing_files().unwrap_err().0.contains(other));
     }
 }

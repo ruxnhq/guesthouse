@@ -1,3 +1,4 @@
+use guesthouse_app_core::disk_image::backing::BackingFile;
 use guesthouse_app_core::linux::card::ForwardedCard;
 use guesthouse_app_core::linux::forwarding::sandbox_runs;
 use guesthouse_app_core::machine::{Kind, Machine};
@@ -233,6 +234,11 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     qemu_img(&["create", "-q", "-f", "qcow2", base.to_str().unwrap(), "1G"]);
     // Named as qemu-img names it from the overlay's own folder, so QEMU goes through `..` to it.
     qemu_img(&["create", "-q", "-f", "qcow2", "-b", "../../bases/base.qcow2", "-F", "qcow2", &own.disk]);
+    // The settings name it as the file system finds it, and QEMU opens it by the header's name.
+    let named =
+        BackingFile { path: base.canonicalize().unwrap().display().to_string(), format: "qcow2".into() };
+    let own = Machine { backing_files: vec![named], ..own };
+    let as_the_header_names_it = Path::new(&own.disk).parent().unwrap().join("../../bases/base.qcow2");
     // Laid out as a QEMU in its build folder is, so its tree holds nothing of the machines'.
     let qemu = scratch.path("qemu/build/qemu-system-x86_64");
     fs::create_dir_all(qemu.parent().unwrap()).unwrap();
@@ -263,7 +269,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         backing_files: Vec::new(),
     };
     let jail = plan.with_backing_files(jail).unwrap();
-    let granted_base = jail.backing_files[0].clone();
+    assert_eq!(jail.backing_files, [base.canonicalize().unwrap()]);
     // A real VM may hold the slot's own port.
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };
@@ -302,7 +308,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .env(PROBE_VARIABLE, "1")
         .env("PROBE_OWN", folder_of(&own))
         .env("PROBE_OTHER", folder_of(&other))
-        .env("PROBE_BASE", &granted_base)
+        .env("PROBE_BASE", &as_the_header_names_it)
         .env("PROBE_RUN", &plan.run_folder)
         .env("PROBE_HOME", env::var_os("HOME").unwrap())
         .env(

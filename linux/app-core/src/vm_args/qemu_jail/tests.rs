@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk_image::backing::BackingFile;
 use crate::machine::Machine;
 use crate::network::Forward;
 use crate::only_through::OnlyThrough;
@@ -344,6 +345,7 @@ fn on_a_base(scratch: &Scratch, base_folder: &str) -> (Machine, PathBuf) {
     ]);
     let machine = Machine {
         share: scratch.path("Shared").display().to_string(),
+        backing_files: vec![BackingFile { path: base.display().to_string(), format: "qcow2".into() }],
         ..Machine::new("win", "Win", disk.to_str().unwrap(), "/m/win/vars.fd")
     };
     (machine, base)
@@ -510,4 +512,36 @@ fn the_jail_lets_qemu_listen_for_the_app_windows_helper_only_when_it_is_on() {
     crate::app_windows::set_on(&context, &machine, true).unwrap();
     let on = plan_for(&context).qemu_jail_plan(&jail(true)).network.tcp_bind;
     assert_eq!(on, Ports::Only(vec![18767, 18867, 18967, 8080]));
+}
+
+/// A disk the app made, standing alone, whose header was later rewritten to name a file the
+/// machine's settings don't. The header is the disk's own bytes, which the guest's QEMU writes.
+fn renamed_to(scratch: &Scratch, named: &Path) -> Machine {
+    let disk = scratch.path("machines/win/disk.qcow2");
+    std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    let qemu_img = |words: &[&str]| {
+        assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+    };
+    qemu_img(&["create", "-q", "-f", "qcow2", disk.to_str().unwrap(), "1G"]);
+    qemu_img(&[
+        "rebase",
+        "-u",
+        "-f",
+        "qcow2",
+        "-F",
+        "raw",
+        "-b",
+        named.to_str().unwrap(),
+        disk.to_str().unwrap(),
+    ]);
+    Machine::new("win", "Win", disk.to_str().unwrap(), "/m/win/vars.fd")
+}
+
+#[test]
+fn a_backing_file_the_settings_dont_name_is_refused_and_not_granted() {
+    let scratch = Scratch::new();
+    let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+    let (_plan_scratch, plan) = jailed(renamed_to(&scratch, &other), true);
+    let refused = plan.with_backing_files(jail(true)).unwrap_err();
+    assert!(refused.0.contains(&other.display().to_string()), "{}", refused.0);
 }

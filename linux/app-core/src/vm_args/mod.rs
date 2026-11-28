@@ -28,6 +28,7 @@ pub use throwaway::{THROWAWAY_FDS, THROWAWAY_MARK, throwaway_disk};
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
 
 use crate::context::Context;
+use crate::disk_image::backing::BackingFile;
 use crate::firmware::Firmware;
 use crate::gpu_identity::{PciIdentity, shown_identity};
 use crate::jailing::LAUNCHER;
@@ -199,6 +200,9 @@ pub struct VmPlan {
     /// For a throwaway machine's run, its own disk, which is only read. `disk` is then the overlay
     /// the app handed QEMU open: see [`crate::throwaway`].
     pub throwaway: Option<String>,
+    /// The files the machine's disk is built on, as its settings name them. A start refuses a disk
+    /// whose header names others.
+    pub backing_files: Vec<BackingFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +299,7 @@ impl VmPlan {
             memory_by_path: None,
             drives_by_path: None,
             throwaway: None,
+            backing_files: machine.backing_files.clone(),
             run_folder,
         }
     }

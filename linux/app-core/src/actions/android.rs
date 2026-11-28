@@ -60,7 +60,7 @@ fn boot_of(context: &Context, machine: &Machine, card: AndroidCard) -> Result<An
     }
     let cache = machine.folder(context).join(CACHE_FOLDER);
     fs::create_dir_all(&cache)?;
-    Ok(AndroidBoot { data, card, cache, play: machine.android_play })
+    Ok(AndroidBoot { data, data_base: None, card, cache, play: machine.android_play })
 }
 
 /// How an Android machine starts on this PC's card, before the jail and sound are chosen.

@@ -180,6 +180,7 @@ fn settings_to_carry(context: &Context, machine: &Machine) -> Machine {
         iso: String::new(),
         share: String::new(),
         drives: Vec::new(),
+        backing_files: Vec::new(),
         disk_folder: String::new(),
         mac: String::new(),
         bridge: DEFAULT_BRIDGE.to_owned(),

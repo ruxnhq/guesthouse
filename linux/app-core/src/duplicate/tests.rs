@@ -1,5 +1,6 @@
 use super::*;
-use crate::disk_image::backing::backing_files;
+use crate::disk_image::backing::{BackingFile, found_chain};
+use crate::disk_image::disk_info;
 use crate::library::{NewMachine, create};
 use crate::machine::{Drive, Kind, load, load_all};
 use crate::processes::stand_in::fake_process;
@@ -158,8 +159,14 @@ fn a_disk_built_on_another_reads_the_same_one_from_its_new_folder() {
         .status()
         .unwrap();
     assert!(rebased.success());
+    let refused = copy_called(&context, &source, "Layered Copy").unwrap_err();
+    assert!(refused.0.starts_with("The copy was not made, as its disk is built on"), "{}", refused.0);
+    let named = vec![BackingFile { path: base.display().to_string(), format: "qcow2".into() }];
+    let source = Machine { backing_files: named.clone(), ..source };
+    source.save(&context).unwrap();
     let copy = copy_called(&context, &source, "Layered Copy").unwrap();
-    assert_eq!(backing_files(Path::new(&copy.disk)).unwrap(), [base]);
+    assert_eq!(found_chain(Path::new(&copy.disk)).unwrap(), named);
+    assert_eq!(copy.backing_files, named, "the copy's settings name it too");
 }
 
 #[test]

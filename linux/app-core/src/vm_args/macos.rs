@@ -438,4 +438,22 @@ mod tests {
             "after the installer's port"
         );
     }
+
+    #[test]
+    fn opencores_disk_is_built_on_nothing() {
+        let scratch = Scratch::new();
+        let opencore = scratch.path("opencore.qcow2");
+        let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+        let qemu_img = |words: &[&str]| {
+            assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+        };
+        qemu_img(&["create", "-q", "-f", "qcow2", opencore.to_str().unwrap(), "64M"]);
+        let Boot::Macos(base) = boot("") else { unreachable!() };
+        let with =
+            VmPlan { boot: Boot::Macos(MacosBoot { opencore: opencore.clone(), ..base }), ..plan(boot("")) };
+        assert_eq!(with.checked_backing_files().unwrap(), Vec::<std::path::PathBuf>::new());
+        let (other, opencore) = (other.to_str().unwrap(), opencore.to_str().unwrap());
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, opencore]);
+        assert!(with.checked_backing_files().unwrap_err().0.contains(other));
+    }
 }

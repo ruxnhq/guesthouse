@@ -338,6 +338,8 @@ impl LocalHost<'_> {
 
 impl VmHost for LocalHost<'_> {
     fn start(&self, plan: &VmPlan, machine: &Machine) -> Result<()> {
+        // QEMU opens whatever a disk's header names, jailed or not, and it may have written the header.
+        plan.checked_backing_files()?;
         self.context.make_run_folder(Some(plan.slot))?;
         // Before anything is started, so a drive that can't be had leaves nothing running.
         let drives = OpenDrives::open(self.context, &plan.drives)?;

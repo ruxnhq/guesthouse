@@ -64,17 +64,15 @@ static int rm_control(struct call *c, u32 base)
 static int rm_alloc(struct call *c, u32 base, u32 top)
 {
 	u32 hclass, size, params, rights;
+	size_t i;
 	int rc;
 
 	memcpy(&hclass, c->data + base + 12, 4);
-	memcpy(&size, c->data + base + (top == 32 ? 24 : 32), 4);
-	if (!size) { /* RM then takes the size from its class table */
-		size_t i;
-
-		for (i = 0; i < ARRAY_SIZE(class_sizes); i++)
-			if (class_sizes[i].hclass == hclass)
-				size = class_sizes[i].size;
-	}
+	/* RM reads the size its class table gives, whatever the call says, and so does the host's device. */
+	size = 0;
+	for (i = 0; i < ARRAY_SIZE(class_sizes); i++)
+		if (class_sizes[i].hclass == hclass)
+			size = class_sizes[i].size;
 	rc = follow(c, base + 16, size, &params);
 	if (rc)
 		return rc;
@@ -212,6 +210,12 @@ long rm_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg)
 	c->req->len = c->next;
 	kick(c->slot);
 	rc = c->req->ret;
+	if (nr == ESC_RM_ALLOC_MEMORY) {
+		u32 status;
+
+		memcpy(&status, c->data + base + 40, 4);
+		pins_settle(c, rc >= 0 && status == 0);
+	}
 	if (rc < 0)
 		goto out;
 	if (nr == ESC_RM_MAP_MEMORY)

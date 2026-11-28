@@ -79,6 +79,8 @@ struct call {
 	int nsaved, nout;
 	struct saved saved[NVFWD_MAX_FIX];
 	struct outbuf out[NVFWD_MAX_FIX];
+	struct page **pins; /* pinned for this call's allocation, see pins_settle() */
+	unsigned long npins;
 };
 
 /* slots.c */
@@ -92,6 +94,7 @@ int place(struct call *c, u64 user, u32 len, u32 *off);
 int follow(struct call *c, u32 at, u32 len, u32 *off);
 int fix_fd(struct call *c, u32 at);
 int pin_range(struct call *c, u32 at, u64 size);
+void pins_settle(struct call *c, bool made);
 struct call *call_new(u32 fdid, u32 cmd);
 void call_free(struct call *c);
 
@@ -104,7 +107,8 @@ int uvm_process_join(void);
 void uvm_process_leave(int place);
 
 /* show.c */
-long show_ioctl(unsigned int cmd, unsigned long arg);
+long show_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg);
+void show_file_closed(struct nvf_file *nf);
 
 /* files.c */
 extern const struct file_operations nvf_fops;

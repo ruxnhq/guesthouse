@@ -19,7 +19,7 @@ static long nvf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct nvf_file *nf = file->private_data;
 
 	if (_IOC_TYPE(cmd) == 'S')
-		return show_ioctl(cmd, arg);
+		return show_ioctl(nf, cmd, arg);
 
 	if (nf->kind == NVFWD_DEV_UVM)
 		return uvm_ioctl(nf, cmd, arg);
@@ -103,7 +103,7 @@ static long kms_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
 		return -EFAULT;
-	pr_info("nvfwd: modeset ioctl %x size %x\n", p.cmd, p.size);
+	pr_info_ratelimited("nvfwd: modeset ioctl %x size %x\n", p.cmd, p.size);
 	if (branch && p.cmd == KMS_ALLOC_DEVICE && p.size == branch->params_bytes) {
 		static u8 zero[1448 - KMS_REPLY_AT];
 		void __user *reply = u64_to_user_ptr(p.address + KMS_REPLY_AT);
@@ -143,6 +143,7 @@ static int nvf_release(struct inode *inode, struct file *file)
 	r->fdid = nf->fdid;
 	kick(slot);
 	slot_put(slot);
+	show_file_closed(nf);
 	if (nf->kind == NVFWD_DEV_UVM)
 		uvm_process_leave(nf->uvm_process);
 	kfree(nf);
@@ -239,6 +240,9 @@ static int nvf_mmap(struct file *file, struct vm_area_struct *vma)
 		return rc;
 	}
 	refcount_set(&m->refs, 1);
+	/* A mapping made without write stays so: the host may have mapped its side read-only. */
+	if (!(vma->vm_flags & VM_WRITE))
+		vm_flags_clear(vma, VM_MAYWRITE);
 	m->off = off;
 	m->len = len;
 	m->uvm = nf->kind == NVFWD_DEV_UVM;
@@ -257,7 +261,7 @@ static int nvf_mmap(struct file *file, struct vm_area_struct *vma)
 		prot = vma->vm_page_prot;
 	else
 		prot = pgprot_noncached(vma->vm_page_prot);
-	pr_info("nvfwd: mmap kind %d len %llx caching %u flags %x\n", nf->kind, len, caching, nf->map_flags);
+	pr_info_ratelimited("nvfwd: mmap kind %d len %llx caching %u flags %x\n", nf->kind, len, caching, nf->map_flags);
 	return remap_pfn_range(vma, vma->vm_start, (nv.win_base + off) >> PAGE_SHIFT, len, prot);
 }
 

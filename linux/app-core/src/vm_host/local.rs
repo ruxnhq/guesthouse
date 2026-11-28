@@ -23,6 +23,7 @@ use crate::throwaway::ThrowawayRun;
 use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, Sound, VmPlan};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 use std::fs::{self, File};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -83,6 +84,18 @@ struct Handed<'a> {
     throwaway: Option<&'a ThrowawayRun>,
 }
 
+/// What `pkill -f` is given to find the swtpm that serves this socket: its path with every character
+/// that means something in a pattern taken literally.
+pub(super) fn swtpm_pattern(socket: &Path) -> String {
+    let path: String = socket
+        .display()
+        .to_string()
+        .chars()
+        .flat_map(|c| if "\\.[]()*+?{}|^$".contains(c) { vec!['\\', c] } else { vec![c] })
+        .collect();
+    format!("^swtpm socket .*path={path}")
+}
+
 impl LocalHost<'_> {
     fn run_file(&self, name: &str) -> std::path::PathBuf {
         self.context.run_folder(None).join(name)
@@ -120,9 +133,10 @@ impl LocalHost<'_> {
         };
         // A TPM ends when QEMU lets go of it, unless a QEMU never came.
         let socket = self.run_file(TPM_SOCKET);
-        let pattern = format!("^swtpm socket .*path={}", socket.display());
+        let pattern = swtpm_pattern(&socket);
         let _ = Command::new("pkill").args(["-f", &pattern]).status();
         let _ = fs::remove_file(&socket);
+        crate::snapshots::finish_tpm_swap(state);
         fs::create_dir_all(state)?;
         let done = Command::new("swtpm").args(arguments).status()?;
         if !done.success() {

@@ -188,6 +188,10 @@ pub struct Session<B, M> {
     /// The display driver has registered a ring since the guest last started, so its process holds
     /// the screen and no allocation is a primary from here on.
     pub(crate) display_driver_seen: bool,
+    /// The process whose ring was first shown since the guest started. It alone speaks for the screen
+    /// until it ends, through mode changes that end its ring, so no other process takes the screen
+    /// in the gap.
+    pub(crate) display_driver: Option<u32>,
     pub(crate) queues_made: u32,
     /// Statistics have been refused once, which is worth saying once.
     pub(crate) statistics_refused: bool,
@@ -295,6 +299,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             shared_waits: HashMap::new(),
             first_locks_waited: HashSet::new(),
             display_driver_seen: false,
+            display_driver: None,
             gates: HashMap::new(),
             rings_not_before: HashMap::new(),
             queues_made: 0,

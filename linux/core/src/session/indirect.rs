@@ -87,7 +87,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// A cursor's first shape comes before there's a ring. After that, only the ring's owner speaks for it.
     fn cursor_message(&mut self, process: u32, monitor: u32, change: impl FnOnce(&mut Cursor)) -> Reply {
         let someone_else = |ring: &IndirectRing| ring.owner != process || ring.name.monitor != monitor;
-        if self.frames.indirect.as_ref().is_some_and(someone_else) {
+        if self.frames.indirect.as_ref().is_some_and(someone_else) || self.not_the_display_driver(process) {
             return self.reply(Outcome::CursorNotWanted, None);
         }
         change(&mut self.frames.cursor);
@@ -101,8 +101,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         picture.pitch == ring.pitch && picture.bytes() == ring.slot_size
     }
 
+    /// Whether another process has shown the screen since the guest started, and still lives.
+    fn not_the_display_driver(&self, process: u32) -> bool {
+        self.display_driver.is_some_and(|driver| driver != process)
+    }
+
     fn register_ring(&mut self, process: u32, ring: Register, out: &mut Vec<u8>) {
         let taken = self.frames.registering.is_some()
+            || self.not_the_display_driver(process)
             || self
                 .frames
                 .indirect
@@ -113,7 +119,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             (self.ticket, space, taken, Self::ring_makes_sense(&ring))
         else {
             log::warn!("refused a frame ring from process {process:#x}: {ring:?}, already taken: {taken}");
-            self.frames.display_mode = None;
+            // The mode stays with whoever has the screen, whatever another process asks.
+            if !taken {
+                self.frames.display_mode = None;
+            }
             self.reply(Outcome::Refused, None).write_over(out);
             return;
         };
@@ -239,6 +248,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             unsent: None,
         });
         self.display_driver_seen = true;
+        self.display_driver = Some(process);
         self.frames.indirect = Some(IndirectRing {
             owner: process,
             name: ring.name,
@@ -366,6 +376,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.frames.display_mode = None;
         self.end_the_last_start();
         self.display_driver_seen = false;
+        self.display_driver = None;
         self.context_processes.clear();
         self.devices.clear();
         self.backend.all_processes_gone();
@@ -378,6 +389,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     }
 
     pub(super) fn process_going(&mut self, process: u32) {
+        if self.display_driver == Some(process) {
+            self.display_driver = None;
+        }
         if self.frames.indirect.as_ref().is_some_and(|ring| ring.owner == process) {
             self.end_indirect_ring("its process has gone");
             self.frames.display_mode = None;

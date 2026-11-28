@@ -14,11 +14,11 @@ const HEIGHT: u32 = 480;
 const PITCH: u32 = 2560;
 const SLOT_BYTES: u64 = PITCH as u64 * HEIGHT as u64;
 const SLOTS: u32 = 3;
-const NAME: RingName = RingName { generation: 1, monitor: 0 };
-const OTHER_PROCESS: u32 = PROCESS + 8;
+pub(super) const NAME: RingName = RingName { generation: 1, monitor: 0 };
+pub(super) const OTHER_PROCESS: u32 = PROCESS + 8;
 const STATUS_OK: u32 = 0;
 const STATUS_STALE: u32 = 1;
-const STATUS_REFUSED: u32 = 2;
+pub(super) const STATUS_REFUSED: u32 = 2;
 const ESCAPE_SIZE_AT: usize = HEADER_SIZE + 16;
 const ESCAPE_HEADER: usize = HEADER_SIZE + 24;
 const HDR_VIEWER: ViewerFacts = ViewerFacts {
@@ -48,7 +48,7 @@ impl FrameSink for Sink {
     }
 }
 
-fn escape_from(process: u32, data: &[u8]) -> Vec<u8> {
+pub(super) fn escape_from(process: u32, data: &[u8]) -> Vec<u8> {
     let mut request = message(Command::DriverEscape, ESCAPE_HEADER);
     set_u32(&mut request, 8, process);
     set_u32(&mut request, ESCAPE_SIZE_AT, data.len() as u32);
@@ -56,7 +56,7 @@ fn escape_from(process: u32, data: &[u8]) -> Vec<u8> {
     request
 }
 
-fn ring(look: Look) -> Register {
+pub(super) fn ring(look: Look) -> Register {
     Register {
         name: NAME,
         slots: SLOTS,
@@ -104,7 +104,7 @@ fn register(session: &mut TestSession, register: &Register) -> (u32, Option<u32>
     driver::reply(&replies[0].bytes).unwrap()
 }
 
-fn say(session: &mut TestSession, process: u32, data: &[u8]) -> (u32, Option<u32>) {
+pub(super) fn say(session: &mut TestSession, process: u32, data: &[u8]) -> (u32, Option<u32>) {
     driver::reply(&send(session, &escape_from(process, data))).expect("a reply")
 }
 
@@ -117,7 +117,7 @@ fn turn(session: &mut TestSession, sink: &mut Sink) {
     session.offer_frames(sink);
 }
 
-fn registered() -> (TestSession, u32) {
+pub(super) fn registered() -> (TestSession, u32) {
     let (mut session, _) = stamped(NAME.generation);
     let (status, first) = register(&mut session, &ring(Look::SDR));
     assert_eq!(status, STATUS_OK);

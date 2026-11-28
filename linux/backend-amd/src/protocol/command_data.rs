@@ -189,12 +189,10 @@ pub fn command_buffers(data: &[u8]) -> Vec<CommandBuffer> {
 /// the DMA buffer the submission message names, or zero for none or when it isn't known.
 ///
 /// A submission with no records is taken from any client in range when it names no DMA buffer and
-/// has nothing past its header, as amdkmdag.sys 32.0.32015.12012 takes it (its check at 0x140347cf0,
-/// called from the virtual-address submit path with the private data, the user-mode part's size and
-/// DmaBufferVirtualAddress): a zero count fails only with a DMA buffer, and the records then have to
-/// end exactly where the private data does. AMD's Vulkan driver sends these, client 9, for a
-/// vkQueueSubmit with no command buffers and for an acquire that signals only a fence. Nothing runs;
-/// the fence is completed as for any work that doesn't reach the GPU.
+/// has nothing past its header, as AMD's kernel driver takes it: a zero count fails only with a DMA
+/// buffer, and the records then have to end exactly where the private data does. AMD's Vulkan driver
+/// sends these, client 9, for a vkQueueSubmit with no command buffers and for an acquire that signals
+/// only a fence. Nothing runs; the fence is completed as for any work that doesn't reach the GPU.
 pub fn check(data: &[u8], dma_buffer: u64) -> Result<Submission, Refused> {
     let header = |at: usize| dword(data, at).ok_or(Refused("the header is cut short"));
     let client = header(CLIENT)?;

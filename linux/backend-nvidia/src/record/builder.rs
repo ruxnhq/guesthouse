@@ -96,11 +96,11 @@ const ADAPTER_ID: [u32; 2] = [0xABC, 1];
 const MOST_CLASSES: usize = 200;
 
 /// The bit NVIDIA's kernel driver puts in the record's fourth video caps word for each graphics,
-/// channel and copy class (621.14's nvlddmkm.sys builds this table at 0x14196FD1F and ORs in the row
-/// of every class Windows lists for the card at 0x14197089C). The guest's video library reads the
-/// graphics bits as the chip's generation: with none from Volta on, it lays out the shaders of its
-/// video processor blits the Maxwell way, at addresses Ampere's graphics engine refuses. The table's
-/// video engine rows are left out, as the profile says what video the guest is offered.
+/// channel and copy class: it ORs in the row of every class Windows lists for the card. The guest's
+/// video library reads the graphics bits as the chip's generation: with none from Volta on, it lays
+/// out the shaders of its video processor blits the Maxwell way, at addresses Ampere's graphics
+/// engine refuses. The table's video engine rows are left out, as the profile says what video the
+/// guest is offered.
 const CLASS_WORD_BITS: [(u32, u32); 19] = [
     (0xCE97, 0x40_0000),
     (0xCD97, 0x20_0000),
@@ -410,9 +410,8 @@ mod tests {
         assert_eq!(class_word(&TURING), 0x8000);
     }
 
-    /// The guest's video library lays its programs out the Volta way only with a bit of this mask
-    /// (621.14's nvwgf2umx.dll at 0x180D4B1BC), and takes Hopper's shaders, which have none for SM
-    /// 7.x or 8.x, with one of the second (0x180D4B7BA).
+    /// The guest's video library lays its programs out the Volta way only with a bit of this mask,
+    /// and takes Hopper's shaders, which have none for SM 7.x or 8.x, with one of the second.
     #[test]
     fn every_generation_gets_the_volta_layout_and_only_blackwell_hoppers_shaders() {
         const VOLTA_LAYOUT: u32 = 0xFE_8000;

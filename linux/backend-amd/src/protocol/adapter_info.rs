@@ -148,8 +148,7 @@ const TILE_STEERING_OVERRIDE: usize = 0xCE0;
 /// The per-engine unit masks: one 16-bit mask of active workgroup processors for each of an
 /// engine's two arrays, engine after engine, with room for [`ENGINES_IN_ARRAYS`] engines. The guest
 /// copies `SHADER_ENGINES` times four bytes from here, then turns each workgroup bit into two compute
-/// unit bits. Read in amfrtdrv64.dll 32.0.32015.12012 at 0x1806bc0c2 (GFX12) and 0x1806bb829
-/// (GFX10 and GFX11), where the block sits at device offset 0x9F48.
+/// unit bits, on GFX10, GFX11 and GFX12 parts alike.
 const ENGINE_ACTIVE_UNITS: usize = 0xD04;
 /// The units kept on all the time, laid out the same way. The GFX10 path reads them four engines in,
 /// at 0xD14, and is not given these: GFX10 parts keep to [`ACTIVE_UNITS`].

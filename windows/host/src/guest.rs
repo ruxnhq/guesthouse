@@ -258,6 +258,12 @@ mod linux_tests {
     /// it. None where there is no `sh`.
     #[cfg(unix)]
     fn ssh_from(hosts: Option<&str>, gateways: &[&str]) -> Option<String> {
+        ssh_from_on(hosts, gateways, &[])
+    }
+
+    /// The same, with the guest's own networks as gpu.sh reads them.
+    #[cfg(unix)]
+    fn ssh_from_on(hosts: Option<&str>, gateways: &[&str], networks: &[&str]) -> Option<String> {
         let folder =
             std::env::temp_dir().join(format!("gh-ssh-from-{}-{}", std::process::id(), next_number()));
         std::fs::create_dir_all(&folder).unwrap();
@@ -267,7 +273,12 @@ mod linux_tests {
         if let Some(text) = hosts {
             std::fs::write(&hosts_file, text).unwrap();
         }
-        let ran = std::process::Command::new("sh").arg(&script).arg(&hosts_file).args(gateways).output();
+        let ran = std::process::Command::new("sh")
+            .arg(&script)
+            .arg(&hosts_file)
+            .arg(gateways.join(" "))
+            .arg(networks.join(" "))
+            .output();
         let _ = std::fs::remove_dir_all(&folder);
         let ran = ran.ok()?;
         assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
@@ -298,7 +309,7 @@ mod linux_tests {
     /// A bridged guest's gateway is its router, which isn't this PC.
     #[cfg(unix)]
     #[test]
-    fn ssh_takes_a_password_only_from_the_loopback_and_this_pc() {
+    fn ssh_takes_a_password_only_from_the_loopback_and_this_pc_on_the_shared_network() {
         let Some(said) = ssh_from(Some("shared\r\n192.168.1.20\r\nnot one; rm -rf /\r\n"), &["172.29.1.1"])
         else {
             return;
@@ -306,6 +317,23 @@ mod linux_tests {
         assert_eq!(only_from(&said), ["127.0.0.1", "::1", "192.168.1.20", "172.29.1.1"]);
         let bridged = ssh_from(Some("bridged\n192.168.1.20\n100.64.1.2\n"), &["192.168.1.1"]).unwrap();
         assert_eq!(only_from(&bridged), ["127.0.0.1", "::1", "192.168.1.20", "100.64.1.2"]);
+    }
+
+    /// A bridged guest also takes a password from its own networks, as other devices reach it there
+    /// directly; on the shared network its network is never let in, and a network that isn't one is
+    /// left out.
+    #[cfg(unix)]
+    #[test]
+    fn a_bridged_guest_takes_a_password_from_its_own_network_too() {
+        let networks = ["192.168.1.0/24", "10.1.0.0/16", "bad/24", "192.168.2.0/99", "192.168.3.0"];
+        let Some(bridged) = ssh_from_on(Some("bridged\n192.168.1.20\n"), &["192.168.1.1"], &networks) else {
+            return;
+        };
+        assert_eq!(only_from(&bridged), ["127.0.0.1", "::1", "192.168.1.20", "192.168.1.0/24", "10.1.0.0/16"]);
+        let nothing_known = ssh_from_on(Some("bridged\n"), &[], &["192.168.1.0/24"]).unwrap();
+        assert_eq!(only_from(&nothing_known), ["127.0.0.1", "::1", "192.168.1.0/24"]);
+        let shared = ssh_from_on(Some("shared\n192.168.1.20\n"), &["172.29.1.1"], &["172.29.0.0/20"]).unwrap();
+        assert_eq!(only_from(&shared), ["127.0.0.1", "::1", "192.168.1.20", "172.29.1.1"]);
     }
 
     /// With no address of this PC's known, only the loopback takes a password, so the relay still

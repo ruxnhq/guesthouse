@@ -101,14 +101,15 @@ if [ -f "$units/guesthouse-ssh.socket" ]; then
     fi
 fi
 
-# Who may sign in by SSH with a password: the loopback, where the host's relay arrives, and this PC
-# alone, by the addresses the host wrote (ssh-from.sh). Keys are taken from anywhere. Settings sshd
+# Who may sign in by SSH with a password: the loopback, where the host's relay arrives, this PC, by
+# the addresses the host wrote, and a bridged guest's own networks (ssh-from.sh). Keys are taken from
+# anywhere. Settings sshd
 # won't read are put back as they were, and sshd reads them again when they change.
 ssh_from=/etc/ssh/sshd_config.d/10-guesthouse-from.conf
 if [ -f "$here/ssh-from.sh" ] && [ -d /etc/ssh/sshd_config.d ]; then
     gateways=$(ip -4 route show default | awk '{ print $3 }')
-    # shellcheck disable=SC2086 # each gateway is an argument of its own
-    if sh "$here/ssh-from.sh" "$files/guesthouse/hosts.txt" $gateways > "$ssh_from.new" &&
+    networks=$(ip -4 route show scope link | awk '$1 ~ /\// { print $1 }')
+    if sh "$here/ssh-from.sh" "$files/guesthouse/hosts.txt" "$gateways" "$networks" > "$ssh_from.new" &&
         ! cmp -s "$ssh_from.new" "$ssh_from"; then
         if [ -f "$ssh_from" ]; then cp "$ssh_from" "$ssh_from.old"; fi
         mv "$ssh_from.new" "$ssh_from"

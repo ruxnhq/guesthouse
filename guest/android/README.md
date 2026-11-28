@@ -18,6 +18,14 @@ What Guesthouse adds to LineageOS:
   type=1,sku=guesthouse microg`. GRUB puts them on the kernel's line as `androidboot.guesthouse.*`, and
   Android has them as `ro.boot.guesthouse.*`.
 
+## Signing keys
+
+The image is signed with keys of Guesthouse's own: the release key for the OTA and the default certificate, and
+the platform, shared, media, network stack, Bluetooth, NFC and SDK sandbox keys. `make-keys.sh FOLDER` makes them,
+and their private halves go in a secret store and nowhere in a repository. `build.sh` reads them from `/keys` and
+stops if one is missing. A machine made from an image signed with other keys can't take this one's apps over its
+data disk, so a new key set goes with a new image.
+
 ## Building it
 
 The build needs about 300 GB of disk, 64 GB of RAM for its container, and an hour and a half on 16 cores the
@@ -27,7 +35,7 @@ first time. Later builds only build what changed.
 docker build -f guest/android/Containerfile -t guesthouse-android-build android
 mkdir -p ~/lineage24
 docker run --rm --user="$(id -u):$(id -g)" -e HOME=/src/.home -e JOBS=12 --memory=64g \
-    -v ~/lineage24:/src -v "$PWD/android:/guesthouse:ro" guesthouse-android-build \
+    -v ~/lineage24:/src -v "$PWD/android:/guesthouse:ro" -v ~/android-keys:/keys:ro guesthouse-android-build \
     bash /guesthouse/build.sh sync
 ```
 

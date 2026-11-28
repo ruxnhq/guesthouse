@@ -136,7 +136,8 @@ mod tests {
         assert!(SETUP_COMPLETE.contains("fDenyTSConnections"));
         assert!(!SETUP_COMPLETE.to_lowercase().contains("advfirewall"), "{SETUP_COMPLETE}");
         assert!(REPORT.contains("'@FirewallAPI.dll,-28752'"));
-        assert!(REPORT.contains("Set-RemoteDesktop $hostAddresses 'Guesthouse Remote Desktop'"));
+        assert!(REPORT.contains("Get-DesktopAddresses $hostsFile $hostAddresses"));
+        assert!(REPORT.contains("Set-RemoteDesktop $desktopAddresses 'Guesthouse Remote Desktop'"));
     }
 
     #[test]

@@ -10,8 +10,14 @@ use guesthouse_remote_view_core::install;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FUNCTIONS: [&str; 5] =
-    ["Get-HostAddresses", "Get-Gateways", "Set-HostRule", "Limit-HostRule", "Set-RemoteDesktop"];
+const FUNCTIONS: [&str; 6] = [
+    "Get-HostAddresses",
+    "Get-DesktopAddresses",
+    "Get-Gateways",
+    "Set-HostRule",
+    "Limit-HostRule",
+    "Set-RemoteDesktop",
+];
 
 fn report() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../windows/host/guest/report.ps1")
@@ -176,20 +182,57 @@ fn a_guest_with_no_network_waits_for_nothing() {
     assert!(lines.contains(&"slept 0".to_owned()), "{lines:#?}");
 }
 
-/// A bridged guest lets in this PC's addresses on that network, so Remote Desktop from this PC
-/// works, and never its router, the guest's gateway there.
+/// A bridged guest lets Remote Desktop in from the network it's on, as other devices reach it there
+/// directly, and from this PC's addresses; its screen's port still answers this PC alone, and never
+/// its router, the guest's gateway there. A bridged guest with no address of this PC's known still
+/// answers its network.
 #[test]
-fn a_bridged_guest_lets_in_this_pc_and_not_its_router() {
+fn a_bridged_guests_remote_desktop_answers_its_network_and_its_screen_this_pc_alone() {
     let Some(shell) = shell() else { return };
-    let guest = Guest::new(shell, Some("bridged\n192.168.1.20\n100.64.1.2\n"));
+    for (hosts, desktop, screen) in [
+        (
+            "bridged\n192.168.1.20\n100.64.1.2\n",
+            "192.168.1.20 100.64.1.2 LocalSubnet",
+            "192.168.1.20 100.64.1.2",
+        ),
+        ("bridged\n", "LocalSubnet", "Any"),
+    ] {
+        let guest = Guest::new(shell, Some(hosts));
+        let lines = guest.rules(
+            "$routes = @('192.168.1.1')
+            $allowed = @(Get-HostAddresses $file (Get-Gateways 30))
+            Set-HostRule 'Test screen' 'UDP' 7791 $allowed | Out-Null
+            Set-RemoteDesktop @(Get-DesktopAddresses $file $allowed) 'Test Remote Desktop' $note | Out-Null",
+        );
+        assert!(
+            lines.contains(&format!("Test Remote Desktop={desktop} enabled True")),
+            "{hosts:?}: {lines:#?}"
+        );
+        let screen_line =
+            lines.iter().find(|line| line.starts_with("Test screen=")).cloned().unwrap_or_default();
+        assert!(!screen_line.contains("LocalSubnet") && !screen_line.contains("192.168.1.1 "), "{lines:#?}");
+        if screen != "Any" {
+            assert!(lines.contains(&format!("Test screen={screen} enabled True")), "{lines:#?}");
+        }
+    }
+}
+
+/// On the shared network Remote Desktop answers this PC alone, by its addresses and the gateway its
+/// forwards arrive from, never the network the guest is on.
+#[test]
+fn a_shared_guests_remote_desktop_never_answers_its_network() {
+    let Some(shell) = shell() else { return };
+    let guest = Guest::new(shell, Some("shared\n192.168.1.20\n"));
     let lines = guest.rules(
-        "$routes = @('192.168.1.1')
-        Set-RemoteDesktop @(Get-HostAddresses $file (Get-Gateways 30)) 'Test Remote Desktop' $note | Out-Null",
+        "$routes = @('172.29.1.1')
+        $allowed = @(Get-HostAddresses $file (Get-Gateways 30))
+        Set-RemoteDesktop @(Get-DesktopAddresses $file $allowed) 'Test Remote Desktop' $note | Out-Null",
     );
     assert!(
-        lines.contains(&"Test Remote Desktop=192.168.1.20 100.64.1.2 enabled True".to_owned()),
+        lines.contains(&"Test Remote Desktop=192.168.1.20 172.29.1.1 enabled True".to_owned()),
         "{lines:#?}"
     );
+    assert!(!lines.iter().any(|line| line.contains("LocalSubnet")), "{lines:#?}");
 }
 
 /// With no address of this PC's known, rules that were open are turned off and none is made open:

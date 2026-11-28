@@ -252,6 +252,16 @@ function Get-HostAddresses([string]$File, [string[]]$Gateways) {
     return @($allowed | Select-Object -Unique)
 }
 
+# Who may reach Remote Desktop: $Allowed, and on a bridged network the rest of the network the guest
+# is on too, as there other devices reach it directly rather than through a forward.
+function Get-DesktopAddresses([string]$File, [string[]]$Allowed) {
+    $Allowed = @($Allowed | Where-Object { $_ })
+    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return $Allowed }
+    $first = @(Get-Content -LiteralPath $File | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -First 1)
+    if ($first.Count -and $first[0] -eq 'bridged') { return @($Allowed + 'LocalSubnet') }
+    return $Allowed
+}
+
 # The guest's default gateways. When it has a network adapter and no gateway yet, as its address
 # can come late, it waits up to $Seconds for one.
 function Get-Gateways([int]$Seconds) {
@@ -317,8 +327,8 @@ function Limit-HostRule([string]$Name, [string[]]$Allowed) {
     }
 }
 
-# Remote Desktop, which SetupComplete.cmd turns on, by Guesthouse's own rule for TCP 3389 from this
-# PC alone. Windows' own rules for it, which let every address in, are turned off once, found by
+# Remote Desktop, which SetupComplete.cmd turns on, by Guesthouse's own rule for TCP 3389 from the
+# addresses Get-DesktopAddresses gives. Windows' own rules for it, which let every address in, are turned off once, found by
 # their group's resource name, which is the same in every language. $Note says that was done, so one
 # turned on again by hand later is left as it is. A group Windows doesn't have counts as done; any
 # other failure to read it is tried again at the next start.
@@ -341,7 +351,8 @@ function Set-RemoteDesktop([string[]]$Allowed, [string]$Rule, [string]$Note) {
 }
 
 $hostAddresses = @(Get-HostAddresses $hostsFile (Get-Gateways 30))
-foreach ($said in @(Set-RemoteDesktop $hostAddresses 'Guesthouse Remote Desktop' 'C:\Guesthouse\remote-desktop.txt')) {
+$desktopAddresses = @(Get-DesktopAddresses $hostsFile $hostAddresses)
+foreach ($said in @(Set-RemoteDesktop $desktopAddresses 'Guesthouse Remote Desktop' 'C:\Guesthouse\remote-desktop.txt')) {
     Send-Line "remote desktop: $said"
 }
 

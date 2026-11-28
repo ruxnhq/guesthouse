@@ -1,0 +1,8 @@
+/* Tide's own colours, light. The states are darker than on the dark, to read on white. */
+@define-color tide_frame_color #e9ebef;
+@define-color tide_sidebar_color #e1e4ea;
+@define-color tide_teal #00897b;
+@define-color tide_amber #b86200;
+@define-color tide_amber_text #7a4100;
+@define-color tide_ruby #c62848;
+@define-color tide_ruby_text #9b1631;

@@ -128,6 +128,11 @@ pub fn start_ticking(window: &Window) {
 }
 
 impl Window {
+    /// The status a machine shows: the one it's held at, or the one a look found.
+    pub(crate) fn held_status(&self, id: &str) -> Option<Status> {
+        self.0.held.borrow().get(id).cloned()
+    }
+
     /// Looks at the VMs, unless a look is already under way.
     pub fn refresh(&self) {
         let mut state = self.0.refresh.borrow_mut();
@@ -305,7 +310,8 @@ impl Window {
         self.say_what_stopped(&report);
         for (id, status) in &report.statuses {
             let open = report.open_windows.get(id).map_or(&[][..], Vec::as_slice);
-            self.show_machine_status(id, status, report.vm_running, open);
+            let held = self.held_status(id);
+            self.show_machine_status(id, held.as_ref().unwrap_or(status), report.vm_running, open);
         }
         self.0.refresh.borrow_mut().looked = true;
         self.tell_the_tray(&report);

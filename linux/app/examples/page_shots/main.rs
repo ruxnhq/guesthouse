@@ -706,14 +706,53 @@ async fn update_banner(window: Window, context: Arc<Context>, folder: PathBuf, f
     fs::remove_file(&script).unwrap();
 }
 
+/// Every look's stylesheet, dark and light, with glass and without, is read by GTK whole: a
+/// property GTK doesn't have would be an error here.
+fn every_look_parses(failures: &Cell<u32>) {
+    for (name, text) in guesthouse_app::theme::stylesheet::every_look() {
+        let provider = gtk::CssProvider::new();
+        let errors = Rc::new(Cell::new(0));
+        let counting = errors.clone();
+        let named = name.clone();
+        provider.connect_parsing_error(move |_, section, error| {
+            println!("{named}: {section}: {error}");
+            counting.set(counting.get() + 1);
+        });
+        provider.load_from_string(&text);
+        check(failures, errors.get() == 0, &format!("GTK reads all of the stylesheet for {name}"));
+    }
+}
+
+/// The library in each of the app's own looks: the machines down a sidebar, and back in the rail
+/// under the desktop's theme.
+async fn library_looks(window: &Window, folder: &Path, failures: &Cell<u32>) {
+    for (look, name) in [("tide", "06c-library-tide"), ("kde", "06d-library-kde")] {
+        let prefs = serde_json::from_value(serde_json::json!({ "look": look })).unwrap();
+        guesthouse_app::theme::follow(&prefs);
+        glib::timeout_future(SETTLE).await;
+        let lists = all_of::<gtk::ListBox>(window);
+        let listed = lists.iter().any(|list| list.has_css_class("machine-list") && list.is_mapped());
+        check(failures, listed, &format!("the {look} look lists the machines down a sidebar"));
+        shot_after_paint(window, folder, name).await;
+    }
+    let prefs = serde_json::from_value(serde_json::json!({ "look": "system" })).unwrap();
+    guesthouse_app::theme::follow(&prefs);
+    glib::timeout_future(SETTLE).await;
+    let rails = all_of::<gtk::FlowBox>(window);
+    let railed = rails.iter().any(|rail| rail.has_css_class("rail") && rail.is_mapped());
+    check(failures, railed, "under the desktop's theme the machines are back in the rail");
+}
+
 async fn walk_pages(window: Window, context: Arc<Context>, folder: PathBuf) {
     let failures = Rc::new(Cell::new(0));
+    every_look_parses(&failures);
     wizard_pages(window.clone(), folder.clone(), failures.clone()).await;
     new_machine(window.clone(), folder.clone(), failures.clone()).await;
     let machines = library_machines(&context, &window, &folder);
     glib::timeout_future(LONG).await;
     check(&failures, text_of(&window).contains("Plain VM"), "the library lists the machines");
     shot_after_paint(&window, &folder, "06-library").await;
+    library_looks(&window, &folder, &failures).await;
     update_banner(window.clone(), context.clone(), folder.clone(), failures.clone()).await;
     settings_pages(window.clone(), folder.clone(), failures.clone(), machines[1].clone()).await;
     other_kinds(window.clone(), folder.clone(), failures.clone(), machines[0].clone()).await;

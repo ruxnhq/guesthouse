@@ -1,0 +1,203 @@
+/* Tide: compact, for tiling window managers. On top of the palette, the shapes and the app's own
+   widgets. Its colours are tide-dark.css or tide-light.css, and glass.css where the compositor
+   blurs. */
+
+@define-color window_bg_color @tide_frame_color;
+@define-color headerbar_bg_color @tide_frame_color;
+@define-color headerbar_backdrop_color @tide_frame_color;
+@define-color sidebar_bg_color @tide_sidebar_color;
+@define-color sidebar_backdrop_color @tide_sidebar_color;
+
+/* A tiled window has no corners or shadow of its own: the compositor draws its border. */
+window.csd.tiled-top,
+window.csd.tiled-bottom,
+window.csd.tiled-left,
+window.csd.tiled-right,
+window.csd.maximized {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+window.background {
+  background-color: @window_bg_color;
+}
+
+/* Where there is a bar, it's slim. */
+headerbar {
+  min-height: 40px;
+}
+
+button.text-button {
+  padding: 6px 14px;
+}
+
+/* The library: machines down the sidebar, the chosen one on solid content beside it. */
+.library-sidebar {
+  padding: 10px 8px;
+}
+
+.library-content {
+  background-color: @view_bg_color;
+  border-top-left-radius: 14px;
+}
+
+.library-content.alone {
+  border-radius: 0;
+}
+
+list.machine-list {
+  background: none;
+}
+
+list.machine-list > row {
+  padding: 0;
+  margin: 3px 0;
+  border-radius: 14px;
+  background: none;
+}
+
+.machine-card.compact {
+  padding: 7px 8px;
+  border-radius: 14px;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+/* The chosen machine is ringed by an outline, which leaves the shadow to how the machine stands. */
+list.machine-list > row:selected > .machine-card.compact {
+  background-color: alpha(@window_fg_color, 0.07);
+  outline: 2px solid @accent_bg_color;
+  outline-offset: 2px;
+}
+
+.machine-card.compact .machine-thumbnail {
+  border-radius: 9px;
+}
+
+/* Beside the sidebar the hero takes the page's height, and its picture is big enough to be seen
+   through a lighter blur. */
+.hero.tall > picture {
+  filter: blur(8px);
+  opacity: 0.9;
+}
+
+.hero {
+  border-radius: 20px;
+}
+
+.hero-title {
+  font-size: 30px;
+  letter-spacing: -0.02em;
+}
+
+.hero-kind {
+  font-size: 14px;
+}
+
+/* A machine says how it stands by how it moves and how heavy it is. Running stirs: a quiet teal
+   ring that breathes. Needing you swells: amber, taller, a ring that grows. Failed spills: ruby,
+   with a shake when it happens. Each still reads in a single frame. */
+.machine-card.running {
+  box-shadow: inset 0 0 0 1px alpha(@tide_teal, 0.35);
+  animation: tide-stir 2.4s ease-in-out infinite;
+}
+
+@keyframes tide-stir {
+  50% {
+    box-shadow: inset 0 0 0 2px alpha(@tide_teal, 0.7);
+  }
+}
+
+.machine-card.attention,
+.machine-card.compact.attention {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  background-color: alpha(@tide_amber, 0.16);
+  box-shadow:
+    0 0 0 1.5px @tide_amber,
+    0 6px 18px alpha(@tide_amber, 0.25);
+  animation: tide-swell 2.4s ease-in-out infinite;
+}
+
+@keyframes tide-swell {
+  50% {
+    box-shadow:
+      0 0 0 2px @tide_amber,
+      0 8px 26px alpha(@tide_amber, 0.5);
+  }
+}
+
+.machine-card.attention label.caption {
+  color: @tide_amber_text;
+  opacity: 1;
+}
+
+.machine-card.failed,
+.machine-card.compact.failed {
+  background-color: alpha(@tide_ruby, 0.12);
+  box-shadow: 0 0 0 1.5px @tide_ruby;
+  animation: tide-spill 180ms linear 3;
+}
+
+@keyframes tide-spill {
+  25% {
+    transform: translateX(-2px);
+  }
+
+  75% {
+    transform: translateX(2px);
+  }
+}
+
+.machine-card.failed label.caption {
+  color: @tide_ruby_text;
+  opacity: 1;
+}
+
+.state-dot.running {
+  background: @tide_teal;
+}
+
+.state-dot.attention {
+  background: @tide_amber;
+}
+
+.state-dot.failed {
+  background: @tide_ruby;
+}
+
+/* Keyboard focus that can be seen from across the room. */
+list.machine-list > row:focus-visible,
+.navigation-sidebar > row:focus-visible,
+button:focus-visible {
+  outline: 2px solid @accent_color;
+  outline-offset: 2px;
+}
+
+/* The viewer's bar. With the bar staying, a slim solid strip at the top; with it hiding, a drop
+   that hangs from the top edge. Either is solid: nothing over or round the guest's screen is
+   see-through. */
+.tide-bar {
+  background-color: rgb(10, 11, 14);
+  color: #f4f5f7;
+}
+
+.viewer-pill.slim {
+  padding: 2px 4px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.viewer-pill.slim button {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+.viewer-pill.hanging {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-left-radius: 20px;
+  border-bottom-right-radius: 20px;
+  background: rgb(10, 11, 14);
+}

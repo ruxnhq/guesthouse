@@ -8,11 +8,21 @@
 
 /*
  * One file shows frames at a time. Another file of the same user, or of an administrator, takes
- * over from it, as a program that starts again does; another user's waits until it closes.
+ * over from it, as a program that starts again does; another user's waits until it closes. Once
+ * the kernel's display driver shows its surfaces, the screen is its alone.
  */
 static DEFINE_SPINLOCK(show_lock);
 static struct nvf_file *show_owner;
 static kuid_t show_owner_uid;
+static bool show_by_kernel;
+
+void show_kernel_claim(void)
+{
+	spin_lock(&show_lock);
+	show_by_kernel = true;
+	show_owner = NULL;
+	spin_unlock(&show_lock);
+}
 
 static bool show_claim(struct nvf_file *nf)
 {
@@ -20,7 +30,8 @@ static bool show_claim(struct nvf_file *nf)
 	bool ok;
 
 	spin_lock(&show_lock);
-	ok = !show_owner || show_owner == nf || uid_eq(uid, show_owner_uid) || capable(CAP_SYS_ADMIN);
+	ok = !show_by_kernel &&
+	     (!show_owner || show_owner == nf || uid_eq(uid, show_owner_uid) || capable(CAP_SYS_ADMIN));
 	if (ok && show_owner != nf) {
 		show_owner = nf;
 		show_owner_uid = uid;

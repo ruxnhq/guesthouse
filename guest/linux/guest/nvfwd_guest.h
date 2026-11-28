@@ -109,6 +109,7 @@ void uvm_process_leave(int place);
 /* show.c */
 long show_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg);
 void show_file_closed(struct nvf_file *nf);
+void show_kernel_claim(void);
 
 /* files.c */
 extern const struct file_operations nvf_fops;

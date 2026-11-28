@@ -240,9 +240,6 @@ static int nvf_mmap(struct file *file, struct vm_area_struct *vma)
 		return rc;
 	}
 	refcount_set(&m->refs, 1);
-	/* A mapping made without write stays so: the host may have mapped its side read-only. */
-	if (!(vma->vm_flags & VM_WRITE))
-		vm_flags_clear(vma, VM_MAYWRITE);
 	m->off = off;
 	m->len = len;
 	m->uvm = nf->kind == NVFWD_DEV_UVM;
@@ -254,6 +251,9 @@ static int nvf_mmap(struct file *file, struct vm_area_struct *vma)
 		return remap_pfn_range(vma, vma->vm_start, (nv.win_base + off) >> PAGE_SHIFT, len, vma->vm_page_prot);
 	}
 	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	/* A mapping made without write stays so: the host maps its side with the same protection. */
+	if (!(vma->vm_flags & VM_WRITE))
+		vm_flags_clear(vma, VM_MAYWRITE);
 	/* 0 cached, 1 uncached, 2 write combined, 5 write back, 6 default, 7 uncached weak */
 	if (caching == 2)
 		prot = pgprot_writecombine(vma->vm_page_prot);

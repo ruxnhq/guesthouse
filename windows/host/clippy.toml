@@ -34,4 +34,8 @@ disallowed-methods = [
     { path = "std::path::Path::read_dir", reason = "reach a guest's disk through guest_volume; allow it only for the host's own files" },
     { path = "std::path::Path::canonicalize", reason = "reach a guest's disk through guest_volume; allow it only for the host's own files" },
     { path = "std::path::Path::read_link", reason = "reach a guest's disk through guest_volume; allow it only for the host's own files" },
+    { path = "std::io::BufRead::read_line", reason = "use guesthouse_basics::read_capped_line" },
+    { path = "std::io::BufRead::lines", reason = "use guesthouse_basics::read_capped_line" },
+    { path = "std::io::BufRead::read_until", reason = "use guesthouse_basics::read_capped_bytes" },
+    { path = "std::io::BufRead::split", reason = "use guesthouse_basics::read_capped_bytes" },
 ]

@@ -2,11 +2,11 @@
 //! try the console against a running machine:
 //!
 //! ```text
-//! cargo run -p guesthouse-app-windows --example console-window -- win 30
+//! cargo run -p guesthouse-app-windows --example console-window -- \\.\pipe\guesthouse-win-<tag>-console 30
 //! cargo run -p guesthouse-app-windows --example console-window -- \\.\pipe\guesthouse-win.BasicSession 30 who
 //! ```
 //!
-//! A pipe's path is taken as it is. With `who`, the pipe is opened once first to say which process
+//! The pipe is named afresh at each boot: the machine's events say it as it starts. With `who`, the pipe is opened once first to say which process
 //! serves it, which takes one of its connections. With `plain`, the guest's screen isn't fitted to
 //! the window, as appsandbox leaves it.
 //!
@@ -32,10 +32,11 @@ fn main() {
     use std::time::{Duration, Instant};
 
     let mut args = std::env::args().skip(1);
-    let name = args.next().unwrap_or_else(|| "win".to_owned());
+    let Some(pipe) = args.next() else {
+        eprintln!("Give the console's pipe, as the machine's events say it.");
+        std::process::exit(1);
+    };
     let seconds: u64 = args.next().and_then(|text| text.parse().ok()).unwrap_or(20);
-    // A path is taken as it is, so a pipe that isn't there can be tried too.
-    let pipe = if name.starts_with(r"\\") { name.clone() } else { guesthouse_control::console_pipe(&name) };
     let flags: Vec<String> = args.collect();
     if flags.iter().any(|flag| flag == "who") {
         // Takes one of the pipe's connections, so only when asked.
@@ -44,7 +45,7 @@ fn main() {
     let scale = !flags.iter().any(|flag| flag == "plain");
     let started = Instant::now();
     let (sender, events) = mpsc::channel();
-    let console = console::Console::open(&pipe, &format!("{name} — Console"), true, scale, move |event| {
+    let console = console::Console::open(&pipe, &format!("{pipe} — Console"), true, scale, move |event| {
         let _ = sender.send(event);
     })
     .expect("the console's thread didn't start");

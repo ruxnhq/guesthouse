@@ -29,15 +29,18 @@ const VOLUMES_SECONDS: u64 = 15;
 /// The NVAPI wrapper a Windows guest on an NVIDIA card gets, from the program's folder.
 const NVAPI_WRAPPER: &str = r"guest\nvapi64.dll";
 
-/// The machine `settings` asks for, on this disk, with this record and network card.
+/// The machine `settings` asks for, on this disk, with this record and network card, its pipes
+/// named with `pipe_tag`.
 pub fn machine(
     settings: &BootSettings,
     disk: PathBuf,
     record: &Record,
     network: Option<guesthouse_hcs::schema::NetworkAdapter>,
+    pipe_tag: String,
 ) -> Machine {
     Machine {
         name: settings.name.clone(),
+        pipe_tag,
         more_disks: more_disks(&disk, record),
         disk,
         memory_mb: settings.memory_mb,

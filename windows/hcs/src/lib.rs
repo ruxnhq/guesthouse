@@ -16,6 +16,7 @@
 //! - `guest_volume`: a guest's volume while its disk is attached to the host, the only way anything
 //!   on it is read, written or removed, which follows no links.
 //! - `hvsock`: Hyper-V sockets, which reach a guest with no network. Its IDs build everywhere.
+//! - `worker`: the account a machine's worker process runs as. It builds everywhere.
 //! - `host`: whether this process is elevated, which HCS needs, and Ctrl+C.
 //! - `dns_sd`: announcing a service through Windows' own mDNS responder. What to do after each of
 //!   its answers builds everywhere.
@@ -55,6 +56,7 @@ pub mod services;
 pub mod system;
 #[cfg(windows)]
 mod text;
+pub mod worker;
 
 #[cfg(windows)]
 pub use error::{Error, Result};

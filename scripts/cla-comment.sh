@@ -9,6 +9,12 @@ set -eu
 
 MARKER='<!-- cla-check -->'
 
+# Accounts that sign nothing get no comment. Their logins can hold brackets, so this comes first.
+if sh scripts/cla-check.sh --exempt "$LOGIN"; then
+    echo "$LOGIN signs nothing."
+    exit 0
+fi
+
 # Checked before it goes in a path or a pattern. The same rule as scripts/cla-check.sh.
 case $LOGIN in
     *[!A-Za-z0-9-]* | '')

@@ -255,7 +255,7 @@ fn a_jailed_qemu_gets_a_clean_environment() {
     assert!(plan.clears_environment());
     let environment = plan.qemu_environment();
     let names: Vec<&str> = environment.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["PATH", "TMPDIR", "XDG_RUNTIME_DIR", "SHARE"]);
+    assert_eq!(names, ["PATH", "TMPDIR", "XDG_RUNTIME_DIR", "SHARE", "SHARE_KEY", "SHARE_ACCESS"]);
     let path: Vec<&str> = environment[0].1.split(':').collect();
     assert!(path.contains(&"/usr/bin"), "most systems' programs");
     assert!(path.contains(&"/run/current-system/sw/bin"), "NixOS's, for setarch and taskset");

@@ -1,5 +1,6 @@
 //! `guesthouse-share`: QEMU starts this for each connection a guest makes to its shared folder, with
-//! the connection on stdin and stdout, and the folder in `SHARE`.
+//! the connection on stdin and stdout, the folder in `SHARE`, its key in `SHARE_KEY` and whether the
+//! guest may change it in `SHARE_ACCESS`.
 
 #[cfg(target_os = "linux")]
 #[path = "share/linux.rs"]

@@ -4,6 +4,11 @@
 //! on stdin and stdout, so no port on the host is open to anything else. Windows has a WebDAV client
 //! built in, which works with no account and no change to the guest's security settings.
 //!
+//! The folder is served under the machine's share key, at `/KEY/`, and nothing is served without it:
+//! a program in the guest that wasn't given the address gets no file. Windows' client sends no
+//! password over plain HTTP, so the key is a part of the path. A read-only share refuses every
+//! request that would change the folder.
+//!
 //! The guest isn't trusted: nothing here reaches outside the folder, links included.
 
 mod anchored;
@@ -23,6 +28,10 @@ use std::time::Duration;
 /// Windows sends a few hundred bytes. This is the only body held whole.
 const MOST_PROPPATCH: u64 = 256 << 10;
 const ALLOWED_METHODS: &str = "OPTIONS,GET,HEAD,PUT,DELETE,MKCOL,MOVE,COPY,PROPFIND,PROPPATCH,LOCK,UNLOCK";
+const READ_ONLY_METHODS: &str = "OPTIONS,GET,HEAD,PROPFIND,PROPPATCH,LOCK,UNLOCK";
+/// What changes the folder, which a read-only share refuses. A lock that would make a file is
+/// refused there on its own.
+const CHANGES: [&str; 5] = ["PUT", "DELETE", "MKCOL", "MOVE", "COPY"];
 const XML: &str = "application/xml; charset=\"utf-8\"";
 /// There's no way to tell what kind a guest's file is, and a WebDAV client doesn't ask.
 const ANY_FILE: &str = "application/octet-stream";
@@ -51,13 +60,63 @@ fn is_quiet(error: &io::Error) -> bool {
     matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }
 
+/// Whether a share may be changed by the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    ReadWrite,
+    ReadOnly,
+}
+
+impl Access {
+    /// The words the app and the share's program pass it in.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::ReadWrite => "read-write",
+            Self::ReadOnly => "read-only",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        [Self::ReadWrite, Self::ReadOnly].into_iter().find(|access| access.word() == word)
+    }
+}
+
 pub struct Share {
     folder: Folder,
+    key: Vec<u8>,
+    access: Access,
+}
+
+/// Compares every byte, so how long it takes says nothing of how much of the key was right.
+fn same_key(given: &[u8], key: &[u8]) -> bool {
+    given.len() == key.len()
+        && given.iter().zip(key).fold(0, |differ, (one, other)| differ | (one ^ other)) == 0
 }
 
 impl Share {
-    pub fn new(root: &Path) -> io::Result<Self> {
-        Ok(Self { folder: Folder::new(root)? })
+    /// A share of `root` under `key`, which must not be empty.
+    pub fn new(root: &Path, key: &str, access: Access) -> io::Result<Self> {
+        if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "the share's key must be letters and digits",
+            ));
+        }
+        Ok(Self { folder: Folder::new(root)?, key: key.as_bytes().to_vec(), access })
+    }
+
+    /// The path in the folder of a URL under the key, as a URL's path: `/KEY/a/b` is `/a/b`. `None`
+    /// for one that isn't under the key.
+    fn under_key(&self, target: &str) -> Option<String> {
+        let raw = String::from_utf8(inside::raw_url_path(target)).ok()?;
+        let rest = raw.strip_prefix('/')?;
+        let (first, after) = rest.split_once('/').unwrap_or((rest, ""));
+        same_key(&inside::url_path(first), &self.key).then(|| format!("/{after}"))
+    }
+
+    /// The key's part of every address the guest is given back.
+    fn base(&self) -> Vec<u8> {
+        [b"/".as_slice(), &self.key].concat()
     }
 
     /// Answers requests until the connection ends.
@@ -89,8 +148,30 @@ impl Share {
             return Ok(false);
         }
         let method = request.method.clone();
+        if method == "OPTIONS" {
+            self.options(request, input, output)?;
+            return Ok(true);
+        }
+        let Some(target) = self.under_key(&request.target) else {
+            request.discard_body(input)?;
+            // A client may look at the server's own root before the address it was given.
+            if method == "PROPFIND" && inside::url_path(&request.target) == b"/" {
+                let nothing =
+                    anchored::Info { is_folder: true, is_file: false, size: 0, modified: 0, changed: 0 };
+                let root = entry(nothing, b"/");
+                reply(output, 207, xml_response(&root).as_bytes(), &[("Content-Type", XML)])?;
+            } else {
+                reply(output, 404, b"", &[])?;
+            }
+            return Ok(true);
+        };
+        request.target = target;
+        if self.access == Access::ReadOnly && CHANGES.contains(&method.as_str()) {
+            request.discard_body(input)?;
+            reply(output, 403, b"", &[])?;
+            return Ok(true);
+        }
         match method.as_str() {
-            "OPTIONS" => self.options(request, input, output)?,
             "PROPFIND" => self.propfind(request, input, output)?,
             "PROPPATCH" => return self.proppatch(request, input, output),
             "HEAD" => self.get(request, output, false)?,
@@ -120,7 +201,8 @@ impl Share {
         output: &mut impl Write,
     ) -> io::Result<()> {
         request.discard_body(input)?;
-        reply(output, 200, b"", &[("DAV", "1,2"), ("MS-Author-Via", "DAV"), ("Allow", ALLOWED_METHODS)])
+        let allowed = if self.access == Access::ReadOnly { READ_ONLY_METHODS } else { ALLOWED_METHODS };
+        reply(output, 200, b"", &[("DAV", "1,2"), ("MS-Author-Via", "DAV"), ("Allow", allowed)])
     }
 
     fn propfind(
@@ -136,8 +218,8 @@ impl Share {
         let Some((info, path)) = found else {
             return reply(output, 404, b"", &[]);
         };
-        let href = url_path(&request.target);
-        let mut entries = vec![entry(info, &href)];
+        let (base, href) = (self.base(), url_path(&request.target));
+        let mut entries = vec![entry(info, &[base.as_slice(), &href].concat())];
         if info.is_folder && request.header("Depth") != Some("0") {
             let parent = href.strip_suffix(b"/").unwrap_or(&href);
             let mut names = files.names(&path)?;
@@ -147,7 +229,7 @@ impl Share {
                 let target = inside::quote(&child_href);
                 let child = self.folder.followed_path_of(&target);
                 if let Some(info) = child.and_then(|child| files.info(&child)) {
-                    entries.push(entry(info, &child_href));
+                    entries.push(entry(info, &[base.as_slice(), &child_href].concat()));
                 }
             }
         }
@@ -169,7 +251,8 @@ impl Share {
         let mut body = Vec::new();
         input.by_ref().take(length).read_to_end(&mut body)?;
         let text = String::from_utf8_lossy(&body);
-        let href = String::from_utf8_lossy(&inside::raw_url_path(&request.target)).into_owned();
+        let path = [self.base(), inside::raw_url_path(&request.target)].concat();
+        let href = String::from_utf8_lossy(&path).into_owned();
         reply(output, 207, proppatch_body(&href, &text).as_bytes(), &[("Content-Type", XML)])?;
         Ok(true)
     }
@@ -232,8 +315,11 @@ impl Share {
     }
 
     fn destination(&self, request: &Request) -> Option<std::path::PathBuf> {
-        let target = request.header("Destination").filter(|text| !text.is_empty()).unwrap_or(&request.target);
-        self.folder.path_of(target).filter(|path| !self.folder.is_root(path))
+        let target = match request.header("Destination").filter(|text| !text.is_empty()) {
+            Some(text) => self.under_key(text)?,
+            None => request.target.clone(),
+        };
+        self.folder.path_of(&target).filter(|path| !self.folder.is_root(path))
     }
 
     fn move_entry(
@@ -290,6 +376,9 @@ impl Share {
             return reply(output, 403, b"", &[]);
         };
         let created = self.folder.files.info(&path).is_none();
+        if created && self.access == Access::ReadOnly {
+            return reply(output, 403, b"", &[]);
+        }
         if created && let Err(error) = self.folder.files.touch(&path) {
             return reply_error(output, &error);
         }

@@ -25,7 +25,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 24] = [
+const SETTINGS: [&str; 25] = [
     "cores",
     "ram",
     "vram",
@@ -38,6 +38,7 @@ const SETTINGS: [&str; 24] = [
     "dns",
     "sound",
     "share",
+    "share-read-only",
     "window-speed",
     "dlss",
     "start-unjailed",
@@ -304,6 +305,11 @@ pub(super) fn set(
             }
             folder.clone_into(&mut machine.share);
         }
+        "share-read-only" => {
+            not_for_ubuntu(&machine)?;
+            must_be_off(context, &machine)?;
+            machine.share_read_only = on_or_off(key, value)?;
+        }
         "backing-files" => {
             must_be_off(context, &machine)?;
             let files: Vec<PathBuf> = match value {
@@ -449,6 +455,13 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
         }
         let share = if machine.share.is_empty() { "none" } else { &machine.share };
         line(out, "share", &share)?;
+        if !machine.share.is_empty() {
+            line(out, "share-read-only", &switch(machine.share_read_only))?;
+            if machine.kind != Kind::Windows {
+                let key = crate::agent::share_key(context, machine)?;
+                line(out, "share-address", &crate::agent::share_address(&key))?;
+            }
+        }
         let forwards: Vec<String> = machine.forwards.iter().map(Forward::text).collect();
         line(out, "forwards", &if forwards.is_empty() { "none".to_owned() } else { forwards.join(", ") })?;
     }

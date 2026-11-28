@@ -424,7 +424,35 @@ fn a_share_starts_our_program_with_the_folder_in_its_environment() {
     let (_scratch, plan) = plan(&machine, plain_boot());
     let nic = value_after(&plan.qemu_arguments(), "-nic");
     assert!(nic.contains(",guestfwd=tcp:10.0.2.4:80-cmd:") && nic.contains("guesthouse-share"));
-    assert_eq!(plan.qemu_environment(), [("SHARE".to_owned(), "/home/me/shared".to_owned())]);
+    assert_eq!(
+        plan.qemu_environment(),
+        [
+            ("SHARE".to_owned(), "/home/me/shared".to_owned()),
+            ("SHARE_KEY".to_owned(), String::new()),
+            ("SHARE_ACCESS".to_owned(), "read-write".to_owned())
+        ]
+    );
+    assert!(!plan.qemu_arguments().iter().any(|word| word.contains("SHARE_KEY")));
+}
+
+#[test]
+fn a_share_is_served_under_the_machines_key_and_can_be_read_only() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { share: "/home/me/shared".into(), share_read_only: true, ..plain_machine() };
+    fs::create_dir_all(machine.folder(&context)).unwrap();
+    let plan = VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0);
+    let key = fs::read_to_string(machine.share_key_file(&context)).unwrap().trim().to_owned();
+    assert_eq!(key.len(), 32);
+    let environment = plan.qemu_environment();
+    assert!(environment.contains(&("SHARE_KEY".to_owned(), key.clone())), "{environment:?}");
+    assert!(environment.contains(&("SHARE_ACCESS".to_owned(), "read-only".to_owned())));
+    let again = VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0);
+    assert_eq!(again.share_key, key, "the key stays from one start to the next");
+    assert!(
+        !plan.qemu_arguments().iter().any(|word| word.contains(&key)),
+        "the key is not on QEMU's command line"
+    );
 }
 
 #[test]

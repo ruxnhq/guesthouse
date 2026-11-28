@@ -11,10 +11,16 @@ if ((Get-ItemProperty $parameters).FileSizeLimitInBytes -ne -1) {
     Stop-Service WebClient -Force -ea 0
 }
 Start-Service WebClient
-$map = "if (-not (net use | Select-String '10.0.2.4')) { net use * http://10.0.2.4/ /persistent:no }"
+# The host puts the share's address here. It holds the key the folder is served under, so the task
+# that maps it is removed once it has run, and only the user's own logon has the drive.
+$address = '@SHARE_ADDRESS@'
+$key = ($address.TrimEnd('/') -split '/')[-1]
+$map = "if (-not (net use | Select-String -SimpleMatch '$key')) { net use * $address /persistent:no }"
 $action = New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless powershell.exe -NoProfile -Command `"$map`""
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
 Register-ScheduledTask -TaskName gpupv-share -Action $action -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName gpupv-share
 for ($i = 0; $i -lt 40 -and (Get-ScheduledTask gpupv-share).State -ne 'Ready'; $i++) { Start-Sleep -Milliseconds 500 }
-if ((Get-ScheduledTaskInfo gpupv-share).LastTaskResult -eq 0) { 'mapped' } else { 'not mapped' }
+$result = (Get-ScheduledTaskInfo gpupv-share).LastTaskResult
+Unregister-ScheduledTask -TaskName gpupv-share -Confirm:$false -ea 0
+if ($result -eq 0) { 'mapped' } else { 'not mapped' }

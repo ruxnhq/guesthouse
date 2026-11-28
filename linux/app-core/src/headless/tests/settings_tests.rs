@@ -418,3 +418,22 @@ fn the_files_a_disk_is_built_on_are_recorded_only_as_its_header_names_them() {
     );
     assert!(said(&context, "show work").0.contains("backing-files"));
 }
+
+#[test]
+fn a_shared_folder_can_be_read_only_and_show_gives_its_address() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    let folder = scratch.path("home/shared");
+    fs::create_dir_all(&folder).unwrap();
+    assert_eq!(said(&context, &format!("set work share {}", folder.display())).1, Ok(()));
+    assert!(!load(&context, "work").unwrap().share_read_only, "a share is read-write until set");
+    assert_eq!(said(&context, "set work share-read-only on").1, Ok(()));
+    let machine = load(&context, "work").unwrap();
+    assert!(machine.share_read_only);
+    let shown = said(&context, "show work").0;
+    let key = fs::read_to_string(machine.share_key_file(&context)).unwrap().trim().to_owned();
+    assert!(shown.contains("share-read-only on\n"), "{shown}");
+    assert!(shown.contains(&format!("share-address http://10.0.2.4/{key}/\n")), "{shown}");
+    assert_eq!(refused(&context, "set work share-read-only maybe"), "share-read-only is on or off.");
+}

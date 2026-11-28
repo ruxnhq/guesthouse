@@ -166,6 +166,10 @@ pub struct VmPlan {
     /// CPUs to run on, as taskset takes them.
     pub pin: Option<String>,
     pub share: Option<String>,
+    /// The key the share is served under: see [`crate::agent::share_key`].
+    pub share_key: String,
+    /// The guest may read the share and not change it.
+    pub share_read_only: bool,
     /// The host's drives the guest has. The app opens each and hands it to QEMU: see
     /// [`crate::host_drives::OpenDrives`].
     pub drives: Vec<Drive>,
@@ -277,6 +281,14 @@ impl VmPlan {
             tpm: machine.tpm.then(|| machine.tpm_folder(context)),
             pin: None,
             share: Some(machine.share.clone()).filter(|share| !share.is_empty()),
+            // Without its key the share's program serves nothing, and the guest is told the folder
+            // didn't come: see `apply_share`, which makes the key the same way.
+            share_key: if machine.share.is_empty() {
+                String::new()
+            } else {
+                crate::agent::share_key(context, machine).unwrap_or_default()
+            },
+            share_read_only: machine.share_read_only,
             drives,
             share_program: context.paths.binary(SHARE_PROGRAM),
             launcher: context.paths.binary(LAUNCHER),

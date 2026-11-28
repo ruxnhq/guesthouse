@@ -150,7 +150,8 @@ fn a_plain_qemu_whose_monitor_never_answers_is_not_left_running() {
     let mut context = scratch_context(&scratch);
     let (_, qemu) = pretend_programs(&scratch, &mut context);
     let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let started = host.start(&plan, &machine);
     let left = left_running(&qemu);
@@ -178,7 +179,8 @@ fn a_qemu_that_exits_at_once_says_why() {
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.program("not-qemu", "#!/bin/sh\necho 'could not open disk' >&2\nexit 1\n");
     let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let error = host.start(&plan, &machine).unwrap_err();
     assert_eq!(error.0, "The VM did not start. could not open disk");
@@ -279,12 +281,37 @@ fn a_program_that_cant_be_run_is_named() {
 }
 
 #[test]
-fn no_qemu_at_all_says_so() {
+fn a_plain_machine_is_jailed_too_and_refused_where_it_cant_be_unless_allowed() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.path("not-installed");
     let host = LocalHost::new(&context);
     let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    for boot in
+        [Boot::Plain { iso: String::new() }, Boot::Install { iso: "/i.iso".into(), answer: "/a".into() }]
+    {
+        let plan = VmPlan::new(&context, &machine, boot, slots::first(), 0);
+        let refused = host.start(&plan, &machine).unwrap_err();
+        assert!(
+            refused.0.contains("can't be jailed") && refused.0.contains("Start without a jail"),
+            "{refused}"
+        );
+        assert_eq!(crate::jailing::read_note(&plan.run_folder), None, "nothing started");
+    }
+    let allowed = Machine { start_without_jail: true, ..machine };
+    let plan = VmPlan::new(&context, &allowed, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    assert!(host.start(&plan, &allowed).unwrap_err().0.contains("isn't installed"));
+    assert!(crate::jailing::read_note(&plan.run_folder).unwrap().starts_with("Not jailed: "));
+}
+
+#[test]
+fn no_qemu_at_all_says_so() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    context.paths.qemu = scratch.path("not-installed");
+    let host = LocalHost::new(&context);
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     assert!(host.start(&plan, &machine).unwrap_err().0.contains("isn't installed"));
 }
@@ -569,17 +596,29 @@ fn a_qemu_without_the_host_loopback_setting_is_asked_and_never_started() {
         marker.display()
     );
     context.paths.qemu = scratch.program("not-qemu", &qemu);
-    let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
-    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
-    let error = host.start(&plan, &machine).unwrap_err();
-    assert!(error.0.contains("the QEMU that comes with Guesthouse"), "{error}");
-    assert!(!marker.exists(), "the machine's QEMU was started");
+    // Asked before every start: one jailed on a PC with Landlock, and one allowed without a jail.
+    for jailed in [true, false] {
+        if jailed {
+            context.jail_offer = a_kernel_with_landlock;
+        } else {
+            context.jail_offer = |_| crate::jailing::Offer::nothing();
+        }
+        let host = LocalHost::new(&context);
+        let machine = Machine {
+            kind: Kind::Plain,
+            start_without_jail: !jailed,
+            ..Machine::new("vm", "VM", "/d", "/v")
+        };
+        let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+        let error = host.start(&plan, &machine).unwrap_err();
+        assert!(error.0.contains("the QEMU that comes with Guesthouse"), "jailed {jailed}: {error}");
+        assert!(!marker.exists(), "the machine's QEMU was started");
+    }
 }
 
 #[test]
 fn the_pattern_for_a_tpms_socket_takes_its_path_literally() {
     use super::local::swtpm_pattern;
     let pattern = swtpm_pattern(Path::new("/run/user/1000/a.b+c(d)/tpm.sock"));
-    assert_eq!(pattern, r"^swtpm socket .*path=/run/user/1000/a\.b\+c\(d\)/tpm\.sock");
+    assert_eq!(pattern, r"^[^ ]*swtpm socket .*path=/run/user/1000/a\.b\+c\(d\)/tpm\.sock");
 }

@@ -92,10 +92,29 @@ const IN_THE_BASE: [&str; 3] = ["/usr", "/proc", "/sys"];
 /// found on. NixOS has them in its system's programs, which are among the folders a jail grants.
 const PATH: &str = "/usr/bin:/usr/sbin:/run/current-system/sw/bin";
 
-/// The folder above the one QEMU is in: a QEMU in its build folder finds its firmware and libraries
-/// through links to there, and for the system's it's `/usr`.
-fn qemu_tree(qemu: &Path) -> PathBuf {
-    qemu.parent().and_then(Path::parent).unwrap_or(qemu).to_owned()
+/// Where QEMU's own files are beside the folder above its own, which it loads firmware, libraries
+/// and helpers from: a build folder's next to it, or an install's in its prefix.
+const QEMU_FILES: [(Grant, &str); 5] = [
+    (Grant::Read, "pc-bios"),
+    (Grant::Read, "share/qemu"),
+    (Grant::Run, "lib"),
+    (Grant::Run, "lib64"),
+    (Grant::Run, "libexec"),
+];
+
+/// What QEMU may read and run of its own: its folder, and its files beside the folder above. A
+/// folder that holds any of `private`, as the home folder or a machine's, is never granted: QEMU's
+/// own folder is then QEMU alone.
+fn qemu_folders(qemu: &Path, private: &[PathBuf]) -> Vec<(Grant, PathBuf)> {
+    let holds_private = |folder: &Path| private.iter().any(|path| path.starts_with(folder));
+    let folder = qemu.parent().unwrap_or(qemu);
+    let own = if holds_private(folder) { qemu } else { folder };
+    let mut folders = vec![(Grant::Run, own.to_owned())];
+    if let Some(tree) = folder.parent() {
+        let beside = QEMU_FILES.iter().map(|(grant, name)| (*grant, tree.join(name)));
+        folders.extend(beside.filter(|(_, path)| !holds_private(path)));
+    }
+    folders
 }
 
 impl VmPlan {
@@ -124,8 +143,18 @@ impl VmPlan {
 
     /// passt does the NAT for a machine on it, outside the jail, so QEMU's own network is the
     /// restricted private link, as for a bridged or restricted machine. Ubuntu's line is NAT.
+    /// Whether QEMU's own user network is the guest's way out, and not the restricted private link.
+    fn user_network_is_nat(&self) -> bool {
+        !self.has_machine_line() || (self.network.mode == Mode::Nat && !self.network.passt)
+    }
+
+    /// Whether this machine's jail holds QEMU to some UDP ports, which only a newer Landlock can.
+    pub fn jail_holds_udp(&self) -> bool {
+        !self.user_network_is_nat()
+    }
+
     fn jail_network(&self) -> Network {
-        let nat = !self.has_machine_line() || (self.network.mode == Mode::Nat && !self.network.passt);
+        let nat = self.user_network_is_nat();
         let mut tcp_bind = self.listened_ports();
         // The user network reaches the shared folder's program through a pair of loopback TCP
         // sockets it makes for each connection, on a port it can't know beforehand.
@@ -154,6 +183,32 @@ impl VmPlan {
         Network { tcp_bind, tcp_connect, udp_bind: Ports::Only(udp_bind), udp_send }
     }
 
+    /// What a grant for QEMU's own files may never take in: the home folder, the machine's own
+    /// files and the run folder.
+    fn private_places(&self) -> Vec<PathBuf> {
+        let mut places: Vec<PathBuf> = std::env::var_os("HOME").map(PathBuf::from).into_iter().collect();
+        places.extend([&self.disk, &self.vars].iter().filter(|path| !path.is_empty()).map(PathBuf::from));
+        places.push(self.run_folder.clone());
+        places
+    }
+
+    /// The files the boot itself reads: a machine's disc, Windows setup's disc and its answers, and
+    /// Ubuntu's installer with its kernel and its answers.
+    fn boot_files(&self) -> Vec<PathBuf> {
+        let files = match &self.boot {
+            Boot::Plain { iso } | Boot::OwnLinux { iso, .. } => vec![PathBuf::from(iso)],
+            Boot::Install { iso, answer } => vec![PathBuf::from(iso), answer.clone()],
+            Boot::UbuntuInstall(install) => vec![
+                PathBuf::from(&install.iso),
+                install.seed.clone(),
+                install.kernel.clone(),
+                install.initrd.clone(),
+            ],
+            Boot::Gpu | Boot::Ubuntu(_) | Boot::Macos(_) | Boot::Android(_) => Vec::new(),
+        };
+        files.into_iter().filter(|file| !file.as_os_str().is_empty()).collect()
+    }
+
     fn firmware_code(&self) -> &Path {
         if let Some(boot) = self.macos_boot() {
             return &boot.firmware_code;
@@ -177,7 +232,9 @@ impl VmPlan {
         for (grant, path) in SYSTEM {
             plan.grant(grant, path);
         }
-        plan.grant(Grant::Run, qemu_tree(&self.qemu));
+        for (grant, path) in qemu_folders(&self.qemu, &self.private_places()) {
+            plan.grant(grant, path);
+        }
         if let Some(folder) = &self.qemu_files {
             plan.grant(Grant::Read, folder);
         }
@@ -185,10 +242,8 @@ impl VmPlan {
             plan.grant(Grant::Read, self.firmware_code()).grant(Grant::Write, &self.vars);
         }
         // A disc chosen while it runs is outside the jail, and the guest sees an empty drive.
-        if let Boot::Plain { iso } | Boot::OwnLinux { iso, .. } = &self.boot
-            && !iso.is_empty()
-        {
-            plan.grant(Grant::Read, iso);
+        for disc in self.boot_files() {
+            plan.grant(Grant::Read, disc);
         }
         for device in DEVICES {
             plan.grant(Grant::Device, device);
@@ -330,6 +385,8 @@ impl VmPlan {
             unix_sockets: Vec::new(),
             no_new_unix_sockets: false,
             reads_own_memory: false,
+            pings: false,
+            tpm: false,
             program: Vec::new(),
         };
         let mut words = vec![self.launcher.display().to_string()];
@@ -353,6 +410,8 @@ impl VmPlan {
             unix_sockets: self.unix_sockets(),
             no_new_unix_sockets: self.passes_unix_sockets(),
             reads_own_memory: self.macos_boot().is_some(),
+            pings: self.user_network_is_nat(),
+            tpm: false,
             program: Vec::new(),
         };
         let launcher = jail.launcher.display().to_string();
@@ -366,6 +425,8 @@ impl VmPlan {
                     unix_sockets: Vec::new(),
                     no_new_unix_sockets: false,
                     reads_own_memory: false,
+                    pings: false,
+                    tpm: false,
                     program: Vec::new(),
                 };
                 words.push(launcher.clone());

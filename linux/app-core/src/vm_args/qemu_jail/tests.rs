@@ -194,6 +194,16 @@ fn on_passt_qemu_only_has_the_private_link() {
     assert_eq!(network.tcp_bind, Ports::Only(vec![8080, EPHEMERAL_PORT]));
 }
 
+#[test]
+fn only_a_qemu_whose_user_network_is_the_nat_may_send_pings() {
+    let (_scratch, nat) = jailed(windows(), true);
+    assert!(nat.qemu_command().iter().any(|word| word == "--pings"));
+    let (_scratch, passt) = on_passt(windows(), true);
+    assert!(!passt.qemu_command().iter().any(|word| word == "--pings"));
+    let (_scratch, bridged) = jailed(Machine { network_mode: Mode::Bridged, ..windows() }, false);
+    assert!(!bridged.qemu_command().iter().any(|word| word == "--pings"));
+}
+
 fn held_to_wg0(machine: Machine, jailed_too: bool) -> (Scratch, VmPlan) {
     let (scratch, plan) = jailed(machine, false);
     let through = OnlyThrough { interface: "wg0".into(), ipv6: false };
@@ -224,7 +234,8 @@ fn a_machine_held_to_an_interface_has_the_launcher_guard_its_passt_with_or_witho
         let (_scratch, plan) = held_to_wg0(windows(), jailed_too);
         let command = plan.qemu_command();
         let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
-        let cut_file = crate::paths::notes_beside(&plan.run_folder).join("network-cut").display().to_string();
+        let notes = crate::paths::notes_beside(&plan.run_folder);
+        let cut_file = notes.join("network-cut").display().to_string();
         assert_eq!(command[guard + 1..guard + 3], ["wg0".to_owned(), cut_file]);
     }
     let (_scratch, plan) = on_passt(windows(), true);
@@ -556,6 +567,19 @@ fn a_backing_file_the_settings_dont_name_is_refused_and_not_granted() {
     assert!(refused.0.contains(&other.display().to_string()), "{}", refused.0);
 }
 
+/// What the app reads back about a running machine, and the remote view's control socket, are in
+/// the notes folder too.
+#[test]
+fn the_row_notes_and_the_remote_views_socket_are_in_the_notes_folder() {
+    let (_scratch, plan) = held_to_wg0(windows(), true);
+    let notes = crate::paths::notes_beside(&plan.run_folder);
+    assert!(crate::remote_view::socket_path(&plan.run_folder).starts_with(&notes));
+    assert!(crate::jailing::note_path(&plan.run_folder).starts_with(&notes));
+    let command = plan.qemu_command();
+    let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
+    assert!(Path::new(&command[guard + 2]).starts_with(&notes), "{}", command[guard + 2]);
+}
+
 /// The notes the app signals by are beside the run folder, where QEMU writes nothing.
 #[test]
 fn qemu_can_write_nothing_in_the_notes_folder() {
@@ -572,4 +596,44 @@ fn qemu_can_write_nothing_in_the_notes_folder() {
         let passt = command.iter().position(|word| word == "--passt").unwrap();
         assert!(Path::new(&command[passt + 3]).starts_with(&notes));
     }
+}
+
+/// QEMU in a folder of the user's own, as `~/.local/bin` or `~/bin`, gets that folder and its own
+/// files beside it, and never a folder that holds the machines.
+#[test]
+fn a_qemu_in_a_users_own_folder_gets_that_folder_and_not_the_one_above() {
+    for (qemu, broad) in [
+        ("/home/u/.local/bin/qemu-system-x86_64", "/home/u/.local"),
+        ("/home/u/bin/qemu-system-x86_64", "/home/u"),
+    ] {
+        let machine = Machine::new(
+            "win",
+            "Win",
+            "/home/u/.local/share/guesthouse/machines/win/disk.qcow2",
+            "/home/u/.local/share/guesthouse/machines/win/vars.fd",
+        );
+        let (_scratch, plan) = jailed(machine, false);
+        let plan = VmPlan { qemu: qemu.into(), ..plan };
+        let rules = plan.qemu_jail_plan(plan.jail.as_ref().unwrap());
+        let folder = Path::new(qemu).parent().unwrap();
+        assert!(rules.paths.contains(&(Grant::Run, folder.to_owned())), "{qemu}");
+        for (grant, path) in &rules.paths {
+            assert!(path != Path::new(broad), "{grant:?} {}", path.display());
+            let above_the_disk = Path::new(&plan.disk).starts_with(path) && path != Path::new(&plan.disk);
+            assert!(!above_the_disk, "{grant:?} {}", path.display());
+        }
+    }
+}
+
+#[test]
+fn a_qemu_beside_the_machines_gets_only_itself() {
+    let folders =
+        qemu_folders(Path::new("/data/qemu-system-x86_64"), &["/data/machines/win/disk.qcow2".into()]);
+    assert_eq!(folders[0], (Grant::Run, PathBuf::from("/data/qemu-system-x86_64")));
+    assert!(folders.iter().all(|(_, path)| !Path::new("/data/machines").starts_with(path)), "{folders:?}");
+    let build = qemu_folders(Path::new("/p/qemu/build/qemu-system-x86_64"), &[]);
+    assert!(
+        build.contains(&(Grant::Run, "/p/qemu/build".into()))
+            && build.contains(&(Grant::Read, "/p/qemu/pc-bios".into()))
+    );
 }

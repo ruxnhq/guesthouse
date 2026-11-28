@@ -40,6 +40,8 @@ pub enum Exit {
     NoLibrary = 5,
     /// The card can't have its memory clock locked.
     NotSupported = 6,
+    /// The user who started it can't open the card's device file, so the card isn't theirs to change.
+    NotTheirs = 7,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +127,15 @@ pub fn highest_clock(supported: &[u32]) -> Option<u32> {
 pub fn is_nvidia_display(vendor: &str, class: &str) -> bool {
     // The class's top byte is 03 for every kind of display controller, 3D ones too.
     vendor.trim().eq_ignore_ascii_case("0x10de") && class.trim().to_ascii_lowercase().starts_with("0x03")
+}
+
+/// The card's device file, from its file in the driver's `/proc/driver/nvidia/gpus`.
+pub fn device_file(information: &str) -> Option<String> {
+    let minor = information.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "Device Minor").then(|| value.trim().parse::<u32>().ok())?
+    })?;
+    Some(format!("/dev/nvidia{minor}"))
 }
 
 /// Why the card wouldn't do it.
@@ -223,6 +234,14 @@ pub fn reset<C: Card>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_device_file_is_the_one_the_driver_lists() {
+        let information = "Model: \t\t NVIDIA Card\nBus Location: \t 0000:01:00.0\nDevice Minor: \t 1\n";
+        assert_eq!(super::device_file(information).as_deref(), Some("/dev/nvidia1"));
+        assert_eq!(super::device_file("Device Minor: x\n"), None);
+        assert_eq!(super::device_file(""), None);
+    }
+
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;

@@ -15,6 +15,8 @@ TAB=$(printf '\t')
 BRIDGE_HELPER_FOLDER=/usr/local/libexec/guesthouse
 BRIDGE_HELPER=$BRIDGE_HELPER_FOLDER/qemu-bridge-helper
 CLOCK_HELPER=$BRIDGE_HELPER_FOLDER/guesthouse-clock-helper
+UDEV_RULES=/etc/udev/rules.d
+DEVICE_RULES_COMMAND="rm -f $UDEV_RULES/70-guesthouse-*.rules && udevadm control --reload"
 SWTPM_PROFILE=/etc/apparmor.d/usr.bin.swtpm
 SWTPM_LOCAL=/etc/apparmor.d/local/usr.bin.swtpm
 SWTPM_RULE='owner /run/user/[0-9]*/guesthouse/** rwk,'
@@ -270,6 +272,23 @@ print_plan() {
         say "The install added a rule to swtpm's AppArmor profile in $SWTPM_LOCAL. This takes it out, as root:"
         say "  sudo sh -c '$(swtpm_rule_command)'"
     fi
+    if device_rules_are_there; then
+        say "The app's settings gave you drives or USB devices with rules in $UDEV_RULES. This takes them out, as root:"
+        say "  sudo sh -c '$DEVICE_RULES_COMMAND'"
+    fi
+}
+
+# The rules for drives and USB devices that the app's settings showed. They're root's, and named by the app.
+device_rules_are_there() {
+    for rule in "$UDEV_RULES"/70-guesthouse-*.rules; do
+        [ -e "$rule" ] && return 0
+    done
+    return 1
+}
+
+remove_device_rules() {
+    device_rules_are_there || return 0
+    sudo sh -c "$DEVICE_RULES_COMMAND" </dev/tty || warn "couldn't take the device rules out of $UDEV_RULES."
 }
 
 # The helper at $1, only while it's still the copy the install put there. Another install of Guesthouse
@@ -438,6 +457,7 @@ main() {
     leave_group
     remove_helper
     remove_swtpm_rule
+    remove_device_rules
     remove_program
     delete_machines
     remove_manifest

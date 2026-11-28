@@ -82,6 +82,24 @@ qemu_words() {
     '
 }
 
+# Whether each path, and each folder above it, is root's and only root can write to it.
+root_owned() {
+    for path in "$@"; do
+        while :; do
+            info=$(stat -c '%u %A' -- "$path" 2>/dev/null) || return 1
+            [ "${info%% *}" = 0 ] || return 1
+            case ${info#* } in
+                ?????w????* | ????????w?*)
+                    # A folder writable by all with its sticky bit, like /tmp, still keeps others' files apart, but not this.
+                    return 1
+                    ;;
+            esac
+            [ "$path" = / ] && break
+            path=$(dirname -- "$path")
+        done
+    done
+}
+
 main() {
     user=${SUDO_USER:-} slot='' ram='' storage=local render_address=0x6 dry_run=''
     while [ $# -gt 0 ]; do
@@ -111,6 +129,8 @@ main() {
     program=$home/.local/lib/guesthouse/current
     [ -x "$program/guesthouse-vm" ] || die "$user has no Guesthouse at $program."
     [ -f "$HERE/hookscript.sh" ] || die "hookscript.sh isn't beside this script."
+    root_owned "$HERE" "$HERE/hookscript.sh" "$HERE/setup-vm.sh" ||
+        die "$HERE has a file or folder that someone other than root can change, and the hookscript from it runs as root. Clone Guesthouse as root into a folder of root's, as docs/proxmox.md says."
 
     config=$(qm config "$vmid") || die "there's no VM $vmid."
     status=$(qm status "$vmid")
@@ -229,6 +249,10 @@ make_words() {
             "-device gpupv-render,"*)
                 [ "$render_address" = none ] || word="$word,bus=pcie.0,addr=$render_address"
                 ;;
+            # QEMU runs as root here, so each channel only takes a daemon that runs as the user.
+            "-device gpupv-global,"* | "-device gpupv-vgpu,"*)
+                word="$word,owner=$uid"
+                ;;
         esac
         printf '%s\n' "$word"
     done)
@@ -261,8 +285,8 @@ check_gpu_words() {
             -e "-chardev socket,id=gpg,path=$run/global\\.sock,reconnect-ms=[0-9]+" \
             -e "-chardev socket,id=gpv,path=$run/vgpu\\.sock,reconnect-ms=[0-9]+" \
             -e "-object memory-backend-file,id=gpio,size=64G,mem-path=/dev/shm/gpupv-window\\.$vmid,share=on" \
-            -e "-device gpupv-global,chardev=gpg,instanceid=$id,iomem=gpio,iomem-base=$hex" \
-            -e "-device gpupv-vgpu,chardev=gpv,instanceid=$id" \
+            -e "-device gpupv-global,chardev=gpg,instanceid=$id,iomem=gpio,iomem-base=$hex,owner=$uid" \
+            -e "-device gpupv-vgpu,chardev=gpv,instanceid=$id,owner=$uid" \
             -e "-object memory-backend-file,id=ram0,size=${ram%G}G,mem-path=/dev/shm/gpupv-ram\\.$vmid,share=on" \
             -e "-machine memory-backend=ram0" \
             -e "-device gpupv-render,channel=$id,hostcaps=[0-9]+(,vendor-id=$hex,device-id=$hex)?(,bus=pcie\\.0,addr=$hex)?" ||

@@ -21,6 +21,7 @@ const STATE_FOLDER: &CStr = c"/run/guesthouse-clocks";
 const FOLDER_MODE: libc::mode_t = 0o700;
 const FILE_MODE: libc::mode_t = 0o600;
 const PCI_DEVICES: &str = "/sys/bus/pci/devices";
+const NVIDIA_CARDS: &str = "/proc/driver/nvidia/gpus";
 /// The library by its standard name, which the loader looks for only in the system's own places for
 /// a setuid program, then where NixOS keeps the driver's libraries.
 const LIBRARIES: [&CStr; 2] = [c"libnvidia-ml.so.1", c"/run/opengl-driver/lib/libnvidia-ml.so.1"];
@@ -81,6 +82,12 @@ fn run(order: &Order) -> Result<(), Fault> {
     if !is_nvidia_display(&read("vendor"), &read("class")) {
         return Err(Fault::new(Exit::NotNvidia, format!("{} is not an NVIDIA display card.", order.card)));
     }
+    if !real_user_can_open(&order.card) {
+        return Err(Fault::new(
+            Exit::NotTheirs,
+            format!("The user who started this can't open the device file of {}.", order.card),
+        ));
+    }
     // All of root, so the user who started it can't stop it half way with a signal: only the end of
     // its input, which is theirs to give, ends a hold.
     // SAFETY: plain calls with no pointers.
@@ -107,6 +114,20 @@ fn run(order: &Order) -> Result<(), Fault> {
         },
     }
     Ok(())
+}
+
+/// Whether the user who started this, and not root, can open the card's device file for reading and
+/// writing, as a program of theirs on the card does.
+fn real_user_can_open(card: &str) -> bool {
+    let information = fs::read_to_string(format!("{NVIDIA_CARDS}/{card}/information")).unwrap_or_default();
+    guesthouse_clock_helper::device_file(&information).is_some_and(|file| real_user_may(&file))
+}
+
+/// `access` asks with the real user and group, which are still the caller's here.
+fn real_user_may(file: &str) -> bool {
+    let Ok(file) = std::ffi::CString::new(file) else { return false };
+    // SAFETY: a plain call with a string that lives across it.
+    unsafe { libc::access(file.as_ptr(), libc::R_OK | libc::W_OK) == 0 }
 }
 
 // ---- Ending ----
@@ -417,5 +438,28 @@ impl Card for Nvml {
         })?;
         // SAFETY: as above.
         answer("Putting the memory clock back", unsafe { reset(self.device) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn only_a_file_the_real_user_can_read_and_write_counts() {
+        let folder = std::env::temp_dir().join(format!("gh-clock-helper-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let (theirs, not) = (folder.join("theirs"), folder.join("not"));
+        fs::write(&theirs, "").unwrap();
+        fs::write(&not, "").unwrap();
+        fs::set_permissions(&not, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(real_user_may(&theirs.display().to_string()));
+        // SAFETY: a plain call.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(!real_user_may(&not.display().to_string()), "read alone isn't enough");
+        }
+        assert!(!real_user_may("/dev/nvidia-no-such-card"));
+        fs::remove_dir_all(folder).unwrap();
     }
 }

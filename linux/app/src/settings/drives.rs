@@ -173,7 +173,7 @@ impl Drives {
             Ok(commands) => {
                 let body = format!(
                     "This user cannot open {}. Run this once in a terminal, then start the machine again. \
-                     It lets whoever is logged in on this PC use this drive. {ACCESS_AFTER}",
+                     It gives this drive to your user alone, until the rule is taken out, which uninstall.sh offers. {ACCESS_AFTER}",
                     host.title()
                 );
                 show_root_step(shared, &body, Some(&commands));

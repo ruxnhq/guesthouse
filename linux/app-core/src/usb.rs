@@ -50,12 +50,14 @@ impl UsbDevice {
         access(self.node(context), Access::READ_OK | Access::WRITE_OK).is_ok()
     }
 
-    /// The one step that needs root. uaccess gives the device to whoever is logged in.
+    /// The one step that needs root. The rule gives the device to this user alone, whoever else logs
+    /// in at the PC.
     pub fn access_command(&self) -> String {
         let (vendor, product) = (&self.vendor, &self.product);
         let rule = format!(
             "SUBSYSTEM==\"usb\", ENV{{DEVTYPE}}==\"usb_device\", ATTR{{idVendor}}==\"{vendor}\", \
-             ATTR{{idProduct}}==\"{product}\", TAG+=\"uaccess\""
+             ATTR{{idProduct}}==\"{product}\", {}",
+            owner_only()
         );
         format!(
             "echo '{rule}' | sudo tee /etc/udev/rules.d/70-guesthouse-{vendor}-{product}.rules\n\
@@ -63,6 +65,11 @@ impl UsbDevice {
              sudo udevadm trigger --attr-match=idVendor={vendor} --attr-match=idProduct={product}"
         )
     }
+}
+
+/// A rule's words that give a device to this user alone, by number, as a name could need quoting.
+pub fn owner_only() -> String {
+    format!("OWNER=\"{}\", MODE=\"0600\"", rustix::process::getuid().as_raw())
 }
 
 /// A text file in sysfs, which is empty if it isn't there.
@@ -254,13 +261,14 @@ mod tests {
     }
 
     #[test]
-    fn the_fix_names_the_device_and_keeps_uaccess_working() {
+    fn the_fix_names_the_device_and_gives_it_to_this_user_alone() {
         let command = gadget().access_command();
-        assert!(command.contains(r#"ATTR{idVendor}=="abcd", ATTR{idProduct}=="0001", TAG+="uaccess""#));
-        assert!(
-            command.contains("70-guesthouse-abcd-0001.rules"),
-            "the name decides whether uaccess still applies"
-        );
+        let uid = rustix::process::getuid().as_raw();
+        let owner =
+            format!(r#"ATTR{{idVendor}}=="abcd", ATTR{{idProduct}}=="0001", OWNER="{uid}", MODE="0600""#);
+        assert!(command.contains(&owner), "{command}");
+        assert!(!command.contains("uaccess"), "not whoever is at the seat");
+        assert!(command.contains("70-guesthouse-abcd-0001.rules"));
     }
 
     #[test]

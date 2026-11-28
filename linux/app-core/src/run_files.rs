@@ -67,19 +67,44 @@ pub fn kept_run_of(folder: &Path, id: &str) -> Option<SystemTime> {
 
 /// Each of these files, with `suffix` added, that is there and changed at or after `since`.
 pub fn files_since(folder: &Path, names: &[&str], suffix: &str, since: SystemTime) -> Vec<(String, PathBuf)> {
+    found_since(names, suffix, since, |name| folder.join(name))
+}
+
+fn found_since(
+    names: &[&str],
+    suffix: &str,
+    since: SystemTime,
+    place: impl Fn(&str) -> PathBuf,
+) -> Vec<(String, PathBuf)> {
     names
         .iter()
         .map(|name| format!("{name}{suffix}"))
         .map(|name| {
-            let path = folder.join(&name);
+            let path = place(&name);
             (name, path)
         })
         .filter(|(_, path)| modified(path).is_some_and(|changed| changed >= since))
         .collect()
 }
 
+/// When the file was last changed, if it's a plain file and not a link.
 pub fn modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+    let metadata = fs::symlink_metadata(path).ok()?;
+    metadata.is_file().then(|| metadata.modified().ok()).flatten()
+}
+
+/// Opens a file of a run folder to read, following no link and only if it's a plain file. A jailed
+/// process writes in a run folder, and what it leaves there is only ever its own file.
+pub fn open_run_file(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::File::options()
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a plain file"));
+    }
+    Ok(file)
 }
 
 /// A moment as a reader would want it.

@@ -15,7 +15,6 @@ use crate::run_files::{
 };
 use crate::slots;
 use crate::tasks::{read_task, task_path};
-use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 const GONE_AT_REBOOT: &str = "Run folders go at each reboot, and the app keeps a copy of a machine's last run \
@@ -48,7 +47,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         if let Some(since) = run_of(&folder, &machine.id) {
             found.has_run_logs = true;
             found.add_file_if_there(&format!("{place}/jail-note"), &crate::jailing::note_path(&folder));
-            add_all(found, &place, &folder, &current, "", since);
+            add_all(found, &place, files_since(&folder, &current, "", since));
             found.notes.push(format!(
                 "The logs in {place} are from the run folder, of the run that started at {}.",
                 local_time(since)
@@ -56,7 +55,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = kept_run_of(&folder, &machine.id) {
             let kept: Vec<&str> = wanted(&[&KEPT_HOST_LOGS[..], &[GUEST_SERIAL]].concat());
-            add_all(found, &place, &folder, &kept, KEPT_SUFFIX, since);
+            add_all(found, &place, files_since(&folder, &kept, KEPT_SUFFIX, since));
         }
     }
     if !found.has_run_logs {
@@ -64,7 +63,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         if let Some(started) = kept_started(context, &machine.id) {
             found.has_run_logs = true;
             let names: Vec<&str> = wanted(&kept_names()).into_iter().collect();
-            add_all(found, "runs/kept", &kept, &names, "", UNIX_EPOCH);
+            add_all(found, "runs/kept", files_since(&kept, &names, "", UNIX_EPOCH));
             found.notes.push(format!(
                 "No run folder holds this machine's last run, so runs/kept is the copy the app kept of it. \
                  That run started at {started}."
@@ -78,17 +77,10 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
     }
 }
 
-fn add_all(
-    found: &mut Collection,
-    place: &str,
-    folder: &Path,
-    names: &[&str],
-    suffix: &str,
-    since: std::time::SystemTime,
-) {
-    for (name, path) in files_since(folder, names, suffix, since) {
+fn add_all(found: &mut Collection, place: &str, files: Vec<(String, std::path::PathBuf)>) {
+    for (name, path) in files {
         let before = found.items.len();
-        found.add_file_if_there(&format!("{place}/{name}"), &path);
+        found.add_run_file(&format!("{place}/{name}"), &path);
         // Apps write what they like to logcat, an account's address among it.
         if name == GUEST_LOGCAT
             && let Some(item) = found.items.get_mut(before)
@@ -106,6 +98,7 @@ mod tests {
     use crate::testing::{Scratch, scratch_context};
     use crate::vm_host::MACHINE_NOTE;
     use std::fs;
+    use std::path::Path;
     use std::time::{Duration, SystemTime};
 
     fn request(guest_serial: bool) -> Request {
@@ -168,6 +161,25 @@ mod tests {
         collect(&context, &machine, &Request { guest_logs: true, ..request(true) }, &mut found);
         assert_eq!(found.names().collect::<Vec<_>>(), ["runs/slot-0/logcat.log"]);
         assert_eq!(found.items[0].text, "E Auth: no token for <email>\n");
+    }
+
+    #[test]
+    fn a_link_or_a_pipe_in_the_run_folder_is_not_read() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let folder = context.run_folder(Some(slots::first()));
+        fs::create_dir_all(&folder).unwrap();
+        crate::run_files::plant_note(&folder, MACHINE_NOTE, "w11");
+        let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
+        std::os::unix::fs::symlink(&elsewhere, folder.join("qemu.log")).unwrap();
+        let pipe =
+            std::ffi::CString::new(folder.join("swtpm.log").into_os_string().into_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
+        fs::write(folder.join("daemon.out"), "the run's").unwrap();
+        let mut found = Collection::default();
+        collect(&context, &Machine::new("w11", "W11", "/d", "/v"), &request(true), &mut found);
+        assert_eq!(found.names().collect::<Vec<_>>(), ["runs/slot-0/daemon.out"]);
+        assert!(found.items.iter().all(|item| !item.text.contains("not the run's")));
     }
 
     #[test]

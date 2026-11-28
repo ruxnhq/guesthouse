@@ -394,7 +394,8 @@ mod tests {
         assert!(has(Grant::Write, "/m/mac/opencore.qcow2") && has(Grant::Write, "/m/mac/disk.qcow2"));
         assert!(has(Grant::Write, "/m/mac/OVMF_VARS.fd") && has(Grant::Read, "/m/mac/OVMF_CODE.fd"));
         assert!(has(Grant::Read, "/m/mac/installer.img") && has(Grant::Read, "/p/macos/ReimsGraphics.rom"));
-        assert!(has(Grant::Run, "/p/macos/qemu"), "its own QEMU's tree");
+        assert!(has(Grant::Run, "/p/macos/qemu/bin") && has(Grant::Run, "/p/macos/qemu/lib"), "its own QEMU");
+        assert!(has(Grant::Read, "/p/macos/qemu/share/qemu"), "its own QEMU's files");
         assert!(has(Grant::Device, UDMABUF));
         assert!(has(Grant::Own, "/m/mac/gpu-cache"), "somewhere to keep compiled shaders");
         for node in ["/dev/nvidiactl", "/dev/nvidia0", "/dev/dri/renderD129"] {

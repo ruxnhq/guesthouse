@@ -61,17 +61,22 @@ const DRIVE_FIXED: u32 = 3;
 const BUFFER: u32 = REQUEST_LIMIT as u32;
 /// How long to wait before trying again when an instance couldn't be made.
 const AGAIN: Duration = Duration::from_secs(1);
-/// How many connections may be open at once. The app has a few open at a time (its requests, one
-/// after another, a watch, a machine being made, the remote view's), far fewer than this for a user.
-pub const LIMITS: Limits = Limits { per_user: 32, in_all: 256 };
+/// How many connections may be open at once, and how long each has to send its request. The app has
+/// a few open at a time (its requests, one after another, a watch, a machine being made, the remote
+/// view's), far fewer than this for a user, and sends each request as soon as it connects.
+pub const LIMITS: Limits = Limits { per_user: 32, in_all: 256, first_line: Duration::from_secs(10) };
+/// How often a connection is looked at while its request is awaited.
+const LINE_POLL: Duration = Duration::from_millis(20);
 /// Whom a connection is counted against when the account of the process that made it can't be read.
 const UNKNOWN_USER: &str = "an unknown user";
 
-/// How many connections may be open at once, for one user and in all.
+/// How many connections may be open at once, for one user and in all, and how long one may take to
+/// send its whole request line before it's closed unanswered.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub per_user: usize,
     pub in_all: usize,
+    pub first_line: Duration,
 }
 
 /// A connection's work, handed to a new thread.
@@ -156,9 +161,14 @@ fn serve<W: Work>(
         // One past the limit is closed here, unanswered, as `served` goes.
         let Some(slot) = slots.take(&user) else { continue };
         let service = Arc::clone(&service);
+        let first_line = slots.limits.first_line;
         let work = Box::new(move || {
             let _slot = slot;
-            answer(&service, File::from(served));
+            let pipe = File::from(served);
+            // A connection that hasn't sent its request in time is closed unanswered.
+            if line_within(&pipe, first_line) {
+                answer(&service, pipe);
+            }
         });
         if let Err(error) = spawn(work) {
             log(&format!("A request was closed unanswered, as no thread could be made for it: {error}"));
@@ -252,6 +262,36 @@ fn client_user(pipe: &OwnedHandle) -> Option<String> {
     // SAFETY: ours, and not used again.
     unsafe { CloseHandle(token) };
     user
+}
+
+/// Whether a whole request line, or as much as a request may be, is waiting on `pipe` within
+/// `within`, or the other end has gone, which reading then finds. The whole line fits in the pipe's
+/// room, so it's all there before it's read.
+fn line_within(pipe: &File, within: Duration) -> bool {
+    let until = std::time::Instant::now() + within;
+    let mut seen = vec![0u8; BUFFER as usize];
+    loop {
+        let mut copied = 0u32;
+        // SAFETY: an instance of ours; the buffer is as long as said, and only copied into.
+        let peeked = unsafe {
+            PeekNamedPipe(
+                pipe.as_raw_handle(),
+                seen.as_mut_ptr().cast(),
+                BUFFER,
+                &mut copied,
+                null_mut(),
+                null_mut(),
+            )
+        } != 0;
+        let copied = copied as usize;
+        if !peeked || copied == seen.len() || seen[..copied].contains(&b'\n') {
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        thread::sleep(LINE_POLL);
+    }
 }
 
 /// Reads one request and answers it, if whoever asked may ask.
@@ -741,15 +781,17 @@ mod tests {
     }
 
     /// Asks for the status until it's answered, as a connection that has just closed gives its
-    /// place back a moment later.
-    fn answered_soon(name: &'static str) -> bool {
-        (0..50).any(|_| {
-            let answered = matches!(status_within(name), Some(Some(Answer::Status { .. })));
-            if !answered {
-                thread::sleep(Duration::from_millis(50));
+    /// place back a moment later. What the last try got, if none was answered.
+    fn answered_soon(name: &'static str) -> Result<(), String> {
+        let mut last = None;
+        for _ in 0..50 {
+            match status_within(name) {
+                Some(Some(Answer::Status { .. })) => return Ok(()),
+                other => last = Some(other),
             }
-            answered
-        })
+            thread::sleep(Duration::from_millis(50));
+        }
+        Err(format!("the last try got {last:?}"))
     }
 
     /// A user's connections that ask nothing hold no more than their share, the one past it is
@@ -757,8 +799,8 @@ mod tests {
     #[test]
     fn connections_past_the_limit_are_closed_and_the_pipe_goes_on() {
         for (test, limits) in [
-            ("per-user", Limits { per_user: 2, in_all: 100 }),
-            ("in-all", Limits { per_user: 100, in_all: 2 }),
+            ("per-user", Limits { per_user: 2, in_all: 100, ..LIMITS }),
+            ("in-all", Limits { per_user: 100, in_all: 2, ..LIMITS }),
         ] {
             let name = serving(test, limits, on_new_thread);
             let held = [connect(name), connect(name)];
@@ -768,7 +810,8 @@ mod tests {
             assert_eq!(status_within(name), Some(None), "{test}: and so is the next, while the limit holds");
             let [first, _second] = held;
             drop(first);
-            assert!(answered_soon(name), "{test}: once one goes, the pipe answers again");
+            answered_soon(name)
+                .unwrap_or_else(|why| panic!("{test}: once one goes, the pipe answers again, but {why}"));
         }
     }
 
@@ -783,6 +826,17 @@ mod tests {
             }
         });
         assert_eq!(status_within(name), Some(None), "the first is closed unanswered");
-        assert!(answered_soon(name), "the next is answered");
+        answered_soon(name).unwrap_or_else(|why| panic!("the next is answered, but {why}"));
+    }
+
+    /// A connection that sends nothing is closed once its time is up, and gives its place back;
+    /// one that sends its request is answered.
+    #[test]
+    fn a_connection_that_sends_no_request_in_time_is_closed() {
+        let limits = Limits { per_user: 1, in_all: 100, first_line: Duration::from_millis(300) };
+        let name = serving("first-line", limits, on_new_thread);
+        let silent = connect(name);
+        assert!(closed_within(&silent, 5), "a connection that sends nothing is closed");
+        answered_soon(name).unwrap_or_else(|why| panic!("its place is free for one that asks, but {why}"));
     }
 }

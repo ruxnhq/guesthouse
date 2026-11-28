@@ -160,6 +160,7 @@ impl Work for Pretend {
         ctl: GuestCtl,
     ) -> Result<(), String> {
         self.booted.lock().unwrap().push(settings.clone());
+        sink.console(&format!(r"\\.\pipe\{}-{}-console", settings.name, self.booted.lock().unwrap().len()));
         sink.state(State::Running);
         ctl.attach(Arc::new(Port { remoteman: Arc::clone(&self.remoteman), ctl: ctl.clone() }), true);
         if !self.silent.load(Ordering::SeqCst) {
@@ -484,6 +485,24 @@ fn a_machine_starts_stops_and_only_then_is_deleted() {
     assert_eq!(ask(service, Request::Delete { name: "win".into() }), [Answer::Ok]);
     assert!(status(service).is_empty());
     assert!(!service.machines().store.folder("win").exists());
+}
+
+/// The console's pipe is named afresh by each boot, and listed only while the machine runs.
+#[test]
+fn a_machines_console_is_listed_by_the_name_its_boot_gave_and_only_while_it_runs() {
+    let setup = setup("console", Pretend::default());
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    assert_eq!(status(service)[0].console_pipe, None);
+    for boot in 1..=2 {
+        assert_eq!(ask(service, Request::Start { name: "win".into() }), [Answer::Ok]);
+        wait_for(service, "win", State::Running);
+        let pipe = format!(r"\\.\pipe\guesthouse-win-{boot}-console");
+        assert_eq!(status(service)[0].console_pipe.as_deref(), Some(pipe.as_str()));
+        assert_eq!(ask(service, Request::Stop { name: "win".into() }), [Answer::Ok]);
+        wait_for(service, "win", State::Off);
+        assert_eq!(status(service)[0].console_pipe, None);
+    }
 }
 
 #[test]

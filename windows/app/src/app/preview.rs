@@ -577,6 +577,7 @@ fn status() -> Status {
         address: address.map(str::to_owned),
         remote_view: false,
         remote_port: None,
+        console_pipe: None,
     };
     let card = |name: &str, memory_mb, default| CardInfo { name: name.to_owned(), memory_mb, default };
     Status {

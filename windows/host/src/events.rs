@@ -9,6 +9,10 @@ use std::sync::Mutex;
 /// guest's serial port, so it must take events from either.
 pub trait Sink: Send + Sync {
     fn event(&self, event: Event);
+
+    /// The pipe this boot's console is served on, once the machine runs: its name is new each boot,
+    /// so whoever opens the console learns it here. A sink that offers no console lets it pass.
+    fn console(&self, _pipe: &str) {}
 }
 
 impl dyn Sink + '_ {

@@ -2,7 +2,9 @@
 //! Remote Desktop client, which can't open a pipe: this listens on a port of this PC's loopback only,
 //! carries each connection to the pipe and back, and starts the client on that port.
 //!
-//!     cargo run -p guesthouse-control --example console -- NAME [VM-ID]
+//!     cargo run -p guesthouse-control --example console -- PIPE [VM-ID]
+//!
+//! PIPE is the console's pipe, which is named afresh at each boot: the machine's events say it.
 //!
 //! With VM-ID, the relay sends Remote Desktop's pre-connection message naming it ahead of what the
 //! client sends, as Hyper-V's own viewer does, as the console waits for it.

@@ -38,6 +38,8 @@ pub struct Entry {
     /// The address the guest has reported since this run began, which its forwards lead to. The
     /// settings keep the last run's, which may not be this run's.
     pub run_address: Option<String>,
+    /// The pipe this run's console is served on, once the machine runs. Its name is new each boot.
+    pub console_pipe: Option<String>,
     /// Whether other devices may view it while it runs, and its port for that, as kept in its own
     /// folder beside its settings.
     pub remote_view: Switch,
@@ -62,6 +64,7 @@ impl Entry {
             stop: None,
             busy: None,
             run_address: None,
+            console_pipe: None,
             remote_view: Switch::default(),
             ctl: None,
             boot_addresses: Vec::new(),
@@ -222,6 +225,12 @@ struct Told {
 impl Sink for Told {
     fn event(&self, event: Event) {
         self.machines.tell(&self.name, event);
+    }
+
+    fn console(&self, pipe: &str) {
+        if let Some(entry) = self.machines.lock().get_mut(&self.name) {
+            entry.console_pipe = Some(pipe.to_owned());
+        }
     }
 }
 

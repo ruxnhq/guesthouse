@@ -5,6 +5,7 @@ use crate::{Command, Options};
 use guesthouse_hcs::gpu;
 use guesthouse_hcs::host;
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest};
+use guesthouse_hcs::serial::pipe_tag;
 use guesthouse_host_windows::events::{Event, Sink};
 use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::windows::{absolute, boot, chosen_card, machine, prepare};
@@ -84,7 +85,9 @@ fn print_document(options: &Options) -> Result<(), String> {
     let settings = options.boot_settings();
     let disk = absolute(&settings.disk)?;
     let record = Record::load(&disk)?;
-    let machine = machine(&settings, disk, &record, None);
+    // Each boot names its pipes afresh, as this does.
+    let tag = pipe_tag().map_err(|error| error.to_string())?;
+    let machine = machine(&settings, disk, &record, None, tag);
     println!("{}", serde_json::to_string_pretty(&machine.document()).expect("a document always serialises"));
     if settings.network {
         eprintln!("(boot adds a network card here, plugged into an endpoint it makes then.)");

@@ -109,12 +109,11 @@ impl DaemonStart {
         self
     }
 
-    /// The program with its words and environment. The memory files are taken out of what the app
-    /// inherited unless this start names them, so a variable left in someone's shell can't put the
-    /// daemon on files while QEMU is on the descriptors.
+    /// The program with its words and environment. It starts from a clean environment with only
+    /// what [`passed_on`] keeps of the app's, and what this start sets.
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
-        command.arg(&self.base).env_remove(RAM_VARIABLE).env_remove(WINDOW_VARIABLE).envs(&self.environment);
+        command.arg(&self.base).env_clear().envs(passed_on(std::env::vars_os())).envs(&self.environment);
         command
     }
 
@@ -133,6 +132,37 @@ impl DaemonStart {
             detached(&mut command).stdin(Stdio::null()).stdout(output.try_clone()?).stderr(output).spawn()?;
         Ok(spawned)
     }
+}
+
+/// What the daemon keeps of the app's environment: the system's few, and Guesthouse's own settings
+/// for it, as a user sets them in a shell. Not the memory files, as a variable left in someone's
+/// shell would put the daemon on files while QEMU is on the descriptors, and not the jail's switch,
+/// which only a start that allows no jail sets.
+const PASSED_ON: [&str; 11] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "XDG_RUNTIME_DIR",
+    "LD_LIBRARY_PATH",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+];
+const OWN_PREFIX: &str = "GUESTHOUSE_";
+
+fn passed_on(
+    environment: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let left_out = [RAM_VARIABLE, WINDOW_VARIABLE, jail::VARIABLE];
+    environment
+        .filter(|(name, _)| {
+            let Some(name) = name.to_str() else { return false };
+            (PASSED_ON.contains(&name) || name.starts_with(OWN_PREFIX)) && !left_out.contains(&name)
+        })
+        .collect()
 }
 
 /// A process group of its own, so that what it starts outlives the task, and the app can close at any
@@ -200,15 +230,38 @@ mod tests {
                 .map(|(name, value)| (name.to_owned(), value.map(OsStr::to_owned)))
                 .collect::<Vec<_>>()
         };
-        let removed = |name: &str| (OsStr::new(name).to_owned(), None);
         let start = DaemonStart::new(&context, slots::first(), "16G", None);
         let found = envs(&start);
-        assert!(found.contains(&removed(RAM_VARIABLE)) && found.contains(&removed(WINDOW_VARIABLE)));
+        assert!(!found.iter().any(|(name, _)| name == RAM_VARIABLE || name == WINDOW_VARIABLE));
         let files = MemoryFiles { ram: "/dev/shm/ram".into(), window: "/dev/shm/window".into() };
         let found = envs(&start.with_memory_files(&files));
         let set = |name: &str, value: &str| (OsStr::new(name).to_owned(), Some(OsStr::new(value).to_owned()));
         assert!(found.contains(&set(RAM_VARIABLE, "/dev/shm/ram")));
         assert!(found.contains(&set(WINDOW_VARIABLE, "/dev/shm/window")));
+    }
+
+    #[test]
+    fn the_daemon_gets_only_the_systems_variables_and_its_own() {
+        let given = [
+            ("PATH", "/usr/bin"),
+            ("GH_TOKEN", "a secret"),
+            ("SSH_AUTH_SOCK", "/run/user/1000/ssh"),
+            ("GUESTHOUSE_VERBOSE", "1"),
+            ("GUESTHOUSE_JAIL", "off"),
+            (RAM_VARIABLE, "/dev/shm/ram"),
+        ];
+        let given = given.iter().map(|(name, value)| ((*name).into(), (*value).into()));
+        let kept: Vec<String> =
+            passed_on(given).into_iter().map(|(name, _)| name.to_string_lossy().into_owned()).collect();
+        assert_eq!(kept, ["PATH", "GUESTHOUSE_VERBOSE"]);
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let start = DaemonStart::new(&context, slots::first(), "16G", None).without_jail();
+        let command = start.command();
+        let jail_off = command
+            .get_envs()
+            .any(|(name, value)| name == "GUESTHOUSE_JAIL" && value == Some(OsStr::new("off")));
+        assert!(jail_off, "a start that allows no jail still says so");
     }
 
     #[test]

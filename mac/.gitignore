@@ -1,6 +1,4 @@
 # The core's XCFramework, Xcode's derived data and the app.
 build/
-# Cargo's output.
-core/target/
 # Made by `xcodegen generate` from project.yml.
 Guesthouse.xcodeproj/

@@ -262,3 +262,29 @@ fn a_path_checked_before_a_link_moved_in_stays_inside() {
     assert!(!scratch.path("outer/f").exists(), "nothing may appear outside the folder");
     assert!(root.join("f").exists(), "the link's way up stops at the folder");
 }
+
+/// What the share answers, or `None` if it is still busy after a few seconds.
+fn codes_in_time(root: &Path, requests: Vec<Vec<u8>>) -> Option<Vec<u16>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let root = root.to_owned();
+    std::thread::spawn(move || sender.send(codes(&root, &requests)));
+    receiver.recv_timeout(std::time::Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn only_regular_files_are_opened() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let fifo = root.join("pipe");
+    rustix::fs::mknodat(rustix::fs::CWD, &fifo, rustix::fs::FileType::Fifo, 0o600.into(), 0).unwrap();
+    let requests = vec![
+        request("PUT", "/pipe", &[], b"x"),
+        request("COPY", "/pipe", &[("Destination", "http://x/copied")], b""),
+        get("/pipe"),
+        get("/hello.txt"),
+    ];
+    let answered = codes_in_time(&root, requests).expect("a pipe in the folder must not hold the connection");
+    assert_eq!(answered[2..], [404, 200]);
+    assert!(answered[..2].iter().all(|code| *code >= 400), "{answered:?}");
+    assert!(!root.join("copied").exists());
+}

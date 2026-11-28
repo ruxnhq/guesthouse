@@ -84,6 +84,18 @@ fn remove_at(parent: &OwnedFd, name: &OsStr) -> io::Result<()> {
     Ok(unlinkat(parent, name, AtFlags::REMOVEDIR)?)
 }
 
+/// Only a regular file is read or written: a pipe or a device the PC put in the folder would hold the
+/// connection, or be written to. `NONBLOCK` makes the open of one return at once, and its kind is
+/// checked on the open handle.
+fn plain_file(file: OwnedFd) -> io::Result<File> {
+    if FileType::from_raw_mode(fstat(&file)?.st_mode) != FileType::RegularFile {
+        return Err(ErrorKind::PermissionDenied.into());
+    }
+    Ok(File::from(file))
+}
+
+const FILE_OPEN: OFlags = OFlags::NONBLOCK.union(OFlags::NOCTTY);
+
 /// Keeps links as links: following one could lead out of the share.
 fn copy_at(from: &OwnedFd, name: &OsStr, to: &OwnedFd, new_name: &OsStr) -> io::Result<()> {
     let found = statat(from, name, AtFlags::SYMLINK_NOFOLLOW)?;
@@ -105,13 +117,19 @@ fn copy_at(from: &OwnedFd, name: &OsStr, to: &OwnedFd, new_name: &OsStr) -> io::
             }
             Ok(())
         }
-        _ => {
-            let read = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-            let write = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-            let mut source = File::from(openat(from, name, read, Mode::empty())?);
-            let mut target = File::from(openat(to, new_name, write, NEW_FILE)?);
+        FileType::RegularFile => {
+            let read = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | FILE_OPEN;
+            let write = OFlags::WRONLY
+                | OFlags::CREATE
+                | OFlags::TRUNC
+                | OFlags::NOFOLLOW
+                | OFlags::CLOEXEC
+                | FILE_OPEN;
+            let mut source = plain_file(openat(from, name, read, Mode::empty())?)?;
+            let mut target = plain_file(openat(to, new_name, write, NEW_FILE)?)?;
             copy(&mut source, &mut target).map(|_| ())
         }
+        _ => Err(ErrorKind::PermissionDenied.into()),
     }
 }
 
@@ -146,17 +164,18 @@ impl Root {
     }
 
     pub fn read(&self, path: &Path) -> io::Result<File> {
-        Ok(File::from(self.open(path, OFlags::RDONLY, Mode::empty())?))
+        plain_file(self.open(path, OFlags::RDONLY | FILE_OPEN, Mode::empty())?)
     }
 
     pub fn create(&self, path: &Path) -> io::Result<File> {
-        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC;
-        Ok(File::from(self.open(path, flags, NEW_FILE)?))
+        let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | FILE_OPEN;
+        plain_file(self.open(path, flags, NEW_FILE)?)
     }
 
     /// Makes an empty file, and leaves one that's there as it is.
     pub fn touch(&self, path: &Path) -> io::Result<()> {
-        self.open(path, OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND, NEW_FILE).map(|_| ())
+        plain_file(self.open(path, OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND | FILE_OPEN, NEW_FILE)?)
+            .map(|_| ())
     }
 
     pub fn names(&self, path: &Path) -> io::Result<Vec<OsString>> {

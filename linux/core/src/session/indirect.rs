@@ -375,6 +375,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.end_indirect_ring("the guest restarted");
         self.frames.display_mode = None;
         self.end_the_last_start();
+        self.forget_the_last_start();
         self.display_driver_seen = false;
         self.display_driver = None;
         self.context_processes.clear();

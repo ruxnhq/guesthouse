@@ -129,6 +129,21 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.run_deferred();
     }
 
+    /// What the last start left waiting goes: its waits, held replies and wake-ups, which name
+    /// transactions and events of a guest that has gone, and every sync object, whose fence pages
+    /// come back once the card is done.
+    pub(super) fn forget_the_last_start(&mut self) {
+        self.pending.clear();
+        self.gates.clear();
+        self.shared_waits.clear();
+        self.replies.clear();
+        self.forget_held_for_the_last_start();
+        for object in self.sync_objects.close_all().into_iter().filter(|object| object.fence != 0) {
+            self.defer(DeferredAction::ReturnFence((object.fence, object.gpu_address)));
+        }
+        self.queue_progress.clear();
+    }
+
     /// Frees an address space, and anything still running or mapped there.
     pub(crate) fn close_space(&mut self, space: SpaceId) {
         let mut owned: Vec<u32> =

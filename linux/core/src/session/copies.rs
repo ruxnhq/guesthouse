@@ -310,6 +310,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.run_parked();
     }
 
+    /// Copies the card still runs go on, but what was held for the guest's last start is dropped:
+    /// their replies, and the messages parked behind them.
+    pub(super) fn forget_held_for_the_last_start(&mut self) {
+        self.copies.iter_mut().for_each(|job| job.ticket = None);
+        self.parked.clear();
+    }
+
     /// Whether a copy is on the copy engine now. One still waiting for its frame hasn't started, and
     /// a guest that copies to its basic display all the time always has one of those.
     pub(super) fn copy_engine_busy(&self) -> bool {

@@ -163,6 +163,15 @@ impl SyncTable {
             || self.holders.values().any(|&process| process == handle)
     }
 
+    /// Removes every handle, and returns the objects.
+    pub fn close_all(&mut self) -> Vec<SyncObject> {
+        self.by_handle.clear();
+        self.holders.clear();
+        self.lines.clear();
+        self.vacant.clear();
+        std::mem::take(&mut self.objects).into_iter().flatten().collect()
+    }
+
     /// Removes every handle a process held, and returns the objects that were left with none.
     pub fn close_held_by(&mut self, process: u32) -> Vec<SyncObject> {
         let held: Vec<u32> =

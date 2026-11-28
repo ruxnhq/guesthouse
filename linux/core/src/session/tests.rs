@@ -204,7 +204,13 @@ mod frame_ring;
 mod freeing;
 mod handles;
 mod indirect;
+mod map_bounds;
+mod opening;
+mod restart;
+mod ring_owner;
+mod state_limits;
 mod video_guard;
+mod waiting_limits;
 
 mod dispatch {
     use super::*;
@@ -914,7 +920,7 @@ mod allocations {
     #[test]
     fn a_shared_resource_lasts_until_its_last_user() {
         let mut session = session();
-        let (resource, handle) = allocate(&mut session, private(0x1000));
+        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
         assert_eq!(u32_at(&open(&mut session, resource, 1), 8), Ok(handle));
         destroy(&mut session, resource, &[]);
         assert!(session.allocations.contains_key(&handle));
@@ -925,7 +931,7 @@ mod allocations {
     #[test]
     fn a_frame_another_process_opened_survives_its_maker_naming_it() {
         let mut session = session();
-        let (resource, handle) = allocate(&mut session, private(0x1000));
+        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
         open(&mut session, resource, 1);
         destroy(&mut session, 0, &[handle]);
         assert!(session.allocations.contains_key(&handle));
@@ -2063,7 +2069,7 @@ mod fences {
         assert_eq!(notices, [Notice::WakeEvent { event: 0xE1, release: 0 }]);
     }
 
-    fn wait_message(objects: &[u32], values: &[u64], any: bool, event: u64) -> Vec<u8> {
+    pub(super) fn wait_message(objects: &[u32], values: &[u64], any: bool, event: u64) -> Vec<u8> {
         let mut request = message(Command::WaitOnCpu, 0x38);
         set_u32(&mut request, 0x1C, objects.len() as u32);
         set_u32(&mut request, 0x20, u32::from(any));

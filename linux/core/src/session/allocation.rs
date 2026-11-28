@@ -162,15 +162,19 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let wanted = shapes.iter().map(|shape| shape.size).fold(0, u64::saturating_add);
         let too_large = shapes.iter().any(|shape| shape.size > ADDRESSES_END);
-        let over_cap = self.config.limits.video_cap.is_some_and(|cap| {
+        (too_large || self.over_video_cap(wanted)).then_some(Status::NO_VIDEO_MEMORY)
+    }
+
+    /// Whether `wanted` more bytes of video memory would pass the guest's cap, if it has one.
+    pub(super) fn over_video_cap(&self, wanted: u64) -> bool {
+        self.config.limits.video_cap.is_some_and(|cap| {
             let used = self.video_in_use();
             let over = used.saturating_add(wanted) > cap;
             if over {
                 log::warn!("{}", cap_warning(cap, used, wanted));
             }
             over
-        });
-        (too_large || over_cap).then_some(Status::NO_VIDEO_MEMORY)
+        })
     }
 
     pub(super) fn create_allocation(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {

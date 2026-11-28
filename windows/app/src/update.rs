@@ -570,13 +570,8 @@ impl Updater for Fake {
     fn discard(&self) {}
 }
 
-/// A key made for this run of the tests or the preview, standing in for a release's: its private half
-/// and its public half, in hex.
 #[cfg(any(test, feature = "preview"))]
-pub fn stand_in_key() -> &'static (String, String) {
-    static KEY: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-    KEY.get_or_init(|| updates::signed::new_key().expect("a key for the tests"))
-}
+pub use updates::signed::stand_in_key;
 
 /// A latest file as a release writes it, for `version`, signed with the stand-in key, for the tests
 /// and the preview.

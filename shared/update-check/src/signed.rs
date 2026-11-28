@@ -10,6 +10,12 @@
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 
+/// The public halves of the release keys, in hex: the one list every host takes a release's signed
+/// files by. A file signed by none of them is not taken. A new key is added here in a release before
+/// the first one it signs. The private half is kept apart from the repo, in the `GUESTHOUSE_RELEASE_KEY`
+/// secret; `cargo run -p guesthouse-update-check --example release_key -- new-key KEY-FILE` makes one.
+pub const RELEASE_KEYS: &[&str] = &[];
+
 /// The length of a key's private half (its seed) and of its public half, in bytes.
 pub const KEY_BYTES: usize = 32;
 /// The length of a signature, in bytes.
@@ -59,6 +65,13 @@ pub fn new_key() -> Result<(String, String), String> {
     let seed = to_hex(&seed);
     let public = public_key(&seed)?;
     Ok((seed, public))
+}
+
+/// A key made for this run, for the tests and for stand-ins that never reach the network, which take it
+/// in place of the release keys: its private half and its public half, in hex. It is never a release key.
+pub fn stand_in_key() -> &'static (String, String) {
+    static KEY: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| new_key().expect("the system gave no random bytes"))
 }
 
 fn pair_of(seed: &str) -> Result<Ed25519KeyPair, String> {
@@ -117,6 +130,16 @@ mod tests {
         let (seed, public) = new_key().unwrap();
         assert!(sign(&seed, PURPOSE, &["a\nb"]).is_err());
         assert!(!verify(&[&public], PURPOSE, &["a\nb"], &"00".repeat(SIGNATURE_BYTES)));
+    }
+
+    #[test]
+    fn the_release_keys_are_keys() {
+        for key in RELEASE_KEYS {
+            assert!(
+                from_hex::<KEY_BYTES>(key).is_some() && !key.bytes().any(|b| b.is_ascii_uppercase()),
+                "{key}"
+            );
+        }
     }
 
     #[test]

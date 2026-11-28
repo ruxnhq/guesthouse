@@ -3,6 +3,7 @@
 
 use serde::Deserialize;
 
+pub mod driver_manifest;
 pub mod signed;
 
 /// Where a Linux release says it's the latest, last of all once its packages are up, so a package

@@ -6,7 +6,7 @@
 # 2. builds the app, then the installer with scripts\windows-setup.ps1, into
 #    target\windows-release\VERSION\, and checks the installer against its .sha256;
 # 3. writes guesthouse-windows-latest.json beside them, which the app reads to offer the update, and
-#    signs it with the release key from GUESTHOUSE_WINDOWS_UPDATE_KEY (the key's private half, in hex),
+#    signs it with the release key from GUESTHOUSE_RELEASE_KEY (the key's private half, in hex),
 #    which the app checks against the public halves built into it before it offers anything;
 #    It also gets the source of the WinFsp the installer carries, which windows\winfsp.json pins, and
 #    checks it against the pin: WinFsp is under the GPLv3, which asks whoever passes on its installer
@@ -50,10 +50,10 @@ function Test-Published([string]$Name) {
 }
 
 # The release key, taken out of the environment so that only the signing below sees it, not the builds.
-$signingKey = $env:GUESTHOUSE_WINDOWS_UPDATE_KEY
-Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_WINDOWS_UPDATE_KEY
+$signingKey = $env:GUESTHOUSE_RELEASE_KEY
+Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_RELEASE_KEY
 if (-not $signingKey -and -not $DryRun) {
-    throw 'GUESTHOUSE_WINDOWS_UPDATE_KEY holds no key. The latest file is signed with it, and no app takes one that is not.'
+    throw 'GUESTHOUSE_RELEASE_KEY holds no key. The latest file is signed with it, and no app takes one that is not.'
 }
 
 $version = (Get-Content -Raw -LiteralPath 'windows\version.txt').Trim()
@@ -103,14 +103,14 @@ $latest = Join-Path $out 'guesthouse-windows-latest.json'
 if ($signingKey) {
     # Built first, without the key; then run with it, which signs the file and reads it back as the app does.
     Invoke-Native 'the signer build' { cargo build --release --locked -p guesthouse-control --example sign_latest }
-    $env:GUESTHOUSE_WINDOWS_UPDATE_KEY = $signingKey
+    $env:GUESTHOUSE_RELEASE_KEY = $signingKey
     try {
         Invoke-Native 'signing the latest file' { & (Join-Path $root 'target\release\examples\sign_latest.exe') sign $latest }
     } finally {
-        Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_WINDOWS_UPDATE_KEY
+        Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_RELEASE_KEY
     }
 } else {
-    Write-Output "No GUESTHOUSE_WINDOWS_UPDATE_KEY, so $latest is unsigned, and no app takes it."
+    Write-Output "No GUESTHOUSE_RELEASE_KEY, so $latest is unsigned, and no app takes it."
 }
 Write-Output "Built $setup ($sha) from $commit."
 

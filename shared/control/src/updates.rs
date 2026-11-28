@@ -4,12 +4,13 @@
 //!
 //! The file is taken only when a release key signed it: its `signature` is an Ed25519 signature of
 //! its version, installer, SHA-256 and notes (`guesthouse_update_check::signed`) by a key whose public
-//! half is in [`RELEASE_KEYS`]. The installer is then checked against that SHA-256 before it runs, so
+//! half is in [`RELEASE_KEYS`], the release keys every host shares. The installer is then checked against that SHA-256 before it runs, so
 //! what runs is what the release key vouched for, wherever the file and the installer were served
 //! from. Apps from before the signature read the same file and pass over the field.
 
 use guesthouse_update_check::is_version;
 pub use guesthouse_update_check::signed;
+pub use guesthouse_update_check::signed::RELEASE_KEYS;
 use serde::Deserialize;
 
 /// Where a release publishes the file.
@@ -20,9 +21,6 @@ const INSTALLERS: &str = "https://files.ruxn.com/p/guesthouse/";
 const NOTES: &str = "https://github.com/ruxnlabs/guesthouse/releases/";
 /// The longest file taken. A real one is a few hundred bytes.
 pub const LONGEST: usize = 4096;
-/// The public halves of the keys that sign a release's file, in hex. A file signed by none of them
-/// is never offered. A new key is added here, in a release before the one it first signs.
-pub const RELEASE_KEYS: &[&str] = &[];
 /// What the signature says it is for, so a signature made for any other file is never taken as one of
 /// these.
 pub const PURPOSE: &str = "guesthouse-windows-latest.json";
@@ -171,13 +169,6 @@ mod tests {
         assert!(text.len() <= LONGEST);
         let before: Before = serde_json::from_str(&text).unwrap();
         assert_eq!((before.version.as_str(), before.sha256.as_str()), ("0.10.0", SHA));
-    }
-
-    #[test]
-    fn the_release_keys_are_keys() {
-        for key in RELEASE_KEYS {
-            assert!(key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
-        }
     }
 
     #[test]

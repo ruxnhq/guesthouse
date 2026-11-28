@@ -33,6 +33,8 @@ targets:
       # headers), not copied.
       - path: rmframes/rmframes_sub.c
         group: rmframes
+      - path: rmframes/rmframes_peer.c
+        group: rmframes
     dependencies:
       - framework: build/GuesthouseCore.xcframework
         embed: false
@@ -117,6 +119,7 @@ targets:
       - App/LocalNetwork.swift
       - App/PresenterPace.swift
       - App/Wording.swift
+      - Shared/CodeRequirement.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ruxn.guesthouse.tests

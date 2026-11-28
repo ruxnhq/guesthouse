@@ -21,6 +21,7 @@ use crate::store;
 use crate::tools::{self, Places, Tool};
 use guesthouse_basics::clock::{Clock, RealClock};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -129,7 +130,7 @@ impl MachineControl for AgentControl {
     }
 
     fn serial(&mut self, _: &str) -> String {
-        fs::read_to_string(self.run_dir.join("serial.log")).unwrap_or_default()
+        serial_end(&self.run_dir.join("serial.log"), SERIAL_LOOK_BYTES)
     }
 
     fn press_key(&mut self, _: &str, qcode: &str) -> Result<(), String> {
@@ -381,9 +382,48 @@ fn disk_gb_for(info: &InstallInfo, tools: &Tools, fake: bool) -> u64 {
     tools.sizes.disk_gb.or(info.disk_gb).unwrap_or(default_sizes(info.guest, 4).2)
 }
 
+/// How much of the end of `serial.log` an install reads on each look. What the guest says
+/// between two looks is far less, and the file has no limit of its own.
+const SERIAL_LOOK_BYTES: u64 = 4 << 20;
+
+/// The last `most` bytes of a file, as text: what the guest said lately. Bytes that are not
+/// UTF-8 are replaced and the rest is kept.
+fn serial_end(path: &Path, most: u64) -> String {
+    let Ok(mut file) = fs::File::open(path) else { return String::new() };
+    let length = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    if file.seek(SeekFrom::Start(length.saturating_sub(most))).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    let _ = file.take(most).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_install_reads_the_end_of_the_serial_log_to_a_limit() {
+        let folder = std::env::temp_dir().join(format!("guesthouse-serial-end-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("serial.log");
+        assert_eq!(serial_end(&path, 64), "");
+        // Bytes that are not text before what the guest says do not hide it.
+        let mut said = vec![0xFF; 100];
+        said.extend_from_slice(b"\nguesthouse: system installed\n");
+        fs::write(&path, &said).unwrap();
+        assert!(serial_end(&path, 1 << 20).ends_with("\nguesthouse: system installed\n"));
+        // A file longer than the limit gives its last bytes only.
+        let mut long = vec![b'x'; 1000];
+        long.extend_from_slice(b"guesthouse: first start ok\n");
+        fs::write(&path, &long).unwrap();
+        let end = serial_end(&path, 64);
+        assert_eq!(end.len(), 64);
+        assert!(end.ends_with("guesthouse: first start ok\n"));
+        let _ = fs::remove_dir_all(&folder);
+    }
 
     fn info(guest: Guest, kept: Option<u64>) -> InstallInfo {
         let mut info = InstallInfo::new("m", &Plan::for_guest(guest), Source::Download);

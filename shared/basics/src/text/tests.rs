@@ -60,3 +60,16 @@ fn hidden_characters_are_shown_as_codes_and_a_long_text_is_cut() {
     assert_eq!(shown_short("abc", 3), "abc");
     assert!(is_hidden('\u{200b}') && !is_hidden('e'));
 }
+
+#[test]
+fn a_comma_in_a_qemu_value_is_doubled() {
+    for (value, written) in [
+        ("", ""),
+        ("/m/win.img", "/m/win.img"),
+        ("a,b", "a,,b"),
+        (",,", ",,,,"),
+        ("Windows 11, ARM.iso", "Windows 11,, ARM.iso"),
+    ] {
+        assert_eq!(qemu_value(value), written, "{value:?}");
+    }
+}

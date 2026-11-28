@@ -80,8 +80,8 @@ nonisolated final class XPCLink: NSObject, AgentLink, AgentListener, @unchecked 
         connection.remoteObjectInterface = agentServiceInterface()
         connection.exportedInterface = NSXPCInterface(with: AgentListener.self)
         connection.exportedObject = self
-        // Only our own agent may answer.
-        connection.setCodeSigningRequirement(#"identifier "com.ruxn.guesthouse.agent""#)
+        // Only our own agent may answer: its identifier, signed by the app's own team.
+        connection.setCodeSigningRequirement(peerRequirement(identifier: "com.ruxn.guesthouse.agent"))
         connection.invalidationHandler = onClose
         connection.interruptionHandler = onClose
         connection.resume()

@@ -116,9 +116,16 @@ pub fn map(shared: Vec<Shared>) -> io::Result<GuestMemory> {
                 range.guest_address
             )));
         }
+        // A range past the file's end would map, and fail at first use. So it is refused here.
+        let file_bytes = std::fs::File::from(range.file.try_clone()?).metadata()?.len();
+        if range.file_offset.checked_add(range.length).is_none_or(|end| end > file_bytes) {
+            return Err(io::Error::other(format!(
+                "the range at {:#x} runs past the end of its file",
+                range.guest_address
+            )));
+        }
         // SAFETY: a new shared mapping of a file QEMU handed over, at an address of the kernel's
-        // choosing, touches nothing that exists. A range past the file's end fails at first use
-        // and not here, and QEMU, which made the file, is trusted with its size.
+        // choosing, touches nothing that exists. The range lies within the file, as just checked.
         let start = unsafe {
             libc::mmap(
                 ptr::null_mut(),
@@ -142,4 +149,40 @@ pub fn map(shared: Vec<Shared>) -> io::Result<GuestMemory> {
     // SAFETY: each range was mapped just now, readable and writable, for its whole length, stays
     // mapped for as long as `mappings` lives, and no reference into it exists here.
     unsafe { GuestMemory::from_ranges(ranges, Box::new(mappings)) }.map_err(io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// A file of `bytes` bytes, as QEMU's memory object would be, deleted once it is open.
+    fn file_of(bytes: u64) -> OwnedFd {
+        let path = std::env::temp_dir().join(format!("pvg-host-ram-{}-{bytes}", std::process::id()));
+        let mut file = std::fs::File::options().read(true).write(true).create_new(true).open(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        file.write_all(&vec![0; bytes as usize]).unwrap();
+        file.into()
+    }
+
+    fn shared(length: u64, file_offset: u64, file_bytes: u64) -> Shared {
+        Shared { guest_address: 0x4000_0000, length, file_offset, file: file_of(file_bytes) }
+    }
+
+    #[test]
+    fn a_range_is_mapped_only_where_its_file_has_the_bytes() {
+        assert!(map(vec![shared(2 * PAGE_BYTES, 0, 2 * PAGE_BYTES)]).is_ok());
+        assert!(map(vec![shared(PAGE_BYTES, PAGE_BYTES, 2 * PAGE_BYTES)]).is_ok());
+        for (length, offset) in
+            [(3 * PAGE_BYTES, 0), (2 * PAGE_BYTES, PAGE_BYTES), (PAGE_BYTES, 2 * PAGE_BYTES)]
+        {
+            let refused =
+                map(vec![shared(length, offset, 2 * PAGE_BYTES)]).err().map(|error| error.to_string());
+            assert_eq!(
+                refused.as_deref(),
+                Some("the range at 0x40000000 runs past the end of its file"),
+                "{length:#x} at {offset:#x}"
+            );
+        }
+    }
 }

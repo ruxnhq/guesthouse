@@ -15,17 +15,31 @@ use std::process::Command;
 /// Objective-C, with ARC.
 const OBJECTIVE_C: [&str; 2] = ["shim/window.m", "shim/export.m"];
 /// Plain C.
-const C: [&str; 3] =
-    ["shim/rmframes/rmframes_pub.c", "shim/rmframes/rmframes_recv.c", "shim/rmframes/rmframes_sub.c"];
+const C: [&str; 4] = [
+    "shim/rmframes/rmframes_pub.c",
+    "shim/rmframes/rmframes_recv.c",
+    "shim/rmframes/rmframes_sub.c",
+    "shim/rmframes/rmframes_peer.c",
+];
 /// What the C files include, for cargo to watch.
-const HEADERS: [&str; 4] = [
+const HEADERS: [&str; 5] = [
     "shim/rmframes/rmframes.h",
+    "shim/rmframes/rmframes_peer.h",
     "shim/rmframes/rmframes_pub.h",
     "shim/rmframes/rmframes_pub_internal.h",
     "shim/rmframes/rmframes_sub.h",
 ];
-const FRAMEWORKS: [&str; 7] =
-    ["AppKit", "QuartzCore", "CoreGraphics", "Carbon", "Metal", "IOSurface", "Foundation"];
+const FRAMEWORKS: [&str; 9] = [
+    "AppKit",
+    "QuartzCore",
+    "CoreGraphics",
+    "Carbon",
+    "Metal",
+    "IOSurface",
+    "Foundation",
+    "CoreFoundation",
+    "Security",
+];
 const WARNINGS: [&str; 4] = ["-Wall", "-Wextra", "-Werror", "-O2"];
 
 fn run(command: &mut Command) {

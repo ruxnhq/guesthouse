@@ -1,5 +1,6 @@
-//! Small text helpers: shell quoting, and standard base64 with padding. The Linux host quotes the
-//! commands it shows and sends its guest's agent base64.
+//! Small text helpers: shell quoting, QEMU's option values, and standard base64 with padding. The
+//! Linux host quotes the commands it shows and sends its guest's agent base64, and the Linux and
+//! Mac hosts put paths into QEMU's options.
 
 /// Quotes a word for a shell, leaving plain ones as they are so that commands stay readable.
 pub fn shell_quote(word: &str) -> String {
@@ -8,6 +9,12 @@ pub fn shell_quote(word: &str) -> String {
         return word.to_owned();
     }
     format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// A value for one of QEMU's `key=value,...` options. QEMU reads a comma as the value's end and
+/// two as one comma, and a file can be called anything.
+pub fn qemu_value(value: &str) -> String {
+    value.replace(',', ",,")
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

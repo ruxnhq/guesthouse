@@ -36,19 +36,21 @@ out=$(cd "$out" && pwd)
 
 cflags="-O2 -g -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=14.0 -I$here/../rmframes"
 frameworks="-framework Foundation -framework Metal -framework IOSurface -framework CoreVideo
-    -framework CoreMedia -framework VideoToolbox -framework AVFoundation"
+    -framework CoreMedia -framework VideoToolbox -framework AVFoundation -framework Security"
 
 pin() { sed -n "s/^ *\"$1\": *\"\\([^\"]*\\)\".*/\\1/p" "$here/remoteman-source.json"; }
 
 clang $cflags -fobjc-arc -o "$out/testsource" \
     "$here/testsource.m" "$here/../rmframes/rmframes_pub.c" "$here/../rmframes/rmframes_recv.c" \
-    -framework Foundation -framework Metal -framework IOSurface
+    "$here/../rmframes/rmframes_peer.c" -framework Foundation -framework Metal -framework IOSurface \
+    -framework Security
 echo "built $out/testsource"
 clang $cflags -o "$out/attacker" "$here/attacker.c" "$here/../rmframes/rmframes_sub.c" \
-    -framework CoreFoundation -framework IOSurface
+    "$here/../rmframes/rmframes_peer.c" -framework CoreFoundation -framework IOSurface -framework Security
 echo "built $out/attacker"
 
-sources="$here/main.m $here/source.m $here/encoder.m $here/../rmframes/rmframes_sub.c"
+sources="$here/main.m $here/source.m $here/encoder.m $here/../rmframes/rmframes_sub.c
+    $here/../rmframes/rmframes_peer.c"
 extra=
 if [ "$serve" = yes ]; then
     repository=$(pin repository)

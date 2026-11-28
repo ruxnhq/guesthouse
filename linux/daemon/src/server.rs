@@ -74,12 +74,25 @@ impl FrameSink for Connections<'_> {
     fn send(&mut self, channel: Channel, header: FrameHeader, payload: &[u8]) -> io::Result<()> {
         let port =
             self.ports.iter_mut().find(|port| port.channel == channel).expect("every channel has a port");
-        let Some(connection) = &mut port.connection else { return Ok(()) };
+        if port.connection.is_none() {
+            return Ok(());
+        }
         // One write, so a frame is one system call and the two parts cannot be separated.
         self.scratch.clear();
         self.scratch.extend_from_slice(&header.encode());
         self.scratch.extend_from_slice(payload);
-        connection.stream.write_all(self.scratch)
+        write_or_close(port, self.scratch);
+        Ok(())
+    }
+}
+
+/// Writes a frame. A connection that can't take it is closed, as a failed read closes one, and the
+/// other channels go on.
+fn write_or_close(port: &mut Port, bytes: &[u8]) {
+    let Some(connection) = &mut port.connection else { return };
+    if let Err(error) = connection.stream.write_all(bytes) {
+        log::warn!("{:?}: {error}, so the connection closes", port.channel);
+        port.connection = None;
     }
 }
 
@@ -381,4 +394,25 @@ fn wait(descriptors: &mut [libc::pollfd], timeout: Option<Duration>) -> io::Resu
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_connection_that_cant_take_a_frame_is_closed_and_nothing_else() {
+        let folder = std::env::temp_dir().join(format!("guesthouse-server-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        let listener = UnixListener::bind(folder.join("port.sock")).unwrap();
+        let (stream, peer) = UnixStream::pair().unwrap();
+        drop(peer);
+        let connection = Some(Connection { stream, frames: FrameStream::new() });
+        let mut port = Port { channel: Channel::Vgpu, listener, connection };
+        write_or_close(&mut port, b"frame");
+        assert!(port.connection.is_none());
+        write_or_close(&mut port, b"frame");
+        fs::remove_dir_all(folder).unwrap();
+    }
 }

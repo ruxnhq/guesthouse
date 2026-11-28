@@ -4,6 +4,8 @@
 
 use gtk::gio::prelude::*;
 use gtk::{gio, glib};
+use guesthouse_app_core::monitor::LONGEST_LINE;
+use guesthouse_basics::capped_line::read_capped_line;
 use rustix::net::{
     self, AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
 };
@@ -48,10 +50,9 @@ fn ask(
 ) -> io::Result<()> {
     write_with_fd(stream, &command, fd)?;
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        let Some(line) = read_capped_line(reader, LONGEST_LINE)? else {
             return Err(ErrorKind::UnexpectedEof.into());
-        }
+        };
         let answer: Value = serde_json::from_str(&line).map_err(io::Error::other)?;
         if answer.get("return").is_some() {
             return Ok(());
@@ -76,8 +77,7 @@ pub fn attach(monitor: &Path) -> io::Result<gio::DBusConnection> {
     let stream = UnixStream::connect(monitor)?;
     stream.set_read_timeout(Some(ANSWER_TIME))?;
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut greeting = String::new();
-    reader.read_line(&mut greeting)?;
+    read_capped_line(&mut reader, LONGEST_LINE)?;
     let (ours, theirs) = pair()?;
     let (listener, listener_theirs) = pair()?;
     ask(&stream, &mut reader, json!({"execute": "qmp_capabilities"}), None)?;

@@ -12,9 +12,10 @@ use crate::picture::{self, ModeText};
 use crate::watch::{self, DRAWING, SERVING, Step};
 use crate::window;
 use crate::wire::{self, Access, Answer, MESSAGE_BYTES, Request};
+use guesthouse_basics::capped_line::read_capped_line;
 use guesthouse_pvg_sys::{Config, Device, Error, Event, FrameSource, Glyph, Mode, Source};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -46,6 +47,8 @@ const MAPPER_WORD: u32 = 8;
 const DEVICE_WORD: u32 = 4;
 /// The guest's device stands still while a line is read, so whoever asks has to be quick.
 const CONTROL_PATIENCE: Duration = Duration::from_millis(250);
+/// The longest request a client may send on the control socket.
+const LONGEST_REQUEST: usize = 64 * 1024;
 /// A display the size of QEMU's own default, 20 inches.
 const MILLIMETRES: (u32, u32) = (400, 300);
 
@@ -563,9 +566,9 @@ fn serve_control(
     };
     let _ = stream.set_read_timeout(Some(CONTROL_PATIENCE));
     let _ = stream.set_write_timeout(Some(CONTROL_PATIENCE));
-    let mut line = String::new();
     SERVING.set(Step::Control);
-    if BufReader::new(&stream).read_line(&mut line).is_err() || line.trim().is_empty() {
+    let Ok(Some(line)) = read_capped_line(&mut BufReader::new(&stream), LONGEST_REQUEST) else { return };
+    if line.trim().is_empty() {
         return;
     }
     match line.trim().split_once(' ').unwrap_or((line.trim(), "")) {

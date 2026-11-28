@@ -12,6 +12,7 @@
 //! submission counts are taken, so an old lap of the ring can't run again. The bytes are the guest's
 //! commands in the guest's address space, as a list's are, and nothing else in them reaches the host.
 
+use crate::channel::ListChannel;
 use crate::pushbuffer::ENTRY_SIZE;
 use guesthouse_backend::{HostServices, SpaceId};
 
@@ -52,6 +53,10 @@ impl GuestRing {
         count: u32,
         end: u32,
     ) -> Result<Vec<u8>, &'static str> {
+        // No list channel takes more than its ring holds, so nothing is read or made room for past it.
+        if count > ListChannel::RING_ENTRIES {
+            return Err("more entries than a list can hold");
+        }
         let span =
             host.guest_span(space, self.address).ok_or("the ring isn't in memory the host can read")?;
         let room = (span.mapping_length - span.offset_in_mapping) / ENTRY_SIZE as u64;
@@ -182,6 +187,14 @@ mod tests {
     #[test]
     fn more_entries_than_the_ring_holds_is_refused() {
         assert!(read(&ring_of(4), 4, 5, 5).is_err());
+    }
+
+    #[test]
+    fn more_entries_than_a_list_can_hold_is_refused_before_any_is_read() {
+        let entries = ListChannel::RING_ENTRIES + 1;
+        let ring = Ring((1..=entries).flat_map(|entry| [entry as u8 | 1; ENTRY_SIZE]).collect());
+        assert!(read(&ring, entries, entries, entries).is_err());
+        assert!(read(&ring, entries, ListChannel::RING_ENTRIES, entries).is_ok());
     }
 
     #[test]

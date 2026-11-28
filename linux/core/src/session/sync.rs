@@ -1,6 +1,9 @@
 //! Handlers for sync objects and fences.
 
-use super::{Handled, Session, answer_status};
+use super::{Failure, Handled, Session, answer_status};
+
+/// The most sync object handles a session holds at once.
+pub(crate) const MOST_SYNC_HANDLES: usize = 1 << 16;
 use crate::deferred::DeferredAction;
 use crate::fences::{FENCE_PAGE, Fence, FenceBlock};
 use crate::sync_table::SyncObject;
@@ -78,6 +81,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     pub(super) fn create_sync_object(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = CreateSyncObject::parse(message)?;
+        if self.sync_objects.handles() >= MOST_SYNC_HANDLES {
+            log::warn!("this guest holds {MOST_SYNC_HANDLES} sync object handles, so no more are made");
+            return Err(Failure::Malformed);
+        }
         let handle = self.handles.take();
         let monitored = request.kind == KIND_MONITORED_FENCE;
         let (fence, gpu_address) = if monitored { self.take_fence()? } else { (0, 0) };
@@ -103,6 +110,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let existing = opened_sync_object(message)?;
         if self.sync_objects.get(existing).is_none() {
             open_answer(0, Status::INVALID_PARAMETER, 0, 0, out);
+            return Ok(());
+        }
+        if self.sync_objects.handles() >= MOST_SYNC_HANDLES {
+            open_answer(0, Status::NO_MEMORY, 0, 0, out);
             return Ok(());
         }
         let handle = self.handles.take();

@@ -115,16 +115,16 @@ impl LocalHost<'_> {
     }
 
     fn spawn_tpm(&self, plan: &VmPlan) -> Result<()> {
-        let (Some(arguments), Some(state)) = (plan.swtpm_arguments(), plan.tpm.as_ref()) else {
+        let (Some(command), Some(state)) = (plan.swtpm_command(), plan.tpm.as_ref()) else {
             return Ok(());
         };
         // A TPM ends when QEMU lets go of it, unless a QEMU never came.
         let socket = self.run_file(TPM_SOCKET);
-        let pattern = format!("^swtpm socket .*path={}", socket.display());
-        let _ = Command::new("pkill").args(["-f", &pattern]).status();
+        let _ = Command::new("pkill").args(["-f", &leftover_tpm(state)]).status();
         let _ = fs::remove_file(&socket);
         fs::create_dir_all(state)?;
-        let done = Command::new("swtpm").args(arguments).status()?;
+        let (program, arguments) = command.split_first().ok_or_else(|| Failure::new("Nothing to run."))?;
+        let done = Command::new(program).args(arguments).stdin(Stdio::null()).status()?;
         if !done.success() {
             let rules = missing_rules(self.context);
             if rules.is_empty() {
@@ -164,8 +164,17 @@ impl LocalHost<'_> {
         Ok(spawned)
     }
 
-    /// QEMU with no daemon and no shared memory. Returns once its monitor answers.
+    /// QEMU with no daemon and no shared memory. Returns once its monitor answers. Its jail is chosen
+    /// here, unless the start that made the plan chose already, as a start with sound does.
     fn start_plain(&self, plan: &VmPlan, machine: &Machine, handed: &Handed) -> Result<()> {
+        let chosen = plan.jail.is_some() || !plan.jail_note.is_empty();
+        let plan = &if chosen {
+            plan.clone()
+        } else {
+            let choice = jailing::choose(self.context, machine, plan, &(self.context.jail_offer)(plan))?;
+            let jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
+            VmPlan { jail, jail_note: choice.note, ..plan.clone() }
+        };
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
         self.keep_last_run();
         fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
@@ -439,6 +448,28 @@ fn terminate(pid: Option<u32>) {
 
 /// QEMU won't start if it can't reach PipeWire, as from a session with no sound server. Only GPU
 /// machines get sound, as they always have, and a macOS guest counts as one.
+/// A TPM left from a start that never got its QEMU, by its state folder, which is the machine's own,
+/// whether swtpm was named by its path or not.
+fn leftover_tpm(state: &std::path::Path) -> String {
+    format!("^[^ ]*swtpm socket --tpm2 --tpmstate dir={} ", regex_quoted(&state.display().to_string()))
+}
+
+#[cfg(test)]
+pub(super) fn leftover_tpm_for_tests(state: &std::path::Path) -> String {
+    leftover_tpm(state)
+}
+
+/// Text that a regular expression matches as it is.
+fn regex_quoted(text: &str) -> String {
+    text.chars().fold(String::new(), |mut quoted, character| {
+        if r"\.^$|?*+()[]{}".contains(character) {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+        quoted
+    })
+}
+
 pub fn sound_on_this_host() -> Option<Sound> {
     let reachable = Command::new("timeout")
         .args([SOUND_CHECK_SECONDS, "pw-cli", "info", "0"])

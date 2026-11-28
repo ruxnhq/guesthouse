@@ -146,7 +146,8 @@ fn a_plain_qemu_whose_monitor_never_answers_is_not_left_running() {
     let mut context = scratch_context(&scratch);
     let (_, qemu) = pretend_programs(&scratch, &mut context);
     let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let started = host.start(&plan, &machine);
     let left = left_running(&qemu);
@@ -174,7 +175,8 @@ fn a_qemu_that_exits_at_once_says_why() {
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.program("not-qemu", "#!/bin/sh\necho 'could not open disk' >&2\nexit 1\n");
     let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     let error = host.start(&plan, &machine).unwrap_err();
     assert_eq!(error.0, "The VM did not start. could not open disk");
@@ -275,12 +277,37 @@ fn a_program_that_cant_be_run_is_named() {
 }
 
 #[test]
-fn no_qemu_at_all_says_so() {
+fn a_plain_machine_is_jailed_too_and_refused_where_it_cant_be_unless_allowed() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.qemu = scratch.path("not-installed");
     let host = LocalHost::new(&context);
     let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    for boot in
+        [Boot::Plain { iso: String::new() }, Boot::Install { iso: "/i.iso".into(), answer: "/a".into() }]
+    {
+        let plan = VmPlan::new(&context, &machine, boot, slots::first(), 0);
+        let refused = host.start(&plan, &machine).unwrap_err();
+        assert!(
+            refused.0.contains("can't be jailed") && refused.0.contains("Start without a jail"),
+            "{refused}"
+        );
+        assert_eq!(crate::jailing::read_note(&plan.run_folder), None, "nothing started");
+    }
+    let allowed = Machine { start_without_jail: true, ..machine };
+    let plan = VmPlan::new(&context, &allowed, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    assert!(host.start(&plan, &allowed).unwrap_err().0.contains("isn't installed"));
+    assert!(crate::jailing::read_note(&plan.run_folder).unwrap().starts_with("Not jailed: "));
+}
+
+#[test]
+fn no_qemu_at_all_says_so() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    context.paths.qemu = scratch.path("not-installed");
+    let host = LocalHost::new(&context);
+    let machine =
+        Machine { kind: Kind::Plain, start_without_jail: true, ..Machine::new("vm", "VM", "/d", "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
     assert!(host.start(&plan, &machine).unwrap_err().0.contains("isn't installed"));
 }
@@ -552,4 +579,20 @@ fn a_passt_note_in_the_run_folder_is_never_signalled() {
     let _ = other.kill();
     let _ = other.wait();
     assert!(left_alone, "the process was signalled");
+}
+
+#[test]
+fn a_leftover_tpm_is_found_by_its_own_state_folder_only() {
+    let pattern = super::local::leftover_tpm_for_tests(Path::new("/m/w.1/tpm"));
+    let matches = |line: &str| {
+        let mut grep =
+            Command::new("grep").args(["-Eq", &pattern]).stdin(std::process::Stdio::piped()).spawn().unwrap();
+        std::io::Write::write_all(grep.stdin.as_mut().unwrap(), line.as_bytes()).unwrap();
+        drop(grep.stdin.take());
+        grep.wait().unwrap().success()
+    };
+    assert!(matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm --ctrl type=unixio,fd=20"));
+    assert!(matches("swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm --ctrl type=unixio,path=/r/tpm.sock"));
+    assert!(!matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/wx1/tpm --ctrl type=unixio,fd=20"));
+    assert!(!matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm-other --ctrl x"));
 }

@@ -167,6 +167,23 @@ impl VmPlan {
         places
     }
 
+    /// The files the boot itself reads: a machine's disc, Windows setup's disc and its answers, and
+    /// Ubuntu's installer with its kernel and its answers.
+    fn boot_files(&self) -> Vec<PathBuf> {
+        let files = match &self.boot {
+            Boot::Plain { iso } | Boot::OwnLinux { iso, .. } => vec![PathBuf::from(iso)],
+            Boot::Install { iso, answer } => vec![PathBuf::from(iso), answer.clone()],
+            Boot::UbuntuInstall(install) => vec![
+                PathBuf::from(&install.iso),
+                install.seed.clone(),
+                install.kernel.clone(),
+                install.initrd.clone(),
+            ],
+            Boot::Gpu | Boot::Ubuntu(_) | Boot::Macos(_) | Boot::Android(_) => Vec::new(),
+        };
+        files.into_iter().filter(|file| !file.as_os_str().is_empty()).collect()
+    }
+
     fn firmware_code(&self) -> &Path {
         if let Some(boot) = self.macos_boot() {
             return &boot.firmware_code;
@@ -200,10 +217,8 @@ impl VmPlan {
             plan.grant(Grant::Read, self.firmware_code()).grant(Grant::Write, &self.vars);
         }
         // A disc chosen while it runs is outside the jail, and the guest sees an empty drive.
-        if let Boot::Plain { iso } | Boot::OwnLinux { iso, .. } = &self.boot
-            && !iso.is_empty()
-        {
-            plan.grant(Grant::Read, iso);
+        for disc in self.boot_files() {
+            plan.grant(Grant::Read, disc);
         }
         for device in DEVICES {
             plan.grant(Grant::Device, device);

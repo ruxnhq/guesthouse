@@ -6,7 +6,7 @@ use super::{KEY_POLL, Task, plan_for, start_if_there_is_room};
 use crate::disk_image::disk_size_gib;
 use crate::failure::{Failure, Result};
 use crate::iso::kernel_package;
-use crate::jailing::{decide, gpu_refusal};
+use crate::jailing::choose;
 use crate::library::make_disk;
 use crate::linux::amd::{amd_card, amd_mode};
 use crate::linux::amd_image::amd_setup_image;
@@ -14,9 +14,7 @@ use crate::linux::card::forwarded_card;
 use crate::linux::driver_host::LoaderHost;
 use crate::linux::driver_image::{Outcome, prepare};
 use crate::linux::forwarding::{amd_problem, forwarding_problem};
-use crate::linux::gpu_off::{
-    GUEST_NO_AMD_CARD, GUEST_NO_CARD, GUEST_NO_IMAGE, GUEST_NO_JAIL, GUEST_TURNED_OFF, GpuOff,
-};
+use crate::linux::gpu_off::{GUEST_NO_AMD_CARD, GUEST_NO_CARD, GUEST_NO_IMAGE, GUEST_TURNED_OFF, GpuOff};
 use crate::linux::layout::ALLOW_LIST;
 use crate::linux::seed::make_seed;
 use crate::linux::{guest_sources, sensor_daemon};
@@ -245,28 +243,16 @@ fn start_vm(task: &mut Task) -> Result<VmPlan> {
     Ok(plan)
 }
 
-/// The forwarded GPU only goes to a jailed QEMU, as on Windows. A PC that can't jail it starts the
-/// guest without the GPU and says why, unless the machine may start without a jail.
+/// A guest with a GPU gets its jail chosen here, as every machine's QEMU is jailed: a PC that can't
+/// jail it refuses the start, unless the machine may start without a jail. One with none gets its
+/// jail chosen as it starts.
 pub(super) fn jailed(task: &mut Task, plan: VmPlan) -> Result<VmPlan> {
     if !plan.has_forwarded_gpu() && !plan.has_amd_gpu() {
         return Ok(plan);
     }
-    match decide(task.context, &task.machine, &plan, &(task.context.jail_offer)(&plan)) {
-        Ok(choice) => {
-            let jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
-            Ok(VmPlan { jail, jail_note: choice.note, ..plan })
-        }
-        Err(reason) => {
-            let detail = gpu_refusal(reason);
-            task.error = format!("Starting without the GPU: {detail}");
-            let gpu = refused(task, &GpuOff::new(GUEST_NO_JAIL, detail))?;
-            let boot = match plan.boot {
-                Boot::OwnLinux { iso, .. } => Boot::OwnLinux { iso, gpu },
-                _ => Boot::Ubuntu(gpu),
-            };
-            Ok(VmPlan { boot, ..plan })
-        }
-    }
+    let choice = choose(task.context, &task.machine, &plan, &(task.context.jail_offer)(&plan))?;
+    let jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
+    Ok(VmPlan { jail, jail_note: choice.note, ..plan })
 }
 
 #[cfg(test)]
@@ -434,21 +420,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pc_that_cant_jail_qemu_only_costs_the_gpu_unless_allowed() {
+    fn a_pc_that_cant_jail_qemu_refuses_the_start_unless_allowed() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let host = RecordingHost::default();
         let mut task = Task::new(&context, &host, "start", ubuntu(&context));
         let wanted = with_the_gpu(&task);
-        let plan = jailed(&mut task, wanted).unwrap();
-        let Boot::Ubuntu(UbuntuBoot::NoGpu { reason_file }) = &plan.boot else { panic!("{:?}", plan.boot) };
-        assert!(fs::read_to_string(reason_file).unwrap().starts_with(GUEST_NO_JAIL));
-        assert!(plan.jail.is_none());
-        assert!(
-            task.error.contains("Landlock") && task.error.contains("Start without a jail"),
-            "{}",
-            task.error
-        );
+        let refused = jailed(&mut task, wanted).unwrap_err();
+        assert!(refused.0.contains("Landlock") && refused.0.contains("Start without a jail"), "{refused}");
         let allowed = Machine { start_without_jail: true, ..ubuntu(&context) };
         let mut task = Task::new(&context, &host, "start", allowed);
         let wanted = with_the_gpu(&task);

@@ -140,7 +140,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `sound` | on or off | Windows |
 | `window-speed` | on or off: whether programs in a window are shown without a copy of every frame, and on NVIDIA whether Vulkan and OpenGL present through DXGI | Windows |
 | `dlss` | on or off: whether Guesthouse's NVAPI wrapper, which DLSS needs, is in System32 in place of NVIDIA's. Off for a game whose anti-cheat refuses the unsigned wrapper | Windows on an NVIDIA card |
-| `start-unjailed` | on or off: on lets a machine with a GPU start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
+| `start-unjailed` | on or off: on lets a machine start unjailed where the kernel can't jail it, as "Start without a jail" does in the app. Where it can, the machine is jailed either way | all |
 | `throwaway` | on or off: on makes the machine start clean every time, from its disk as it is now, as Throwaway does in the app. [Copies](copies.md) says what goes and what stays. Only while it's off and installed | all |
 | `screen` | 1920x1080, 2560x1440 or 3840x2160 | Windows |
 | `refresh` | Hz | Windows |

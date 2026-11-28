@@ -32,6 +32,8 @@ enum Case {
     Passt,
     Bridged,
     ForwardedGpu,
+    /// Windows setup from its disc, with no GPU.
+    Install,
 }
 
 /// The kernel's flag for the old address layout, which `setarch -L` sets.
@@ -146,6 +148,8 @@ fn passt_answers() -> bool {
 fn probe() {
     let (own, other) = (variable("PROBE_OWN"), variable("PROBE_OTHER"));
     let forwarded = env::var_os("PROBE_FORWARDED").is_some();
+    // Six with a GPU: the four monitors, then the daemon's two, or the forwarded GPU's input and frames.
+    let sockets = if env::var_os("PROBE_DISCS").is_some() { 4 } else { 6 };
     let checks = [
         ("its own disk", fs::read(own.join("disk.qcow2")).is_ok()),
         ("its disk's base", fs::read(variable("PROBE_BASE")).is_ok()),
@@ -170,7 +174,10 @@ fn probe() {
         ),
         // Six either way: the four monitors, then the daemon's two, or the forwarded GPU's input and
         // frames.
-        ("its own unix sockets", (20..26).all(|fd| fs::read_link(format!("/proc/self/fd/{fd}")).is_ok())),
+        (
+            "its own unix sockets",
+            (20..20 + sockets).all(|fd| fs::read_link(format!("/proc/self/fd/{fd}")).is_ok()),
+        ),
         ("not another device", OpenOptions::new().read(true).write(true).open("/dev/fuse").is_err()),
         ("no ptrace", unsafe { libc::ptrace(libc::PTRACE_ATTACH, libc::getppid(), 0, 0) } == -1),
         ("no new privileges", status_says(["NoNewPrivs:", "1"])),
@@ -187,6 +194,10 @@ fn probe() {
         checks.push(("the driver image", fs::read(variable("PROBE_IMAGE")).is_ok()));
         checks.push(("the old address layout", personality() & ADDR_COMPAT_LAYOUT != 0));
     }
+    if let Some(discs) = env::var_os("PROBE_DISCS") {
+        let discs = env::split_paths(&discs).collect::<Vec<_>>();
+        checks.push(("setup's disc and its answers", discs.iter().all(|disc| fs::read(disc).is_ok())));
+    }
     if env::var_os("PROBE_BRIDGED").is_some() {
         let device = fs::read_link(format!("/proc/self/fd/{TAP_FD}"));
         checks.push(("the bridge's device", device.is_ok_and(|path| path == Path::new(PRETEND_DEVICE))));
@@ -196,6 +207,10 @@ fn probe() {
         eprintln!("not as it should be: {failed:?}");
         process::exit(1);
     }
+}
+
+fn vm_args_program(name: &str) -> bool {
+    guesthouse_app_core::vm_args::on_path(name)
 }
 
 fn mode(bits: u32) -> fs::Permissions {
@@ -259,7 +274,11 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     fs::create_dir_all(qemu.parent().unwrap()).unwrap();
     fs::copy(env::current_exe().unwrap(), &qemu).unwrap();
     let forwarded = on == Case::ForwardedGpu;
-    let (own, boot) = if forwarded {
+    let discs = [scratch.write("isos/windows.iso", "setup"), scratch.write("state/answers.iso", "answers")];
+    let (own, boot) = if on == Case::Install {
+        let boot = Boot::Install { iso: discs[0].display().to_string(), answer: discs[1].clone() };
+        (Machine { kind: Kind::Plain, ..own }, boot)
+    } else if forwarded {
         let gpu = UbuntuBoot::WithGpu {
             image: scratch.write("store/linux-driver/driver.iso", "the driver"),
             allow_list: scratch.write("program/linux/allow.txt", ""),
@@ -273,7 +292,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     let plan = VmPlan::new(&context, &own, boot, slots::number(3), 0);
     context.make_run_folder(Some(slots::number(3))).unwrap();
     // The daemon's sockets, which the launcher connects to for a Windows QEMU with no sound.
-    let _daemon = (!forwarded).then(|| {
+    let _daemon = (on != Case::ForwardedGpu && on != Case::Install).then(|| {
         ["global.sock", "vgpu.sock"].map(|name| UnixListener::bind(plan.run_folder.join(name)).unwrap())
     });
     let jail = QemuJail {
@@ -311,6 +330,9 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     if bridged {
         run.env("PROBE_BRIDGED", "1").env(HELPER_VARIABLE, "1");
     }
+    if on == Case::Install {
+        run.env("PROBE_DISCS", env::join_paths(&discs).unwrap());
+    }
     if forwarded {
         let bus = Path::new(&env::var_os("XDG_RUNTIME_DIR").unwrap_or_default()).join("bus");
         run.env("PROBE_FORWARDED", "1")
@@ -345,6 +367,39 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     done.success()
 }
 
+/// The virtual TPM in its jail: swtpm takes its socket from the launcher, keeps its state in the
+/// machine's TPM folder, and ends when its client tells it to.
+fn tpm_runs_jailed() -> bool {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { tpm: true, ..machine(&scratch, "own") };
+    let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::number(3), 0);
+    context.make_run_folder(Some(slots::number(3))).unwrap();
+    let state = plan.tpm.clone().unwrap();
+    fs::create_dir_all(&state).unwrap();
+    let jail = QemuJail {
+        launcher: env!("CARGO_BIN_EXE_guesthouse-jail").into(),
+        namespaces: false,
+        qemu_sandbox: false,
+        sound_socket: None,
+        backing_files: Vec::new(),
+    };
+    let plan = VmPlan { jail: Some(jail), ..plan };
+    let command = plan.swtpm_command().unwrap();
+    if !Command::new(&command[0]).args(&command[1..]).status().unwrap().success() {
+        eprintln!("swtpm didn't start: {:?}", fs::read_to_string(plan.run_folder.join("swtpm.log")));
+        return false;
+    }
+    let socket = plan.run_folder.join("tpm.sock");
+    let ask = |what: &str| Command::new("swtpm_ioctl").arg("--unix").arg(&socket).arg(what).status();
+    let answered = ask("-i").is_ok_and(|done| done.success()) && ask("-s").is_ok_and(|done| done.success());
+    let kept = fs::read_dir(&state).unwrap().flatten().any(|entry| entry.file_name() == "tpm2-00.permall");
+    if !(answered && kept) {
+        eprintln!("swtpm answered: {answered}, kept its state: {kept}");
+    }
+    answered && kept
+}
+
 pub fn main() {
     if env::var_os(HELPER_VARIABLE).is_some() && env::args().any(|word| word.starts_with("--fd=")) {
         pretend_bridge_helper();
@@ -360,11 +415,17 @@ pub fn main() {
     }
     // SAFETY: no thread exists yet. Ubuntu's SSH port, which a real VM may hold.
     unsafe { env::set_var("SSH_PORT", free_port().to_string()) };
-    let mut cases = vec![Case::Nat, Case::Bridged, Case::ForwardedGpu];
+    let mut cases = vec![Case::Nat, Case::Bridged, Case::ForwardedGpu, Case::Install];
     if passt_installed() {
         cases.push(Case::Passt);
     } else {
         println!("on passt ... skipped, as passt isn't installed");
+    }
+    if vm_args_program("swtpm") && vm_args_program("swtpm_ioctl") {
+        assert!(tpm_runs_jailed(), "the TPM, jailed");
+        println!("the TPM, jailed ... ok");
+    } else {
+        println!("the TPM ... skipped, as swtpm isn't installed");
     }
     for on in cases {
         assert!(run_jailed(false, on), "jailed, without namespaces, {on:?}");

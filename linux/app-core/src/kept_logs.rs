@@ -6,7 +6,8 @@
 use crate::context::Context;
 use crate::report::trim::trim;
 use crate::run_files::{
-    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, local_time, noted_run, run_files_since,
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, local_time, noted_run, open_run_file,
+    run_files_since,
 };
 use crate::vm_host::MACHINE_NOTE;
 use std::fs;
@@ -49,7 +50,9 @@ pub fn keep_run(context: &Context, run_folder: &Path) -> io::Result<()> {
     let _ = fs::remove_dir_all(&new);
     fs::create_dir_all(&new)?;
     for (name, path) in files {
-        let text = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut open_run_file(&path)?, &mut bytes)?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         fs::write(new.join(name), trim(&text, MOST_KEPT_BYTES))?;
     }
     fs::write(new.join(STARTED_FILE), local_time(since))?;
@@ -93,6 +96,22 @@ mod tests {
         keep_run(&context, &run).unwrap();
         assert!(!kept.join("daemon.out").exists(), "the copy before is replaced whole");
         assert_eq!(fs::read_to_string(kept.join("qemu.log")).unwrap(), "second run");
+    }
+
+    #[test]
+    fn a_link_in_the_run_folder_is_not_followed() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let run = scratch.path("run");
+        fs::create_dir_all(&run).unwrap();
+        let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
+        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        fs::write(run.join("daemon.out"), "the run's").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, run.join("qemu.log")).unwrap();
+        keep_run(&context, &run).unwrap();
+        let kept = kept_folder(&context, "w11");
+        assert_eq!(fs::read_to_string(kept.join("daemon.out")).unwrap(), "the run's");
+        assert!(!kept.join("qemu.log").exists(), "a link is not a log");
     }
 
     #[test]

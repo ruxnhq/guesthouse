@@ -79,7 +79,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
 fn add_all(found: &mut Collection, place: &str, files: Vec<(String, std::path::PathBuf)>) {
     for (name, path) in files {
         let before = found.items.len();
-        found.add_file_if_there(&format!("{place}/{name}"), &path);
+        found.add_run_file(&format!("{place}/{name}"), &path);
         // Apps write what they like to logcat, an account's address among it.
         if name == GUEST_LOGCAT
             && let Some(item) = found.items.get_mut(before)
@@ -155,6 +155,25 @@ mod tests {
         collect(&context, &machine, &Request { guest_logs: true, ..request(true) }, &mut found);
         assert_eq!(found.names().collect::<Vec<_>>(), ["runs/slot-0/logcat.log"]);
         assert_eq!(found.items[0].text, "E Auth: no token for <email>\n");
+    }
+
+    #[test]
+    fn a_link_or_a_pipe_in_the_run_folder_is_not_read() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let folder = context.run_folder(Some(slots::first()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join(MACHINE_NOTE), "w11").unwrap();
+        let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
+        std::os::unix::fs::symlink(&elsewhere, folder.join("qemu.log")).unwrap();
+        let pipe =
+            std::ffi::CString::new(folder.join("swtpm.log").into_os_string().into_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
+        fs::write(folder.join("daemon.out"), "the run's").unwrap();
+        let mut found = Collection::default();
+        collect(&context, &Machine::new("w11", "W11", "/d", "/v"), &request(true), &mut found);
+        assert_eq!(found.names().collect::<Vec<_>>(), ["runs/slot-0/daemon.out"]);
+        assert!(found.items.iter().all(|item| !item.text.contains("not the run's")));
     }
 
     #[test]

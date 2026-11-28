@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 
 use windows::Win32::Storage::FileSystem::{
     FILE_APPEND_DATA, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE,
+    FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE, WRITE_OWNER,
 };
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
@@ -67,10 +67,23 @@ pub fn keep(file: &Path) {
     append_own(&path(), &format!("{}\n", text.trim_end()), ELEVATED.get().copied().unwrap_or(true));
 }
 
-/// The installer's own log, opened to add to it: elevated, only an existing plain file the user
-/// owns; not elevated, as the user, made if it isn't there.
+/// The installer's own log, opened to add to it: by a part another process started elevated, only
+/// an existing plain file the user owns; by the process that was opened, which the path came to
+/// on its own command line, made if it isn't there. One that is elevated gives a log it makes to its
+/// own user, so the parts it starts may add to it.
 pub fn open_own(path: &Path, elevated: bool) -> io::Result<std::fs::File> {
     if !elevated {
+        if system::is_elevated() {
+            let made = std::fs::OpenOptions::new()
+                .access_mode((FILE_APPEND_DATA | WRITE_OWNER | READ_CONTROL | SYNCHRONIZE).0)
+                .create_new(true)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(path);
+            if let Ok(file) = made {
+                system::give_to_own_user(&file)?;
+                return Ok(file);
+            }
+        }
         return std::fs::OpenOptions::new().create(true).append(true).open(path);
     }
     let file = std::fs::OpenOptions::new()
@@ -165,6 +178,22 @@ mod tests {
         assert!(made.status.success(), "mklink /j: {}", String::from_utf8_lossy(&made.stdout));
         append_own(&link.join("guesthouse-setup.log"), "from the elevated part\n", true);
         assert!(!elsewhere.join("guesthouse-setup.log").exists(), "a file was made through the junction");
+    }
+
+    #[test]
+    fn a_log_given_to_its_user_is_theirs_to_add_to() {
+        let dir = folder("given");
+        let log = dir.join("guesthouse-setup.log");
+        let file = std::fs::OpenOptions::new()
+            .access_mode((FILE_APPEND_DATA | WRITE_OWNER | READ_CONTROL | SYNCHRONIZE).0)
+            .create_new(true)
+            .open(&log)
+            .unwrap();
+        system::give_to_own_user(&file).unwrap();
+        system::plain_and_owned(&file).unwrap();
+        drop(file);
+        append_own(&log, "from the elevated part\n", true);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "from the elevated part\n");
     }
 
     #[test]

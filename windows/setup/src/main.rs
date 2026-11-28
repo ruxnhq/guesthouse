@@ -152,7 +152,9 @@ fn main() {
     if !args.ui {
         system::safe_dll_search();
     }
-    log::init(args.log.clone(), system::is_elevated());
+    // The parts the starter hands over to keep to the stricter rule for its log, whose path they
+    // were given; the starter's own command line named it.
+    log::init(args.log.clone(), system::is_elevated() && (args.stage2 || args.ui));
     // With no console, a panic would otherwise leave nothing behind.
     std::panic::set_hook(Box::new(|info| log::say(&format!("panic: {info}"))));
 

@@ -741,12 +741,56 @@ fn owner_is(handle: HANDLE, test: impl Fn(windows::Win32::Security::PSID) -> boo
     }
 }
 
+/// The account this process runs as, as a SID in `buffer`.
+fn own_sid(buffer: &mut [u64; 64]) -> io::Result<windows::Win32::Security::PSID> {
+    use windows::Win32::Security::{TOKEN_USER, TokenUser};
+    let mut token = HANDLE::default();
+    // SAFETY: the token is closed; the buffer is as long as said and outlives the SID read from it.
+    unsafe {
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(io::Error::other)?;
+        let mut len = 0u32;
+        let read = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr().cast()),
+            (buffer.len() * 8) as u32,
+            &mut len,
+        );
+        let _ = CloseHandle(token);
+        read.map_err(io::Error::other)?;
+        Ok((*(buffer.as_ptr() as *const TOKEN_USER)).User.Sid)
+    }
+}
+
+/// Makes `file`, opened for `WRITE_OWNER`, this process's user's own, as an elevated process's
+/// files are otherwise the Administrators group's.
+pub fn give_to_own_user(file: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
+    use windows::Win32::Security::OWNER_SECURITY_INFORMATION;
+    let mut buffer = [0u64; 64];
+    let me = own_sid(&mut buffer)?;
+    // SAFETY: the handle is open for WRITE_OWNER, and the SID lives in `buffer` through the call.
+    let code = unsafe {
+        SetSecurityInfo(
+            HANDLE(file.as_raw_handle()),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(me),
+            None,
+            None,
+            None,
+        )
+    };
+    win32(code, "giving the log to its user")
+}
+
 /// Whether `file` is a plain file of the user this process runs as: owned by them, with no other
 /// name (hard link) and no reparse point. What they own they may change anyway, so an elevated
 /// process that writes only to such a file writes nothing they couldn't.
 pub fn plain_and_owned(file: &std::fs::File) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Security::{EqualSid, TOKEN_USER, TokenUser};
+    use windows::Win32::Security::EqualSid;
     use windows::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
         GetFileInformationByHandle,
@@ -763,20 +807,8 @@ pub fn plain_and_owned(file: &std::fs::File) -> io::Result<()> {
         if info.nNumberOfLinks != 1 {
             return Err(io::Error::other(format!("the file has {} names", info.nNumberOfLinks)));
         }
-        let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(io::Error::other)?;
-        let mut user = vec![0u64; 64];
-        let mut len = 0u32;
-        let read = GetTokenInformation(
-            token,
-            TokenUser,
-            Some(user.as_mut_ptr() as *mut _),
-            (user.len() * 8) as u32,
-            &mut len,
-        );
-        let _ = CloseHandle(token);
-        read.map_err(io::Error::other)?;
-        let me = (*(user.as_ptr() as *const TOKEN_USER)).User.Sid;
+        let mut buffer = [0u64; 64];
+        let me = own_sid(&mut buffer)?;
         if !owner_is(handle, |owner| EqualSid(owner, me).is_ok())? {
             return Err(io::Error::other("the file is someone else's"));
         }

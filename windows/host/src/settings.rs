@@ -94,8 +94,8 @@ pub struct BootSettings {
     /// while it runs. None has no such port.
     #[serde(default)]
     pub ssh_port: Option<u16>,
-    /// This PC's own addresses, which a Windows guest lets reach its screen's port, and no other.
-    /// None leaves the guest's rules as they were, as a host from before this did.
+    /// This PC's own addresses, which a Windows guest lets reach its Remote Desktop and its screen's
+    /// port, and no other. With None the guest knows none, and those rules let nobody in.
     #[serde(default)]
     pub host_addresses: Option<Vec<std::net::Ipv4Addr>>,
 }

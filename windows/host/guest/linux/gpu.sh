@@ -101,6 +101,31 @@ if [ -f "$units/guesthouse-ssh.socket" ]; then
     fi
 fi
 
+# Who may sign in by SSH with a password: the loopback, where the host's relay arrives, this PC, by
+# the addresses the host wrote, and a bridged guest's own networks (ssh-from.sh). Keys are taken from
+# anywhere. Settings sshd
+# won't read are put back as they were, and sshd reads them again when they change.
+ssh_from=/etc/ssh/sshd_config.d/10-guesthouse-from.conf
+if [ -f "$here/ssh-from.sh" ] && [ -d /etc/ssh/sshd_config.d ]; then
+    gateways=$(ip -4 route show default | awk '{ print $3 }')
+    networks=$(ip -4 route show scope link | awk '$1 ~ /\// { print $1 }')
+    if sh "$here/ssh-from.sh" "$files/guesthouse/hosts.txt" "$gateways" "$networks" > "$ssh_from.new" &&
+        ! cmp -s "$ssh_from.new" "$ssh_from"; then
+        if [ -f "$ssh_from" ]; then cp "$ssh_from" "$ssh_from.old"; fi
+        mv "$ssh_from.new" "$ssh_from"
+        if said=$(sshd -t 2>&1); then
+            systemctl try-reload-or-restart ssh.service 2>&1 | say_each ssh
+        else
+            printf '%s\n' "$said" | say_each ssh
+            if [ -f "$ssh_from.old" ]; then mv "$ssh_from.old" "$ssh_from"; else rm -f "$ssh_from"; fi
+        fi
+    fi
+    rm -f "$ssh_from.new" "$ssh_from.old"
+    if [ -f "$ssh_from" ]; then
+        say "ssh: passwords only from $(sed -n 's/^Match Address [*],!//p' "$ssh_from" | sed 's/,!/, /g')"
+    fi
+fi
+
 if ! modprobe dxgkrnl 2> /dev/null; then
     say "dxgkrnl: building it for $(uname -r)"
     log=/var/log/guesthouse-dxgkrnl.log

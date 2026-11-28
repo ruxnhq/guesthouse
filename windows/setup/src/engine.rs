@@ -734,15 +734,11 @@ impl Run<'_> {
 
     fn delete(&mut self) -> StepResult {
         let dir = self.ctx.dir.clone();
-        // setup.log goes with the folder: kept in %TEMP% first.
+        // setup.log goes with the folder: its lines are kept in the installer's own log first.
         let setup_log = dir.join("setup.log");
         log::also(None);
         self.setup_log = false;
-        if setup_log.exists() {
-            let kept = std::env::temp_dir().join("guesthouse-setup-removed.log");
-            let _ = std::fs::copy(&setup_log, &kept);
-            log::say(&format!("  setup.log kept as {}", kept.display()));
-        }
+        log::keep(&setup_log);
         if self.ctx.dry_run {
             self.would(&format!(
                 "delete {} (here: {}, which is deleted)",

@@ -32,7 +32,12 @@ pub(super) struct NetState {
     pub enable: Option<Enabled>,
     /// Turning Hyper-V on waits, part way, while this is set.
     pub enable_held: bool,
+    /// Addresses where another card than the guest's answers, as this PC's own or another device's.
+    pub elsewhere: Vec<Ipv4Addr>,
 }
+
+/// The card a pretend machine's record keeps, which answers at every address but those `elsewhere`.
+pub(super) const GUEST_CARD: &str = "00-15-5D-00-00-01";
 
 #[derive(Default)]
 pub(super) struct FakeNet {
@@ -109,6 +114,11 @@ impl Network for FakeNet {
 
     fn ip_helper_running(&self) -> bool {
         !self.state.lock().unwrap().ip_helper_down
+    }
+
+    fn card_at(&self, address: Ipv4Addr) -> Result<String, String> {
+        let elsewhere = self.state.lock().unwrap().elsewhere.contains(&address);
+        Ok(if elsewhere { "00-15-5D-99-99-99".into() } else { GUEST_CARD.into() })
     }
 
     fn bridging(&self) -> Bridging {
@@ -245,6 +255,40 @@ fn forwards_follow_the_guests_address_when_it_changes() {
     assert_eq!(net(service).rules, ["Guesthouse win 8080"], "one rule, as one forward");
     stop(service, "win");
     assert!(net(service).proxies.is_empty());
+}
+
+#[test]
+fn a_forward_leads_only_to_an_address_where_the_machines_own_card_answers() {
+    let device = Ipv4Addr::new(10, 0, 0, 5);
+    let work =
+        Pretend { net: FakeNet::with(|net| net.elsewhere = vec![THIS_PC, device]), ..Pretend::default() };
+    let setup = setup("forwards-card", work);
+    let service = &setup.service;
+    ask(service, Request::Create { machine: new_machine(&setup, "win") });
+    change(service, with_forwards(&[forward(8445, 445)]));
+    start_and_run(service, "win");
+    wait_net(service, |net| net.proxies.len() == 1);
+
+    // This PC's own address, then another device's: neither is the guest's, whatever it says.
+    for said in [THIS_PC, device] {
+        service.machines().tell("win", Event::Report(format!("address: {said}")));
+        wait_net(service, |net| net.proxies.is_empty() && net.rules.is_empty());
+        thread::sleep(Duration::from_millis(300));
+        assert!(net(service).proxies.is_empty(), "nothing leads to {said}");
+        let said_why = problems(service, "win").iter().any(|problem| {
+            problem.starts_with("No port forwards are made") && problem.contains(&said.to_string())
+        });
+        assert!(said_why, "{:?}", problems(service, "win"));
+    }
+    assert!(
+        !net(service).calls.iter().any(|call| call.contains("192.168.1.20") || call.contains("10.0.0.5"))
+    );
+
+    service.machines().tell("win", Event::Report("address: 172.29.1.9".into()));
+    wait_net(service, |net| {
+        net.proxies.len() == 1 && net.proxies[0].connect_address == Ipv4Addr::new(172, 29, 1, 9)
+    });
+    stop(service, "win");
 }
 
 #[test]

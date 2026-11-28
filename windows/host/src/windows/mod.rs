@@ -203,7 +203,8 @@ pub(crate) fn volumes(disk: &VirtualDisk) -> Result<Vec<Volume>, String> {
 
 /// Brings a Windows guest's disk up to date before it boots, which no machine may have open then:
 /// the card's driver, the guest's report, which also listens for the host asking it to shut down,
-/// and the guest's screen when there's a remoteman installer to give it. `nvapi_wrapper` is whether
+/// who may reach the ports it lets in (`hosts`, [`crate::guest::hosts_file`]'s text), and the
+/// guest's screen when there's a remoteman installer to give it. `nvapi_wrapper` is whether
 /// the guest has the NVAPI wrapper or NVIDIA's own NVAPI.
 fn refresh_windows_disk(
     disk: &Path,
@@ -235,11 +236,26 @@ fn refresh_windows_disk(
     }
     // Written again at every boot, as guests made before it changed have an older one.
     windows.write(crate::guest::REPORT_PATH, crate::guest::REPORT).map_err(|error| error.to_string())?;
+    give_hosts(&windows, hosts)?;
     give_share(&windows, shares, sink)?;
     match setup {
-        Some(setup) => give_screen(disk, &windows, &setup, card, hosts, sink),
+        Some(setup) => give_screen(disk, &windows, &setup, card, sink),
         None => {
             keep_trust(disk, &windows, sink);
+            Ok(())
+        }
+    }
+}
+
+/// Tells the guest who may reach the ports it lets in. With nothing to tell, the file goes, and the
+/// guest lets nobody in by those rules. A copy in the screen's folder, where a host before this wrote
+/// it, goes too.
+fn give_hosts(guest: &GuestVolume, hosts: Option<&str>) -> Result<(), String> {
+    let _ = guest.remove_file(Path::new(screen::GUEST_FOLDER).join("hosts.txt"));
+    match hosts {
+        Some(text) => guest.write(crate::guest::HOSTS_PATH, text).map_err(|error| error.to_string()),
+        None => {
+            let _ = guest.remove_file(crate::guest::HOSTS_PATH);
             Ok(())
         }
     }
@@ -315,7 +331,6 @@ fn give_screen(
     guest: &GuestVolume,
     setup: &Path,
     card: Option<&Card>,
-    hosts: Option<&str>,
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let folder = Path::new(screen::GUEST_FOLDER);
@@ -327,13 +342,6 @@ fn give_screen(
     give_trust(guest, &viewer)?;
     write("encoder.txt", card.map_or("auto", |card| screen::encoder_for(&card.instance_id)))?;
     write("screen.ps1", screen::SCRIPT)?;
-    // Who may reach remoteman's port. Without it the guest leaves its rules as they are.
-    match hosts {
-        Some(text) => write(screen::HOSTS_FILE, text)?,
-        None => {
-            let _ = guest.remove_file(folder.join(screen::HOSTS_FILE));
-        }
-    }
     let account = disk.with_extension("account.txt");
     if let Ok(text) = std::fs::read_to_string(&account) {
         write("logon.txt", &text)?;
@@ -363,16 +371,23 @@ fn give_trust(guest: &GuestVolume, viewer: &str) -> Result<(), String> {
 }
 
 /// With no installer to give, a guest given one before still runs its script, which runs the
-/// installer when remoteman's service has gone. Its list is made again from the guest's own, so the
+/// installer when remoteman's service has gone. The script is written again, as an older one would
+/// work with rules this host no longer keeps. Its list is made again from the guest's own, so the
 /// installer never gets the one from an earlier boot, with a device revoked since on it.
 fn keep_trust(disk: &Path, guest: &GuestVolume, sink: &dyn Sink) {
-    if !guest.is_file(Path::new(screen::GUEST_FOLDER).join("screen.ps1")) {
+    let script = Path::new(screen::GUEST_FOLDER).join("screen.ps1");
+    if !guest.is_file(&script) {
         return;
     }
-    let kept =
-        screen::viewer_identity(&screen::state_beside(disk)).and_then(|viewer| give_trust(guest, &viewer));
+    let kept = guest
+        .write(&script, screen::SCRIPT)
+        .map_err(|error| error.to_string())
+        .and_then(|()| screen::viewer_identity(&screen::state_beside(disk)))
+        .and_then(|viewer| give_trust(guest, &viewer));
     if let Err(error) = kept {
-        sink.problem(format!("The guest's list of devices to trust wasn't written: {error}"));
+        sink.problem(format!(
+            "The guest's screen script or list of devices to trust wasn't written: {error}"
+        ));
     }
 }
 
@@ -499,13 +514,30 @@ mod tests {
             "a guest with no screen is left alone"
         );
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("screen.ps1"), screen::SCRIPT).unwrap();
+        std::fs::write(folder.join("screen.ps1"), "# an older script").unwrap();
         std::fs::write(folder.join("trusted"), format!("{PAIRED} Revoked since\n")).unwrap();
         keep_trust(&disk, &guest, &sink);
+        assert_eq!(std::fs::read_to_string(folder.join("screen.ps1")).unwrap(), screen::SCRIPT);
         let viewer = screen::viewer_identity(&screen::state_beside(&disk)).unwrap();
         assert_eq!(std::fs::read_to_string(folder.join("trusted")).unwrap(), screen::trust_list(&viewer));
         assert_eq!(std::fs::read_to_string(folder.join("viewer.txt")).unwrap(), screen::trust_list(&viewer));
         assert!(sink.0.lock().unwrap().is_empty());
+        drop(guest);
+        let _ = std::fs::remove_dir_all(disk.parent().unwrap());
+    }
+
+    #[test]
+    fn every_windows_guest_is_told_who_may_reach_its_ports_and_nothing_stays_when_there_is_nothing_to_tell() {
+        let (disk, folder, root) = scratch("hosts");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("hosts.txt"), "shared\n").unwrap();
+        let guest = GuestVolume::open(&root).unwrap();
+        let text = crate::guest::hosts_file(true, &[std::net::Ipv4Addr::new(192, 168, 1, 20)]);
+        give_hosts(&guest, Some(&text)).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(crate::guest::HOSTS_PATH)).unwrap(), text);
+        assert!(!folder.join("hosts.txt").exists(), "the copy where a host before this wrote it goes");
+        give_hosts(&guest, None).unwrap();
+        assert!(!root.join(crate::guest::HOSTS_PATH).exists());
         drop(guest);
         let _ = std::fs::remove_dir_all(disk.parent().unwrap());
     }

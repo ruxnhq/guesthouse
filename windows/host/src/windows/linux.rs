@@ -9,7 +9,8 @@ use super::prepare::{BYTES_PER_GB, attach_new, diskpart, free_letters, new_passw
 use super::volumes;
 use crate::events::Sink;
 use crate::guest::linux::{
-    ACCOUNT, BOOT_FILES, FILES, INSTALLER_INITRD, LABEL, USER_DATA, WSL_DRIVERS, WSL_LIB, account, unix_text,
+    ACCOUNT, BOOT_FILES, FILES, HOSTS, INSTALLER_INITRD, LABEL, USER_DATA, WSL_DRIVERS, WSL_LIB, account,
+    unix_text,
 };
 use crate::machine::Guest;
 use crate::record::{Record, files_disk};
@@ -142,6 +143,7 @@ pub fn refresh_disk(
     card: Option<&Card>,
     shares: &[Share],
     installed: bool,
+    hosts: Option<&str>,
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let mut attached = VirtualDisk::open(files, Kind::Vhdx).map_err(|error| error.to_string())?;
@@ -171,6 +173,14 @@ pub fn refresh_disk(
                 Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.to_string()),
                 _ => {}
             }
+        }
+    }
+    // Who may sign in by SSH besides the loopback. With nothing to tell, the file goes, and only the
+    // loopback may.
+    match hosts {
+        Some(text) => write(&guest, HOSTS, text)?,
+        None => {
+            let _ = guest.remove_file(HOSTS);
         }
     }
     refresh(&guest, card, shares, sink)

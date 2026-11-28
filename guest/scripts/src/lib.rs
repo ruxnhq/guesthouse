@@ -15,6 +15,7 @@ mod ctl_channel;
 mod display_settings;
 mod driver_certificate;
 mod guest_rights;
+mod host_rules;
 mod nv_files;
 mod nv_store;
 mod pair_answer;

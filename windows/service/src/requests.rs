@@ -5,7 +5,8 @@
 
 use crate::machines::{Entry, Machines};
 use crate::report_parts::tail_file;
-use crate::store::{OWN_FILES, Settings, Store, empty, usable_name};
+use crate::store::{Settings, Store, empty, usable_name};
+use disk_tree::{copy_tree, remove_disks, tree};
 use guesthouse_control::report::pieces;
 use guesthouse_control::{
     Answer, Bridging, Card, CardInfo, DEFAULT_USER, Event, HyperV, Machine, MachineSettings, NetworkMode,
@@ -22,7 +23,6 @@ use guesthouse_host_windows::snapshots::{self, Disks};
 use guesthouse_host_windows::ssh;
 use guesthouse_remote_view_core::pairing::Event as PairingEvent;
 use guesthouse_remote_view_core::session::Sessions;
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -65,8 +65,12 @@ pub trait Work: Send + Sync + 'static {
     fn cards(&self) -> Vec<CardInfo>;
     /// Stops at once the machine HCS knows by `id`, if there is one.
     fn end(&self, id: &str);
-    /// Who may open a machine's console: the user signed in at the console, and administrators.
-    fn console_access(&self) -> Vec<String>;
+    /// The owner of the file or folder at `path`, as a SID.
+    fn files_owner(&self, path: &Path) -> Option<String>;
+    /// The accounts this PC keeps a profile for, as SIDs, Windows' own among them.
+    fn profiles(&self) -> Vec<String>;
+    /// Who may open a machine's console: its owner, if it has one, and administrators.
+    fn console_access(&self, owner: Option<&str>) -> Vec<String>;
     /// Lets a stopped machine's disk grow to `size_gb`, and never shrinks it.
     fn grow(&self, disk: &Path, size_gb: u64) -> Result<(), String>;
     /// The largest the disk may grow to now, in GB, if it can be read.
@@ -113,8 +117,10 @@ pub trait Connection {
     /// Whether the window has closed its end.
     fn gone(&mut self) -> bool;
     /// Whether the user asking may read the file at `path`, as the service, which may read any file,
-    /// opens only what the user could.
-    fn may_read(&mut self, path: &Path) -> Result<(), String>;
+    /// opens only what the user could. What comes back is the path of the file that opened, with
+    /// every link on the way resolved, and the file held as the user opened it, so while it's held
+    /// it isn't written, moved or replaced, and nor is any folder it's in.
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String>;
     /// Whether the user asking may share the folder at `path`: read it, write it unless
     /// `read_only`, and change who may open it. Sharing it lets the machine's own account open it,
     /// which the service does as the system, so only a folder the user could do that to is shared.
@@ -125,11 +131,14 @@ pub trait Connection {
     /// must be the folder itself, by its own path, not a link and not reached through one, on one
     /// of this PC's fixed drives. What comes back holds it open while the machine's folder is made.
     fn may_place(&mut self, path: &Path) -> Result<Held, String>;
+    /// Who is asking.
+    fn asker(&self) -> Asker;
 }
 
 /// The folder a check holds open, for as long as it's kept.
 pub use crate::store::Held;
 
+pub use owners::Asker;
 pub use remote_view::{Opened, Unannounced, ViewSettings, open_relay};
 
 /// HCS's ID for a machine, which also names its pipes. `boot` stops any machine with its ID that's
@@ -161,6 +170,8 @@ pub struct Service<W: Work> {
     sessions: Sessions,
     /// Each machine's pairing is driven one step at a time.
     driving: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
+    /// What was found of each machine's guest's address, by the card that answers there.
+    checked: Mutex<std::collections::HashMap<String, guest_address::Checked>>,
 }
 
 impl<W: Work> Service<W> {
@@ -171,6 +182,7 @@ impl<W: Work> Service<W> {
         let names: Vec<String> = machines.lock().keys().cloned().collect();
         for name in names {
             work.end(&vm_id(&name));
+            owners::from_files(&machines, &work, &name);
             // The disks of a machine whose place can't be used aren't touched.
             if let Some(problem) = machines.store.problem(&name) {
                 work.log(&format!("{name}'s disks can't be used: {problem}"));
@@ -208,6 +220,7 @@ impl<W: Work> Service<W> {
             switching: Mutex::new(()),
             sessions: Sessions::default(),
             driving: Mutex::default(),
+            checked: Mutex::default(),
         });
         // Port forwards a stopped service left behind are no use to anyone, and hold their ports.
         // Listing the firewall's rules takes seconds, and the service manager is waiting for the
@@ -227,9 +240,16 @@ impl<W: Work> Service<W> {
 
     /// Answers `request` on `connection`. A write that fails means the window has gone, and the
     /// work it asked for goes on without it.
+    /// A machine that isn't the asker's is answered as one that isn't there.
     pub fn answer(self: &Arc<Self>, request: Request, connection: &mut dyn Connection) {
+        let asker = connection.asker();
+        self.take_unowned(&asker);
+        if let Some(asked) = owners::named(&request).filter(|asked| !self.theirs(asked, &asker)) {
+            let _ = connection.send(&no_machine(asked));
+            return;
+        }
         let answer = match request {
-            Request::Status => self.status(),
+            Request::Status => self.status(&asker),
             Request::Create { machine } => return self.create(machine, connection),
             Request::Start { name } => self.start(&name, connection),
             Request::Stop { name } => self.stop(&name),
@@ -329,7 +349,7 @@ impl<W: Work> Service<W> {
         *self.bridging.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
-    fn status(&self) -> Answer {
+    fn status(&self, asker: &Asker) -> Answer {
         // Each place is held again as it stands: one that's gone is a problem, and one that's back
         // isn't.
         let names: Vec<String> = self.machines.lock().keys().cloned().collect();
@@ -343,6 +363,7 @@ impl<W: Work> Service<W> {
             .machines
             .lock()
             .iter()
+            .filter(|(_, entry)| asker.may_use(entry))
             .map(|(name, entry)| {
                 let record = Record::load(&self.machines.store.disk(name)).unwrap_or_default();
                 Machine {
@@ -443,22 +464,32 @@ impl<W: Work> Service<W> {
             }
         }
         let image = &machine.image;
-        if !image.is_absolute() || image.to_string_lossy().starts_with(r"\\") {
-            return Some(format!("{} isn't a file on this PC's own drives.", image.display()));
-        }
-        // Opened as the user first: the service looking for the file itself would tell anyone
-        // whether a file is there in a folder they can't look in.
-        if let Err(reason) = connection.may_read(image) {
-            return Some(reason);
-        }
-        (!image.is_file()).then(|| format!("{} isn't a file.", image.display()))
+        (!image.is_absolute() || image.to_string_lossy().starts_with(r"\\"))
+            .then(|| format!("{} isn't a file on this PC's own drives.", image.display()))
     }
 
-    fn create(self: &Arc<Self>, machine: NewMachine, connection: &mut dyn Connection) {
-        if let Some(reason) = self.refusal(&machine, connection) {
-            let _ = connection.send(&Answer::Refused { reason });
-            return;
+    /// Opens `machine`'s image as the user, and has it read from then on by the path that open found,
+    /// held as the user opened it until the machine is made. The service looking for the file itself
+    /// would tell anyone whether a file is there in a folder they can't look in.
+    fn image(machine: &mut NewMachine, connection: &mut dyn Connection) -> Result<Held, String> {
+        let (image, held) = connection.may_read(&machine.image)?;
+        if !image.is_file() {
+            return Err(format!("{} isn't a file.", machine.image.display()));
         }
+        machine.image = image;
+        Ok(held)
+    }
+
+    fn create(self: &Arc<Self>, mut machine: NewMachine, connection: &mut dyn Connection) {
+        let image =
+            self.refusal(&machine, connection).map_or_else(|| Self::image(&mut machine, connection), Err);
+        let image = match image {
+            Ok(held) => held,
+            Err(reason) => {
+                let _ = connection.send(&Answer::Refused { reason });
+                return;
+            }
+        };
         let name = machine.name.clone();
         // The folder it's to be kept in is checked as the user, and held until the machine's own
         // folder is made in it.
@@ -475,6 +506,7 @@ impl<W: Work> Service<W> {
         {
             let mut making = self.making.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(other) = &*making {
+                let other = if self.visible(other, &connection.asker()) { other } else { "Another machine" };
                 let reason = format!("{other} is being made. One machine is made at a time, so wait for it.");
                 let _ = connection.send(&Answer::Refused { reason });
                 return;
@@ -512,13 +544,17 @@ impl<W: Work> Service<W> {
             nested_virtualization: false,
             ssh_port: None,
             size_gb: Some(machine.size_gb),
+            owner: Some(connection.asker().user),
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Installing));
         let (_, events) = self.machines.watch(&name).expect("the machine was just added");
         self.machines.tell(&name, Event::State(State::Installing));
 
         let service = Arc::clone(self);
-        let work = thread::spawn(move || service.make(machine));
+        let work = thread::spawn(move || {
+            let _image = image;
+            service.make(machine)
+        });
         let mut window_gone = false;
         let mut pass_on = |event: Event, connection: &mut dyn Connection| {
             if !window_gone && connection.send(&Answer::Event { event }).is_err() {
@@ -711,7 +747,7 @@ impl<W: Work> Service<W> {
             memory_mb: entry_settings.memory_mb,
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
-            console_access: self.work.console_access(),
+            console_access: self.work.console_access(entry_settings.owner.as_deref()),
             nvapi_wrapper: entry_settings.nvapi_wrapper,
             tpm: entry_settings.tpm,
             nested_virtualization: entry_settings.nested_virtualization,
@@ -915,7 +951,9 @@ impl<W: Work> Service<W> {
         let saved = {
             let mut entries = self.machines.lock();
             // This PC's ports are the machines' together: one is one machine's forward only.
+            let asker = connection.asker();
             for (other, entry) in entries.iter().filter(|(other, _)| **other != name) {
+                let other = if asker.may_use(entry) { other.as_str() } else { "another machine" };
                 if let Some(taken) = wanted.forwards.iter().find(|forward| {
                     entry.settings.forwards.iter().any(|kept| kept.host_port == forward.host_port)
                 }) {
@@ -1375,7 +1413,7 @@ impl<W: Work> Service<W> {
             None => None,
         };
         let mut files = self.work.report_parts();
-        files.push(("machines.txt".to_owned(), Ok(self.machines_text())));
+        files.push(("machines.txt".to_owned(), Ok(self.machines_text(&connection.asker()))));
         if let Some(name) = &named {
             for (shown, path) in report_machine_files(&self.machines.store, name) {
                 files.push((shown, tail_file(&path, REPORT_TAIL)));
@@ -1394,8 +1432,8 @@ impl<W: Work> Service<W> {
     }
 
     /// Each machine on a line: its name, system, state, and whether its first boot has set it up.
-    fn machines_text(&self) -> String {
-        let Answer::Status { machines, .. } = self.status() else { return String::new() };
+    fn machines_text(&self, asker: &Asker) -> String {
+        let Answer::Status { machines, .. } = self.status(asker) else { return String::new() };
         machines
             .iter()
             .map(|machine| {
@@ -1615,85 +1653,6 @@ fn inside(path: &Path, folder: &Path) -> bool {
     path == folder || path.starts_with(&format!("{folder}\\"))
 }
 
-/// Every file under `folder` and its size, and every folder with a size of nothing, by path from it
-/// in lowercase and with `/`, except what's a machine's own at the top. A link is an error, not
-/// followed: a machine's folder holds none, so one is something else's.
-fn tree(folder: &Path) -> Result<BTreeMap<String, u64>, String> {
-    fn walk(folder: &Path, prefix: &str, top: bool, found: &mut BTreeMap<String, u64>) -> Result<(), String> {
-        let said = |error: io::Error| format!("{}: {error}", folder.display());
-        for entry in fs::read_dir(folder).map_err(said)? {
-            let entry = entry.map_err(|error| format!("{}: {error}", folder.display()))?;
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            if top && OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&name)) {
-                continue;
-            }
-            let kind = entry.file_type().map_err(|error| format!("{}: {error}", entry.path().display()))?;
-            if kind.is_symlink() {
-                return Err(format!(
-                    "{} is a link, and the service doesn't move links.",
-                    entry.path().display()
-                ));
-            }
-            if kind.is_dir() {
-                found.insert(format!("{prefix}{name}/"), 0);
-                walk(&entry.path(), &format!("{prefix}{name}/"), false, found)?;
-            } else {
-                let size =
-                    entry.metadata().map_err(|error| format!("{}: {error}", entry.path().display()))?.len();
-                found.insert(format!("{prefix}{name}"), size);
-            }
-        }
-        Ok(())
-    }
-    let mut found = BTreeMap::new();
-    walk(folder, "", true, &mut found)?;
-    Ok(found)
-}
-
-/// Copies what's in `from` into `to`, which is there, but a machine's own files at the top. Each file
-/// that's copied is told to `done` by its place and its size.
-fn copy_tree(from: &Path, to: &Path, top: bool, done: &mut dyn FnMut(&str, u64)) -> Result<(), String> {
-    let entries = fs::read_dir(from).map_err(|error| format!("{}: {error}", from.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("{}: {error}", from.display()))?;
-        let name = entry.file_name();
-        if top && OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&name.to_string_lossy())) {
-            continue;
-        }
-        let (source, copy) = (entry.path(), to.join(&name));
-        let kind = entry.file_type().map_err(|error| format!("{}: {error}", source.display()))?;
-        if kind.is_symlink() {
-            return Err(format!("{} is a link, and the service doesn't move links.", source.display()));
-        }
-        if kind.is_dir() {
-            fs::create_dir(&copy).map_err(|error| format!("{}: {error}", copy.display()))?;
-            copy_tree(&source, &copy, false, done)?;
-        } else {
-            let bytes = fs::copy(&source, &copy)
-                .map_err(|error| format!("Copying {} to {}: {error}", source.display(), copy.display()))?;
-            done(&name.to_string_lossy(), bytes);
-        }
-    }
-    Ok(())
-}
-
-/// Deletes what's in a machine's own folder that isn't its own: its disks and what's beside them.
-fn remove_disks(folder: &Path) -> Result<(), String> {
-    let entries = fs::read_dir(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
-    for entry in entries.filter_map(Result::ok) {
-        if OWN_FILES.iter().any(|own| own.eq_ignore_ascii_case(&entry.file_name().to_string_lossy())) {
-            continue;
-        }
-        let path = entry.path();
-        let gone = match entry.file_type() {
-            Ok(kind) if kind.is_dir() => fs::remove_dir_all(&path),
-            _ => fs::remove_file(&path),
-        };
-        gone.map_err(|error| format!("{}: {error}", path.display()))?;
-    }
-    Ok(())
-}
-
 /// A size in words, in GB when it's large and MB when it isn't.
 use guesthouse_basics::words::size_in_gb_or_mb_down as size_words;
 
@@ -1701,8 +1660,11 @@ use guesthouse_basics::words::size_in_gb_or_mb_down as size_words;
 #[path = "requests/size_words_tests.rs"]
 mod size_words_tests;
 
+mod disk_tree;
 mod forwards;
+mod guest_address;
 mod hyper_v;
+mod owners;
 mod pairing;
 mod remote_view;
 

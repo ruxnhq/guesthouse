@@ -147,6 +147,10 @@ impl Network for RealNetwork {
         services::standing(IP_HELPER) == Standing::Running
     }
 
+    fn card_at(&self, address: Ipv4Addr) -> Result<String, String> {
+        guesthouse_hcs::neighbours::card_at(address)
+    }
+
     fn bridging(&self) -> Bridging {
         let service = services::standing(portable::HYPER_V_SERVICE) != Standing::Missing;
         // The feature is read only when its service isn't there, and on a thread of its own, as

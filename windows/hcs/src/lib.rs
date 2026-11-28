@@ -17,6 +17,7 @@
 //!   on it is read, written or removed, which follows no links.
 //! - `hvsock`: Hyper-V sockets, which reach a guest with no network. Its IDs build everywhere.
 //! - `worker`: the account a machine's worker process runs as. It builds everywhere.
+//! - `neighbours`: which network card answers at an address. How a card is written builds everywhere.
 //! - `host`: whether this process is elevated, which HCS needs, and Ctrl+C.
 //! - `dns_sd`: announcing a service through Windows' own mDNS responder. What to do after each of
 //!   its answers builds everywhere.
@@ -30,6 +31,7 @@
 pub mod adapters;
 pub mod dns_sd;
 pub mod hvsock;
+pub mod neighbours;
 pub mod schema;
 
 #[cfg(windows)]

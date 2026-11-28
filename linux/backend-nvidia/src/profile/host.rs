@@ -92,8 +92,8 @@ pub struct HostBranch {
     pub gem_import_request: usize,
     pub gem_import_request_handle: usize,
 
-    /// All of these only read. Their parameters hold no pointers, and the only handles in them are
-    /// looked up in this daemon's own client, so none can reach another client's objects.
+    /// All of these only read. Their parameters hold no pointers, and the handle fields in them are
+    /// zeroed before a control runs (see `escape::control`).
     pub guest_controls: &'static [GuestControl],
 }
 

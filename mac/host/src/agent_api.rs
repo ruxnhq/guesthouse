@@ -41,11 +41,12 @@ pub extern "C" fn guesthouse_agent_socket_path() -> *mut c_char {
     }
 }
 
-/// Makes the agent for this user and finds the machines still running. Null without a home
-/// folder. Never freed: an agent lasts as long as its process.
+/// Makes the agent for this user and finds the machines still running. `signed` is whether the
+/// agent's code carries a Developer ID signature. Null without a home folder. Never freed: an
+/// agent lasts as long as its process.
 #[unsafe(no_mangle)]
-pub extern "C" fn guesthouse_agent_new() -> *mut Agent {
-    match Config::from_env() {
+pub extern "C" fn guesthouse_agent_new(signed: bool) -> *mut Agent {
+    match Config::from_env(signed) {
         Some(config) => Box::into_raw(Box::new(Agent::new(config))),
         None => std::ptr::null_mut(),
     }
@@ -94,7 +95,8 @@ pub unsafe extern "C" fn guesthouse_agent_is_idle(agent: *const Agent) -> bool {
 }
 
 /// Answers on the socket at `path` until the agent is idle. Returns 0 when it ended idle, 1
-/// when another agent already has the socket, -1 on an error (printed to standard error).
+/// when another agent already has the socket, -1 on an error (printed to standard error) and
+/// when the agent is signed, which answers over XPC only.
 ///
 /// # Safety
 /// `agent` came from `guesthouse_agent_new`; `path` is a nul-terminated string.
@@ -105,6 +107,10 @@ pub unsafe extern "C" fn guesthouse_agent_serve(agent: *const Agent, path: *cons
     let (Some(agent), Some(path)) = (agent, path) else {
         return -1;
     };
+    if agent.is_signed() {
+        eprintln!("guesthouse-agent: a signed agent answers over XPC only");
+        return -1;
+    }
     match server::serve(agent, Path::new(path)) {
         Ok(()) => 0,
         Err(ServeError::AlreadyRunning) => 1,

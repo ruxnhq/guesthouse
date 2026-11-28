@@ -23,8 +23,9 @@ char *guesthouse_machine_list(const char *folder);
  * also checked for what they can do (--frames, pvg-fwd). `setting` is what Settings holds (NULL or
  * empty for nothing), `bundled` where the app bundle keeps its own copy (NULL for none). Returns
  * JSON, {"path", "source", "why"} (source: setting, environment, bundled or lab) or
- * {"error": "..."}. */
-char *guesthouse_tool_locate(const char *tool, const char *setting, const char *bundled);
+ * {"error": "..."}. With signed_build (the app's code carries a Developer ID signature) only
+ * `bundled` is looked at. */
+char *guesthouse_tool_locate(const char *tool, const char *setting, const char *bundled, bool signed_build);
 
 /* Adding a machine. `request` is JSON: name, cores, memory_mb, disk, firmware_code,
  * firmware_vars, option_rom (optional), host_memory_mb, host_cores. _check answers
@@ -143,8 +144,10 @@ char *guesthouse_agent_socket_path(void);
 typedef struct GuesthouseAgent GuesthouseAgent;
 
 /* Makes the agent for this user and finds the machines still running from before. Its settings
- * come from GUESTHOUSE_QEMU and the two GUESTHOUSE_*_TIMEOUT_MS variables. NULL without HOME. */
-GuesthouseAgent *guesthouse_agent_new(void);
+ * come from GUESTHOUSE_QEMU and the two GUESTHOUSE_*_TIMEOUT_MS variables, unless signed_build
+ * (its code carries a Developer ID signature): it then runs the programs of its own bundle, takes no
+ * path from the environment or a request, and does not answer on a socket. NULL without HOME. */
+GuesthouseAgent *guesthouse_agent_new(bool signed_build);
 
 /* Answers one request line with one answer line. Does not wait on QEMU. */
 char *guesthouse_agent_handle(const GuesthouseAgent *agent, const char *line);

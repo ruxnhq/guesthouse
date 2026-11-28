@@ -8,13 +8,15 @@ import GuesthouseCore
 //
 //   --xpc           answer on the mach service (what launchd starts it with)
 //   --socket [PATH] answer on a Unix socket, by default agent.sock in the support folder (what
-//                   the app starts when launchd's way is not available)
+//                   the app starts when launchd's way is not available); a Developer ID-signed
+//                   agent answers on the mach service only and refuses it
 //   --print-state   print every machine's state as one line of JSON and leave
 
 setvbuf(stdout, nil, _IOLBF, 0)
 setvbuf(stderr, nil, _IOLBF, 0)
 
-guard let agent = guesthouse_agent_new() else {
+let signed = isSignedBuild()
+guard let agent = guesthouse_agent_new(signed) else {
     fputs("guesthouse-agent: no home folder\n", stderr)
     exit(1)
 }
@@ -37,6 +39,10 @@ if arguments.contains("--print-state") {
 
 if arguments.contains("--xpc") {
     serveXPC(agent: agent)
+}
+if signed {
+    fputs("guesthouse-agent: a signed agent answers over XPC only (--xpc)\n", stderr)
+    exit(1)
 }
 
 var socketPath = ""

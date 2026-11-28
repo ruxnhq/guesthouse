@@ -14,6 +14,7 @@ use crate::process::{self, Pid};
 use crate::protocol::{self, MachineState, Op, Response, StateChange};
 use crate::state::{self, Event, Refused, Status};
 use crate::store;
+use crate::tools::{Programs, requested};
 use guesthouse_remote_view_core::pairing::Event as PairEvent;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -69,6 +70,9 @@ pub struct Config {
     pub pvg_host: Option<PathBuf>,
     /// What installing a guest needs beyond the above.
     pub install: InstallConfig,
+    /// The agent's code carries a Developer ID signature: it runs the programs of its own bundle
+    /// only, and answers on the team-checked XPC route only.
+    pub signed: bool,
     /// How long a guest has to power off before Force Off is offered.
     pub shutdown_timeout: Duration,
     /// How long QEMU has to open its control socket.
@@ -78,27 +82,28 @@ pub struct Config {
 impl Config {
     /// The machines folder is the app's; the timeouts can be shortened for tests with
     /// `GUESTHOUSE_SHUTDOWN_TIMEOUT_MS` and `GUESTHOUSE_START_TIMEOUT_MS`.
-    pub fn from_env() -> Option<Config> {
+    ///
+    /// `signed` says this agent's code carries a Developer ID signature (the one fact
+    /// that decides it): it then runs the programs of its own bundle only, and no environment
+    /// variable or request names one (`tools::Programs`).
+    pub fn from_env(signed: bool) -> Option<Config> {
         let millis = |name: &str, default: u64| {
             let value = std::env::var(name).ok().and_then(|text| text.parse().ok());
             Duration::from_millis(value.unwrap_or(default))
         };
+        let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+        let programs = Programs::choose(signed, exe.as_deref(), |name| std::env::var_os(name));
         Some(Config {
             machines: store::default_folder()?,
-            qemu: std::env::var_os("GUESTHOUSE_QEMU").filter(|path| !path.is_empty()).map(PathBuf::from),
-            rmhost: std::env::var_os("GUESTHOUSE_RMHOST").filter(|path| !path.is_empty()).map(PathBuf::from),
+            qemu: programs.qemu,
+            rmhost: programs.rmhost,
             install: InstallConfig {
-                fake: std::env::var_os("GUESTHOUSE_INSTALL_FAKE").is_some_and(|v| !v.is_empty()),
-                driver_dir: std::env::var_os("GUESTHOUSE_DRIVER_DIR")
-                    .filter(|p| !p.is_empty())
-                    .map(PathBuf::from),
-                firmware_dir: std::env::var_os("GUESTHOUSE_FIRMWARE_DIR")
-                    .filter(|p| !p.is_empty())
-                    .map(PathBuf::from),
+                fake: programs.fake_install,
+                driver_dir: programs.driver_dir,
+                firmware_dir: programs.firmware_dir,
             },
-            pvg_host: std::env::var_os("GUESTHOUSE_PVG_HOST")
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from),
+            pvg_host: programs.pvg_host,
+            signed,
             shutdown_timeout: millis("GUESTHOUSE_SHUTDOWN_TIMEOUT_MS", 60_000),
             start_timeout: millis("GUESTHOUSE_START_TIMEOUT_MS", 30_000),
         })
@@ -192,6 +197,7 @@ impl Agent {
             Err((id, why)) => return Response::error(id, why).to_line(),
         };
         let id = request.id;
+        let signed = self.shared.config.signed;
         let result = match request.op {
             Op::List => {
                 let mut response = Response::ok(id);
@@ -201,14 +207,18 @@ impl Agent {
                 response.agent = self.shared.build.get().cloned();
                 return response.to_line();
             }
-            Op::Start { machine, qemu, rmhost, pvg_host, scale } => {
-                self.start(&machine, qemu.as_deref(), rmhost.as_deref(), pvg_host.as_deref(), scale)
-            }
+            Op::Start { machine, qemu, rmhost, pvg_host, scale } => self.start(
+                &machine,
+                requested(signed, qemu.as_deref()),
+                requested(signed, rmhost.as_deref()),
+                requested(signed, pvg_host.as_deref()),
+                scale,
+            ),
             Op::Share { machine, on, pairing, pairing_seconds, rmhost } => self.share(
                 &machine,
                 on,
                 pairing.then(|| pairing_seconds.unwrap_or(crate::remote::PAIRING_SECONDS)),
-                rmhost.as_deref(),
+                requested(signed, rmhost.as_deref()),
             ),
             Op::Shutdown { machine } => self.shut_down(&machine),
             Op::ForceOff { machine } => self.force_off(&machine),
@@ -229,9 +239,9 @@ impl Agent {
                 &guest,
                 file,
                 Tools {
-                    qemu,
-                    pvg_host,
-                    driver_dir: driver_dir.map(PathBuf::from),
+                    qemu: requested(signed, qemu),
+                    pvg_host: requested(signed, pvg_host),
+                    driver_dir: requested(signed, driver_dir).map(PathBuf::from),
                     password,
                     desktop,
                     sizes: Sizes { cores, memory_mb, disk_gb },
@@ -301,6 +311,11 @@ impl Agent {
         let id = *next;
         lock(&self.shared.subscribers).push((id, sender));
         Subscription { shared: self.shared.clone(), id }
+    }
+
+    /// The agent's code is Developer ID-signed (see `Config::signed`).
+    pub fn is_signed(&self) -> bool {
+        self.shared.config.signed
     }
 
     /// Nothing is running and nobody is listening: the agent may go.

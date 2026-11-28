@@ -58,6 +58,7 @@ impl Support {
             rmhost: None,
             pvg_host: Some(PathBuf::from(FAKE_PVG_HOST)),
             install: Default::default(),
+            signed: false,
             shutdown_timeout: Duration::from_secs(5),
             start_timeout: Duration::from_secs(10),
         })

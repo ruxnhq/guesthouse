@@ -32,3 +32,13 @@ nonisolated func signingTeam() -> String? {
     else { return nil }
     return information[kSecCodeInfoTeamIdentifier as String] as? String
 }
+
+/// Whether this program carries a Developer ID signature: the one fact that decides whether the
+/// app and the agent run only the programs of their own bundle, and whether the agent answers on
+/// its team-checked XPC route only. Ad hoc and unsigned builds (CI, the lab) are not signed here.
+nonisolated func isSignedBuild() -> Bool {
+    signedBuild
+}
+
+/// Read once: a program's signature does not change while it runs.
+private nonisolated let signedBuild: Bool = signingTeam() != nil

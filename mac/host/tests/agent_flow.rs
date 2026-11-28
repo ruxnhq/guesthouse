@@ -59,6 +59,7 @@ impl Support {
             rmhost: None,
             pvg_host: None,
             install: Default::default(),
+            signed: false,
             shutdown_timeout: Duration::from_millis(1500),
             start_timeout: Duration::from_secs(10),
         }
@@ -282,6 +283,31 @@ fn a_pid_file_of_something_else_is_not_a_machine() {
     let agent = support.agent();
     assert_eq!(state_of(&agent, "win").state, "off");
     assert!(!run.join("machine.pid").exists());
+}
+
+#[test]
+fn a_signed_agent_runs_the_programs_of_its_bundle_whatever_a_request_names() {
+    let support = Support::new();
+    support.machine("win", "plain");
+    let mut config = support.config(Some("/Bundle.app/Contents/Helpers/qemu-system-aarch64"));
+    config.signed = true;
+    let agent = Agent::new(config);
+    let line = format!(r#"{{"v":1,"id":2,"op":"start","machine":"win","qemu":"{FAKE_QEMU}"}}"#);
+    let answer = request(&agent, &line);
+    assert_eq!(answer.error.unwrap(), "QEMU is not at /Bundle.app/Contents/Helpers/qemu-system-aarch64");
+}
+
+#[test]
+fn a_signed_agent_does_not_answer_on_a_socket() {
+    let support = Support::new();
+    let mut config = support.config(Some(FAKE_QEMU));
+    config.signed = true;
+    let agent = Agent::new(config);
+    let socket = std::ffi::CString::new(support.0.join("agent.sock").to_str().unwrap()).unwrap();
+    // SAFETY: the agent outlives the call and the path is a nul-terminated string.
+    let ended = unsafe { guesthouse_core::agent_api::guesthouse_agent_serve(&agent, socket.as_ptr()) };
+    assert_eq!(ended, -1);
+    assert!(!support.0.join("agent.sock").exists());
 }
 
 #[test]

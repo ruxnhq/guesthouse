@@ -54,7 +54,7 @@ nonisolated enum ToolLocation: Equatable {
     /// Looks in the places the core knows, with `setting` as Settings holds it (QEMU only).
     static func find(_ tool: Tool, setting: String = "") -> ToolLocation {
         let bundled = BundledHelpers.folder.appending(path: tool.fileName).path(percentEncoded: false)
-        guard let text = guesthouse_tool_locate(tool.rawValue, setting, bundled),
+        guard let text = guesthouse_tool_locate(tool.rawValue, setting, bundled, isSignedBuild()),
               let answer = try? JSONDecoder().decode(Answer.self, from: Data(String(cString: text).utf8))
         else { return .missing(tool.fallbackSentence) }
         defer { guesthouse_string_free(text) }

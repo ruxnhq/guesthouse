@@ -121,7 +121,7 @@ fn ok(agent: &Agent, line: &str) {
 
 #[test]
 fn the_agent_shares_a_machine_with_a_viewer_and_stops_when_told() {
-    let places = Places::on_this_mac(Tool::Rmhost, None, None);
+    let places = Places::on_this_mac(Tool::Rmhost, None, None, false);
     let Ok(found) = tools::locate(Tool::Rmhost, &places) else {
         eprintln!("\n*** share_flow SKIPPED: rmhost is not built here (set GUESTHOUSE_RMHOST) ***\n");
         return;
@@ -186,6 +186,7 @@ fn the_agent_shares_a_machine_with_a_viewer_and_stops_when_told() {
         rmhost: None,
         pvg_host: None,
         install: Default::default(),
+        signed: false,
         shutdown_timeout: Duration::from_secs(5),
         start_timeout: Duration::from_secs(10),
     });

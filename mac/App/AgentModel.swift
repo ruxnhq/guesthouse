@@ -193,7 +193,7 @@ final class AgentModel {
         var patience = LaunchdPatience()
         for _ in 0..<5 {
             guard await establishOnce(launchd: launchd) == .replaced else { return }
-            if launchd && patience.replacedOne() { launchd = false }
+            if launchd && patience.replacedOne() && !isSignedBuild() { launchd = false }
         }
     }
 
@@ -212,6 +212,11 @@ final class AgentModel {
                 why = reason
             }
             log.notice("Not using launchd: \(why ?? "", privacy: .public)")
+        }
+        // A signed build has no Unix socket to the agent: the team-checked XPC route is the only one.
+        if isSignedBuild() {
+            route = why ?? String(localized: "launchd's agent did not answer")
+            return .none
         }
         let socket = Core.agentSocketPath
         if let socket {

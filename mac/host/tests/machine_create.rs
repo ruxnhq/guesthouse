@@ -74,8 +74,19 @@ fn a_machine_is_added_listed_renamed_and_the_search_for_qemu_answers() {
             c("qemu").as_ptr(),
             c(&support.join("code.fd").display().to_string()).as_ptr(),
             std::ptr::null(),
+            false,
         )
     });
     assert_eq!(qemu["source"], "setting");
+    // A signed build passes the setting over: only the bundled copy is run.
+    let signed = call(|| unsafe {
+        guesthouse_tool_locate(
+            c("qemu").as_ptr(),
+            c(&support.join("code.fd").display().to_string()).as_ptr(),
+            std::ptr::null(),
+            true,
+        )
+    });
+    assert!(signed["error"].as_str().unwrap().contains("cannot find QEMU"));
     let _ = fs::remove_dir_all(&support);
 }

@@ -156,10 +156,7 @@ mod tests {
     #[test]
     fn the_part_is_what_it_was() {
         assert_eq!(PART_NAME, "guesthouse-macos-part-2");
-        assert_eq!(
-            ARCHIVE_URL,
-            "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-2/guesthouse-macos-part-2-x86_64.tar.xz"
-        );
+        assert_eq!(ARCHIVE_URL, "https://files.ruxn.com/p/guesthouse/guesthouse-macos-part-2-x86_64.tar.xz");
         assert_eq!(ARCHIVE_SHA256, "454f0800e5d231cde7dc29432053739a1393ff95b444b9a9dcad2f0bb08cec96");
         assert_eq!(ARCHIVE_BYTES, 22_772_560);
     }

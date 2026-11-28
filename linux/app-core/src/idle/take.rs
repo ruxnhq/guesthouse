@@ -101,7 +101,8 @@ mod tests {
         assert!(reading.vcpu_window_seconds >= 2.0, "{}", reading.vcpu_window_seconds);
         let asked = agent.requests.lock().unwrap();
         assert_eq!(asked.len(), 1, "one call to the guest");
-        assert_eq!(asked[0].0, context.agent_port(Some(slots::number(1))), "the port of the slot it runs in");
+        let monitor = context.run_folder(Some(slots::number(1))).join(crate::monitor::MAIN_SOCKET);
+        assert_eq!(asked[0].0, monitor, "through the slot it runs in");
         assert!(asked[0].2.starts_with("$helper = 'dGhlIGhlbHBlcg=='\nread it"), "{}", asked[0].2);
     }
 

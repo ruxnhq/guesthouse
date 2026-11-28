@@ -86,8 +86,8 @@ impl fmt::Display for UsageError {
 }
 
 impl Settings {
-    /// The settings for a machine running in `slot`: its run folder and loopback port are the slot's,
-    /// and the program ends with the QEMU found there now. Without a QEMU there is no machine to
+    /// The settings for a machine running in `slot`: its run folder is the slot's, its loopback port the
+    /// one QEMU there picked for the remote view's forward, and the program ends with that QEMU. Without a QEMU there is no machine to
     /// carry for, and the program would never end by itself, so there are no settings.
     pub fn for_machine(
         context: &Context,
@@ -103,10 +103,17 @@ impl Settings {
             .ok_or_else(|| {
                 Failure::new("The machine is not running, so its remote view has nothing to carry.")
             })?;
+        let loopback_port =
+            crate::guest_end::udp_forwarded_port(context, Some(slot), guesthouse_remote_view_core::PORT)
+                .ok_or_else(|| {
+                    Failure::new(
+                        "The machine's QEMU names no way in for its remote view. Restart the machine.",
+                    )
+                })?;
         Ok(Self {
             machine: machine.to_owned(),
             run_folder: context.run_folder(Some(slot)),
-            loopback_port: slot.remote_view_port(),
+            loopback_port,
             listen,
             qemu: Some(qemu),
             idle_timeout: None,
@@ -269,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_in_a_slot_gets_that_slots_folder_loopback_port_and_qemu() {
+    fn a_machine_in_a_slot_gets_that_slots_folder_the_loopback_port_qemu_picked_and_qemu() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let slot = crate::slots::number(2);
@@ -282,9 +289,14 @@ mod tests {
             &[],
             "",
         );
+        let machine = crate::machine::Machine::new("win11", "win11", "/d", "/v");
+        let port = guesthouse_remote_view_core::PORT;
+        let qemu =
+            crate::testing::act_as_qemu_with_udp(&context, &machine, Some(slot), &[], &[(port, 40123)]);
         let settings = Settings::for_machine(&context, "win11", slot, None).unwrap();
+        drop(qemu);
         assert_eq!(settings.run_folder, context.run_folder(Some(slot)));
-        assert_eq!(settings.loopback_port, 19067);
+        assert_eq!(settings.loopback_port, 40123, "the port QEMU picked, as its monitor says");
         assert_eq!(settings.qemu, Some(Watched { pid: 300, started: 300 }));
     }
 

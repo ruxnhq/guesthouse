@@ -255,7 +255,7 @@ impl ScreenPage {
             machine.bar_hides()
         };
         self.0.pill.set_hides(hides);
-        self.0.window.save_machine(&self.0.machine.borrow());
+        self.0.window.save_machine(&self.0.machine);
         self.call_header(false);
     }
 
@@ -333,7 +333,7 @@ impl ScreenPage {
             screen.set_overlay(wanted);
         }
         self.0.pill.set_overlay(wanted);
-        self.0.window.save_machine(&self.0.machine.borrow());
+        self.0.window.save_machine(&self.0.machine);
     }
 
     fn on_capture_changed(&self) {

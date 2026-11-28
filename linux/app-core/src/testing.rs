@@ -2,12 +2,22 @@
 
 use crate::context::Context;
 use crate::firmware::Firmware;
+use crate::guest_end::GuestEnd;
+use crate::machine::Machine;
+use crate::monitor::MAIN_SOCKET;
 use crate::paths::{Paths, Variables};
+use guesthouse_daemon::slot::Slot;
 use std::fs;
 use std::io::Write;
+use std::io::{BufRead, BufReader};
+use std::os::unix::fs::symlink;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
 
 /// So that no test depends on how much this PC has free. One about the limit sets its own.
 const PLENTY_OF_GIB: u64 = 64;
@@ -129,4 +139,118 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     context.apparmor = scratch.path("apparmor.d");
     context.udmabuf_limit = scratch.path("udmabuf-limit");
     context
+}
+
+/// This test process as the slot's QEMU of `machine`, while this is kept: it answers on the slot's
+/// monitor, where it says it forwards each guest port of `forwards` from the loopback port beside it,
+/// its words open the machine's disk, and the context's `/proc` shows its open files and this PC's
+/// sockets as they are.
+pub struct ActingQemu {
+    monitor: PathBuf,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for ActingQemu {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wakes the monitor's thread, which then lets go of the socket.
+        let _ = UnixStream::connect(&self.monitor);
+    }
+}
+
+/// QEMU's table of its user network's connections, with a line for each forward. QEMU lines its
+/// columns up with more spaces than one.
+fn usernet_table(tcp: &[(u16, u16)], udp: &[(u16, u16)]) -> String {
+    let mut table = "Protocol[State] FD Source-Address Port Dest.-Address Port RecvQ SendQ\n".to_owned();
+    for (kind, forwards) in [("TCP", tcp), ("UDP", udp)] {
+        for (guest, host) in forwards {
+            table += &format!("{kind}[HOST_FORWARD] 13 127.0.0.1 {host} 10.0.2.15 {guest} 0 0\n");
+        }
+    }
+    table
+}
+
+fn serve_monitor(stream: UnixStream, table: &str) {
+    let Ok(mut writer) = stream.try_clone() else { return };
+    let _ = writer.write_all(b"{\"QMP\": {\"version\": {}, \"capabilities\": []}}\n");
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+        let answer = if request["execute"] == "human-monitor-command"
+            && request["arguments"]["command-line"] == "info usernet"
+        {
+            serde_json::json!({"return": table})
+        } else {
+            serde_json::json!({"return": {}})
+        };
+        let _ = writeln!(writer, "{answer}");
+    }
+}
+
+#[must_use]
+pub fn act_as_qemu(
+    context: &Context,
+    machine: &Machine,
+    slot: Option<Slot>,
+    forwards: &[(u16, u16)],
+) -> ActingQemu {
+    act_as_qemu_with_udp(context, machine, slot, forwards, &[])
+}
+
+/// The same, with UDP forwards too, each a guest port and the loopback port beside it.
+#[must_use]
+pub fn act_as_qemu_with_udp(
+    context: &Context,
+    machine: &Machine,
+    slot: Option<Slot>,
+    forwards: &[(u16, u16)],
+    udp: &[(u16, u16)],
+) -> ActingQemu {
+    context.make_run_folder(slot).unwrap();
+    let pid = std::process::id();
+    let folder = context.processes.join(pid.to_string());
+    fs::create_dir_all(&folder).unwrap();
+    let words = format!("qemu\0-drive\0file={},format=qcow2\0", crate::text::qemu_value(&machine.disk));
+    fs::write(folder.join("cmdline"), words).unwrap();
+    let _ = symlink(format!("/proc/{pid}/fd"), folder.join("fd"));
+    let _ = symlink("/proc/net", context.processes.join("net"));
+    let monitor = context.run_folder(slot).join(MAIN_SOCKET);
+    let _ = fs::remove_file(&monitor);
+    let listener = UnixListener::bind(&monitor).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (stopping, table) = (stop.clone(), usernet_table(forwards, udp));
+    thread::spawn(move || {
+        for stream in listener.incoming().map_while(Result::ok) {
+            if stopping.load(Ordering::SeqCst) {
+                return;
+            }
+            let table = table.clone();
+            thread::spawn(move || serve_monitor(stream, &table));
+        }
+    });
+    ActingQemu { monitor, stop }
+}
+
+/// A machine of its own with this test process as its QEMU, which forwards one port of the guest from
+/// a loopback port, while it is kept: for a test that only needs a way to a port of a guest.
+pub struct QemuStandIn {
+    context: Context,
+    machine: Machine,
+    guest_port: u16,
+    _qemu: ActingQemu,
+    _scratch: Scratch,
+}
+
+impl QemuStandIn {
+    pub fn forwarding(guest_port: u16, host_port: u16) -> Self {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let machine = Machine::new("vm", "vm", &scratch.path("vm.qcow2").display().to_string(), "/v");
+        let qemu = act_as_qemu(&context, &machine, None, &[(guest_port, host_port)]);
+        Self { context, machine, guest_port, _qemu: qemu, _scratch: scratch }
+    }
+
+    /// The guest's port, as the app reaches it.
+    pub fn end(&self) -> GuestEnd {
+        GuestEnd::new(&self.context, &self.machine, None, self.guest_port)
+    }
 }

@@ -77,7 +77,7 @@ impl Shared {
             draft.changed.borrow().iter().for_each(|changed| changed());
             return;
         }
-        self.window.save_machine(&self.machine.borrow());
+        self.window.save_machine(&self.machine);
         self.window.refresh();
     }
 
@@ -101,7 +101,10 @@ impl Shared {
         action: impl FnOnce(&Context, &mut Machine) -> guesthouse_app_core::Result<()>,
     ) -> guesthouse_app_core::Result<()> {
         let Some(draft) = &self.draft else {
-            return action(&self.window.context(), &mut self.machine.borrow_mut());
+            self.window.catch_up_machine(&self.machine);
+            let done = action(&self.window.context(), &mut self.machine.borrow_mut());
+            self.window.machine_saved(&self.machine.borrow().id);
+            return done;
         };
         let mut trial = self.machine.borrow().clone();
         if !valid_id(&trial.id) {

@@ -90,6 +90,12 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         // primaries, DWM's or a fullscreen program's, and a windowed program's back buffer isn't one.
         let from_primary = self.allocations[&request.source].primary;
         let is_screen = target_guest_address.is_some() && request.private_size == 0 && from_primary;
+        if !self.work_allowed() && !is_screen {
+            // Copies run on the card like any other work. The screen's still goes, so the guest can
+            // be seen, and restarted.
+            answer_status(Status::UNSUCCESSFUL, out);
+            return Ok(());
+        }
         let context = std::iter::once(request.context);
         let targets = self.queue_targets(context.clone());
         let source_address = self.surface_address(request.source)?;

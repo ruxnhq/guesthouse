@@ -31,6 +31,7 @@ mod guest_dma;
 mod ib_dump;
 mod info;
 mod ioctl;
+mod lost_runs;
 mod memory;
 mod moves;
 mod nodes;
@@ -90,6 +91,7 @@ use guesthouse_backend::{
     Refusal, RegistryName, RegistryValue, Setup, SlotCopy, SpaceId, StagingCopy, StagingStart,
     StandardSurface, Status, SurfaceShape, UnmapRequest, VendorQuery, Work, WorkStart,
 };
+use lost_runs::stand_in_for_lost_runs;
 use nodes::{Node, nodes};
 use run_wait::Patience;
 use screen_copy::{CopyPlan, PIXEL_BYTES};
@@ -161,6 +163,8 @@ pub struct AmdBackend {
     video_wake: Option<OwnedFd>,
     /// When the runs on the card were last looked at.
     looked_at_runs: Option<Instant>,
+    /// Spaces that lost a run since the core last asked: see [`Backend::take_fault`].
+    lost_runs: lost_runs::Blame,
     /// Makes dma-bufs of guest memory, where this user may.
     udmabuf: Udmabuf,
     /// The file and its ranges behind each buffer on the first open that every space maps, such as
@@ -228,29 +232,6 @@ const LOOK_AT_RUNS_EVERY: Duration = Duration::from_millis(50);
 /// What a copy by the DMA engine fails with on a card whose packets aren't written here.
 const DMA_NOT_WRITTEN: &str = "the DMA copy is written for GFX10 to GFX12";
 
-/// Stands in at the fence of each run the kernel retired before the card wrote it: one it reset,
-/// or cancelled after a reset. A run that went through wrote its fence before the kernel saw it end.
-/// Returns the fences it stood in at.
-fn stand_in_for_lost_runs(host: &mut dyn HostServices, retired: Vec<GuestFence>) -> Vec<GuestFence> {
-    let mut lost = Vec::new();
-    for fence in retired {
-        let Ok(reached) = host.fence_value(fence.address) else { continue };
-        if reached >= fence.value {
-            continue;
-        }
-        lost.push(fence);
-        log::warn!(
-            "queue {:#x}: the kernel ended a run before it wrote fence value {:#x}, so the host writes it",
-            fence.queue,
-            fence.value
-        );
-        if let Err(error) = host.write_u64(fence.address, fence.value) {
-            log::warn!("standing in for a lost run: {error}");
-        }
-    }
-    lost
-}
-
 impl std::fmt::Debug for AmdBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AmdBackend").field("facts", &self.facts).finish_non_exhaustive()
@@ -281,6 +262,7 @@ impl AmdBackend {
             judged_at: None,
             prepared: HashMap::new(),
             looked_at_runs: None,
+            lost_runs: lost_runs::Blame::default(),
             udmabuf: Udmabuf::open(),
             pages_for_each_space: HashMap::new(),
             ib_dump: None,
@@ -1871,6 +1853,10 @@ impl Backend for AmdBackend {
         oldest.map_or(sent, |number| number - 1)
     }
 
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.lost_runs.take()
+    }
+
     fn close_queue(&mut self, queue: u32) {
         self.close_video_session(queue);
         for space in self.spaces.values_mut() {
@@ -1913,12 +1899,16 @@ impl Backend for AmdBackend {
             return;
         }
         self.looked_at_runs = Some(now);
-        for space in self.spaces.values_mut() {
+        for (&id, space) in &mut self.spaces {
             let lost = stand_in_for_lost_runs(host, space.vm.take_retired());
+            if !lost.is_empty() {
+                self.lost_runs.lost(id);
+            }
             if let (Some(keeper), Some(fence)) = (&mut self.ib_dump, lost.first()) {
                 keeper.keep_for(fence.queue, fence.value, "hung", now);
             }
         }
+        self.lost_runs.end_look();
         if let Some(keeper) = &mut self.ib_dump {
             keeper.now_and_then(now);
         }

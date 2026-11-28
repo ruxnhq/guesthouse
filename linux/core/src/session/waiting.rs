@@ -526,18 +526,39 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.store_fence(fence, value);
     }
 
+    /// Counts what the host driver saw fault or hang. A fault of the daemon's own space is one of its
+    /// copies for the guest, and each counts on its own, as no process of the guest is there to stop.
+    pub(crate) fn count_backend_faults(&mut self, now: Instant) {
+        while let Some(space) = self.backend.take_fault() {
+            if Some(space) == self.own_space {
+                log::warn!("a copy for the guest faulted on the card");
+                self.note_fault(now);
+            } else {
+                log::warn!("work of process {space:?} faulted on the card");
+                self.count_failed_queue(space, now);
+            }
+        }
+    }
+
+    /// Counts one fault toward the guest's limit.
+    fn note_fault(&mut self, now: Instant) {
+        if self.faults.note(now) {
+            log::error!(
+                "{MOST_FAULTS} processes faulted within {} seconds, so this guest's GPU work has stopped \
+                 until it restarts, and what programs in it submit from now on will fail",
+                FAULT_WINDOW.as_secs()
+            );
+        }
+    }
+
     /// A process counts as one fault however many of its queues go with it, as a healthy app can have
     /// more queues than a guest gets faults.
     fn count_failed_queue(&mut self, space: SpaceId, now: Instant) {
         let failed = self.failed_queues.entry(space).or_default();
         *failed += 1;
         let failed = *failed;
-        if failed == 1 && self.faults.note(now) {
-            log::error!(
-                "{MOST_FAULTS} processes faulted within {} seconds, so this guest's GPU work has stopped \
-                 until it restarts, and what programs in it submit from now on will fail",
-                FAULT_WINDOW.as_secs()
-            );
+        if failed == 1 {
+            self.note_fault(now);
         }
         if failed >= MOST_FAILED_QUEUES {
             log::error!("{failed} queues of process {space:?} have failed, so it comes off the GPU");
@@ -626,6 +647,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if watching || self.backend.needs_polling() {
             self.backend.poll_work(&mut services!(self), now);
         }
+        self.count_backend_faults(now);
         if self.pending.is_empty() {
             return self.how_soon();
         }
@@ -654,6 +676,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// seen by the next [`Session::poll`].
     pub fn gpu_woke(&mut self, now: Instant) {
         self.backend.gpu_woke(&mut services!(self), now);
+        self.count_backend_faults(now);
     }
 
     /// Finishes an item if it can. Otherwise hands it back.

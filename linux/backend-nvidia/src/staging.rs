@@ -368,6 +368,9 @@ impl<R: Rm> NvidiaBackend<R> {
             copier.running = false;
             return Some(Status::UNSUCCESSFUL);
         }
+        // A channel that stops answering has faulted or hung the copy engine, which counts toward
+        // the guest's fault limit like work of its own: once for the copy, however it ends.
+        self.faults.push_back(copier.space);
         log::warn!("the copy channel stopped answering, so it is being replaced");
         match self.retry_copy(host) {
             Ok(()) => {
@@ -811,6 +814,25 @@ mod tests {
         let window = AREA + AREA_SIZE as u64;
         assert_eq!(rm.memory_at(window), None);
         assert_eq!(rm.memory_at(window + COPY_WINDOW), None);
+    }
+
+    #[test]
+    fn a_copy_that_stops_answering_is_one_fault() {
+        use guesthouse_backend::Backend;
+        let mut backend = crate::fake_guest::fake_backend(FakeRm::new());
+        let range = guesthouse_backend::GpuRange { start: 0x400_0000, end: 0x1_0000_0000 };
+        let space = backend.create_address_space(&[range]).unwrap();
+        let copy = SlotCopy { own_space: space, ..slot_copy(None) };
+        let mut host = AreaOnly(AREA);
+        assert!(matches!(backend.start_frame_copy(&mut host, &copy), StagingStart::Running));
+        let late = Instant::now() + std::time::Duration::from_secs(10);
+        assert_eq!(backend.poll_copy(&mut host, late), None, "it runs again on a new channel");
+        assert_eq!(backend.take_fault(), Some(space));
+        assert_eq!(
+            backend.poll_copy(&mut host, late + std::time::Duration::from_secs(10)),
+            Some(Status::UNSUCCESSFUL)
+        );
+        assert_eq!(backend.take_fault(), None);
     }
 
     #[test]

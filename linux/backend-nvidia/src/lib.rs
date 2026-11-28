@@ -163,6 +163,8 @@ pub struct NvidiaBackend<R> {
     next_space: u64,
     pub(crate) queues: HashMap<u32, LiveQueue>,
     pub(crate) copier: Option<Copier>,
+    /// Spaces whose work faulted, for the core to count: see [`Backend::take_fault`].
+    pub(crate) faults: std::collections::VecDeque<SpaceId>,
     pub(crate) peek_page: Option<peek::PeekPage>,
     /// Rings named in queues' private data, by queue.
     pub(crate) guest_rings: HashMap<u32, GuestRing>,
@@ -284,6 +286,7 @@ impl<R: Rm> NvidiaBackend<R> {
             next_space: 1,
             queues: HashMap::new(),
             copier: None,
+            faults: std::collections::VecDeque::new(),
             peek_page: None,
             guest_rings: HashMap::new(),
             ring_moves: RingMoves::default(),
@@ -653,6 +656,10 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     fn ring_doorbell(&mut self, queue: u32, doorbell: u64) -> Result<Doorbell, BackendError> {
         self.ring(queue, doorbell);
         Ok(Doorbell::Rung)
+    }
+
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.faults.pop_front()
     }
 
     fn close_queue(&mut self, queue: u32) {

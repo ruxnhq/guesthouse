@@ -1,6 +1,6 @@
 //! What the app and the program say to each other: one request as a line of JSON on a Unix socket in
-//! the run folder, and one line back. The monitor and the daemon are reached the same way, and a
-//! socket in the run folder is only open to this user. A program that is not running has no answer,
+//! the app's notes folder beside the run folder, and one line back. No jail is given that folder, so
+//! only the app and this program reach the socket. A program that is not running has no answer,
 //! which is how the app finds out it is not there.
 //!
 //! What the lines say is `guesthouse-relay`'s, as the network side they ask is.
@@ -22,7 +22,7 @@ const LINE_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_MODE: u32 = 0o600;
 
 pub fn socket_path(run_folder: &Path) -> PathBuf {
-    run_folder.join(SOCKET)
+    crate::paths::notes_beside(run_folder).join(SOCKET)
 }
 
 /// Asks the program of the machine in this run folder. An error means it did not answer: it is not
@@ -42,6 +42,7 @@ pub fn ask(run_folder: &Path, request: &Request) -> io::Result<RelayReply> {
 /// Makes the socket, replacing one an earlier run left, for only this user.
 pub fn listener(run_folder: &Path) -> io::Result<UnixListener> {
     let path = socket_path(run_folder);
+    crate::context::make_private_folder(&crate::paths::notes_beside(run_folder))?;
     match std::fs::remove_file(&path) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}
@@ -139,14 +140,30 @@ mod tests {
     #[test]
     fn nobody_listening_is_an_error() {
         let scratch = Scratch::new();
-        assert!(ask(scratch.root(), &Request::Status).is_err());
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(ask(&folder, &Request::Status).is_err());
     }
 
     #[test]
     fn an_old_socket_is_replaced() {
         let scratch = Scratch::new();
-        let first = listener(scratch.root()).unwrap();
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        let first = listener(&folder).unwrap();
         drop(first);
-        assert!(listener(scratch.root()).is_ok(), "the file the first left behind does not stop the second");
+        assert!(listener(&folder).is_ok(), "the file the first left behind does not stop the second");
+    }
+
+    #[test]
+    fn the_socket_is_outside_the_run_folder_that_the_jails_are_given() {
+        let scratch = Scratch::new();
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        let _listener = listener(&folder).unwrap();
+        let socket = socket_path(&folder);
+        assert!(socket.exists() && !socket.starts_with(&folder));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "nothing for the jailed programs to open");
+        assert_eq!(std::fs::metadata(socket.parent().unwrap()).unwrap().permissions().mode() & 0o077, 0);
     }
 }

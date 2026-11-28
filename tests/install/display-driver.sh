@@ -33,7 +33,7 @@ fi
 printf 'MZ a stand-in\n' >"$T/good/GuesthouseDisplay.dll"
 printf 'UmdfLibraryVersion=2.25.0\n' >"$T/good/GuesthouseDisplay.inf"
 cp "$T/good/GuesthouseDisplay.dll" "$T/source-inf/"
-cp "$T/tree/drivers/windows-display/GuesthouseDisplay/GuesthouseDisplay.inf" "$T/source-inf/"
+cp "$T/tree/guest/drivers/windows-display/GuesthouseDisplay/GuesthouseDisplay.inf" "$T/source-inf/"
 
 build payload
 check 'a build with no driver still works' '[ $? -eq 0 ]'
@@ -61,7 +61,7 @@ for name in GuesthouseDisplay.dll GuesthouseDisplay.inf vdd_settings.xml LICENSE
     check "the payload has $name" '[ -s "$T/out/stage/display-driver/$name" ]'
     check "and it's in the archive" 'tar -tJf "$T"/out/guesthouse-*-x86_64.tar.xz | grep -q "display-driver/$name$"'
 done
-check 'the licences are the repo'\''s' 'cmp -s "$T/tree/drivers/windows-display/LICENSE-MS-PL" "$T/out/stage/display-driver/LICENSE-MS-PL"'
+check 'the licences are the repo'\''s' 'cmp -s "$T/tree/guest/drivers/windows-display/LICENSE-MS-PL" "$T/out/stage/display-driver/LICENSE-MS-PL"'
 check 'the release says it has one' 'grep -q "^parts=.*display" "$T/out/stage/RELEASE"'
 
 exit "$failed"

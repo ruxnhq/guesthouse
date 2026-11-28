@@ -79,12 +79,10 @@ impl Model {
         match words.as_slice() {
             ["pair", "on"] => self.pairing = true,
             ["pair", "off"] => (self.pairing, self.pending) = (false, None),
-            ["pair", "accept"] => {
-                if let Some((name, fingerprint, _)) = self.pending.take() {
-                    self.devices.push((fingerprint, name, true, true));
-                }
+            ["pair", answer, named] if self.pending.as_ref().is_some_and(|waiting| waiting.1 == *named) => {
+                let (name, fingerprint, _) = self.pending.take().unwrap();
+                (*answer == "accept").then(|| self.devices.push((fingerprint, name, true, true)));
             }
-            ["pair", "decline"] => self.pending = None,
             ["allow", "clipboard", on] => self.clipboard = *on == "on",
             ["allow", "files", on] => self.files = *on == "on",
             ["device", fingerprint, "allow", what, on] => {

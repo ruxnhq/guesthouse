@@ -73,7 +73,7 @@ fn the_device_is_limited_before_the_switches_come_back() {
     run.read(&with_switches(false, Some(pending(KITCHEN, "Tab", 50)), &[], (false, false)));
     // Still held: a waiting device changes nothing about that.
     assert_eq!(run.pairing.held(), Some(HostWide { clipboard: true, files: true }));
-    assert_eq!(run.event(Event::Accept), ["pair accept"]);
+    assert_eq!(run.event(Event::Accept), [format!("pair accept {KITCHEN}")]);
     let lines = run.read(&with_switches(false, None, &[(KITCHEN, "Tab")], (false, false)));
     assert_eq!(lines, [LIMITS[0], LIMITS[1], "allow clipboard on", "allow files on"]);
     assert_eq!(run.pairing.held(), None);
@@ -88,11 +88,17 @@ fn a_declined_timed_out_or_stopped_pairing_gives_the_switches_back() {
     };
     let mut run = linux_run((true, true));
     waiting(&mut run);
-    assert_eq!(run.event(Event::Decline), ["pair decline", "allow clipboard on", "allow files on"]);
+    assert_eq!(
+        run.event(Event::Decline),
+        [&format!("pair decline {KITCHEN}"), "allow clipboard on", "allow files on"]
+    );
 
     let mut run = linux_run((true, true));
     waiting(&mut run);
-    assert_eq!(run.event(Event::Stop), ["pair decline", "allow clipboard on", "allow files on"]);
+    assert_eq!(
+        run.event(Event::Stop),
+        [&format!("pair decline {KITCHEN}"), "allow clipboard on", "allow files on"]
+    );
 
     let mut run = linux_run((true, true));
     waiting(&mut run);

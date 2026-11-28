@@ -71,8 +71,8 @@ fn request_lines() -> Vec<String> {
         ctl::status(),
         ctl::pair_open(),
         ctl::pair_close(),
-        ctl::pair_accept(),
-        ctl::pair_decline(),
+        ctl::pair_accept(FP).unwrap(),
+        ctl::pair_decline(FP).unwrap(),
         ctl::updates_off(),
         ctl::device_revoke(FP).unwrap(),
         ctl::device_drop(),
@@ -289,5 +289,55 @@ fn lines_written_under_the_lock_from_two_threads_stay_whole() {
         let number = rest.strip_suffix(&long).unwrap_or_else(|| panic!("line {at}: {:?}", pair[0]));
         assert!(["one", "two"].contains(&name), "{:?}", pair[0]);
         assert_eq!(pair[1], format!("{name} {number} its second line"), "an answer's lines stay together");
+    }
+}
+
+/// What the host reads from the lines `Receive-CtlLine` wrote for request 7, with remoteman's host a
+/// stand-in that says `status` as `status` and notes every other command it is given.
+fn answer_with_waiting(channel: &Channel, line: &str, status: &str) -> (String, Vec<String>) {
+    let said = channel.run(&format!(
+        "$script:ran = New-Object System.Collections.Generic.List[string]\n\
+         function Invoke-Ctl {{\n\
+           param([string]$Program, [string[]]$Arguments, [int]$Milliseconds)\n\
+           $rest = @($Arguments | Select-Object -Skip 3)\n\
+           if ($rest -ceq 'status') {{ $text = {status} }} else {{ $script:ran.Add($rest -join ' '); $text = 'ok' }}\n\
+           [pscustomobject]@{{ Failure = $null; Code = 0; Bytes = [System.Text.Encoding]::UTF8.GetBytes($text) }}\n\
+         }}\n\
+         $port = New-Object System.IO.StringWriter\n\
+         $port.NewLine = \"`n\"\n\
+         $null = Receive-CtlLine -Line ({line}) -Port $port -Lock (New-Object System.Object) -Program 'x'\n\
+         foreach ($one in $script:ran) {{ 'ran: ' + $one }}\n\
+         $port.ToString()",
+        line = ps_text(line),
+    ));
+    let ran = said.lines().iter().filter_map(|line| line.strip_prefix("ran: ")).map(str::to_owned).collect();
+    let answer: Vec<&str> =
+        said.lines().into_iter().filter(|line| line.starts_with("guesthouse: ")).collect();
+    let text = match host_reassembles(7, &answer) {
+        Progress::Done(Answer { text, .. }) => text,
+        other => format!("no answer, {other:?}: {said}"),
+    };
+    (text, ran)
+}
+
+#[test]
+fn an_answer_to_pairing_goes_only_to_the_device_named() {
+    let Some(shell) = shell() else { return };
+    let channel = Channel::new(shell);
+    const OTHER: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    let waiting = |fingerprint: &str| {
+        ps_text(&format!(
+            "warning first\r\n{{\"pairing\":false,\"pending\":{{\"name\":\"Tab\",\"fingerprint\":\"{fingerprint}\",\"code\":\"111 222\",\"seconds\":40}}}}\r\n"
+        ))
+    };
+    for answer in ["accept", "decline"] {
+        let line = format!("guesthouse: ctl ask 7 pair {answer} {FP}");
+        let (text, ran) = answer_with_waiting(&channel, &line, &waiting(&FP.to_ascii_uppercase()));
+        assert_eq!((text.as_str(), ran), ("ok", vec![format!("pair {answer}")]));
+        for status in [waiting(OTHER), ps_text("{\"pairing\":true,\"pending\":null}"), ps_text("not json")] {
+            let (text, ran) = answer_with_waiting(&channel, &line, &status);
+            assert_eq!(text, ctl::ANOTHER_DEVICE_WAITS, "{answer} with {status}");
+            assert!(ran.is_empty(), "{answer} with {status}: {ran:?}");
+        }
     }
 }

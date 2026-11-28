@@ -74,7 +74,7 @@ fn a_device_waits_with_the_seconds_the_host_gave_and_is_paired() {
     assert!(!view.open);
     assert_eq!(view.pending.as_ref().unwrap().code, "123 456");
     assert_eq!(view.pending_until_ms, Some(run.now + 56_000));
-    assert_eq!(run.event(Event::Accept), ["pair accept"]);
+    assert_eq!(run.event(Event::Accept), [format!("pair accept {KITCHEN}")]);
     // The policy's limits for the new device go out as it is let in.
     let lines =
         says(&mut run, PairingEvent::Paired { fingerprint: KITCHEN.into(), name: "Kitchen tablet".into() });
@@ -142,7 +142,7 @@ fn out_of_order_the_host_wins() {
 fn the_persons_answers_go_as_words_and_the_host_closes() {
     let mut run = host_run();
     says(&mut run, waits(KITCHEN, "Kitchen tablet", 60));
-    assert_eq!(run.event(Event::Decline), ["pair decline"]);
+    assert_eq!(run.event(Event::Decline), [format!("pair decline {KITCHEN}")]);
     assert_eq!(run.pairing.view().closed_reason, Some(CloseReason::Declined));
     says(&mut run, closed(CloseReason::Declined));
     assert_eq!(run.pairing.view().closed_reason, Some(CloseReason::Declined));

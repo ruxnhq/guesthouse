@@ -14,6 +14,7 @@ mod ctl_channel;
 mod guest_rights;
 mod nv_files;
 mod nv_store;
+mod pair_answer;
 mod screen;
 
 use std::fs;

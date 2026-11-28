@@ -71,7 +71,7 @@ function Test-CtlWords {
         if ($word -cnotmatch '\A[0-9a-z-]+\z') { return $false }
     }
     $fp = '[0-9a-f]{64}'
-    $grammar = "\A(status|pair (on|off|accept|decline)|revoke $fp|device $fp (allow (clipboard|files|sound|mic|camera) (on|off)|view-only (on|off))|allow (clipboard|files) (on|off)|set updates off|sharing on)\z"
+    $grammar = "\A(status|pair (on|off)|pair (accept|decline) $fp|revoke $fp|device $fp (allow (clipboard|files|sound|mic|camera) (on|off)|view-only (on|off))|allow (clipboard|files) (on|off)|set updates off|sharing on)\z"
     return ($Words -join ' ') -cmatch $grammar
 }
 
@@ -148,7 +148,25 @@ function Write-CtlLines {
     }
 }
 
-# Answers $Line if it is a request: true when it was one. remoteman's host is given 10 s, and the
+# remoteman's host answers whoever waits on a plain `pair accept` or `pair decline`, so the device
+# named is read from the host's status straight before, and only when it is the one waiting is the
+# answer sent. Otherwise nothing is run and the request is answered "another device is waiting now".
+function Invoke-CtlAnswer {
+    param([string]$Program, [string]$Answer, [string]$Fingerprint, [int]$Milliseconds)
+    $status = Invoke-Ctl -Program $Program -Arguments @('ctl', '--port', '7791', 'status') -Milliseconds $Milliseconds
+    if ($status.Failure) { return $status }
+    $waiting = $null
+    $said = @([System.Text.Encoding]::UTF8.GetString($status.Bytes) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_.StartsWith('{') })
+    if ($said.Count -gt 0) {
+        try { $pending = ($said[0] | ConvertFrom-Json).pending; if ($pending) { $waiting = [string]$pending.fingerprint } } catch { }
+    }
+    if (-not $waiting -or $waiting.ToLowerInvariant() -cne $Fingerprint) {
+        return [pscustomobject]@{ Failure = $null; Code = 1; Bytes = [System.Text.Encoding]::UTF8.GetBytes('another device is waiting now') }
+    }
+    return Invoke-Ctl -Program $Program -Arguments @('ctl', '--port', '7791', 'pair', $Answer) -Milliseconds $Milliseconds
+}
+
+# Answers $Line if it is a request: true when it was one. remoteman's host is given 10 s in all, and the
 # host waits longer than that for the answer.
 function Receive-CtlLine {
     param([string]$Line, $Port, $Lock, [string]$Program)
@@ -157,7 +175,11 @@ function Receive-CtlLine {
     if (-not $request.Valid) {
         $lines = @("guesthouse: ctl failed $($request.Id) refused")
     } else {
-        $ran = Invoke-Ctl -Program $Program -Arguments (@('ctl', '--port', '7791') + $request.Words) -Milliseconds 10000
+        if ($request.Words[0] -ceq 'pair' -and $request.Words.Count -eq 3) {
+            $ran = Invoke-CtlAnswer -Program $Program -Answer $request.Words[1] -Fingerprint $request.Words[2] -Milliseconds 5000
+        } else {
+            $ran = Invoke-Ctl -Program $Program -Arguments (@('ctl', '--port', '7791') + $request.Words) -Milliseconds 10000
+        }
         if ($ran.Failure) {
             $lines = @("guesthouse: ctl failed $($request.Id) $($ran.Failure)")
         } else {
@@ -171,7 +193,7 @@ function Receive-CtlLine {
 # remoteman's host's program, where its installer puts it (screen.ps1 has the same).
 $ctlHost = 'C:\Program Files\remoteman host\remoteman-host.exe'
 # The channel's functions as text, for the listener's thread, which starts with none of this script's.
-$ctlCode = (('Test-CtlWords', 'Read-CtlRequest', 'Get-CtlAnswerLines', 'Invoke-Ctl', 'Write-CtlLines', 'Receive-CtlLine') |
+$ctlCode = (('Test-CtlWords', 'Read-CtlRequest', 'Get-CtlAnswerLines', 'Invoke-Ctl', 'Invoke-CtlAnswer', 'Write-CtlLines', 'Receive-CtlLine') |
     ForEach-Object { "function $_ {$((Get-Item -LiteralPath "function:$_").Definition)}" }) -join "`n"
 # ctl channel: end
 

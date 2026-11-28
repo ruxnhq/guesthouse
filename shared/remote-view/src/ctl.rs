@@ -59,15 +59,21 @@ pub fn pair_close() -> Words {
     words(&["pair", "off"])
 }
 
-/// `pair accept`: trusts the device waiting.
-pub fn pair_accept() -> Words {
-    words(&["pair", "accept"])
+/// `pair accept FINGERPRINT`: trusts the device waiting, only if it is the one with this
+/// fingerprint, the one the person was shown. remoteman's own host takes `pair accept` alone, so
+/// what runs it in the guest reads the waiting device first and sends that only when it matches.
+pub fn pair_accept(fingerprint: &str) -> Result<Words, String> {
+    Ok(vec!["pair".to_string(), "accept".to_string(), check_fingerprint(fingerprint)?])
 }
 
-/// `pair decline`: turns the device waiting away.
-pub fn pair_decline() -> Words {
-    words(&["pair", "decline"])
+/// `pair decline FINGERPRINT`: turns the device waiting away, only if it is the one with this
+/// fingerprint.
+pub fn pair_decline(fingerprint: &str) -> Result<Words, String> {
+    Ok(vec!["pair".to_string(), "decline".to_string(), check_fingerprint(fingerprint)?])
 }
+
+/// What is said when the device waiting is not the one named.
+pub const ANOTHER_DEVICE_WAITS: &str = "another device is waiting now";
 
 /// `revoke FINGERPRINT`: stops trusting a device, which is disconnected and refused from then on.
 pub fn device_revoke(fingerprint: &str) -> Result<Words, String> {

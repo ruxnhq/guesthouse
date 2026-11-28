@@ -73,7 +73,7 @@ fn a_host_that_says_what_happens_drives_its_pairing_with_no_reading_and_no_clock
     assert_eq!((shown.closed_reason, shown.paired.as_deref()), (Some(CloseReason::Paired), Some("Phone")));
 
     // `pair accept` went; the policy's `allow` words did not, and that was logged, not refused.
-    assert_eq!(*guest.sent.borrow(), ["pair on 120", "pair accept"]);
+    assert_eq!(*guest.sent.borrow(), ["pair on 120".to_string(), format!("pair accept {PHONE}")]);
     assert_eq!(guest.logged.borrow().len(), 2);
     assert!(guest.logged.borrow().iter().all(|line| line.ends_with(": no such line")));
     // Never asked, and the clock read once per call.
@@ -125,6 +125,6 @@ fn a_host_that_answers_gives_its_words_through_ctl_by_default() {
         fn log(&self, _line: &str) {}
     }
     let guest = Answers(RefCell::new(Vec::new()));
-    assert_eq!(guest.send(&ctl::pair_accept()), Ok(()));
-    assert_eq!(*guest.0.borrow(), ["pair accept"]);
+    assert_eq!(guest.send(&ctl::pair_open()), Ok(()));
+    assert_eq!(*guest.0.borrow(), ["pair on"]);
 }

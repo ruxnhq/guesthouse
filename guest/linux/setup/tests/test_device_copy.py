@@ -4,7 +4,7 @@ import re
 import unittest
 
 LINUX = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PATCH = os.path.join(os.path.dirname(LINUX), "qemu", "qemu-gpupv.patch")
+PATCH = os.path.join(os.path.dirname(os.path.dirname(LINUX)), "qemu", "qemu-gpupv.patch")
 
 
 def file_in_patch(name):

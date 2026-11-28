@@ -103,7 +103,7 @@ sign "$out/wddmtool-unsigned.exe" "$out/wddmtool.exe"
 # headers live in the WDK's um folder. No C runtime, as for wddmtool.
 umd_objects=
 for file in umd_adapter umd_device umd_format umd_resource umd_present umd_stubs umd_log umd_util \
-		umd_capture umd_inner umd_resource_inner umd_view umd_state umd_shader umd_draw umd_compute umd_blt umd_dxbc umd_md5 \
+		umd_inner umd_resource_inner umd_view umd_state umd_shader umd_draw umd_compute umd_blt umd_dxbc umd_md5 \
 		umd_residency umd_video; do
 	# shellcheck disable=SC2086
 	clang $user -isystem "$wdk/Include/$version/um" -isystem "$wdk/Include/$version/shared" \

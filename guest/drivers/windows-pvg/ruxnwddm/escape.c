@@ -11,8 +11,8 @@
 //
 // Escapes come at PASSIVE_LEVEL in the caller's process. Windows lets any
 // process send them, so each one is checked for size and magic, and only
-// administrators may touch the ring by hand (the INFO answers hold no
-// secret).
+// administrators may touch the ring by hand, list the live allocations or
+// read the kernel log.
 
 #include "pvg.h"
 
@@ -230,6 +230,10 @@ NTSTATUS ruxnwddm_escape(RUXNWDDM_ADAPTER *a, const DXGKARG_ESCAPE *args)
 	case RUXNWDDM_ESCAPE_ALLOCATIONS:
 		if (size < sizeof(struct ruxnwddm_escape_allocations))
 			return STATUS_BUFFER_TOO_SMALL;
+		if (!caller_is_admin()) {
+			status = STATUS_ACCESS_DENIED;
+			break;
+		}
 		ruxnwddm_alloc_list_fill(a, (struct ruxnwddm_escape_allocations *)header);
 		status = STATUS_SUCCESS;
 		break;

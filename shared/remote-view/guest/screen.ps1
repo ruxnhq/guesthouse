@@ -12,54 +12,74 @@ $hostExe = Join-Path $folder 'remoteman-host.exe'
 $state = 'C:\ProgramData\remoteman\host'
 $service = 'remoteman host'
 
-# Signing in by itself at every start, so the screen opens on the desktop and not on a sign-in
-# screen that would ask the viewer for the password. The host writes the account here once, and it
-# goes as soon as Windows has it. It takes effect from the next start.
-$logon = Join-Path $screen 'logon.txt'
-if (Test-Path -LiteralPath $logon) {
-    $lines = Get-Content -LiteralPath $logon
-    $user = (($lines | Where-Object { $_ -like 'user: *' }) -replace '^user: ', '').Trim()
-    $password = (($lines | Where-Object { $_ -like 'password: *' }) -replace '^password: ', '').Trim()
-    if ($user -and $password) {
-        $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-        Set-ItemProperty -LiteralPath $winlogon -Name AutoAdminLogon -Value '1'
-        Set-ItemProperty -LiteralPath $winlogon -Name DefaultUserName -Value $user
-        Set-ItemProperty -LiteralPath $winlogon -Name DefaultPassword -Value $password
-        Set-ItemProperty -LiteralPath $winlogon -Name DefaultDomainName -Value $env:COMPUTERNAME
-        Remove-ItemProperty -LiteralPath $winlogon -Name AutoLogonCount -ErrorAction SilentlyContinue
-        # Windows 11 hides signing in with a password until this is 0.
-        $passwordless = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device'
-        New-Item -Path $passwordless -Force | Out-Null
-        Set-ItemProperty -LiteralPath $passwordless -Name DevicePasswordLessBuildVersion -Value 0 -Type DWord
-        # No lock screen, and no locking or sleeping when nobody types, as a locked guest shows the
-        # viewer a sign-in screen.
-        $personalization = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
-        New-Item -Path $personalization -Force | Out-Null
-        Set-ItemProperty -LiteralPath $personalization -Name NoLockScreen -Value 1 -Type DWord
-        $system = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-        Set-ItemProperty -LiteralPath $system -Name InactivityTimeoutSecs -Value 0 -Type DWord
-        powercfg.exe /change monitor-timeout-ac 0 | Out-Null
-        powercfg.exe /change standby-timeout-ac 0 | Out-Null
-        Send-Line "screen: $user signs in by itself from the next start"
-    }
-    Remove-Item -LiteralPath $logon -Force
-}
-
-if (-not (Test-Path -LiteralPath $setup)) {
-    Send-Line "screen: remoteman's host wasn't given, so the guest has no screen"
-    return
-}
-
 # Writes what Windows holds in memory of its registry and of drive C to the disk. A machine stopped
 # at once, as a guest with a card is, loses what wasn't written: a whole install's service and
 # firewall rule were lost so, while its files stayed.
 function Save-ToDisk {
     if (-not ('Guesthouse.Registry' -as [type])) {
-        Add-Type -Namespace Guesthouse -Name Registry -MemberDefinition '[DllImport("advapi32.dll")] public static extern int RegFlushKey(IntPtr key);'
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; namespace Guesthouse { public static class Registry { [DllImport("advapi32.dll")] public static extern int RegFlushKey(IntPtr key); } }'
     }
     # HKEY_LOCAL_MACHINE's predefined handle, which flushes every hive under it.
     [Guesthouse.Registry]::RegFlushKey([IntPtr]0x80000002) | Out-Null
     Write-VolumeCache -DriveLetter C -ErrorAction SilentlyContinue
+}
+
+# Winlogon's values for signing in by itself, in $Key. The password goes to the LSA secret and never
+# to the registry, where every account may read it: Save-LogonSecret and Move-LeftPassword are in
+# guest/windows/logon-secret.ps1, which the host puts before this script. With no user, the account
+# is left as it was. Says 'kept', 'refused' or 'none'.
+function Set-SignIn([string]$Key, [string]$User, [string]$Secret) {
+    $left = Move-LeftPassword $Key
+    if (-not $Secret) { return @{ moved = 'kept'; refused = 'refused'; none = 'none' }[$left] }
+    if (-not (Save-LogonSecret $Secret)) { return 'refused' }
+    if ($User) {
+        Set-ItemProperty -LiteralPath $Key -Name AutoAdminLogon -Value '1'
+        Set-ItemProperty -LiteralPath $Key -Name DefaultUserName -Value $User
+        Set-ItemProperty -LiteralPath $Key -Name DefaultDomainName -Value $env:COMPUTERNAME
+        Remove-ItemProperty -LiteralPath $Key -Name AutoLogonCount -ErrorAction SilentlyContinue
+    }
+    'kept'
+}
+
+# Signing in by itself at every start, so the screen opens on the desktop and not on a sign-in
+# screen that would ask the viewer for the password. The host writes the account here before a start,
+# and it goes as soon as Windows has it. It takes effect from the next start.
+$logon = Join-Path $screen 'logon.txt'
+$user = $null
+$password = $null
+if (Test-Path -LiteralPath $logon) {
+    $lines = Get-Content -LiteralPath $logon
+    $user = (($lines | Where-Object { $_ -like 'user: *' }) -replace '^user: ', '').Trim()
+    $password = (($lines | Where-Object { $_ -like 'password: *' }) -replace '^password: ', '').Trim()
+    Remove-Item -LiteralPath $logon -Force
+    if (-not ($user -and $password)) { $user = $null; $password = $null }
+}
+$signIn = Set-SignIn 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' $user $password
+$password = $null
+if ($signIn -eq 'refused') {
+    Send-Line "screen: Windows didn't take the password to sign in with, so the guest starts on its sign-in screen"
+}
+if ($signIn -eq 'kept' -and $user) {
+    # Windows 11 hides signing in with a password until this is 0.
+    $passwordless = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device'
+    New-Item -Path $passwordless -Force | Out-Null
+    Set-ItemProperty -LiteralPath $passwordless -Name DevicePasswordLessBuildVersion -Value 0 -Type DWord
+    # No lock screen, and no locking or sleeping when nobody types, as a locked guest shows the
+    # viewer a sign-in screen.
+    $personalization = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
+    New-Item -Path $personalization -Force | Out-Null
+    Set-ItemProperty -LiteralPath $personalization -Name NoLockScreen -Value 1 -Type DWord
+    $system = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    Set-ItemProperty -LiteralPath $system -Name InactivityTimeoutSecs -Value 0 -Type DWord
+    powercfg.exe /change monitor-timeout-ac 0 | Out-Null
+    powercfg.exe /change standby-timeout-ac 0 | Out-Null
+    Send-Line "screen: $user signs in by itself from the next start"
+}
+if ($signIn -ne 'none') { Save-ToDisk }
+
+if (-not (Test-Path -LiteralPath $setup)) {
+    Send-Line "screen: remoteman's host wasn't given, so the guest has no screen"
+    return
 }
 
 # remoteman's host keeps files and the clipboard off unless its owner says otherwise. Here the owner

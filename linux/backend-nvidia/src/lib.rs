@@ -659,6 +659,17 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         self.close(queue);
     }
 
+    /// Nothing has to wait for runs here. The RM takes a mapping out of the card's page tables when
+    /// it is unmapped, and memory and channels with all their mappings when they are freed, so work
+    /// still running then faults on those addresses and never reaches what the pages hold next.
+    fn work_sent(&self) -> u64 {
+        0
+    }
+
+    fn work_ended(&mut self) -> u64 {
+        0
+    }
+
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {
         self.start_copy(host, copy)
     }

@@ -1,6 +1,6 @@
 # Step 7 of RELEASING.md: after a Linux release (vX.Y.Z) is published, opens the pull request that
 # points install.sh, the Nix package, the README and the site at it. It checks the release's downloads
-# against its SHA256SUMS first, and the AppImage on files.ruxn.com against it too. If the AppImage
+# against its SHA256SUMS and the release build's record of them first, and the AppImage on files.ruxn.com against it too. If the AppImage
 # isn't there within half an hour the pull request is a draft, to be marked ready once it is.
 # Step 5 of the Windows host's: after a Windows release (windows-vX.Y.Z) is published, opens "Point
 # the site at Windows X.Y.Z", which changes only the Windows version, link, name, size and hash link in
@@ -89,6 +89,11 @@ jobs:
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS \
             -p "guesthouse-$VERSION-x86_64.tar.xz" -p "guesthouse-$VERSION-source.tar.xz"
           grep -E " \*?guesthouse-$VERSION-(x86_64|source)\.tar\.xz\$" SHA256SUMS | sha256sum -c -
+          # And against the record the release build made of them, which the release's own files can't change.
+          for file in SHA256SUMS "guesthouse-$VERSION-x86_64.tar.xz" "guesthouse-$VERSION-source.tar.xz"; do
+            gh attestation verify "$file" -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml"
+          done
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets \
             -q ".assets[] | select(.name == \"guesthouse-installer-$VERSION.AppImage\") | .size" >appimage-size
           [ -s appimage-size ] || { echo "::error::The release has no AppImage."; exit 1; }

@@ -436,7 +436,7 @@ one_user() {
     fi
     # Its lines are check, the state, the title, what was found and the fix, split by tabs, as check.rs says.
     # They come from a program in the user's home, so nothing but plain text of them reaches root's terminal.
-    printed=$(runuser -u "$name" -- env -i HOME="$home" USER="$name" LOGNAME="$name" PATH=/usr/local/bin:/usr/bin:/bin \
+    printed=$(setsid -w runuser -u "$name" -- env -i HOME="$home" USER="$name" LOGNAME="$name" PATH=/usr/local/bin:/usr/bin:/bin \
         XDG_RUNTIME_DIR="/run/user/$uid" timeout "$CHECK_SECONDS" "$(file "$program/guesthouse-check")" </dev/null 2>/dev/null) || {
         warning "guesthouse-check, $who" "It didn't run." "Run it as $who to see why."
         return

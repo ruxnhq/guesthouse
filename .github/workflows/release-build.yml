@@ -7,7 +7,7 @@
 #
 # The display driver can only be built on Windows, and every new build of it is a new package id that
 # each guest installs again (app-core's actions/display.rs). So, as by hand, the previous release's DLL and INF are used again,
-# checked against that release's SHA256SUMS, unless something compiled in guest/drivers/windows-display
+# checked against the payload hash install.sh records for that release, unless something compiled in guest/drivers/windows-display
 # changed since that release. Then it's built here on a Windows runner.
 #
 # From the Actions tab it runs for a tag that's pushed already. With "release" off, it only builds and
@@ -181,8 +181,15 @@ jobs:
           OLD=${PREVIOUS#v}
           mkdir -p "$RUNNER_TEMP/previous" "$RUNNER_TEMP/display-driver"
           cd "$RUNNER_TEMP/previous"
-          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -p "guesthouse-$OLD-x86_64.tar.xz"
-          grep -E " \*?guesthouse-$OLD-x86_64\.tar\.xz\$" SHA256SUMS | sha256sum -c -
+          # The payload's hash is the one install.sh in this tree records for that release, which went
+          # in through a reviewed pull request, not whatever the release holds now.
+          constant() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$GITHUB_WORKSPACE/install.sh" | head -n 1; }
+          [ "$(constant RELEASE_VERSION)" = "$OLD" ] ||
+            { echo "::error::install.sh at $TAG names $(constant RELEASE_VERSION), not $OLD, so $OLD's payload has no recorded hash. Point install.sh at $OLD first."; exit 1; }
+          WANT=$(constant PAYLOAD_SHA256)
+          printf '%s' "$WANT" | grep -Eqx '[0-9a-f]{64}' || { echo "::error::install.sh has no payload hash."; exit 1; }
+          gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" -p "guesthouse-$OLD-x86_64.tar.xz"
+          echo "$WANT  guesthouse-$OLD-x86_64.tar.xz" | sha256sum -c -
           tar -xJf "guesthouse-$OLD-x86_64.tar.xz" -C "$RUNNER_TEMP/display-driver" --strip-components=2 \
             "guesthouse-$OLD-x86_64/display-driver/GuesthouseDisplay.dll" \
             "guesthouse-$OLD-x86_64/display-driver/GuesthouseDisplay.inf"
@@ -270,6 +277,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       PREVIOUS: ${{ needs.prepare.outputs.previous }}
@@ -285,6 +294,18 @@ jobs:
         with:
           name: release-${{ needs.prepare.outputs.version }}
           path: ${{ env.BUILD_FOLDER }}
+
+      # A record of what this run built, kept apart from the release: the steps that take a
+      # published release's files check them against it (gh attestation verify), so a file that
+      # was changed after the build doesn't pass on the strength of a SHA256SUMS changed with it.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-x86_64.tar.xz
+            ${{ env.BUILD_FOLDER }}/guesthouse-installer-${{ needs.prepare.outputs.version }}.AppImage
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-source.tar.xz
+            ${{ env.BUILD_FOLDER }}/guesthouse-${{ needs.prepare.outputs.version }}-bundled-source.tar
+            ${{ env.BUILD_FOLDER }}/SHA256SUMS
 
       - name: Draft the notes
         run: |

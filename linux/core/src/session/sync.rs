@@ -1,6 +1,9 @@
 //! Handlers for sync objects and fences.
 
-use super::{Handled, Session, answer_status};
+use super::{Failure, Handled, Session, answer_status};
+
+/// The most sync object handles a session holds at once.
+pub(crate) const MOST_SYNC_HANDLES: usize = 1 << 16;
 use crate::deferred::DeferredAction;
 use crate::fences::{FENCE_PAGE, Fence, FenceBlock};
 use crate::sync_table::SyncObject;
@@ -54,8 +57,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     }
 
     pub(super) fn create_paging_queue(&mut self, out: &mut Vec<u8>) -> Handled {
-        let queue = self.handles.take();
-        let sync = self.handles.take();
+        let queue = self.take_handle()?;
+        let sync = self.take_handle()?;
         let fence = match self.fences.reuse_paging() {
             Some(fence) => {
                 self.memory.zero(fence, FENCE_PAGE)?;
@@ -78,7 +81,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     pub(super) fn create_sync_object(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = CreateSyncObject::parse(message)?;
-        let handle = self.handles.take();
+        if self.sync_objects.handles() >= MOST_SYNC_HANDLES {
+            log::warn!("this guest holds {MOST_SYNC_HANDLES} sync object handles, so no more are made");
+            return Err(Failure::Malformed);
+        }
+        let handle = self.take_handle()?;
         let monitored = request.kind == KIND_MONITORED_FENCE;
         let (fence, gpu_address) = if monitored { self.take_fence()? } else { (0, 0) };
         let event = if request.kind == KIND_CPU_NOTIFICATION {
@@ -105,7 +112,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             open_answer(0, Status::INVALID_PARAMETER, 0, 0, out);
             return Ok(());
         }
-        let handle = self.handles.take();
+        if self.sync_objects.handles() >= MOST_SYNC_HANDLES {
+            open_answer(0, Status::NO_MEMORY, 0, 0, out);
+            return Ok(());
+        }
+        let handle = self.take_handle()?;
         let object = self.sync_objects.open(existing, handle).expect("checked just above");
         self.sync_objects.note_holder(handle, MessageHeader::process_of(message)?);
         open_answer(handle, Status::SUCCESS, object.gpu_address, object.fence, out);
@@ -123,7 +134,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
 
     pub(super) fn create_shared_object(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let object = first_handle(message)?;
-        let handle = self.handles.take();
+        let handle = self.take_handle()?;
         self.shared_objects.insert(handle, object);
         put_u32(out, handle);
         put_u32(out, 0);

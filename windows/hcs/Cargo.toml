@@ -17,6 +17,10 @@ serde_json = "1"
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"
 features = [
+    # NtCreateFile and the rest, which open each part of a path on a guest's disk relative to the
+    # folder before it.
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",
     # DnsServiceRegister and the rest, Windows' own mDNS responder, which announces a machine's
@@ -26,6 +30,7 @@ features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_Security",
+    # Permissions written as SDDL, for the folder Guesthouse keeps in a Windows guest, and
     # ConvertSidToStringSidW, for who serves a machine's serial port.
     "Win32_Security_Authorization",
     # BCryptGenRandom, for each boot's pipe names.

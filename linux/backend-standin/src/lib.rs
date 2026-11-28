@@ -142,6 +142,10 @@ pub struct StandIn {
     /// answer was.
     pub ask_monitored: Option<u64>,
     pub monitored_found: Option<Option<u64>>,
+    /// Runs rung that end, as a card's driver counts them.
+    pub runs_sent: u64,
+    /// How many of those the driver says have ended, or `None` for all of them.
+    pub runs_ended: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -235,6 +239,8 @@ impl StandIn {
             slots_in_guest_pages: false,
             context_commands: false,
             ask_monitored: None,
+            runs_sent: 0,
+            runs_ended: None,
             monitored_found: None,
         }
     }
@@ -621,11 +627,23 @@ impl Backend for StandIn {
             return Ok(Doorbell::NotBefore(not_before));
         }
         self.doorbells.push((queue, doorbell));
-        Ok(if self.work_stays { Doorbell::RungToStay } else { Doorbell::Rung })
+        if self.work_stays {
+            return Ok(Doorbell::RungToStay);
+        }
+        self.runs_sent += 1;
+        Ok(Doorbell::Rung)
     }
 
     fn close_queue(&mut self, queue: u32) {
         self.closed_queues.push(queue);
+    }
+
+    fn work_sent(&self) -> u64 {
+        self.runs_sent
+    }
+
+    fn work_ended(&mut self) -> u64 {
+        self.runs_ended.unwrap_or(self.runs_sent).min(self.runs_sent)
     }
 
     fn start_staging_copy(&mut self, _host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart {

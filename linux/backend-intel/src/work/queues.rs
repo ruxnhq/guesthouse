@@ -41,6 +41,8 @@ pub(super) struct Run {
     /// When it was sent, and how many changes its space's mappings had had by then.
     pub sent: Option<Instant>,
     pub changes_before: u64,
+    /// Its place among every run sent to the card, from one, once it has gone. Zero until then.
+    pub number: u64,
 }
 
 impl Run {
@@ -65,6 +67,16 @@ pub(super) struct Queue {
     /// The latest ring submission, and whether its queue's ban has been looked into.
     ring_run: Option<Run>,
     ring_banned_seen: bool,
+}
+
+/// A queue that has gone, whose runs may still be on the card: its handle, its timeline, the point
+/// its last run signals, and the number of its oldest run.
+#[derive(Debug)]
+pub(super) struct Closing {
+    pub queue: u32,
+    pub done: u32,
+    pub point: u64,
+    pub number: u64,
 }
 
 /// Work checked and ready, waiting for its doorbell.
@@ -218,6 +230,7 @@ impl CardWork {
             chain: None,
             sent: None,
             changes_before: 0,
+            number: 0,
         };
         let doorbell = self.new_id();
         let prepared = Prepared {
@@ -292,6 +305,7 @@ impl CardWork {
             chain,
             sent: None,
             changes_before: 0,
+            number: 0,
         };
         match kind {
             Kind::Ring => {
@@ -581,7 +595,12 @@ impl CardWork {
                 let prepared = self.prepared.remove(&doorbell).expect("found above");
                 let changes_before = self.spaces.get(&space).map_or(0, |held| held.changes_made);
                 if let Some(queue) = self.queues.get_mut(&prepared.queue) {
-                    let stamped = |run: Run| Run { sent: Some(Instant::now()), changes_before, ..run };
+                    if prepared.run.is_some() {
+                        self.runs_sent += 1;
+                    }
+                    let number = self.runs_sent;
+                    let stamped =
+                        |run: Run| Run { sent: Some(Instant::now()), changes_before, number, ..run };
                     let wake = prepared.run.filter(Run::host_finishes).zip(queue.ordinary);
                     if let Some(run) = prepared.run {
                         queue.in_flight.push_back(stamped(run));
@@ -748,11 +767,58 @@ impl CardWork {
                 log::warn!("intel work: destroying queue {queue:#x}'s xe queue failed: {error}");
             }
         }
-        if let Some(done) = done
-            && let Err(error) = self.xe.destroy_syncobj(done)
-        {
+        // xe ends a destroyed queue's runs in its own time, and its timeline says when.
+        let sent = gone.in_flight.iter().filter(|run| run.point != 0);
+        let oldest = sent.clone().map(|run| run.number).min();
+        let last = sent.map(|run| run.point).max();
+        if let (Some(done), Some(number), Some(point)) = (done, oldest, last) {
+            self.closing.push(Closing { queue, done, point, number });
+        } else if let Some(done) = done {
+            self.destroy_timeline(queue, done);
+        }
+    }
+
+    fn destroy_timeline(&mut self, queue: u32, done: u32) {
+        if let Err(error) = self.xe.destroy_syncobj(done) {
             log::warn!("intel work: destroying queue {queue:#x}'s sync object failed: {error}");
         }
+    }
+
+    /// How many runs have gone to the card, for [`Self::runs_ended`].
+    pub fn runs_sent(&self) -> u64 {
+        self.runs_sent
+    }
+
+    /// How many runs, from the first, xe's timelines say have all ended, those of queues that went
+    /// or failed included. A ring's run, which never ends, isn't counted.
+    pub fn runs_ended(&mut self) -> u64 {
+        let mut oldest: Option<u64> = None;
+        let mut note = |number: u64| oldest = Some(oldest.map_or(number, |oldest| oldest.min(number)));
+        for queue in self.queues.values() {
+            let Some((_, done)) = queue.ordinary else { continue };
+            // A queue's runs end in order, so the first that hasn't is the oldest.
+            let unended = queue
+                .in_flight
+                .iter()
+                .filter(|run| run.point != 0)
+                .find(|run| !self.xe.point_reached(done, run.point, Duration::ZERO).unwrap_or(true));
+            if let Some(run) = unended {
+                note(run.number);
+            }
+        }
+        let mut ended = Vec::new();
+        for (index, closing) in self.closing.iter().enumerate() {
+            if self.xe.point_reached(closing.done, closing.point, Duration::ZERO).unwrap_or(true) {
+                ended.push(index);
+            } else {
+                note(closing.number);
+            }
+        }
+        for index in ended.into_iter().rev() {
+            let closing = self.closing.swap_remove(index);
+            self.destroy_timeline(closing.queue, closing.done);
+        }
+        oldest.map_or(self.runs_sent, |number| number - 1)
     }
 
     /// Whether prepared work sends anything to the card when its doorbell rings. A context's
@@ -1030,6 +1096,49 @@ mod tests {
         assert_eq!(rig.xe.calls_named("point_reached").len(), 1);
         rig.work.poll(&mut rig.host, now + Duration::from_millis(60));
         assert_eq!(rig.xe.calls_named("point_reached").len(), 2);
+    }
+
+    #[test]
+    fn a_run_counts_as_on_the_card_until_its_timeline_says_it_ended() {
+        let mut rig = ready(Stage::Everything);
+        rig.xe.hold_runs();
+        let work = rig.submission(1, 9);
+        let WorkStart::Started { doorbell, .. } = rig.start(&work) else { panic!() };
+        rig.work.ring_doorbell(doorbell).unwrap();
+        assert_eq!(rig.work.runs_sent(), 1);
+        assert_eq!(rig.work.runs_ended(), 0);
+        rig.xe.release_runs();
+        assert_eq!(rig.work.runs_ended(), 1);
+    }
+
+    #[test]
+    fn a_closed_queues_runs_count_until_they_end() {
+        let mut rig = ready(Stage::Everything);
+        rig.xe.hold_runs();
+        let work = rig.submission(1, 9);
+        let WorkStart::Started { doorbell, .. } = rig.start(&work) else { panic!() };
+        rig.work.ring_doorbell(doorbell).unwrap();
+        rig.work.close_queue(1);
+        assert_eq!(rig.work.live_queues(), 0);
+        assert_eq!(rig.work.runs_ended(), 0, "xe may still be running it");
+        assert!(rig.xe.calls_named("destroy_syncobj").is_empty(), "its timeline is still asked about");
+        rig.xe.release_runs();
+        assert_eq!(rig.work.runs_ended(), 1);
+        assert_eq!(rig.xe.calls_named("destroy_syncobj").len(), 1);
+    }
+
+    #[test]
+    fn a_failed_spaces_runs_count_until_they_end() {
+        let mut rig = ready(Stage::Everything);
+        rig.xe.hold_runs();
+        let work = rig.submission(1, 9);
+        let WorkStart::Started { doorbell, .. } = rig.start(&work) else { panic!() };
+        rig.work.ring_doorbell(doorbell).unwrap();
+        rig.work.fail_space(rig.space, "a test");
+        assert_eq!(rig.start(&rig.submission(1, 10)), WorkStart::QueueFailed);
+        assert_eq!(rig.work.runs_ended(), 0);
+        rig.xe.release_runs();
+        assert_eq!(rig.work.runs_ended(), 1);
     }
 
     /// A ring as Intel's compute driver submits it: work, then a semaphore wait, and no end.

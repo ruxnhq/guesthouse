@@ -300,6 +300,15 @@ impl Backend for RecordedAnswers {
 
     fn close_queue(&mut self, _queue: u32) {}
 
+    /// A replay sends nothing to a card.
+    fn work_sent(&self) -> u64 {
+        0
+    }
+
+    fn work_ended(&mut self) -> u64 {
+        0
+    }
+
     fn start_staging_copy(&mut self, _host: &mut dyn HostServices, _copy: &StagingCopy) -> StagingStart {
         self.note(Provenance::PartlyRecorded);
         StagingStart::Finished(u32_at(&self.expected, 0).map_or(Status::UNSUCCESSFUL, Status))

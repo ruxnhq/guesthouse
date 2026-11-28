@@ -40,6 +40,30 @@ is_gpu_word() {
     return 1
 }
 
+# Runs a command as USER in a session of its own, with no terminal and nothing to read, so it has no part in root's.
+as_user() {
+    as_user_name=$1
+    shift
+    setsid -w runuser -u "$as_user_name" -- "$@" </dev/null
+}
+
+# Whether VALUE, of one line, is wholly of the shape REGEX, an extended one.
+shape() {
+    case $1 in
+        '' | *'
+'*) return 1 ;;
+    esac
+    printf '%s\n' "$1" | grep -Eqx -e "$2"
+}
+
+# Replaces the first OLD in LINE with NEW, as plain text.
+swap_first() {
+    case $1 in
+        *"$2"*) printf '%s%s%s' "${1%%"$2"*}" "$3" "${1#*"$2"}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # What QEMU's line in the printed script has, one flag and its value on each line.
 qemu_words() {
     awk '
@@ -106,7 +130,7 @@ main() {
     esac
 
     say "asking Guesthouse for $machine's words, as $user"
-    printed=$(runuser -u "$user" -- env -i HOME="$home" USER="$user" LOGNAME="$user" PATH=/usr/local/bin:/usr/bin:/bin \
+    printed=$(as_user "$user" env -i HOME="$home" USER="$user" LOGNAME="$user" PATH=/usr/local/bin:/usr/bin:/bin \
         XDG_RUNTIME_DIR="/run/user/$uid" GUESTHOUSE_PROGRAM="$program" "$program/guesthouse-vm" command "$machine") ||
         die "guesthouse-vm command $machine failed."
     make_words
@@ -169,7 +193,9 @@ make_words() {
     printed_ram_file=$(printf '%s\n' "$printed" | sed -n 's/^ *GUESTHOUSE_RAM_FILE=\([^ ]*\) \\$/\1/p')
     printed_window_file=$(printf '%s\n' "$printed" | sed -n 's/^ *GUESTHOUSE_WINDOW_FILE=\([^ ]*\) \\$/\1/p')
     printed_ram=$(printf '%s\n' "$printed" | sed -n 's/^ *GUESTHOUSE_RAM=\([^ ]*\) \\$/\1/p')
-    [ -n "$printed_run" ] && [ -n "$printed_ram_file" ] && [ -n "$printed_window_file" ] && [ -n "$printed_ram" ] ||
+    # They are only looked for in the words, as text. Each has to be what Guesthouse prints, and nothing else.
+    shape "$printed_run" "/run/user/$uid/guesthouse/run(-[0-9]+)?" && shape "$printed_ram_file" "(/[A-Za-z0-9_.-]+)+" &&
+        shape "$printed_window_file" "(/[A-Za-z0-9_.-]+)+" && shape "$printed_ram" "[1-9][0-9]*G" ||
         die "guesthouse-vm command printed a script this doesn't know. Its version may be newer than this script."
     ram=${ram:-$printed_ram}
     case $ram in
@@ -191,14 +217,21 @@ make_words() {
     done)
     printf '%s\n' "$gpu_words" | grep -q '^-device gpupv-render,' ||
         die "guesthouse-vm command $machine printed no GPU words. Its notes, from setup-vm.sh --dry-run's run of it, may say why."
-    gpu_words=$(printf '%s\n' "$gpu_words" | sed \
-        -e "s|path=$printed_run/|path=$run/|" \
-        -e "s|mem-path=$printed_ram_file,|mem-path=/dev/shm/gpupv-ram.$vmid,|" \
-        -e "s|mem-path=$printed_window_file,|mem-path=/dev/shm/gpupv-window.$vmid,|" \
-        -e "s|^\(-object memory-backend-file,id=ram0,size=\)[^,]*,|\1$ram,|")
-    if [ "$render_address" != none ]; then
-        gpu_words=$(printf '%s\n' "$gpu_words" | sed "/^-device gpupv-render,/ s/\$/,bus=pcie.0,addr=$render_address/")
-    fi
+    gpu_words=$(printf '%s\n' "$gpu_words" | while IFS= read -r word; do
+        word=$(swap_first "$word" "path=$printed_run/" "path=$run/")
+        word=$(swap_first "$word" "mem-path=$printed_ram_file," "mem-path=/dev/shm/gpupv-ram.$vmid,")
+        word=$(swap_first "$word" "mem-path=$printed_window_file," "mem-path=/dev/shm/gpupv-window.$vmid,")
+        case $word in
+            "-object memory-backend-file,id=ram0,size="*)
+                rest=${word#-object memory-backend-file,id=ram0,size=}
+                word="-object memory-backend-file,id=ram0,size=$ram,${rest#*,}"
+                ;;
+            "-device gpupv-render,"*)
+                [ "$render_address" = none ] || word="$word,bus=pcie.0,addr=$render_address"
+                ;;
+        esac
+        printf '%s\n' "$word"
+    done)
     check_gpu_words
     # The daemon's words for the card, and any others, except those the hookscript sets for this VM.
     # Root reads them at each start, so only plain words, and the script stops at anything else.

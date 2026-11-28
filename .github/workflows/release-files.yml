@@ -66,6 +66,9 @@ jobs:
           cd "$RUNNER_TEMP/files"
           gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -p "$NAME"
           grep -E " \*?$NAME\$" SHA256SUMS | sha256sum -c -
+          # And against the record the release build made of it, which the release's own files can't change.
+          gh attestation verify "$NAME" -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-build.yml"
           # The same line RELEASING.md's by-hand step writes.
           sha256sum "$NAME" >"$NAME.sha256"
           rm SHA256SUMS

@@ -48,8 +48,13 @@ pub const SETUP: &str = r"screen\remoteman-host-setup.exe";
 pub const GUEST_SETUP: &str = "remoteman-host-setup.exe";
 /// The guest's folder for its screen, from the root of its Windows volume.
 pub const GUEST_FOLDER: &str = r"Guesthouse\screen";
-/// The script the guest runs as SYSTEM to install remoteman's host and say its fingerprint.
-pub const SCRIPT: &str = include_str!("../guest/screen.ps1");
+/// The script the guest runs as SYSTEM to install remoteman's host and say its fingerprint, after the
+/// sign-in steps every Windows guest shares.
+pub const SCRIPT: &str = concat!(
+    include_str!("../../../guest/windows/logon-secret.ps1"),
+    "\n",
+    include_str!("../guest/screen.ps1")
+);
 /// What the guest says when its host has made its identity.
 const FINGERPRINT_LINE: &str = "guesthouse: screen: fingerprint ";
 
@@ -152,6 +157,20 @@ mod tests {
             assert_eq!(encoder_for_maker(vendor), encoder, "{vendor:?}");
         }
         assert_eq!(encoder_for_maker(Some(0x1234)), "d3d12");
+    }
+
+    /// The sign-in step is defined before screen.ps1's own code uses it, in the one file the host
+    /// writes.
+    #[test]
+    fn the_guest_script_has_the_shared_sign_in_step_first() {
+        let defined = SCRIPT.find("function Move-LeftPassword").unwrap();
+        let used = SCRIPT.find("$left = Move-LeftPassword $Key").unwrap();
+        assert!(defined < used);
+        assert_eq!(SCRIPT.matches("function Save-LogonSecret").count(), 1);
+        assert!(
+            !SCRIPT.contains("-Name DefaultPassword -Value"),
+            "the password is never written to the registry"
+        );
     }
 
     #[test]

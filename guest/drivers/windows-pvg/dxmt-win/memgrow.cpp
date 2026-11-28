@@ -47,17 +47,14 @@ struct vertex {
 	float x, y, u, v;
 };
 
-// Each line to the console and to C:\\ruxnlog\\memgrow-PID.txt, written
-// through: a run ended at once after a GPU fault keeps what was said
-// (run rn79 lost a redirected console's file).
-static HANDLE out_file = INVALID_HANDLE_VALUE;
+// Each line to the console and to the driver's kernel log, which keeps what
+// was said when a run ends at once after a GPU fault.
 static bool kernel_log;	// the line also goes to the driver's kernel log (klog.c)
 
 static void say(const char *format, ...)
 {
 	char line[512];
 	va_list args;
-	DWORD written;
 	int n;
 
 	va_start(args, format);
@@ -70,8 +67,6 @@ static void say(const char *format, ...)
 	fputs(line, stdout);
 	if (kernel_log)
 		pvg_kmt_log(line, (unsigned)(n && line[n - 1] == '\n' ? n - 1 : n));
-	if (out_file != INVALID_HANDLE_VALUE)
-		WriteFile(out_file, line, (DWORD)n, &written, NULL);
 }
 
 static void quiet(const char *line)
@@ -114,13 +109,6 @@ int main(int argc, char **argv)
 	int step;
 
 	setvbuf(stdout, NULL, _IONBF, 0);
-	{
-		char path[MAX_PATH];
-
-		snprintf(path, sizeof(path), "C:\\ruxnlog\\memgrow-%lu.txt", GetCurrentProcessId());
-		out_file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
-				       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
-	}
 	if (argc > 2)
 		TEX_SIDE = (UINT)atoi(argv[2]);
 	// winemetal says every texture it makes, with its number and place.

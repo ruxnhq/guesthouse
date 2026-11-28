@@ -9921,3 +9921,93 @@ index 0c42a2b..fec8b5a 100644
 -- 
 2.56.1
 
+From 0e78e28a6dad4455fece37d4f7cac771030cc60c Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Fri, 27 Nov 2026 21:24:43 -0800
+Subject: [PATCH] hw/hyperv: log config accesses and version refusals a few
+ times only
+
+The render function's config accesses each wrote a line to QEMU's output, and
+so did every refused time sync version offer. Log the first 32 config accesses,
+and the version refusal once.
+---
+ hw/hyperv/gpupv.c       | 26 ++++++++++++++++++++++----
+ hw/hyperv/hv-timesync.c |  6 ++++--
+ 2 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/hw/hyperv/gpupv.c b/hw/hyperv/gpupv.c
+index 28a31f0..23bd512 100644
+--- a/hw/hyperv/gpupv.c
++++ b/hw/hyperv/gpupv.c
+@@ -423,13 +423,32 @@ struct GpupvRender {
+     uint16_t device_id;
+ };
+ 
++/*
++ * A guest can touch config space as often as it likes, so only the first few
++ * accesses are logged.
++ */
++#define GPUPV_CFG_LOG_MAX 32
++
++static void gpupv_render_trace(const char *what, uint32_t addr, int len,
++                               uint32_t val)
++{
++    static unsigned int logged;
++
++    if (logged >= GPUPV_CFG_LOG_MAX) {
++        return;
++    }
++    logged++;
++    info_report("gpupv-render: config %s 0x%02x/%d = 0x%x%s", what,
++                addr, len, val,
++                logged == GPUPV_CFG_LOG_MAX ? " (no more are logged)" : "");
++}
++
+ static uint32_t gpupv_render_read(PCIDevice *dev, uint32_t addr, int len)
+ {
+     uint32_t val = pci_default_read_config(dev, addr, len);
+ 
+     if (addr >= PCI_CONFIG_HEADER_SIZE) {
+-        info_report("gpupv-render: config read  0x%02x/%d = 0x%x",
+-                    addr, len, val);
++        gpupv_render_trace("read ", addr, len, val);
+     }
+     return val;
+ }
+@@ -438,8 +457,7 @@ static void gpupv_render_write(PCIDevice *dev, uint32_t addr, uint32_t val,
+                                int len)
+ {
+     if (addr >= PCI_CONFIG_HEADER_SIZE) {
+-        info_report("gpupv-render: config write 0x%02x/%d = 0x%x",
+-                    addr, len, val);
++        gpupv_render_trace("write", addr, len, val);
+     }
+     if (addr == GPUPV_CFG_VERSION) {
+         stl_le_p(dev->config + GPUPV_CFG_VERSION, val);
+diff --git a/hw/hyperv/hv-timesync.c b/hw/hyperv/hv-timesync.c
+index 2226ba8..d258fcc 100644
+--- a/hw/hyperv/hv-timesync.c
++++ b/hw/hyperv/hv-timesync.c
+@@ -243,7 +243,8 @@ static void read_versions(HvTimeSync *sync, const uint8_t *data, uint32_t size)
+     IcVersion chosen[2];
+ 
+     if (size < sizeof(header) + sizeof(negotiate) + sizeof(chosen)) {
+-        warn_report("hv-timesync: the guest took none of the versions offered");
++        warn_report_once("hv-timesync: the guest took none of the versions "
++                         "offered");
+         return;
+     }
+     memcpy(&header, data, sizeof(header));
+@@ -251,7 +252,8 @@ static void read_versions(HvTimeSync *sync, const uint8_t *data, uint32_t size)
+     memcpy(chosen, data + sizeof(header) + sizeof(negotiate), sizeof(chosen));
+     if (header.status || negotiate.frame_versions != 1 ||
+         negotiate.message_versions != 1) {
+-        warn_report("hv-timesync: the guest took none of the versions offered");
++        warn_report_once("hv-timesync: the guest took none of the versions "
++                         "offered");
+         return;
+     }
+     sync->frame_version = chosen[0];
+-- 
+2.56.1
+

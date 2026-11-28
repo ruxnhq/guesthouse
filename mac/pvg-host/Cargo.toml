@@ -17,6 +17,8 @@ name = "guesthouse-pvg-host"
 path = "src/main.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# One line a client sends, read to a limit.
+guesthouse-basics.workspace = true
 # The device, and the guard on what the guest says to it.
 guesthouse-pvg-sys.workspace = true
 # recvmsg for the files QEMU hands over, mmap for the guest's memory in them, and poll.

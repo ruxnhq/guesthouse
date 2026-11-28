@@ -201,6 +201,8 @@ mod copy_bounds;
 mod failing;
 mod first_lock;
 mod frame_ring;
+mod freeing;
+mod handles;
 mod indirect;
 
 mod dispatch {
@@ -2378,6 +2380,41 @@ mod queues {
         set_u32(&mut request, 0x18, 1);
         request.extend_from_slice(&mutex.to_le_bytes());
         assert_eq!(status_of(&send(session, &request)), SUCCESS);
+    }
+
+    #[test]
+    fn made_and_destroyed_sync_objects_leave_nothing_in_the_table() {
+        let mut session = session();
+        for _ in 0..1000 {
+            let mutex = create_mutex(&mut session);
+            destroy_sync(&mut session, mutex);
+        }
+        assert_eq!(session.sync_objects.handles(), 0);
+        assert!(session.sync_objects.places() <= 1);
+    }
+
+    #[test]
+    fn sync_objects_stop_at_a_limit_and_a_destroy_makes_room() {
+        use super::super::sync::MOST_SYNC_HANDLES;
+        let mut session = session();
+        let first = create_mutex(&mut session);
+        for _ in 1..MOST_SYNC_HANDLES {
+            create_mutex(&mut session);
+        }
+        let mut request = message(Command::CreateSyncObject, 0x30);
+        set_u32(&mut request, 0x20, guesthouse_messages::sync::KIND_MUTEX);
+        assert_ne!(status_of(&send(&mut session, &request)), SUCCESS);
+        assert_eq!(session.sync_objects.handles(), MOST_SYNC_HANDLES);
+        destroy_sync(&mut session, first);
+        assert_ne!(u32_at(&send(&mut session, &request), 0), Ok(0));
+    }
+
+    #[test]
+    fn a_process_that_ends_takes_its_sync_objects_with_it() {
+        let mut session = session();
+        let mutex = create_mutex(&mut session);
+        send(&mut session, &message(Command::DestroyProcess, HEADER_SIZE));
+        assert!(session.sync_objects.get(mutex).is_none());
     }
 
     #[test]

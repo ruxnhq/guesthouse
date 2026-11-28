@@ -425,6 +425,20 @@ test_a_machine_with_options_is_q35_too() {
     said "ok       VM 101: Windows with the GPU, 8 GiB, slot 1."
 }
 
+test_guesthouse_check_runs_in_a_session_of_its_own() {
+    cat >"$R/home/alice/.local/lib/guesthouse/0.10.0/guesthouse-check" <<EOF2
+#!/bin/sh
+session=\$(sed 's/^[^)]*) //' /proc/self/stat | cut -d' ' -f4)
+if [ "\$session" = "$(sed 's/^[^)]*) //' /proc/$$/stat | cut -d' ' -f4)" ]; then
+    printf 'check\tfailed\tSession\tIt shares the session of the script that ran it.\t\n'
+else
+    printf 'check\tok\tSession\tIt has a session of its own.\t\n'
+fi
+EOF2
+    run_check
+    said "guesthouse-check: Session: It has a session of its own."
+}
+
 test_guesthouse_checks_empty_fields_keep_their_places() {
     printf '#!/bin/sh\nprintf "check\\twarning\\tDisk\\t\\tFree some room.\\n"\n' >"$R/home/alice/.local/lib/guesthouse/0.10.0/guesthouse-check"
     run_check

@@ -152,6 +152,17 @@ impl Syncobj {
         self.handle
     }
 
+    /// Another name for the same object, to ask about it. It is never destroyed through this name.
+    pub fn alias(&self) -> Self {
+        Self { handle: self.handle }
+    }
+
+    /// A handle no kernel made, for a test.
+    #[cfg(test)]
+    pub fn made_up(handle: u32) -> Self {
+        Self { handle }
+    }
+
     /// Arms an eventfd that becomes readable when this sync object is signalled. The eventfd is the
     /// event source the backend trait does not have today.
     pub fn arm_eventfd(&self, file: &impl AsRawFd) -> io::Result<OwnedFd> {

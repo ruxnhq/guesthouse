@@ -14,7 +14,7 @@
 //! tells an answer that may be lost from one the guest wrote.
 
 use crate::events::{Event, Sink};
-use crate::printable::printable;
+use crate::printable::{LINE_LIMIT, printable};
 use guesthouse_remote_view_core::ctl::Words;
 use guesthouse_remote_view_core::ctl_wire::{self, Answer, Failure, Id, Progress, Reassembly};
 use guesthouse_remote_view_core::session::{self, Unanswered};
@@ -337,7 +337,10 @@ impl Drop for Asking<'_> {
 pub fn read_lines(source: impl Read, on_line: &mut impl FnMut(&str), sink: &dyn Sink, ctl: &GuestCtl) {
     let mut source = BufReader::new(source);
     let mut line = Vec::new();
-    while source.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+    // `take` so a guest that never ends a line can't make this hold more than the limit; the rest of
+    // a longer line comes as the next one.
+    while source.by_ref().take(LINE_LIMIT as u64 + 1).read_until(b'\n', &mut line).is_ok_and(|read| read > 0)
+    {
         let text = printable(&line);
         line.clear();
         if ctl.take_line(&text) {

@@ -171,6 +171,52 @@ fn a_gpu_machine_starts_through_the_same_host_and_sets_up_its_desktop() {
     assert!(asked[4].2.contains("New-ScheduledTaskPrincipal"), "and runs in the user's session");
 }
 
+/// A guest made before its folder had rights of its own gets them at its next start, as soon as the
+/// agent answers, and a script for the user's session writes only to the file SYSTEM made for it.
+#[test]
+fn a_start_puts_the_guest_folders_rights_right_first() {
+    let scratch = Scratch::new();
+    let mut context = plain_task_context(&scratch);
+    scratch.write("program/guest/display.ps1", "what the session sees");
+    scratch.write("program/guest/guest-rights.ps1", "$account = '@USER@'\nkeep the folder");
+    scratch.write("program/guest/logon-secret.ps1", "move the password");
+    let agent = Arc::new(ScriptedAgent::answering(&[
+        "C:\\gpupv: SYSTEM and administrators only\r\n",
+        "3\n",
+        "gpu working 1\n",
+        "device missing",
+        "",
+        "screen basic 1920x1080 64 hdr 0",
+        "",
+        "screen 1920x1080\n",
+        "",
+        "screen basic 1920x1080 64 hdr 0",
+    ]));
+    context.agent = agent.clone();
+    let vm = machine(&context);
+    let account = vm.account().to_owned();
+    crate::agent::make_token(&context, &vm).unwrap();
+    fs::create_dir_all(context.run_folder(None)).unwrap();
+    with_vm_running(&context);
+    let host = RecordingHost::default();
+    let mut task = Task::new(&context, &host, "start", vm);
+    boot(&mut task).unwrap();
+    assert_eq!(task.error, "");
+    let asked = agent.requests.lock().unwrap();
+    assert_eq!(asked[0].2, format!("move the password\n$account = '{account}'\nkeep the folder"));
+    assert!(asked[2].2.contains("Win32_VideoController"), "{}", asked[2].2);
+    let session = &asked[5].2;
+    assert!(session.contains("New-ScheduledTaskPrincipal"), "{session}");
+    let result = "C:\\gpupv\\cap\\apply-display.txt";
+    let made = session
+        .find(&format!("[IO.File]::WriteAllText('{result}', ''); icacls '{result}' /grant \"${{u}}:(R,W)\""));
+    let run = session.find("Start-ScheduledTask");
+    assert!(made.is_some() && made < run, "{session}");
+    assert!(session.contains(&format!("while((Get-Item {result}).Length -eq 0")), "{session}");
+    let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
+    assert!(log.contains("guest rights: C:\\gpupv: SYSTEM and administrators only"), "{log}");
+}
+
 #[test]
 fn a_start_with_less_ram_gives_the_vm_less_and_the_machine_keeps_its_own() {
     let scratch = Scratch::new();

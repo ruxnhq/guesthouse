@@ -160,6 +160,10 @@ pub mod linux {
     /// The file install.sh makes the guest's administrator from. The guest has the files disk
     /// read-only, so the host takes it off at the first start after the install.
     pub const ACCOUNT: &str = r"guesthouse\account";
+    /// Who besides the loopback may sign in to the guest's sshd with a password, as
+    /// [`super::hosts_file`] writes it:
+    /// `gpu.sh` reads it at every start with `ssh-from.sh`.
+    pub const HOSTS: &str = r"guesthouse\hosts.txt";
     /// Ubuntu's installer's answer file, which the host takes off with the account, so the installed
     /// system never takes it for its own.
     pub const USER_DATA: &str = "user-data";
@@ -168,7 +172,7 @@ pub mod linux {
 
     /// Files written to the files disk, by their path on it. The boot menu is in each place
     /// Ubuntu's GRUB may look for it, by the folder it started from or by its own search.
-    pub const FILES: [(&str, &str); 18] = [
+    pub const FILES: [(&str, &str); 19] = [
         (r"EFI\BOOT\grub.cfg", GRUB),
         (r"EFI\ubuntu\grub.cfg", GRUB),
         (r"boot\grub\grub.cfg", GRUB),
@@ -187,6 +191,7 @@ pub mod linux {
         (r"guesthouse\guesthouse-ssh.socket", include_str!("../guest/linux/guesthouse-ssh.socket")),
         (r"guesthouse\guesthouse-ssh.service", include_str!("../guest/linux/guesthouse-ssh.service")),
         (r"guesthouse\guesthouse-hv_sock.conf", include_str!("../guest/linux/guesthouse-hv_sock.conf")),
+        (r"guesthouse\ssh-from.sh", include_str!("../guest/linux/ssh-from.sh")),
         (r"guesthouse\dxgkrnl\build.sh", include_str!("../guest/linux/dxgkrnl/build.sh")),
         (r"guesthouse\dxgkrnl\Kbuild", include_str!("../guest/linux/dxgkrnl/Kbuild")),
         (
@@ -246,6 +251,141 @@ mod linux_tests {
 
     fn file(name: &str) -> &'static str {
         FILES.iter().find(|(path, _)| path.ends_with(name)).unwrap().1
+    }
+
+    /// What ssh-from.sh prints for this hosts file and these gateways, run by `sh` as gpu.sh runs
+    /// it. None where there is no `sh`.
+    #[cfg(unix)]
+    fn ssh_from(hosts: Option<&str>, gateways: &[&str]) -> Option<String> {
+        let folder =
+            std::env::temp_dir().join(format!("gh-ssh-from-{}-{}", std::process::id(), next_number()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let script = folder.join("ssh-from.sh");
+        std::fs::write(&script, unix_text(file("ssh-from.sh"))).unwrap();
+        let hosts_file = folder.join("hosts.txt");
+        if let Some(text) = hosts {
+            std::fs::write(&hosts_file, text).unwrap();
+        }
+        let ran = std::process::Command::new("sh").arg(&script).arg(&hosts_file).args(gateways).output();
+        let _ = std::fs::remove_dir_all(&folder);
+        let ran = ran.ok()?;
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        Some(String::from_utf8(ran.stdout).unwrap())
+    }
+
+    #[cfg(unix)]
+    fn next_number() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// The addresses ssh-from.sh takes a password from: every other one takes keys only.
+    #[cfg(unix)]
+    fn only_from(said: &str) -> Vec<String> {
+        let line = said.lines().find_map(|line| line.strip_prefix("Match Address *,!")).unwrap_or_default();
+        assert!(
+            said.contains("\n    PasswordAuthentication no\n    KbdInteractiveAuthentication no\n"),
+            "{said}"
+        );
+        line.split(",!").map(str::to_owned).collect()
+    }
+
+    /// An Ubuntu guest's sshd takes a password from the loopback, where the host's relay over a
+    /// Hyper-V socket arrives, and from this PC: its addresses, and on the shared network the guest's
+    /// gateway, which is where a port forward and this PC's own SSH to the guest's address come from.
+    /// A bridged guest's gateway is its router, which isn't this PC.
+    #[cfg(unix)]
+    #[test]
+    fn ssh_takes_a_password_only_from_the_loopback_and_this_pc() {
+        let Some(said) = ssh_from(Some("shared\r\n192.168.1.20\r\nnot one; rm -rf /\r\n"), &["172.29.1.1"])
+        else {
+            return;
+        };
+        assert_eq!(only_from(&said), ["127.0.0.1", "::1", "192.168.1.20", "172.29.1.1"]);
+        let bridged = ssh_from(Some("bridged\n192.168.1.20\n100.64.1.2\n"), &["192.168.1.1"]).unwrap();
+        assert_eq!(only_from(&bridged), ["127.0.0.1", "::1", "192.168.1.20", "100.64.1.2"]);
+    }
+
+    /// With no address of this PC's known, only the loopback takes a password, so the relay still
+    /// works.
+    #[cfg(unix)]
+    #[test]
+    fn with_no_address_known_ssh_takes_a_password_from_the_loopback_alone() {
+        for hosts in [None, Some(""), Some("bridged\n"), Some("tunnel\n192.168.1.20\n")] {
+            let Some(said) = ssh_from(hosts, &["192.168.1.1"]) else { return };
+            assert_eq!(only_from(&said), ["127.0.0.1", "::1"], "{hosts:?}");
+        }
+    }
+
+    /// sshd itself, where this PC has one, reads the settings as meant: the loopback and this PC may
+    /// use a password, any other address keys only, even with a file read after it that turns
+    /// passwords on, as Ubuntu's `50-cloud-init.conf` does.
+    #[cfg(unix)]
+    #[test]
+    fn sshd_takes_passwords_from_this_pc_alone_and_keys_from_anywhere() {
+        let sshd = std::path::Path::new("/usr/sbin/sshd");
+        let Some(said) = ssh_from(Some("shared\n192.168.1.20\n"), &["172.29.1.1"]).filter(|_| sshd.is_file())
+        else {
+            return;
+        };
+        let folder = std::env::temp_dir().join(format!("gh-sshd-{}-{}", std::process::id(), next_number()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let key = folder.join("key");
+        let made = std::process::Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&key)
+            .output();
+        if !made.is_ok_and(|made| made.status.success()) {
+            let _ = std::fs::remove_dir_all(&folder);
+            return;
+        }
+        let drop_ins = folder.join("sshd_config.d");
+        std::fs::create_dir_all(&drop_ins).unwrap();
+        std::fs::write(drop_ins.join("10-guesthouse-from.conf"), &said).unwrap();
+        std::fs::write(drop_ins.join("50-cloud-init.conf"), "PasswordAuthentication yes\n").unwrap();
+        let config = folder.join("sshd_config");
+        std::fs::write(
+            &config,
+            format!(
+                "Include {}/*.conf\nHostKey {}\nKbdInteractiveAuthentication yes\nUsePAM no\n",
+                drop_ins.display(),
+                key.display()
+            ),
+        )
+        .unwrap();
+        let settings = |address: &str| {
+            let ran = std::process::Command::new(sshd)
+                .arg("-T")
+                .arg("-f")
+                .arg(&config)
+                .arg("-C")
+                .arg(format!("user=guesthouse,host=pc,addr={address}"))
+                .output()
+                .unwrap();
+            assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+            let said = String::from_utf8_lossy(&ran.stdout).to_lowercase();
+            ["passwordauthentication", "kbdinteractiveauthentication", "pubkeyauthentication"]
+                .map(|name| said.lines().any(|line| line == format!("{name} yes")))
+        };
+        let answers: Vec<[bool; 3]> =
+            ["127.0.0.1", "::1", "192.168.1.20", "172.29.1.1", "192.168.1.77", "fe80::5"]
+                .into_iter()
+                .map(settings)
+                .collect();
+        let _ = std::fs::remove_dir_all(&folder);
+        let password = [true, true, true];
+        let keys_only = [false, false, true];
+        assert_eq!(answers, [password, password, password, password, keys_only, keys_only]);
+    }
+
+    #[test]
+    fn gpu_sh_keeps_who_may_use_a_password_from_the_hosts_file() {
+        let gpu = file("gpu.sh");
+        assert!(gpu.contains(&format!("\"$files/{}\"", HOSTS.replace('\\', "/"))), "{gpu}");
+        assert!(gpu.contains("sh \"$here/ssh-from.sh\""));
+        assert!(gpu.contains("ssh_from=/etc/ssh/sshd_config.d/10-guesthouse-from.conf"));
+        assert!(gpu.contains("if said=$(sshd -t 2>&1); then"), "settings sshd won't read are never kept");
     }
 
     #[test]

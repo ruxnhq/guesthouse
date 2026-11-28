@@ -152,7 +152,14 @@ fn run(
             sink.as_ref(),
         )?,
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref(), &shares, record.installed, sink.as_ref())?;
+            linux::refresh_disk(
+                &files_disk(&disk),
+                card.as_ref(),
+                &shares,
+                record.installed,
+                hosts.as_deref(),
+                sink.as_ref(),
+            )?;
             if !record.installed {
                 sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }

@@ -155,6 +155,9 @@ pub struct Session<B, M> {
     /// a creation that hands it back is known for one of them.
     pub(crate) standard_data: VecDeque<(Vec<u8>, AllocationShape)>,
     pub(crate) resources: HashMap<u32, Vec<u32>>,
+    /// Resources made to be shared by a global handle, which is the resource's own: only these open
+    /// by it. Others open through a shared object.
+    pub(crate) global_shares: HashSet<u32>,
     /// Users of a resource, when more than the process that made it.
     pub(crate) resource_users: HashMap<u32, u32>,
     /// Shared handle to the object behind it.
@@ -285,6 +288,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             resources: HashMap::new(),
             resource_users: HashMap::new(),
             shared_objects: HashMap::new(),
+            global_shares: HashSet::new(),
             sync_objects: SyncTable::new(),
             paging_queues: HashMap::new(),
             queue_progress: HashMap::new(),

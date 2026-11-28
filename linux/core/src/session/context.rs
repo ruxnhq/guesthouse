@@ -122,6 +122,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.run_deferred();
         self.free_allocations(handles);
         self.resources.clear();
+        self.global_shares.clear();
         self.resource_users.clear();
         self.shared_objects.clear();
         processes.into_iter().for_each(|process| self.end_process(process));

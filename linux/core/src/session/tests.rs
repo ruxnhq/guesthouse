@@ -206,7 +206,6 @@ mod handles;
 mod indirect;
 mod map_bounds;
 mod opening;
-mod restart;
 mod ring_owner;
 mod state_limits;
 mod video_guard;

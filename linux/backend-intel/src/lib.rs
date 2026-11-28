@@ -49,6 +49,8 @@ pub mod work;
 pub mod xe;
 pub mod xe_query;
 
+use stage::self_test_verdict;
+
 use books::Books;
 use card::CardFacts;
 use generation::Generation;
@@ -417,23 +419,6 @@ fn render_keying(card: &CardFacts, summary: &xe::selftest::Summary) -> Keying {
     } else {
         Keying::BindingIndex
     }
-}
-
-/// Whether the self-test lets the guest's work on the card: every step work needs passed. A failed
-/// step work does without, such as a video engine, the clock or the cleanup, is a warning only.
-fn self_test_verdict(summary: &xe::selftest::Summary) -> Result<(), Fallback> {
-    let needed = summary.failed_that_work_needs();
-    if !needed.is_empty() {
-        return Err(Fallback::SelfTestFailed(needed));
-    }
-    let spared = summary.failed_that_work_does_without();
-    if !spared.is_empty() {
-        log::warn!(
-            "{PREFIX} self-test: {} failed, which the guest's work doesn't need, so it runs on the card all the same",
-            spared.join(", ")
-        );
-    }
-    Ok(())
 }
 
 /// The facts of a card recorded elsewhere, for a lab run on a PC without it. The guest must have
@@ -1045,6 +1030,10 @@ impl Backend for IntelBackend {
     /// From xe's timelines, which only the kernel signals. While listening nothing reaches the card.
     fn work_ended(&mut self) -> u64 {
         self.work.as_mut().map_or(0, CardWork::runs_ended)
+    }
+
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.work.as_mut()?.take_fault()
     }
 
     fn close_queue(&mut self, queue: u32) {

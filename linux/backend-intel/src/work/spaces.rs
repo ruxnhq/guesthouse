@@ -408,6 +408,7 @@ impl CardWork {
             && !found.failed
         {
             found.failed = true;
+            self.faults.push_back(space);
             log::warn!(
                 "intel work: space {space:?} runs nothing more: {why}. Its guest process loses its device; \
                  the others go on"

@@ -152,3 +152,18 @@ fn a_batch_is_looked_at_again_only_by_its_last_few_kilobytes() {
     let found = rig.work.ending(&mut rig.host, space, long).unwrap();
     assert_eq!(found, Ending::RunsOn, "a megabyte is not read to find the chain");
 }
+
+#[test]
+fn a_space_whose_work_xe_ended_is_handed_to_the_core_once() {
+    let mut rig = Rig::new(Stage::Everything);
+    let mut dwords = batch::store_qword(0x9_0000_0000, 1).to_vec();
+    dwords.push(batch::BATCH_END);
+    rig.write_batch(&dwords);
+    let work = rig.submission(1, 5);
+    let WorkStart::Started { doorbell, .. } = rig.start(&work) else { panic!() };
+    rig.work.ring_doorbell(doorbell).unwrap();
+    assert_eq!(rig.work.take_fault(), None);
+    rig.poll();
+    assert_eq!(rig.work.take_fault(), Some(rig.space));
+    assert_eq!(rig.work.take_fault(), None);
+}

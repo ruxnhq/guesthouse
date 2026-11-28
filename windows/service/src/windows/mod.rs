@@ -79,6 +79,10 @@ impl Work for HostWork {
         security::owner_of(path)
     }
 
+    fn profiles(&self) -> Vec<String> {
+        security::profiles()
+    }
+
     fn console_access(&self, owner: Option<&str>) -> Vec<String> {
         owner.map(str::to_owned).into_iter().chain([security::ADMINISTRATORS.to_owned()]).collect()
     }

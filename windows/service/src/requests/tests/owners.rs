@@ -224,3 +224,23 @@ fn report_as(setup: &Setup, user: &str) -> Report {
     }
     (parts.files, parts.missing, answers)
 }
+
+/// Windows' own profiles, which every PC keeps: the system's and two services'.
+fn windows_own() -> Vec<String> {
+    ["S-1-5-18", "S-1-5-19", "S-1-5-20"].map(String::from).to_vec()
+}
+
+#[test]
+fn a_pcs_one_user_takes_a_waiting_machine_and_with_two_users_it_waits() {
+    let one = setup("owners-one-user", Pretend::default());
+    let profiles = [windows_own(), vec![SOMEONE_ELSE.to_owned()]].concat();
+    let (store, service) = old_machine(&one, |_| Pretend { profiles, ..Pretend::default() });
+    assert_eq!(names_listed(&service, SOMEONE_ELSE, false), ["old"], "a standard user, the PC's one");
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(SOMEONE_ELSE));
+
+    let two = setup("owners-two-users", Pretend::default());
+    let profiles = [windows_own(), vec![SOMEONE_ELSE.to_owned(), "S-1-5-21-1-2-3-1003".to_owned()]].concat();
+    let (store, service) = old_machine(&two, |_| Pretend { profiles, ..Pretend::default() });
+    assert!(names_listed(&service, SOMEONE_ELSE, false).is_empty(), "one of two standard users");
+    assert_eq!(store.load()[0].1.owner, None);
+}

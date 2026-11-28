@@ -705,6 +705,9 @@ mod tests {
         fn files_owner(&self, _: &Path) -> Option<String> {
             None
         }
+        fn profiles(&self) -> Vec<String> {
+            Vec::new()
+        }
         fn console_access(&self, _: Option<&str>) -> Vec<String> {
             Vec::new()
         }

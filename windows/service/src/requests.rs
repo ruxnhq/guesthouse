@@ -67,6 +67,8 @@ pub trait Work: Send + Sync + 'static {
     fn end(&self, id: &str);
     /// The owner of the file or folder at `path`, as a SID.
     fn files_owner(&self, path: &Path) -> Option<String>;
+    /// The accounts this PC keeps a profile for, as SIDs, Windows' own among them.
+    fn profiles(&self) -> Vec<String>;
     /// Who may open a machine's console: its owner, if it has one, and administrators.
     fn console_access(&self, owner: Option<&str>) -> Vec<String>;
     /// Lets a stopped machine's disk grow to `size_gb`, and never shrinks it.

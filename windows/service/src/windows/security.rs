@@ -199,6 +199,45 @@ pub fn owner_of(path: &std::path::Path) -> Option<String> {
     found
 }
 
+/// The names of the profiles Windows keeps, each the SID of the account it's for: users', and the
+/// system's and services' too.
+pub fn profiles() -> Vec<String> {
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegCloseKey, RegEnumKeyExW, RegOpenKeyExW,
+    };
+    let path = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
+    let mut key: HKEY = null_mut();
+    // SAFETY: the path ends in a zero, and the key comes back in a place for it, closed below.
+    if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.as_ptr(), 0, KEY_READ, &mut key) } != 0 {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for index in 0.. {
+        let mut name = [0u16; 256];
+        let mut length = name.len() as u32;
+        // SAFETY: the key is open, and the name's buffer is as long as said.
+        let read = unsafe {
+            RegEnumKeyExW(
+                key,
+                index,
+                name.as_mut_ptr(),
+                &mut length,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        if read != 0 {
+            break;
+        }
+        found.push(String::from_utf16_lossy(&name[..length as usize]));
+    }
+    // SAFETY: opened above, and not used after this.
+    unsafe { RegCloseKey(key) };
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +252,13 @@ mod tests {
         let windows = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap();
         let theirs = owner_of(&windows.join("System32")).unwrap();
         assert!(!theirs.starts_with("S-1-5-21-"), "{theirs}");
+    }
+
+    #[test]
+    fn the_profiles_are_the_systems_and_this_users_among_others() {
+        let found = profiles();
+        assert!(found.iter().any(|sid| sid == SYSTEM), "{found:?}");
+        let me = own_user().unwrap();
+        assert!(found.contains(&me), "{me} in {found:?}");
     }
 }

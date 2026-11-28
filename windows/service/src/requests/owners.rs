@@ -6,9 +6,9 @@
 //! A machine made before owners were kept has none, and one rule gives it one. As the service
 //! starts, the owner of the machine's own folder, then of its disk, is its owner if that's a user's
 //! account, not the system's, the Administrators group's or another of Windows' own. A machine
-//! whose files name no user waits for an administrator: an administrator's account asking as
-//! itself, unelevated as the app runs, takes every machine still waiting, saved before it's
-//! answered, and nobody else sees one. An elevated administrator sees them all without taking any.
+//! whose files name no user waits: an administrator's account asking as itself, unelevated as the
+//! app runs, takes every machine still waiting, saved before it's answered, and so does the one
+//! user of a PC that keeps a profile for one user's account alone. Nobody else sees one. An elevated administrator sees them all without taking any.
 //! An administrator can give a machine to another user by changing `owner` in its `machine.json`.
 
 use super::{Service, Work};
@@ -88,10 +88,13 @@ pub fn named(request: &Request) -> Option<&str> {
 }
 
 impl<W: Work> Service<W> {
-    /// Gives `asker` every machine that has no owner, if their account is an administrator's and
-    /// they ask as themselves, saving each before anything else is done.
+    /// Gives `asker` every machine that has no owner, if they ask as themselves and their account
+    /// is an administrator's or this PC's one user's, saving each before anything else is done.
     pub(super) fn take_unowned(&self, asker: &Asker) {
-        if asker.administrator || !asker.administrators_account {
+        if asker.administrator || !self.machines.lock().values().any(|entry| entry.settings.owner.is_none()) {
+            return;
+        }
+        if !asker.administrators_account && !self.the_one_user(&asker.user) {
             return;
         }
         let mut entries = self.machines.lock();
@@ -106,6 +109,13 @@ impl<W: Work> Service<W> {
                 Err(error) => self.work.log(&format!("{name}'s owner couldn't be saved: {error}")),
             }
         }
+    }
+
+    /// Whether `user` is the one user this PC keeps a profile for.
+    fn the_one_user(&self, user: &str) -> bool {
+        let profiles = self.work.profiles();
+        let users: Vec<&String> = profiles.iter().filter(|sid| a_users(sid)).collect();
+        users == [user]
     }
 
     /// Whether the machine asked for as `asked` is one `asker` may use. One they may not is as if it

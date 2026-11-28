@@ -117,6 +117,7 @@ targets:
       - App/LocalNetwork.swift
       - App/PresenterPace.swift
       - App/Wording.swift
+      - Shared/CodeRequirement.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ruxn.guesthouse.tests

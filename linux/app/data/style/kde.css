@@ -71,6 +71,10 @@ list.machine-list > row:selected > .machine-card.compact {
 }
 
 /* KWin's buttons: plain glyphs, the close one red under the pointer. */
+window.csd {
+  border-radius: 6px;
+}
+
 windowcontrols > button > image {
   padding: 5px;
   background: none;

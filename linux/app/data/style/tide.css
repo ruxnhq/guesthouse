@@ -63,9 +63,11 @@ list.machine-list > row {
   box-shadow: none;
 }
 
+/* The chosen machine is ringed by an outline, which leaves the shadow to how the machine stands. */
 list.machine-list > row:selected > .machine-card.compact {
   background-color: alpha(@window_fg_color, 0.07);
-  box-shadow: 0 0 0 2px @accent_bg_color;
+  outline: 2px solid @accent_bg_color;
+  outline-offset: 2px;
 }
 
 .machine-card.compact .machine-thumbnail {
@@ -98,12 +100,6 @@ list.machine-list > row:selected > .machine-card.compact {
 .machine-card.running {
   box-shadow: inset 0 0 0 1px alpha(@tide_teal, 0.35);
   animation: tide-stir 2.4s ease-in-out infinite;
-}
-
-list.machine-list > row:selected > .machine-card.compact.running {
-  box-shadow:
-    0 0 0 2px @accent_bg_color,
-    inset 0 0 0 1px alpha(@tide_teal, 0.35);
 }
 
 @keyframes tide-stir {

@@ -34,6 +34,11 @@ pub fn has_bar(drawn: Drawn, tiled: bool, desktop_tiles: bool) -> bool {
     drawn != Drawn::Tide || !(tiled || desktop_tiles)
 }
 
+/// Whether a layout of the window's buttons, like `icon:minimize,close`, shows the app's icon.
+fn shows_icon(layout: &str) -> bool {
+    layout.split([':', ',']).any(|button| button.trim() == "icon")
+}
+
 /// Whether the cards are lines of a sidebar in the look that draws the app now.
 pub fn compact_cards() -> bool {
     arrangement(theme::drawn()) == Arrangement::Sidebar
@@ -62,6 +67,8 @@ impl Window {
             card.set_compact(arrangement == Arrangement::Sidebar);
         }
         self.0.library.set_bar_shown(self.has_bar());
+        let layout = gtk::Settings::default().and_then(|settings| settings.gtk_decoration_layout());
+        self.0.library.set_brand_icon_shown(!layout.is_some_and(|layout| shows_icon(&layout)));
         if let Some(page) = self.0.screen_page.borrow().as_ref() {
             page.follow_look();
         }
@@ -92,6 +99,13 @@ mod tests {
         let half =
             gdk::ToplevelState::TOP_TILED | gdk::ToplevelState::BOTTOM_TILED | gdk::ToplevelState::LEFT_TILED;
         assert!(!is_tiled(half));
+    }
+
+    #[test]
+    fn an_icon_in_the_buttons_is_seen() {
+        assert!(shows_icon("icon:minimize,maximize,close"));
+        assert!(!shows_icon(":minimize,maximize,close"));
+        assert!(!shows_icon("appmenu:close"));
     }
 
     #[test]

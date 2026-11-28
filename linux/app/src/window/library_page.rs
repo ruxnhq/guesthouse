@@ -49,6 +49,8 @@ pub struct LibraryPage {
     problems: gtk::Label,
     stack: gtk::Stack,
     header: adw::HeaderBar,
+    /// The app's name in the bar.
+    brand: gtk::Box,
     add: gtk::Button,
     start: gtk::Button,
     update: adw::Banner,
@@ -74,7 +76,7 @@ fn detach(widget: &impl IsA<gtk::Widget>) {
     }
 }
 
-/// The app's name and version, where a title would be.
+/// The app's name and version, where a title would be. The icon is the first child.
 fn brand() -> gtk::Box {
     let name = gtk::Label::new(Some("Guesthouse"));
     name.add_css_class("brand");
@@ -150,7 +152,8 @@ impl LibraryPage {
             .build();
         let header = adw::HeaderBar::new();
         header.set_title_widget(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
-        header.pack_start(&brand());
+        let header_brand = brand();
+        header.pack_start(&header_brand);
         let menu = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .primary(true)
@@ -177,6 +180,7 @@ impl LibraryPage {
             problems,
             stack,
             header,
+            brand: header_brand,
             add,
             start,
             update,
@@ -231,6 +235,15 @@ impl LibraryPage {
         match self.arrangement.get() {
             Arrangement::Rail => self.rail.append(card),
             Arrangement::Sidebar => self.sidebar.list.append(card),
+        }
+    }
+
+    /// Leaves the app's icon out of the bar when the window's buttons already show it, as KWin's
+    /// layout does.
+    pub fn set_brand_icon_shown(&self, shown: bool) {
+        let brand = self.brand.first_child();
+        if let Some(icon) = brand {
+            icon.set_visible(shown);
         }
     }
 

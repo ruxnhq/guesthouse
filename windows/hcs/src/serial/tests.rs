@@ -15,7 +15,7 @@ use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread, OpenThreadToken};
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 /// A pipe name no other test, or run, has.
 fn pipe_name() -> String {
@@ -166,4 +166,39 @@ fn each_boot_has_pipe_names_of_its_own() {
     assert_eq!(one.len(), 2 * TAG_BYTES);
     assert!(one.chars().all(|c| c.is_ascii_hexdigit()));
     assert_ne!(one, two);
+}
+
+/// The ID of a process the system runs that isn't this one: services.exe, which every Windows has.
+fn a_system_process() -> u32 {
+    // SAFETY: plain call; the snapshot is closed below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    // SAFETY: a zeroed entry is a valid one to fill, once its size is said.
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let mut found = None;
+    // SAFETY: the snapshot is open and the entry says its size.
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while more && found.is_none() {
+        let length = entry.szExeFile.iter().position(|&unit| unit == 0).unwrap();
+        if String::from_utf16_lossy(&entry.szExeFile[..length]).eq_ignore_ascii_case("services.exe") {
+            found = Some(entry.th32ProcessID);
+        }
+        // SAFETY: as above.
+        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+    // SAFETY: ours, and not used again.
+    unsafe { CloseHandle(snapshot) };
+    found.expect("services.exe runs")
+}
+
+/// An account this process may not read is read again as the system: an administrator reads it,
+/// and a standard user, who can't take on the system's identity, is told so and not let through.
+#[test]
+fn an_account_this_process_may_not_read_is_read_as_the_system() {
+    match process_account(a_system_process()) {
+        Ok(account) => assert_eq!(account, SYSTEM_SID),
+        Err(error) => {
+            assert!(error.to_string().contains("the system's identity couldn't be taken on"), "{error}")
+        }
+    }
 }

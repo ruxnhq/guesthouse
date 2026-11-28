@@ -627,6 +627,9 @@ mod tests {
         fn port_free(&self, _: u16) -> bool {
             false
         }
+        fn card_at(&self, _: std::net::Ipv4Addr) -> Result<String, String> {
+            Err("no network".into())
+        }
         fn ip_helper_running(&self) -> bool {
             false
         }

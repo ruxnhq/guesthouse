@@ -164,6 +164,8 @@ pub struct Service<W: Work> {
     sessions: Sessions,
     /// Each machine's pairing is driven one step at a time.
     driving: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
+    /// What was found of each machine's guest's address, by the card that answers there.
+    checked: Mutex<std::collections::HashMap<String, guest_address::Checked>>,
 }
 
 impl<W: Work> Service<W> {
@@ -211,6 +213,7 @@ impl<W: Work> Service<W> {
             switching: Mutex::new(()),
             sessions: Sessions::default(),
             driving: Mutex::default(),
+            checked: Mutex::default(),
         });
         // Port forwards a stopped service left behind are no use to anyone, and hold their ports.
         // Listing the firewall's rules takes seconds, and the service manager is waiting for the
@@ -1639,6 +1642,7 @@ mod size_words_tests;
 
 mod disk_tree;
 mod forwards;
+mod guest_address;
 mod hyper_v;
 mod owners;
 mod pairing;

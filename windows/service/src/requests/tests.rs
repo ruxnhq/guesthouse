@@ -147,11 +147,12 @@ impl Work for Pretend {
         fs::write(&settings.disk, b"disk").unwrap();
         fs::write(settings.disk.with_extension("account.txt"), "user: guesthouse\npassword: secret\n")
             .unwrap();
+        // Its card is chosen as a first boot chooses it, and kept in its record.
+        let mut record = Record { mac: Some(network::GUEST_CARD.into()), ..Record::default() };
         if let Some(installer) = &self.linux_installer {
-            let record =
-                Record { guest: Guest::Linux, installer: Some(installer.clone()), ..Record::default() };
-            record.save(&settings.disk).unwrap();
+            record = Record { guest: Guest::Linux, installer: Some(installer.clone()), ..record };
         }
+        record.save(&settings.disk).unwrap();
         Ok(())
     }
 
@@ -983,7 +984,7 @@ fn turning_the_network_off_forgets_the_guests_address() {
 fn set_up(setup: &Setup, name: &str) {
     ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
     let disk = setup.service.machines().store.disk(name);
-    Record { installed: true, ..Record::default() }.save(&disk).unwrap();
+    Record { installed: true, ..Record::load(&disk).unwrap() }.save(&disk).unwrap();
 }
 
 /// Waits for the service to finish what it's doing to a machine in the background.
@@ -1136,11 +1137,19 @@ fn a_report_for_a_machine_adds_only_its_allowed_files() {
     let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
-        ["service.log", "windows.txt", "machines.txt", "machine.json", "snapshots/index.json", "events.log"]
+        [
+            "service.log",
+            "windows.txt",
+            "machines.txt",
+            "machine.json",
+            "win.guesthouse.json",
+            "snapshots/index.json",
+            "events.log"
+        ]
     );
     assert!(files.iter().any(|(name, text)| name == "events.log" && text.contains("UTC note one")));
     let missing: Vec<&str> = missing.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(missing, ["crashes.txt", "win.guesthouse.json", "events.1.log"], "each is optional");
+    assert_eq!(missing, ["crashes.txt", "events.1.log"], "each is optional");
     let everything = format!("{files:?}");
     for secret in ["hunter2", "PRIVATE KEY", "account", "screen", "installer", "1.vhdx"] {
         assert!(!everything.contains(secret), "{secret} was handed over");
@@ -1187,22 +1196,6 @@ fn a_large_file_comes_in_pieces_a_line_can_hold_and_only_its_end() {
     assert!(text.len() <= 2 * 1024 * 1024 + 64);
 }
 
-#[test]
-fn a_machine_that_isnt_there_is_refused_before_anything_is_sent() {
-    let setup = setup("report-none", Pretend::default());
-    let answers = ask(&setup.service, Request::ReportFiles { machine: Some("nope".into()) });
-    assert_eq!(answers, [Answer::Refused { reason: "There is no machine called nope.".into() }]);
-}
-
-#[test]
-fn a_report_stops_when_the_window_has_gone() {
-    let setup = setup("report-gone", Pretend::default());
-    let (answers, received) = channel();
-    drop(received);
-    let mut window = Window { answers, readable: true, gone: true };
-    setup.service.answer(Request::ReportFiles { machine: None }, &mut window);
-}
-
 #[cfg(unix)]
 #[test]
 fn a_file_that_is_a_link_is_not_followed() {
@@ -1225,6 +1218,7 @@ mod pairing;
 mod places;
 mod remote_view;
 mod remote_view_ports;
+mod reports;
 mod snapshot_labels;
 mod start_refusals;
 use network::FakeNet;

@@ -18,7 +18,7 @@ const RULE: &str = "Guesthouse remote view win 7792";
 pub(super) fn windows_machine(setup: &Setup, name: &str) {
     ask(&setup.service, Request::Create { machine: new_machine(setup, name) });
     let disk = setup.service.machines().store.disk(name);
-    let record = Record { installed: true, screen: Some(HOST.into()), ..Record::default() };
+    let record = Record { installed: true, screen: Some(HOST.into()), ..Record::load(&disk).unwrap() };
     record.save(&disk).unwrap();
     let client = guesthouse_host_windows::screen::state_beside(&disk).join("client");
     fs::create_dir_all(&client).unwrap();
@@ -289,6 +289,24 @@ fn the_relay_follows_the_guests_address_and_waits_for_this_runs() {
     assert_eq!(shown(service, "win").state, ShareState::Starting);
     service.machines().tell("win", Event::Guest("guesthouse: address: 172.29.1.9".into()));
     wait_view(service, "win", ShareState::Listening);
+    stop(service, "win");
+}
+
+#[test]
+fn the_relay_leads_only_to_an_address_where_the_machines_own_card_answers() {
+    let work = Pretend { net: FakeNet::with(|net| net.elsewhere = vec![THIS_PC]), ..Pretend::default() };
+    let setup = setup("view-card", work);
+    let service = &setup.service;
+    windows_machine(&setup, "win");
+    share(service, "win", Some(true));
+    start_and_run(service, "win");
+    wait_view(service, "win", ShareState::Listening);
+    service.machines().tell("win", Event::Report(format!("address: {THIS_PC}")));
+    wait_view(service, "win", ShareState::Failed);
+    assert!(net(service).views.is_empty());
+    assert!(!net(service).calls.iter().any(|call| call.contains("192.168.1.20")), "{:?}", net(service).calls);
+    let reason = shown(service, "win").reason.unwrap_or_default();
+    assert!(reason.contains("not the machine's"), "{reason}");
     stop(service, "win");
 }
 

@@ -30,7 +30,7 @@ use guesthouse_app_core::context::Context;
 use guesthouse_app_core::gpu_support::{NO_GPU_PART, gpu_ready, what_machines_are};
 use guesthouse_app_core::library::{delete, import_existing, remove_entry};
 use guesthouse_app_core::log::write_log;
-use guesthouse_app_core::machine::{Machine, load_all};
+use guesthouse_app_core::machine::{Machine, load, load_all};
 use guesthouse_app_core::settings::{Fields, read_prefs, write_prefs};
 use guesthouse_app_core::setup::setup_done;
 use guesthouse_app_core::tasks::{launch, slot_of};
@@ -68,6 +68,9 @@ struct Inner {
     vm_running: Cell<bool>,
     host_key_down: Cell<bool>,
     refresh: RefCell<RefreshState>,
+    /// Counts the app's own saves and reads of machine files, so a look begun before one isn't taken
+    /// over what it did.
+    machine_writes: Cell<u64>,
     screen_watch: OnceCell<Option<Rc<screen_hdr::ScreenWatch>>>,
     /// A newer release, once a check has found one.
     newer: RefCell<Option<String>>,
@@ -117,6 +120,7 @@ impl Window {
             vm_running: Cell::new(false),
             host_key_down: Cell::new(false),
             refresh: RefCell::default(),
+            machine_writes: Cell::new(0),
             screen_watch: OnceCell::new(),
             newer: RefCell::default(),
             tray: RefCell::default(),
@@ -393,10 +397,49 @@ impl Window {
         self.refresh();
     }
 
-    pub fn save_machine(&self, machine: &Machine) {
-        if let Err(failure) = machine.save(&self.0.context) {
-            self.problem(&failure.0);
+    /// Saves what the handle has changed, onto the machine as its file has it now, so that a change
+    /// made meanwhile with `guesthouse-vm` or by a task stays. The handle takes the file as saved.
+    pub fn save_machine(&self, handle: &MachineHandle) {
+        let edited = handle.borrow().clone();
+        let Some(card) = self.card(&edited.id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        match edited.save_changes(&self.0.context, &card.known()) {
+            Ok(saved) => {
+                card.set_known(saved.clone());
+                *handle.borrow_mut() = saved;
+            }
+            Err(failure) => self.problem(&failure.0),
         }
+    }
+
+    /// Brings the handle up to the machine's file, keeping what it has changed and not saved, before
+    /// a change that saves it by itself.
+    pub fn catch_up_machine(&self, handle: &MachineHandle) {
+        let id = handle.borrow().id.clone();
+        let Some(card) = self.card(&id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        let Ok(file) = load(&self.0.context, &id) else { return };
+        let caught_up = handle.borrow().caught_up(&card.known(), &file);
+        match caught_up {
+            Ok(machine) => {
+                *handle.borrow_mut() = machine;
+                card.set_known(file);
+            }
+            Err(failure) => self.problem(&failure.0),
+        }
+    }
+
+    /// Notes the machine's file as it is now, after a change that saved it by itself.
+    pub fn machine_saved(&self, id: &str) {
+        let Some(card) = self.card(id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        if let Ok(file) = load(&self.0.context, id) {
+            card.set_known(file);
+        }
+    }
+
+    pub(crate) fn machine_writes(&self) -> u64 {
+        self.0.machine_writes.get()
     }
 
     pub fn remember(&self, fields: Value) {

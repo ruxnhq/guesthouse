@@ -73,6 +73,9 @@ struct Parts {
 pub struct MachineCard {
     window: Window,
     machine: MachineHandle,
+    /// The machine as its file was when the handle was last read from it or saved to it, which says
+    /// what the handle has changed since.
+    known: Rc<RefCell<Machine>>,
     status: Rc<RefCell<Status>>,
     shown: Rc<RefCell<Shown>>,
     parts: Rc<Parts>,
@@ -179,6 +182,7 @@ impl MachineCard {
         let parts = Parts { card, icon, picture, headline, spinner, start, show, apps, open_app };
         let this = Self {
             window: window.clone(),
+            known: Rc::new(RefCell::new(machine.clone())),
             machine: Rc::new(RefCell::new(machine)),
             status: Rc::default(),
             shown: Rc::default(),
@@ -203,6 +207,14 @@ impl MachineCard {
 
     pub fn machine(&self) -> MachineHandle {
         self.machine.clone()
+    }
+
+    pub fn known(&self) -> Machine {
+        self.known.borrow().clone()
+    }
+
+    pub fn set_known(&self, machine: Machine) {
+        *self.known.borrow_mut() = machine;
     }
 
     pub fn status(&self) -> Status {

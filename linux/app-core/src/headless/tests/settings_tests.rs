@@ -371,3 +371,36 @@ fn vendor_id_retry_gets_a_machine_kept_on_microsofts_number_tried_again() {
     );
     assert_eq!(read_state(&context, &machine), settled);
 }
+
+#[test]
+fn a_change_made_here_stays_when_the_app_saves_one_of_its_own_from_an_older_copy() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    // The app's copy, as it read the machine when it opened.
+    let known = load(&context, "work").unwrap();
+    assert_eq!(said(&context, "set work network none").1, Ok(()));
+    assert_eq!(said(&context, "set work cores 2").1, Ok(()));
+    // Then a switch in the app's viewer, on its copy.
+    let mut copy = known.clone();
+    copy.bar_stays = !known.bar_stays;
+    let saved = copy.save_changes(&context, &known).unwrap();
+    let file = load(&context, "work").unwrap();
+    assert_eq!((file.network_mode, file.cores), (Mode::None, 2), "what was set here stays");
+    assert_eq!(file.bar_stays, !known.bar_stays, "and the app's switch is saved");
+    assert_eq!(saved, file, "the app's copy is the file now");
+}
+
+#[test]
+fn the_apps_copy_catches_up_with_the_file_and_keeps_what_it_has_not_saved() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    make(&context, "work", "Office PC", Kind::Plain);
+    let known = load(&context, "work").unwrap();
+    assert_eq!(said(&context, "set work network none").1, Ok(()));
+    let file = load(&context, "work").unwrap();
+    assert_eq!(known.caught_up(&known, &file).unwrap(), file);
+    let copy = Machine { cores: 3, ..known.clone() };
+    let caught_up = copy.caught_up(&known, &file).unwrap();
+    assert_eq!((caught_up.network_mode, caught_up.cores), (Mode::None, 3));
+}

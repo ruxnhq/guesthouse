@@ -40,6 +40,8 @@ pub struct RefreshState {
     share_looks: Looks,
     /// What the share panel's times count from.
     started: Option<Instant>,
+    /// The window's count of its own machine saves when the look began.
+    writes_at_look: u64,
 }
 
 struct Report {
@@ -138,6 +140,7 @@ impl Window {
         let running_before = state.running_before.clone();
         let share_before = state.share_looks.clone();
         let started = *state.started.get_or_insert_with(Instant::now);
+        state.writes_at_look = self.machine_writes();
         drop(state);
         let machines: Vec<Machine> =
             self.0.cards.borrow().values().map(|row| row.machine().borrow().clone()).collect();
@@ -165,8 +168,10 @@ impl Window {
         }
     }
 
-    /// A task changes these on disk, and a stale copy here would write them back.
+    /// What a task or `guesthouse-vm` saved, into the handles, so they show it. A look that began
+    /// before one of the app's own saves read the files before it, and is left for the next.
     fn take_saved(&self, saved: &[Machine]) {
+        let stale = self.0.refresh.borrow().writes_at_look != self.machine_writes();
         for machine in saved {
             // A task made it, as a copy is: it's only seen once it's whole, and it's still there.
             let made_elsewhere = !self.0.cards.borrow().contains_key(&machine.id)
@@ -174,13 +179,13 @@ impl Window {
             if made_elsewhere {
                 self.add_machine(machine.clone());
             }
-            if let Some(row) = self.0.cards.borrow().get(&machine.id) {
+            if let Some(row) = self.0.cards.borrow().get(&machine.id).filter(|_| !stale) {
                 let handle = row.machine();
-                let mut current = handle.borrow_mut();
-                current.installing = machine.installing;
-                // A terminal or a task can make it a throwaway, or an install an ordinary one again.
-                current.throwaway = machine.throwaway;
-                current.iso.clone_from(&machine.iso);
+                let caught_up = handle.borrow().caught_up(&row.known(), machine);
+                if let Ok(caught_up) = caught_up {
+                    *handle.borrow_mut() = caught_up;
+                    row.set_known(machine.clone());
+                }
             }
         }
     }

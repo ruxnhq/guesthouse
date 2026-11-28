@@ -765,6 +765,13 @@ pub type SettingsChanges = Vec<(String, Option<serde_json::Value>)>;
 /// The settings changed from `before` to `after`, as New Machine's draft of a machine's settings gives
 /// them, to be applied once the machine is made.
 pub fn settings_changes(before: &Machine, after: &Machine) -> SettingsChanges {
+    let mut changes = field_changes(before, after);
+    changes.retain(|(key, _)| !MADE_FIELDS.contains(&key.as_str()));
+    changes
+}
+
+/// Every field changed from `before` to `after`.
+fn field_changes(before: &Machine, after: &Machine) -> SettingsChanges {
     let as_map = |machine: &Machine| match serde_json::to_value(machine) {
         Ok(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -776,7 +783,6 @@ pub fn settings_changes(before: &Machine, after: &Machine) -> SettingsChanges {
         .map(|(key, value)| (key.clone(), Some(value.clone())))
         .collect();
     changes.extend(before.keys().filter(|key| !after.contains_key(*key)).map(|key| (key.clone(), None)));
-    changes.retain(|(key, _)| !MADE_FIELDS.contains(&key.as_str()));
     changes
 }
 
@@ -797,6 +803,22 @@ impl Machine {
             .map_err(|error| Failure(format!("The settings chosen could not be applied: {error}")))?;
         changed.id.clone_from(&self.id);
         Ok(changed)
+    }
+
+    /// `saved`, which is the machine as its file has it now, with what changed from `known` to this
+    /// copy. `known` is the file as this copy was last read from it or saved to it, so a field this copy
+    /// didn't change takes whatever the command line or a task has saved since.
+    pub fn caught_up(&self, known: &Machine, saved: &Machine) -> Result<Machine> {
+        saved.with_changes(&field_changes(known, self))
+    }
+
+    /// Saves only what changed from `known` to this copy, onto the machine as its file has it now, and
+    /// returns the machine as it was saved. See [`Machine::caught_up`].
+    pub fn save_changes(&self, context: &Context, known: &Machine) -> Result<Machine> {
+        let saved = load(context, &self.id)?;
+        let changed = self.caught_up(known, &saved)?;
+        changed.save(context)?;
+        load(context, &self.id)
     }
 }
 

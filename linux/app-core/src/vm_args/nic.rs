@@ -195,6 +195,11 @@ impl VmPlan {
         link
     }
 
+    /// Whether QEMU's own network is given [`NO_HOST_LOOPBACK`], which its QEMU then has to know.
+    pub fn keeps_host_loopback_off(&self) -> bool {
+        self.qemu_arguments().iter().any(|word| word.split(',').any(|part| part == NO_HOST_LOOPBACK))
+    }
+
     /// The network card: an e1000e, or for macOS, which has no driver for one, a virtio card.
     fn nic_card(&self) -> &'static str {
         if self.macos_boot().is_some() { MACOS_CARD } else { CARD }

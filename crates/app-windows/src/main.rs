@@ -8,7 +8,7 @@
 //! it, `window.rs` what's shown, `bridge.rs` the calls to the service, `screen.rs` remoteman's
 //! viewer, `console.rs` a machine's own screen in Windows' Remote Desktop control, `report.rs` a bug
 //! report's making and sending, `log.rs` a log's lines, `pace.rs` how often the window is told
-//! things, `remote_view.rs` what the Remote View group shows and asks, `shell.rs` how
+//! things, `palette.rs` what Ctrl+K offers and finds, `remote_view.rs` what the Remote View group shows and asks, `shell.rs` how
 //! the window gets about, `preferences.rs` the app's own settings, `update.rs` whether a newer
 //! Guesthouse is out, `hyper_v.rs` what's said of Windows' Hyper-V feature, which bridging needs,
 //! and `system.rs` the rest of what's asked of Windows.
@@ -27,6 +27,8 @@ mod hyper_v;
 mod log;
 #[cfg(any(windows, test))]
 mod pace;
+#[cfg(any(windows, test))]
+mod palette;
 #[cfg(any(windows, test))]
 mod preferences;
 #[cfg(any(windows, test))]

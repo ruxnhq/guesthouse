@@ -26,6 +26,7 @@ use windows_reactor::*;
 use crate::bridge::{self, Ended, Job, Looking, Seen, Watch, Window};
 use crate::console::{self, Console};
 use crate::log::Log;
+use crate::palette::{self, Entry, Here, Now, Step};
 use crate::preferences::{Preferences, Theme, WhenOut};
 use crate::remote_view::{Ask, Facts, Viewing};
 use crate::report::{self, Asked, Prepared};
@@ -512,6 +513,13 @@ fn whole(value: Option<f64>) -> Option<u64> {
     value.filter(|v| v.is_finite() && *v >= 1.0).map(|v| v.round() as u64)
 }
 
+/// The command palette, while it's open: what's typed, and which of what it finds is highlighted.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Palette {
+    pub query: String,
+    pub at: usize,
+}
+
 /// A snapshot whose Revert or Delete is being asked about, as each can't be undone.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SnapshotAsk {
@@ -600,6 +608,10 @@ pub struct Main {
     pub restart_ask: bool,
     /// Whether Home's line about the restart has been closed, until the app next opens.
     pub restart_line_closed: bool,
+    /// The command palette, Ctrl+K, while it's open.
+    pub palette: Option<Palette>,
+    /// Its box, which takes the keyboard's focus as it opens.
+    pub palette_box: ElementRef,
     pub making: Option<Making>,
     /// The console's window, while one is open. There's one at a time.
     pub console: Option<OpenConsole>,
@@ -805,6 +817,18 @@ pub enum Message {
     RestartAnswered(ContentDialogResult),
     /// Home's line about the restart was closed.
     RestartLineClosed,
+    /// Open the command palette, from Ctrl+K or the title bar's box.
+    OpenPalette,
+    /// What's typed in the palette's box.
+    PaletteQuery(String),
+    /// Up, Down or Enter in the palette's box.
+    PaletteKey(palette::Key),
+    /// Run the palette's entry with this key, as when it's clicked.
+    PaletteRun(String),
+    /// The palette closed, with Escape or once an entry ran.
+    PaletteClosed,
+    /// Move the keyboard's focus to the palette's box, once it's laid out.
+    PaletteFocus,
     /// One of the Remote View group's controls.
     RemoteView(Ask),
     /// The service's answer to what was asked of the remote view, and which machine's it was.
@@ -1658,6 +1682,98 @@ impl Main {
     }
 }
 
+impl Main {
+    /// Whether a question is being asked in a dialog now, when nothing else may open.
+    pub fn asking(&self) -> bool {
+        self.deleting.is_some()
+            || self.snapshot_ask.is_some()
+            || self.bridge_ask
+            || self.install_ask
+            || self.hyper_v_ask
+            || self.restart_ask
+            || self.viewing.as_ref().is_some_and(|viewing| viewing.removing.is_some())
+    }
+
+    /// What the palette offers now, in its own order.
+    pub fn palette_entries(&self) -> Vec<Entry> {
+        let here = match (self.page, self.machine()) {
+            (Page::Home, _) if self.seen.is_ok() => Here::Home,
+            (Page::Machine, Some(machine)) => Here::Machine(machine.name.clone(), self.section),
+            _ => Here::Elsewhere,
+        };
+        palette::entries(&Now {
+            here,
+            machines: self.status().map(|status| status.machines.as_slice()),
+            addressed: &|machine| address(machine).is_some(),
+            can_look: self.updates.can_look(),
+        })
+    }
+
+    /// What the palette lists now for what's typed, at most [`palette::MOST_SHOWN`] of them, and
+    /// how many it found in all.
+    pub fn palette_found(&self) -> (Vec<Entry>, usize) {
+        let query = self.palette.as_ref().map(|palette| palette.query.as_str()).unwrap_or_default();
+        let mut found = palette::matching(&self.palette_entries(), query);
+        let all = found.len();
+        found.truncate(palette::MOST_SHOWN);
+        (found, all)
+    }
+
+    /// Runs the palette's entry `key`, if it's still one it offers now, as what can be done may
+    /// have changed since it was listed: it closes, and each of the entry's steps is the message
+    /// its button sends.
+    fn run_palette(&mut self, key: &str, context: &ComponentContext<Self>) {
+        let entry = self.palette_found().0.into_iter().find(|entry| entry.key == key);
+        self.palette = None;
+        let Some(entry) = entry else {
+            self.tell("That can't be done now.", true);
+            return;
+        };
+        for step in entry.steps {
+            let message = match step {
+                Step::Open(name) => Message::Open(name),
+                Step::Section(section) => Message::Section(Some(section.label().to_owned())),
+                Step::Start => Message::Start,
+                Step::Stop => Message::Stop,
+                Step::Screen => Message::Screen,
+                Step::Home => {
+                    self.go(Page::Home);
+                    continue;
+                }
+                Step::NewMachine => Message::NewMachine,
+                Step::Settings => Message::OpenSettings,
+                Step::Report => Message::OpenReport,
+                Step::Look => Message::Look,
+            };
+            self.update(message, context);
+        }
+    }
+
+    /// Moves the palette's highlight, and says where it is to a screen reader, as the keyboard's
+    /// focus stays in the box.
+    fn palette_key(&mut self, key: palette::Key, context: &ComponentContext<Self>) {
+        let (found, _) = self.palette_found();
+        let Some(at) = self.palette.as_ref().map(|palette| palette.at.min(found.len().saturating_sub(1)))
+        else {
+            return;
+        };
+        if key == palette::Key::Run {
+            if let Some(entry) = found.get(at) {
+                self.run_palette(&entry.key.clone(), context);
+            }
+            return;
+        }
+        let at = palette::moved(at, key, found.len());
+        if let Some(palette) = &mut self.palette {
+            palette.at = at;
+        }
+        if let Some(entry) = found.get(at) {
+            let said = format!("{}, {} of {}", entry.spoken(), at + 1, found.len());
+            let _ = self.palette_box.request_notification(AutomationNotification::new(said));
+        }
+    }
+}
+
 /// Whether GUESTHOUSE_UPDATE_CHECK=0 turns looking by itself off.
 pub fn looking_turned_off() -> bool {
     std::env::var("GUESTHOUSE_UPDATE_CHECK").is_ok_and(|value| value == "0")
@@ -1736,6 +1852,8 @@ impl Component for Main {
             hyper_v_asking: false,
             restart_ask: false,
             restart_line_closed: false,
+            palette: None,
+            palette_box: ElementRef::new(),
             updates: Updates::new(installed, guesthouse_control::WINDOWS_VERSION),
             updater: Arc::new(crate::system::Network::new(
                 crate::preferences::folder().filter(|_| live && installed).as_deref(),
@@ -2158,6 +2276,24 @@ impl Component for Main {
                 }
             }
             Message::RestartLineClosed => self.restart_line_closed = true,
+            Message::OpenPalette => {
+                if self.palette.is_none() && !self.asking() {
+                    self.palette = Some(Palette::default());
+                    self.focus_timer = Some(context.set_timeout(FOCUS_AFTER, Message::PaletteFocus));
+                }
+            }
+            Message::PaletteQuery(query) => {
+                if let Some(palette) = &mut self.palette {
+                    palette.query = query;
+                    palette.at = 0;
+                }
+            }
+            Message::PaletteKey(key) => self.palette_key(key, context),
+            Message::PaletteRun(key) => self.run_palette(&key, context),
+            Message::PaletteClosed => self.palette = None,
+            Message::PaletteFocus => {
+                let _ = self.palette_box.request_focus();
+            }
             Message::RemoteView(ask) => self.ask_remote_view(ask),
             Message::RemoteViewAnswered(id, ask, answer) if id == self.looking_id => {
                 self.remote_view_answered(ask, answer)

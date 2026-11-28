@@ -9,6 +9,7 @@ use windows_reactor::*;
 use super::parts::*;
 use super::{remote_view, settings};
 use crate::app::{self, Account, ConsoleState, DELETE_KEY, Main, Message, NEW_TAG, REPORT_TAG, Section};
+use crate::palette;
 use crate::remote_view::proposed;
 
 /// A machine's memory, as it was given: in GB when it's a whole number of them, and in MB otherwise.
@@ -115,19 +116,19 @@ pub fn actions(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> V
     let state = machine.state;
     let mut parts: Vec<View> = vec![super::app_settings::gear(main, context)];
     if matches!(state, State::Off | State::Failed | State::Installing) {
-        let start = button("Start", context.message(Message::Start), true)
-            .is_enabled(matches!(state, State::Off | State::Failed) && machine.working.is_none());
+        let start =
+            button("Start", context.message(Message::Start), true).is_enabled(palette::can_start(machine));
         parts.push(start.into());
     } else {
         // Asked again while it shuts down, the service stops it at once.
         let stopping = matches!(state, State::Stopping | State::StoppingStalled);
         let stop = button(if stopping { "Stop now" } else { "Stop" }, context.message(Message::Stop), false)
-            .is_enabled(stopping || matches!(state, State::Starting | State::Running));
+            .is_enabled(stopping || palette::can_ask_to_stop(machine));
         parts.push(stop.into());
     }
     if machine.system == System::Windows {
         // remoteman's host is put in the guest at its boots after the first, which set it up.
-        let streams = app::address(machine).is_some() && state == State::Running && machine.set_up;
+        let streams = palette::can_open_screen(machine, app::address(machine).is_some());
         parts.push(
             button("Open screen", context.message(Message::Screen), streams).is_enabled(streams).into(),
         );

@@ -5,7 +5,9 @@
 #    version is published yet, as a published file never changes;
 # 2. builds the app, then the installer with scripts\windows-setup.ps1, into
 #    target\windows-release\VERSION\, and checks the installer against its .sha256;
-# 3. writes guesthouse-windows-latest.json beside them, which the app reads to offer the update;
+# 3. writes guesthouse-windows-latest.json beside them, which the app reads to offer the update, and
+#    signs it with the release key from GUESTHOUSE_WINDOWS_UPDATE_KEY (the key's private half, in hex),
+#    which the app checks against the public halves built into it before it offers anything;
 #    It also gets the source of the WinFsp the installer carries, which windows\winfsp.json pins, and
 #    checks it against the pin: WinFsp is under the GPLv3, which asks whoever passes on its installer
 #    to offer its source as well;
@@ -15,7 +17,8 @@
 #    all, guesthouse-windows-latest.json to the file drop (the R2 bucket ruxn-files, at
 #    pub/guesthouse/, served as files.ruxn.com/p/guesthouse/) with the cf CLI, and downloads the
 #    installer back to check it.
-# -DryRun does 1 to 3 and publishes nothing. RELEASING.md says what comes before and after.
+# -DryRun does 1 to 3 and publishes nothing; without the key it leaves the latest file unsigned, which
+# no app takes. RELEASING.md says what comes before and after.
 # -BuildOnly is -DryRun for release-windows.yml, which runs from the tag once it's pushed: the tag being
 # on GitHub already is what it expects, so only that check is left out.
 # It needs git, cargo, gh and cf on PATH, each signed in.
@@ -44,6 +47,13 @@ $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 function Test-Published([string]$Name) {
     & $curl --head --fail --silent --proto =https --output NUL "$base/$Name"
     return $LASTEXITCODE -eq 0
+}
+
+# The release key, taken out of the environment so that only the signing below sees it, not the builds.
+$signingKey = $env:GUESTHOUSE_WINDOWS_UPDATE_KEY
+Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_WINDOWS_UPDATE_KEY
+if (-not $signingKey -and -not $DryRun) {
+    throw 'GUESTHOUSE_WINDOWS_UPDATE_KEY holds no key. The latest file is signed with it, and no app takes one that is not.'
 }
 
 $version = (Get-Content -Raw -LiteralPath 'windows\version.txt').Trim()
@@ -90,6 +100,18 @@ $latest = Join-Path $out 'guesthouse-windows-latest.json'
     sha256    = $sha
     notes     = "https://github.com/$repo/releases/tag/$tag"
 } | ConvertTo-Json | Set-Content -LiteralPath $latest -Encoding ascii
+if ($signingKey) {
+    # Built first, without the key; then run with it, which signs the file and reads it back as the app does.
+    Invoke-Native 'the signer build' { cargo build --release --locked -p guesthouse-control --example sign_latest }
+    $env:GUESTHOUSE_WINDOWS_UPDATE_KEY = $signingKey
+    try {
+        Invoke-Native 'signing the latest file' { & (Join-Path $root 'target\release\examples\sign_latest.exe') sign $latest }
+    } finally {
+        Remove-Item -ErrorAction SilentlyContinue Env:GUESTHOUSE_WINDOWS_UPDATE_KEY
+    }
+} else {
+    Write-Output "No GUESTHOUSE_WINDOWS_UPDATE_KEY, so $latest is unsigned, and no app takes it."
+}
 Write-Output "Built $setup ($sha) from $commit."
 
 if ($DryRun -or $BuildOnly) {

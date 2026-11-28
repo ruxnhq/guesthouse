@@ -122,6 +122,7 @@ jobs:
           [ "$(jq -r .version guesthouse-windows-latest.json)" = "$VERSION" ]
           [ "$(jq -r .sha256 guesthouse-windows-latest.json)" = "$SAID" ]
           [ "$(jq -r .installer guesthouse-windows-latest.json)" = "https://files.ruxn.com/p/guesthouse/$SETUP" ]
+          jq -r '.signature // empty' guesthouse-windows-latest.json | grep -Eqx '[0-9a-f]{128}'
       - name: Publish them, the latest file last
         if: steps.files.outputs.skip != 'true'
         run: |

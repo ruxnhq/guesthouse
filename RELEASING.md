@@ -120,7 +120,9 @@ Once a build in `testing` has run with a GPU-PV VM on a real card, run the Proxm
 
 ## The Windows host
 
-CI builds this from the tag too. Nothing in the installer is signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+CI builds this from the tag too. The installer isn't signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+
+`guesthouse-windows-latest.json`, which names the installer and its SHA-256, is signed with the release key: an Ed25519 key whose private half is the `GUESTHOUSE_WINDOWS_UPDATE_KEY` secret (in hex) and whose public half is in `RELEASE_KEYS` in `shared/control/src/updates.rs`. The app offers only a file one of those keys signed, then checks the installer against that SHA-256 before it runs it. `scripts/windows-release.ps1` signs the file and reads it back as the app does, and stops if the app wouldn't take it. A new key is made with `cargo run -p guesthouse-control --example sign_latest -- new-key KEY-FILE`, which prints the public half; it goes into `RELEASE_KEYS` in a release before the first one it signs, and the private half goes into the secret and the password manager, never into the repo.
 
 ### From the tag, in CI
 
@@ -141,7 +143,7 @@ CI builds this from the tag too. Nothing in the installer is signed, and nothing
 
 ### By hand
 
-This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in. `scripts/windows-release.ps1` does steps 2 to 4.
+This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in, and the release key's private half in `GUESTHOUSE_WINDOWS_UPDATE_KEY` (`-DryRun` goes on without it, and leaves the latest file unsigned). `scripts/windows-release.ps1` does steps 2 to 4.
 
 1. **Set the version.** Change `windows/version.txt` to the new version (`scripts/release-bump.sh windows VERSION` does it), three numbers and no `v`, and merge that into `main` with a pull request, `Windows VERSION`. It takes nothing else, and the checks have to pass. The service says this version to the app, the installer puts it in Settings > Apps, and the app compares it with the newest to offer the update.
 

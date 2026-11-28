@@ -10,7 +10,7 @@ fn text(version: &str) -> Fetched {
 
 /// An app that has looked, and found `version`.
 fn found(version: &str, download_by_itself: bool) -> (Updates, Vec<Effect>) {
-    let mut updates = Updates::new(true, "0.13.0");
+    let mut updates = Updates::new(true, "0.13.0").with_stand_in_key();
     updates.download_by_itself = download_by_itself;
     let [Effect::Fetch { attempt }] = updates.step(Input::Look, NOW)[..] else { panic!() };
     let effects = updates.step(Input::Looked { attempt, fetched: text(version) }, NOW);
@@ -60,7 +60,7 @@ fn version_of(updates: &Updates) -> Option<&str> {
 
 #[test]
 fn a_build_of_the_repo_never_looks_downloads_or_installs() {
-    let mut updates = Updates::new(false, "0.13.0");
+    let mut updates = Updates::new(false, "0.13.0").with_stand_in_key();
     updates.download_by_itself = true;
     for input in [Input::Look, Input::Download, Input::Install, Input::Cancel] {
         assert!(updates.step(input, NOW).is_empty());
@@ -88,7 +88,7 @@ fn a_look_says_newer_newest_or_cant_tell() {
         // An installer anywhere but the file drop is never offered.
         (Fetched::Text(release_file("0.14.0").replace("files.ruxn.com", "example.com")), CantTell::Garbled),
     ] {
-        let mut updates = Updates::new(true, "0.13.0");
+        let mut updates = Updates::new(true, "0.13.0").with_stand_in_key();
         let [Effect::Fetch { attempt }] = updates.step(Input::Look, NOW)[..] else { panic!() };
         assert!(updates.step(Input::Looked { attempt, fetched }, NOW).is_empty());
         assert_eq!(updates.phase, Phase::CantTell { why, looked: NOW });
@@ -97,8 +97,32 @@ fn a_look_says_newer_newest_or_cant_tell() {
 }
 
 #[test]
+fn a_file_the_apps_keys_did_not_sign_is_never_offered() {
+    let look = |mut updates: Updates, text: String| {
+        let [Effect::Fetch { attempt }] = updates.step(Input::Look, NOW)[..] else { panic!() };
+        assert!(updates.step(Input::Looked { attempt, fetched: Fetched::Text(text) }, NOW).is_empty());
+        updates.phase
+    };
+    let garbled = Phase::CantTell { why: CantTell::Garbled, looked: NOW };
+    // Signed, but not by a key this app takes: the release keys, here, not the stand-in.
+    assert_eq!(look(Updates::new(true, "0.13.0"), release_file("0.14.0")), garbled);
+    // Signed by the key it takes, with the installer's SHA-256 changed after.
+    let changed = release_file("0.14.0").replace(&"ab".repeat(32), &"cd".repeat(32));
+    assert_eq!(look(Updates::new(true, "0.13.0").with_stand_in_key(), changed), garbled);
+    // With no signature at all.
+    let mut unsigned: serde_json::Value = serde_json::from_str(&release_file("0.14.0")).unwrap();
+    unsigned.as_object_mut().unwrap().remove("signature");
+    assert_eq!(look(Updates::new(true, "0.13.0").with_stand_in_key(), unsigned.to_string()), garbled);
+    // And the same file as it was signed is.
+    assert!(matches!(
+        look(Updates::new(true, "0.13.0").with_stand_in_key(), release_file("0.14.0")),
+        Phase::Newer { .. }
+    ));
+}
+
+#[test]
 fn a_second_look_while_one_goes_on_starts_nothing_and_an_old_answer_changes_nothing() {
-    let mut updates = Updates::new(true, "0.13.0");
+    let mut updates = Updates::new(true, "0.13.0").with_stand_in_key();
     let [Effect::Fetch { attempt }] = updates.step(Input::Look, NOW)[..] else { panic!() };
     assert!(updates.step(Input::Look, NOW).is_empty());
     updates.step(Input::Looked { attempt: attempt + 7, fetched: text("0.14.0") }, NOW);
@@ -250,7 +274,7 @@ fn only_a_check_of_this_download_makes_it_ready() {
 fn an_app_started_again_trusts_nothing_it_had() {
     // Closed mid-download, or with one ready: the next start knows nothing of it, so whatever is
     // left on disk is downloaded again, and checked again, before it's ready.
-    let mut updates = Updates::new(true, "0.13.0");
+    let mut updates = Updates::new(true, "0.13.0").with_stand_in_key();
     assert_eq!(updates.phase, Phase::NotLooked);
     for input in [
         Input::Downloaded { attempt: 1, result: Ok(()) },
@@ -436,7 +460,7 @@ fn the_fake_goes_as_a_real_one_would_when_all_is_well() {
     assert_eq!(fake.fetch(), text("0.14.0"));
     let mut seen = Vec::new();
     let stop = std::sync::atomic::AtomicBool::new(false);
-    let latest = updates::parse(&release_file("0.14.0")).unwrap();
+    let latest = updates::parse(&release_file("0.14.0"), &[&stand_in_key().1]).unwrap();
     assert_eq!(fake.download(&latest, 1, &mut |got, total| seen.push((got, total)), &stop), Ok(()));
     assert_eq!(seen.len(), 2);
     assert_eq!(fake.hash(1), Ok(SHA.to_owned()));

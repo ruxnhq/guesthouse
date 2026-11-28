@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(recorded_intel_card(&context), None);
         context.recorded_intel_card = Some(scratch.write("b580.card", crate::render_cards::tests::ARC_B580));
         let said = recorded_intel_card(&context).unwrap();
-        assert!(said.contains("recording of the Intel card e20b at 0000:03:00.0"), "{said}");
+        assert!(said.contains("recording of the Intel card e20b at 0000:01:00.0"), "{said}");
         context.recorded_intel_card = Some(scratch.path("nowhere.card"));
         assert!(recorded_intel_card(&context).unwrap().contains("can't be used"));
     }

@@ -128,7 +128,7 @@ fn a_recorded_intel_card_is_offered_when_one_is_named_and_wants_intels_driver() 
     context.install_room = Some(0);
     let data = wim(&["Windows 11 Pro"], 26300, 9);
     let disc = make_iso(&scratch, "win", &[("sources/install.wim", &data)]);
-    let words = format!("new Arc --iso {disc} --amd-card 0000:03:00.0");
+    let words = format!("new Arc --iso {disc} --amd-card 0000:01:00.0");
     let without = failure_of(said(&context, &words).1);
     assert!(!without.contains(crate::setup::intel::NO_INTEL_SETUP), "no Intel card unless named: {without}");
     context.recorded_intel_card = Some(scratch.write("b580.card", crate::render_cards::tests::ARC_B580));

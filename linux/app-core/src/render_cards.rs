@@ -131,7 +131,7 @@ pub(crate) mod tests {
         context.recorded_intel_card = Some(scratch.write("b580.card", ARC_B580));
         let intel = render_cards(&context, GpuMaker::Intel);
         assert_eq!(intel.len(), 1);
-        assert_eq!((intel[0].pci.as_str(), intel[0].device), ("0000:03:00.0", 0xE20B));
+        assert_eq!((intel[0].pci.as_str(), intel[0].device), ("0000:01:00.0", 0xE20B));
         assert!(intel[0].name.ends_with(RECORDED), "{}", intel[0].name);
         assert_eq!(render_cards(&context, GpuMaker::Amd).len(), 1, "another maker's list is as it was");
         assert!(crate::setup::intel::supported_intel_cards(&context).len() == 1);

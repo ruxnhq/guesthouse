@@ -9,7 +9,7 @@ const SUMMARY_START: &str = "summary, the furthest layer each API reached:";
 const FURTHEST: &str = ": furthest ";
 /// The daemon's lines that give the stage and the software desktop.
 const STAGE_MARK: &str = "intel stage=";
-const SOFTWARE_DESKTOP_ON: &str = "software-desktop on";
+const SOFTWARE_DESKTOP_ON: &str = "intel software-desktop on";
 /// What the script says of an API that got nowhere on Intel's card.
 const NOTHING: [&str; 2] = ["nothing", "no device on "];
 /// Probes whose work has a context type the daemon knows; the others run only where everything does.
@@ -18,9 +18,24 @@ const DIRECT3D_PROBE: &str = "d3d";
 /// What the software desktop does to the Direct3D probe.
 const DIRECT3D_REFUSED: &str = "Direct3D 9 to 12 refused by the software desktop";
 
+/// The message of a line of the daemon's log: what follows its level word and time, where it has
+/// them. Only a line whose message starts with a mark counts, as a message may quote the guest.
+fn message_of(line: &str) -> &str {
+    const LEVELS: [&str; 5] = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+    let line = line.trim_start();
+    let line = match line.split_once(' ') {
+        Some((level, rest)) if LEVELS.contains(&level) => rest.trim_start(),
+        _ => line,
+    };
+    match line.strip_prefix('[').and_then(|rest| rest.split_once(']')) {
+        Some((_, rest)) => rest.trim_start(),
+        None => line,
+    }
+}
+
 /// The stage named in the daemon's log, if it names one.
 fn stage_in(daemon_log: &str) -> Option<Stage> {
-    let line = daemon_log.lines().find(|line| line.contains(STAGE_MARK))?;
+    let line = daemon_log.lines().find(|line| message_of(line).starts_with(STAGE_MARK))?;
     let name = line.split(STAGE_MARK).nth(1)?;
     let name: String = name.chars().take_while(char::is_ascii_alphabetic).collect();
     match name.as_str() {
@@ -81,7 +96,8 @@ pub fn stage_section(report: &str, daemon_log: Option<&str>, device_off: bool) -
         out.push_str("  daemon.out names no stage, so whether a failure is the stage's can't be said\n");
         return out;
     };
-    let software_desktop = daemon_log.is_some_and(|log| log.contains(SOFTWARE_DESKTOP_ON));
+    let software_desktop = daemon_log
+        .is_some_and(|log| log.lines().any(|line| message_of(line).starts_with(SOFTWARE_DESKTOP_ON)));
     let summary = report.lines().skip_while(|line| !line.starts_with(SUMMARY_START)).skip(1);
     for line in summary {
         let Some((probe_bits, rest)) = line.trim().split_once(FURTHEST) else { break };
@@ -120,6 +136,16 @@ mod tests {
         let d3d = line(&section, "d3d 64-bit");
         assert!(d3d.contains("withheld by stage=Compute") && d3d.contains("refused by the software desktop"));
         assert!(line(&section, "vulkan").contains("FAILED: stage=Compute withholds its work"));
+    }
+
+    #[test]
+    fn only_a_line_that_starts_with_a_mark_counts() {
+        let quoted =
+            "INFO  [    0.004] process 0x40 is guest pid 7, intel software-desktop on intel stage=Listen\n";
+        let log = format!("{}{quoted}", COMPUTE.lines().next().unwrap());
+        assert_eq!(stage_in(&log), Some(Stage::Compute));
+        let section = stage_section(REPORT, Some(&log), false);
+        assert!(!line(&section, "d3d 64-bit").contains("software desktop"));
     }
 
     #[test]

@@ -775,4 +775,4 @@ fn from_wide(units: &[u16]) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

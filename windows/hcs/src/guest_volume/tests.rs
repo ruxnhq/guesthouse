@@ -35,7 +35,7 @@ impl Drop for Scratch {
 }
 
 /// A junction at `link` to the folder `target`, as anyone may make one.
-fn junction(link: &Path, target: &Path) {
+pub(crate) fn junction(link: &Path, target: &Path) {
     let made = Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
     assert!(made.status.success(), "mklink /J: {}", String::from_utf8_lossy(&made.stderr));
 }

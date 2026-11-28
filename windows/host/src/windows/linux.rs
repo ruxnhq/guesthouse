@@ -18,6 +18,7 @@ use guesthouse_account_core::common::linux_name_problem;
 use guesthouse_hcs::disk::{self, Kind, VirtualDisk};
 use guesthouse_hcs::drivers::copy_folder;
 use guesthouse_hcs::gpu::Card;
+use guesthouse_hcs::guest_volume::{Entry, GuestVolume};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -101,23 +102,22 @@ fn make(
         &[letter],
     )?;
     let root = PathBuf::from(format!("{letter}:\\"));
+    let guest = GuestVolume::open(&root).map_err(|error| format!("{}: {error}", root.display()))?;
 
     for (from, to) in BOOT_FILES {
         let source = iso_root.join(from);
         // MokManager is only needed to enrol keys, which this never does, so an ISO without it is fine.
         if source.is_file() {
-            let target = root.join(to);
-            fs::create_dir_all(target.parent().expect("a boot file is in a folder"))
-                .and_then(|()| fs::copy(&source, &target))
-                .map_err(|error| format!("{}: {error}", target.display()))?;
+            guest.copy_in(&source, to).map_err(|error| error.to_string())?;
         }
     }
     for (path, text) in FILES {
-        write(&root, path, &unix_text(text))?;
+        write(&guest, path, &unix_text(text))?;
     }
     let password = new_password()?;
-    write(&root, ACCOUNT, &account(&settings.user, &password))?;
-    refresh(&root, card, &[], sink)?;
+    write(&guest, ACCOUNT, &account(&settings.user, &password))?;
+    refresh(&guest, card, &[], sink)?;
+    drop(guest);
 
     Record { guest: Guest::Linux, installer: Some(iso.to_owned()), ..Record::default() }.save(disk_path)?;
     write_account(disk_path, &settings.user, &password, sink)?;
@@ -142,25 +142,31 @@ pub fn refresh_disk(
         .into_iter()
         .next()
         .ok_or_else(|| format!("{} has no volume on it.", files.display()))?;
-    refresh(&volume.root, card, shares, sink)
+    let guest = GuestVolume::open(&volume.root).map_err(|error| format!("{}: {error}", files.display()))?;
+    refresh(&guest, card, shares, sink)
 }
 
 /// The GPU files on the files disk at `root`. WSL's own libraries go first and the driver's on top,
 /// as WSL lays one over the other. Only the card's driver folder is kept, so an old driver's goes.
-fn refresh(root: &Path, card: Option<&Card>, shares: &[Share], sink: &dyn Sink) -> Result<(), String> {
+fn refresh(
+    guest: &GuestVolume,
+    card: Option<&Card>,
+    shares: &[Share],
+    sink: &dyn Sink,
+) -> Result<(), String> {
     // The guest runs its scripts from here at every start, so these are always this build's.
     for (path, text) in FILES.iter().filter(|(path, _)| path.starts_with(GUEST_SCRIPTS)) {
-        write(root, path, &unix_text(text))?;
+        write(guest, path, &unix_text(text))?;
     }
     // gpu.sh mounts the shares it names, and unmounts those it doesn't.
     if shares.is_empty() {
-        let _ = fs::remove_file(root.join(SHARE));
+        let _ = guest.remove_file(SHARE);
     } else {
-        write(root, SHARE, &share_lines(shares))?;
+        write(guest, SHARE, &share_lines(shares))?;
     }
-    let lib = root.join(WSL_LIB);
+    let lib = Path::new(WSL_LIB);
     for source in library_folders().into_iter().filter(|folder| folder.is_dir()) {
-        let copied = copy_folder(&source, &lib).map_err(|error| error.to_string())?;
+        let copied = copy_folder(&source, guest, lib).map_err(|error| error.to_string())?;
         sink.note(format!(
             "{}: {} files copied, {} already there.",
             source.display(),
@@ -168,29 +174,27 @@ fn refresh(root: &Path, card: Option<&Card>, shares: &[Share], sink: &dyn Sink) 
             copied.kept
         ));
     }
-    if !lib.join(DXCORE).is_file() {
+    if !guest.is_file(lib.join(DXCORE)) {
         sink.problem(format!(
             "This host has no {DXCORE}, which comes with WSL, so nvidia-smi and CUDA won't run in the \
              guest. Installing WSL gives it."
         ));
     }
 
-    let drivers = root.join(WSL_DRIVERS);
-    fs::create_dir_all(&drivers).map_err(|error| format!("{}: {error}", drivers.display()))?;
+    let drivers = Path::new(WSL_DRIVERS);
+    guest.create_dir_all(drivers).map_err(|error| error.to_string())?;
     let Some(folder) = card.and_then(|card| card.driver_folder.as_deref()) else { return Ok(()) };
     let name = folder.file_name().expect("a driver folder has a name");
-    let copied = copy_folder(folder, &drivers.join(name)).map_err(|error| error.to_string())?;
+    let copied = copy_folder(folder, guest, &drivers.join(name)).map_err(|error| error.to_string())?;
     sink.note(format!(
         "Driver {}: {} files copied, {} already there.",
         name.to_string_lossy(),
         copied.copied,
         copied.kept
     ));
-    for entry in fs::read_dir(&drivers).map_err(|error| format!("{}: {error}", drivers.display()))?.flatten()
-    {
-        if entry.file_name() != name && entry.path().is_dir() {
-            fs::remove_dir_all(entry.path())
-                .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+    for (entry, kind) in guest.read_dir(drivers).map_err(|error| error.to_string())? {
+        if entry != name && matches!(kind, Entry::Folder | Entry::Link) {
+            guest.remove_tree(drivers.join(&entry)).map_err(|error| error.to_string())?;
         }
     }
     Ok(())
@@ -245,6 +249,73 @@ mod tests {
 }
 
 #[cfg(test)]
+mod link_tests {
+    use super::*;
+    use crate::events::Kept;
+    use crate::windows::tests::junction;
+
+    /// A folder standing in for the files disk's volume, one for the host's own files beside it,
+    /// and a card whose driver folder is there too.
+    fn scratch(name: &str) -> (PathBuf, PathBuf, PathBuf, Card) {
+        let base = std::env::temp_dir().join(format!("gh-files-links-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (root, host) = (base.join("volume"), base.join("host"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&host).unwrap();
+        let driver = base.join(r"store\card.inf_amd64_0123456789abcdef");
+        fs::create_dir_all(&driver).unwrap();
+        fs::write(driver.join("card.dll"), "driver").unwrap();
+        let card = Card {
+            name: "Card".into(),
+            instance_id: r"PCI\VEN_10DE&DEV_0000".into(),
+            interface_path: String::new(),
+            service: "card".into(),
+            driver_folder: Some(driver),
+            memory: None,
+        };
+        (base, root, host, card)
+    }
+
+    #[test]
+    fn a_wsl_folder_that_is_a_link_has_nothing_copied_into_or_removed_from_what_it_names() {
+        let (base, root, host, card) = scratch("drivers");
+        fs::create_dir_all(host.join(r"drivers\Alice\Documents")).unwrap();
+        fs::write(host.join(r"drivers\Alice\Documents\letter.txt"), "the host's own").unwrap();
+        junction(&root.join("wsl"), &host);
+        let guest = GuestVolume::open(&root).unwrap();
+
+        let refreshed = refresh(&guest, Some(&card), &[], &Kept::default());
+        assert_eq!(
+            fs::read_to_string(host.join(r"drivers\Alice\Documents\letter.txt")).unwrap(),
+            "the host's own"
+        );
+        let names: Vec<_> = fs::read_dir(&host).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(names, ["drivers"], "nothing was copied through the link");
+        assert!(refreshed.is_err());
+
+        drop(guest);
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_script_that_is_a_link_to_a_host_file_leaves_the_file_as_it_was() {
+        let (base, root, host, _) = scratch("script");
+        let hosts_own = host.join("settings.ini");
+        fs::write(&hosts_own, "the host's own").unwrap();
+        fs::create_dir_all(root.join("guesthouse")).unwrap();
+        std::os::windows::fs::symlink_file(&hosts_own, root.join(r"guesthouse\gpu.sh")).unwrap();
+        let guest = GuestVolume::open(&root).unwrap();
+
+        let refreshed = refresh(&guest, None, &[], &Kept::default());
+        assert_eq!(fs::read_to_string(&hosts_own).unwrap(), "the host's own");
+        assert!(refreshed.is_err());
+
+        drop(guest);
+        let _ = fs::remove_dir_all(base);
+    }
+}
+
+#[cfg(test)]
 mod host_tests {
     use super::*;
     use crate::events::Kept;
@@ -254,13 +325,16 @@ mod host_tests {
     #[ignore = "copies this host's WSL libraries"]
     fn the_files_disk_gets_wsl_and_the_drivers_libraries_with_dxcore() {
         let root = std::env::temp_dir().join(format!("gh-files-{}", std::process::id()));
-        refresh(&root, None, &[], &Kept::default()).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let guest = GuestVolume::open(&root).unwrap();
+        refresh(&guest, None, &[], &Kept::default()).unwrap();
         let lib = root.join(WSL_LIB);
         assert!(lib.join(DXCORE).is_file(), "WSL's DXCore");
         assert!(lib.join("libcuda.so.1").is_file(), "the driver's CUDA");
         assert!(lib.join("nvidia-smi").is_file(), "the driver's nvidia-smi");
         assert!(root.join(WSL_DRIVERS).is_dir());
-        refresh(&root, None, &[], &Kept::default()).unwrap();
+        refresh(&guest, None, &[], &Kept::default()).unwrap();
+        drop(guest);
         let _ = fs::remove_dir_all(root);
     }
 }

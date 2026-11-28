@@ -143,6 +143,7 @@ static int nvf_release(struct inode *inode, struct file *file)
 	r->fdid = nf->fdid;
 	kick(slot);
 	slot_put(slot);
+	pins_check();
 	show_file_closed(nf);
 	if (nf->kind == NVFWD_DEV_UVM)
 		uvm_process_leave(nf->uvm_process);

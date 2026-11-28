@@ -92,6 +92,7 @@ EXPORT_SYMBOL_GPL(nvfwd_kopen);
 void nvfwd_kclose(u32 fdid)
 {
 	simple_op(NVFWD_OP_CLOSE, fdid, 0, 0, 0, 0, NULL);
+	pins_check();
 }
 EXPORT_SYMBOL_GPL(nvfwd_kclose);
 

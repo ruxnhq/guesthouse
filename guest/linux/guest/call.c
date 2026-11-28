@@ -142,17 +142,20 @@ int pin_range(struct call *c, u32 at, u64 size)
 }
 
 /*
- * After the host has answered. Pages of an allocation the host made stay pinned until the guest
- * reboots: nothing here hears when every handle on the memory is gone. Pages of one it refused,
- * or never saw, go back now.
+ * After the host has answered. Pages of an allocation the host made stay pinned under the pin id
+ * it answered with, until it lets that go (pins.c). Pages of one it refused, or never saw, go
+ * back now.
  */
 void pins_settle(struct call *c, bool made)
 {
 	if (!c->pins)
 		return;
-	if (!made)
+	if (made) {
+		pins_keep(c->req->a3, c->pins, c->npins);
+	} else {
 		unpin_user_pages(c->pins, c->npins);
-	kvfree(c->pins);
+		kvfree(c->pins);
+	}
 	c->pins = NULL;
 	c->npins = 0;
 }
@@ -175,6 +178,7 @@ struct call *call_new(u32 fdid, u32 cmd)
 	c->req->fdid = fdid;
 	c->req->cmd = cmd;
 	c->req->nfix = 0;
+	c->req->a3 = 0; /* the host's answer for an OS descriptor allocation: its pin */
 	return c;
 }
 

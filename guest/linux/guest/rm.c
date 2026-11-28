@@ -227,5 +227,7 @@ long rm_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg)
 			rc = -EFAULT;
 out:
 	call_free(c);
+	if (nr == ESC_RM_FREE && rc >= 0)
+		pins_check(); /* after the slot is back: this takes one of its own */
 	return rc;
 }

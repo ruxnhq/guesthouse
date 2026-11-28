@@ -16,6 +16,7 @@
 #include "nvfwd_proto.h"
 
 #define ESC_RM_ALLOC_MEMORY 0x27
+#define ESC_RM_FREE 0x29
 #define ESC_RM_CONTROL 0x2a
 #define ESC_RM_ALLOC 0x2b
 #define ESC_RM_MAP_MEMORY 0x4e
@@ -95,6 +96,10 @@ int follow(struct call *c, u32 at, u32 len, u32 *off);
 int fix_fd(struct call *c, u32 at);
 int pin_range(struct call *c, u32 at, u64 size);
 void pins_settle(struct call *c, bool made);
+
+/* pins.c */
+void pins_keep(u64 pin, struct page **pages, unsigned long npages);
+void pins_check(void);
 struct call *call_new(u32 fdid, u32 cmd);
 void call_free(struct call *c);
 

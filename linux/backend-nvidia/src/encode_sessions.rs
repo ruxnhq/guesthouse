@@ -9,19 +9,28 @@
 //!
 //! The guest's runtime then makes one context on each encoder, so a process's sessions are as many
 //! as it has contexts on its busiest encoder, plus any it was told yes for and hasn't started.
+//! A process holds at most `SLOTS_PER_PROCESS` slots and the guest at most `SLOTS_PER_GUEST`, and a
+//! slot told yes that gets no context within `STARTING_TIME` goes back to the driver.
 
 use crate::rm::classes::{CONTROL_ENCODE_SLOT_GIVE_BACK, CONTROL_ENCODE_SLOT_TAKE};
 use crate::rm::device::Device;
 use crate::rm::{Rm, STATUS_OK};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 const SLOT_PARAMS: usize = 4;
+/// What one process may hold, well above the few encoders a program opens.
+pub const SLOTS_PER_PROCESS: u32 = 8;
+/// What the whole guest may hold.
+pub const SLOTS_PER_GUEST: u32 = 24;
+/// How long a slot told yes waits for its encoder context.
+pub const STARTING_TIME: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Default)]
 struct ProcessSessions {
     slots: u32,
-    /// Told yes, and no contexts for it yet.
-    starting: u32,
+    /// When each slot told yes was, for the ones with no context yet.
+    starting: VecDeque<Instant>,
     contexts_on_node: HashMap<u32, u32>,
 }
 
@@ -49,12 +58,24 @@ fn give_back<R: Rm>(device: &mut Device<R>) {
 impl EncodeSessions {
     /// Whether a process may open one more session, which is the driver's answer. If so it holds a slot.
     pub fn ask<R: Rm>(&mut self, device: &mut Device<R>, process: u32) -> bool {
+        self.ask_at(device, process, Instant::now())
+    }
+
+    fn ask_at<R: Rm>(&mut self, device: &mut Device<R>, process: u32, now: Instant) -> bool {
+        self.expire(device, now);
+        let held = |sessions: &ProcessSessions| sessions.slots;
+        if self.processes.get(&process).map_or(0, held) >= SLOTS_PER_PROCESS
+            || self.processes.values().map(held).sum::<u32>() >= SLOTS_PER_GUEST
+        {
+            log::debug!("process {process:#x} holds as many encoding slots as it may");
+            return false;
+        }
         let subdevice = device.subdevice;
         match device.rm.control(subdevice, CONTROL_ENCODE_SLOT_TAKE, &mut [0; SLOT_PARAMS]) {
             Ok(STATUS_OK) => {
                 let sessions = self.processes.entry(process).or_default();
                 sessions.slots += 1;
-                sessions.starting += 1;
+                sessions.starting.push_back(now);
                 true
             }
             Ok(status) => {
@@ -68,13 +89,27 @@ impl EncodeSessions {
         }
     }
 
+    /// Gives back the slots that were told yes more than `STARTING_TIME` ago and have no context.
+    pub fn expire<R: Rm>(&mut self, device: &mut Device<R>, now: Instant) {
+        for sessions in self.processes.values_mut() {
+            while let Some(&asked) = sessions.starting.front() {
+                if now.saturating_duration_since(asked) < STARTING_TIME {
+                    break;
+                }
+                sessions.starting.pop_front();
+                sessions.slots = sessions.slots.saturating_sub(1);
+                give_back(device);
+            }
+        }
+    }
+
     /// Notes a context on an encoder. A new highest count is a session under way.
     pub fn context_made(&mut self, process: u32, node: u32) {
         let sessions = self.processes.entry(process).or_default();
         let before = sessions.running();
         *sessions.contexts_on_node.entry(node).or_default() += 1;
         if sessions.running() > before {
-            sessions.starting = sessions.starting.saturating_sub(1);
+            sessions.starting.pop_front();
         }
     }
 
@@ -194,6 +229,65 @@ mod tests {
         start(&mut sessions, &mut device);
         assert!(sessions.ask(&mut device, PROCESS));
         NODES.iter().for_each(|&node| sessions.context_gone(&mut device, PROCESS, node));
+        assert_eq!(sessions.held_by(PROCESS), 1);
+    }
+
+    #[test]
+    fn a_process_holds_at_most_its_share_of_slots() {
+        let mut device = device(0);
+        let mut sessions = EncodeSessions::default();
+        for _ in 0..SLOTS_PER_PROCESS {
+            assert!(sessions.ask(&mut device, PROCESS));
+        }
+        assert!(!sessions.ask(&mut device, PROCESS));
+        assert_eq!(sessions.held_by(PROCESS), SLOTS_PER_PROCESS);
+        assert!(sessions.ask(&mut device, PROCESS + 1), "another process still has its own");
+    }
+
+    #[test]
+    fn the_guest_holds_at_most_its_share_of_slots() {
+        let mut device = device(0);
+        let mut sessions = EncodeSessions::default();
+        let granted = (0..SLOTS_PER_GUEST * 2)
+            .filter(|asked| sessions.ask(&mut device, PROCESS + asked / SLOTS_PER_PROCESS))
+            .count();
+        assert_eq!(granted, SLOTS_PER_GUEST as usize);
+    }
+
+    #[test]
+    fn a_slot_with_no_context_goes_back_after_its_time() {
+        let mut device = device(0);
+        let mut sessions = EncodeSessions::default();
+        let start = Instant::now();
+        assert!(sessions.ask_at(&mut device, PROCESS, start));
+        sessions.expire(&mut device, start + STARTING_TIME / 2);
+        assert_eq!(sessions.held_by(PROCESS), 1);
+        sessions.expire(&mut device, start + STARTING_TIME);
+        assert_eq!(sessions.held_by(PROCESS), 0);
+        assert_eq!(given_back(&device), 1);
+    }
+
+    #[test]
+    fn a_slot_that_got_its_context_stays() {
+        let mut device = device(0);
+        let mut sessions = EncodeSessions::default();
+        let start = Instant::now();
+        assert!(sessions.ask_at(&mut device, PROCESS, start));
+        sessions.context_made(PROCESS, 6);
+        sessions.expire(&mut device, start + STARTING_TIME * 10);
+        assert_eq!((sessions.held_by(PROCESS), given_back(&device)), (1, 0));
+    }
+
+    #[test]
+    fn asking_again_after_the_time_gives_the_old_slots_back_first() {
+        let mut device = device(0);
+        let mut sessions = EncodeSessions::default();
+        let start = Instant::now();
+        for _ in 0..SLOTS_PER_PROCESS {
+            assert!(sessions.ask_at(&mut device, PROCESS, start));
+        }
+        assert!(!sessions.ask_at(&mut device, PROCESS, start));
+        assert!(sessions.ask_at(&mut device, PROCESS, start + STARTING_TIME));
         assert_eq!(sessions.held_by(PROCESS), 1);
     }
 

@@ -189,6 +189,8 @@ impl GuestMemory for SharedMemory {
 
     fn map_pages(&mut self, pages: &[u64]) -> io::Result<PagesView> {
         let fd = self.ram.as_raw_fd();
+        // A page past the file's end would fault the first touch of it, so it's refused here.
+        let ram_bytes = self.ram.metadata()?.len();
         let size = pages.len() as u64 * PAGE_SIZE;
         let reserve = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE;
         // SAFETY: this only reserves address space that the kernel picks.
@@ -202,7 +204,7 @@ impl GuestMemory for SharedMemory {
                 .windows(2)
                 .take_while(|pair| pair[0].checked_add(1) == Some(pair[1]))
                 .count();
-            match map_run(base, index, run, fd, pages[index]) {
+            match map_run(base, index, run, (fd, ram_bytes), pages[index]) {
                 Ok(range) => shown.push(range),
                 Err(error) => {
                     self.unmap_pages(view);
@@ -233,6 +235,9 @@ impl GuestMemory for SharedMemory {
 
     fn read_view(&self, view: PagesView, offset: u64, out: &mut [u8]) -> usize {
         let length = view.size.saturating_sub(offset).min(out.len() as u64) as usize;
+        if length == 0 {
+            return 0;
+        }
         let from = (view.host_address + offset) as *const u8;
         // SAFETY: the view stays mapped until `unmap_pages`, and `length` keeps this inside it.
         unsafe { ptr::copy_nonoverlapping(from, out.as_mut_ptr(), length) };
@@ -240,7 +245,7 @@ impl GuestMemory for SharedMemory {
     }
 
     fn write_view_u32(&mut self, view: PagesView, offset: u64, value: u32) {
-        if offset.is_multiple_of(4) && offset + 4 <= view.size {
+        if offset.is_multiple_of(4) && offset.checked_add(4).is_some_and(|end| end <= view.size) {
             let at = (view.host_address + offset) as *mut u32;
             // SAFETY: the check keeps it inside the view and aligned, as views start on a page. It
             // is atomic because the GPU can be reading these pages.
@@ -258,14 +263,22 @@ impl GuestMemory for SharedMemory {
 }
 
 /// Maps `run` consecutive guest pages over part of a reservation. Returns where they are in the file.
-fn map_run(base: *mut libc::c_void, index: usize, run: usize, fd: i32, page: u64) -> io::Result<FileRange> {
+fn map_run(
+    base: *mut libc::c_void,
+    index: usize,
+    run: usize,
+    (fd, ram_bytes): (i32, u64),
+    page: u64,
+) -> io::Result<FileRange> {
+    let length = run * PAGE_SIZE as usize;
     let offset = page.checked_mul(PAGE_SIZE).and_then(ram_offset);
+    let in_file = |offset: &u64| offset.checked_add(length as u64).is_some_and(|end| end <= ram_bytes);
     let offset = offset
+        .filter(in_file)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("page {page:#x} is not RAM")))?;
     let at = base.wrapping_byte_add(index * PAGE_SIZE as usize);
     let protection = libc::PROT_READ | libc::PROT_WRITE;
     let flags = libc::MAP_SHARED | libc::MAP_FIXED;
-    let length = run * PAGE_SIZE as usize;
     // SAFETY: `at` lies inside the reservation made by `map_pages`, which nothing else uses.
     let done = unsafe { libc::mmap(at, length, protection, flags, fd, offset as i64) };
     check(done).map(|_| FileRange { offset, length: length as u64 })
@@ -309,6 +322,34 @@ mod tests {
     /// The window in this file, with RAM that's only there to have one.
     fn window_only(window: &Path) -> SharedMemory {
         SharedMemory::new(&open(window), open(window)).unwrap()
+    }
+
+    #[test]
+    fn only_pages_inside_the_ram_file_are_mapped() {
+        let window = temporary_file("in-ram-window", &[0; 0x1000]);
+        let ram = temporary_file("in-ram-ram", &[0; 0x2000]);
+        let mut memory = SharedMemory::new(&open(&window), open(&ram)).unwrap();
+        let view = memory.map_pages(&[0, 1]).unwrap();
+        memory.unmap_pages(view);
+        assert!(memory.map_pages(&[2]).is_err());
+        assert!(memory.map_pages(&[1, 2]).is_err());
+        assert!(memory.map_pages(&[0, u64::MAX / PAGE_SIZE]).is_err());
+        fs::remove_file(window).unwrap();
+        fs::remove_file(ram).unwrap();
+    }
+
+    #[test]
+    fn a_view_read_or_written_far_past_its_end_does_nothing() {
+        let window = temporary_file("far-window", &[0; 0x1000]);
+        let ram = temporary_file("far-ram", &[0; 0x1000]);
+        let mut memory = SharedMemory::new(&open(&window), open(&ram)).unwrap();
+        let view = memory.map_pages(&[0]).unwrap();
+        let mut out = [0u8; 8];
+        assert_eq!(memory.read_view(view, u64::MAX - 2, &mut out), 0);
+        memory.write_view_u32(view, u64::MAX - 3, 7);
+        memory.unmap_pages(view);
+        fs::remove_file(window).unwrap();
+        fs::remove_file(ram).unwrap();
     }
 
     #[test]

@@ -25,6 +25,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             || self.programs.contains_key(&handle)
             || self.spaces.contains_key(&handle)
             || self.devices.contains(&handle)
+            || self.display_driver == Some(handle)
             || self.allocations.contains_key(&handle)
             || self.resources.contains_key(&handle)
             || self.resource_users.contains_key(&handle)

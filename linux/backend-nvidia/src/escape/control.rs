@@ -41,6 +41,23 @@ const BUS_LIST_LONGEST: u32 = 0x34;
 const MAX_PROBED_GPUS: usize = 32;
 const INVALID_GPU_ID: u32 = 0xFFFF_FFFF;
 
+/// Where a listed control carries a handle or a route, as (command, offset, length) in its
+/// parameters. The guest's handles name nothing here, so these are zeroed before the control runs.
+/// Offsets are from `NV0080_CTRL_DMA_ADV_SCHED_GET_VA_CAPS_PARAMS` (`hVASpace`),
+/// `NV2080_CTRL_GR_GET_GLOBAL_SM_ORDER_PARAMS` and `NV0080_CTRL_GR_GET_INFO_V2_PARAMS`
+/// (`grRouteInfo`, a flags word and a 64-bit route).
+const HANDLE_FIELDS: [(u32, usize, usize); 3] =
+    [(0x0080_1806, 164, 4), (0x2080_121B, 10248, 16), (0x2080_1228, 512, 16)];
+
+/// Zeroes the handle fields of a listed control's parameters.
+fn clear_handles(command: u32, params: &mut [u8]) {
+    for &(_, at, length) in HANDLE_FIELDS.iter().filter(|field| field.0 == command) {
+        if let Some(field) = params.get_mut(at..at + length) {
+            field.fill(0);
+        }
+    }
+}
+
 /// The answer to the list of probed GPUs: this card, and invalid entries, not zeros.
 fn probed_ids(gpu_id: u32, params: &mut [u8]) {
     let mut words = [INVALID_GPU_ID; 2 * MAX_PROBED_GPUS].to_vec();
@@ -157,6 +174,7 @@ pub(super) fn run<R: Rm>(
         put(data, CONTROL_STATUS, STATUS_NOT_SUPPORTED);
         return Ok(());
     }
+    clear_handles(command, params);
     if command == CONTROL_GET_ATTACHED_IDS {
         attached_ids(device.gpu_id()?, params);
         put(data, CONTROL_STATUS, 0);
@@ -298,6 +316,42 @@ mod tests {
         assert_eq!(data[CONTROL_PARAMS + 1640], 1);
         assert_eq!(get(&data, CONTROL_PARAMS + 1644), Some(7));
         assert_eq!(get(&data, CONTROL_STATUS), Some(0));
+    }
+
+    /// What the RM was handed for a control, with every parameter byte set to 0xFF first.
+    fn sent_with_every_byte_set(command: u32) -> Vec<u8> {
+        let mut device = device();
+        let size = device.guest_control_size(command).unwrap();
+        let mut data = control(command, size);
+        data[CONTROL_PARAMS..].fill(0xFF);
+        run(&mut device, &NO_FACTS, &mut data).unwrap();
+        device
+            .rm
+            .calls
+            .iter()
+            .find_map(|call| match call {
+                Call::Control { command: ran, params, .. } if *ran == command => Some(params.clone()),
+                _ => None,
+            })
+            .expect("it reached the RM")
+    }
+
+    #[test]
+    fn the_handles_a_listed_control_carries_are_zero_when_it_runs() {
+        for (command, at, length) in HANDLE_FIELDS {
+            let sent = sent_with_every_byte_set(command);
+            assert!(sent[at..at + length].iter().all(|&byte| byte == 0), "{command:#x}");
+            assert_eq!(sent[at - 1], 0xFF, "{command:#x} keeps the bytes before");
+            assert_eq!(sent.get(at + length).copied().unwrap_or(0xFF), 0xFF, "{command:#x} keeps the rest");
+        }
+    }
+
+    #[test]
+    fn every_handle_field_is_inside_its_controls_parameters() {
+        for (command, at, length) in HANDLE_FIELDS {
+            let size = device().guest_control_size(command).unwrap();
+            assert!(at + length <= size, "{command:#x}");
+        }
     }
 
     #[test]

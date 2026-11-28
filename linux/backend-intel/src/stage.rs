@@ -291,6 +291,24 @@ impl Withheld {
     }
 }
 
+/// Whether the self-test lets the guest's work on the card: every step work needs passed. A failed
+/// step work does without, such as a video engine, the clock or the cleanup, is a warning only.
+pub(crate) fn self_test_verdict(summary: &crate::xe::selftest::Summary) -> Result<(), Fallback> {
+    let needed = summary.failed_that_work_needs();
+    if !needed.is_empty() {
+        return Err(Fallback::SelfTestFailed(needed));
+    }
+    let spared = summary.failed_that_work_does_without();
+    if !spared.is_empty() {
+        log::warn!(
+            "{} self-test: {} failed, which the guest's work doesn't need, so it runs on the card all the same",
+            crate::watch::PREFIX,
+            spared.join(", ")
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

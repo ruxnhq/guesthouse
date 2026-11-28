@@ -121,7 +121,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         });
         match described {
             Some(kind) if size >= SIZE_TELLS_FROM => {
-                self.surface_range_sizes.insert((process, size), kind);
+                if self.surface_range_sizes.len() < super::limits::MOST_KEYED {
+                    self.surface_range_sizes.insert((process, size), kind);
+                }
                 kind
             }
             Some(kind) => kind,
@@ -154,7 +156,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         let space = self.space_for(process)?;
         let (protection, driver_protection) = ReserveRequest::protections(message).unwrap_or_default();
         let view = RangeView { surface: self.described_surface(process, request.size), driver_protection };
-        let found = request.size.checked_add(ALLOCATION_ALIGN).and_then(|_| {
+        let room = self.reserved_addresses.len() < super::limits::MOST_RESERVED_RANGES
+            && !self.address_share_passed(space, request.size);
+        let found = request.size.checked_add(ALLOCATION_ALIGN).filter(|_| room).and_then(|_| {
             let size = align_up(request.size, ALLOCATION_ALIGN);
             let found = match request.base {
                 0 => self.find_room(window_of(&request), size, space),

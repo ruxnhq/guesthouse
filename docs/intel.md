@@ -6,7 +6,7 @@ Alchemist (the Arc A-series), Meteor Lake and Arrow Lake are known too, but `i91
 
 ## What it's meant to do
 
-The daemon built with the `intel` feature answers Intel's Windows driver in the guest, so that it loads and makes its devices, contexts, queues and memory, and it runs the guest's work on the card, as "Work on the card" below says. Where the card doesn't pass its own test at the start, nothing is run and Windows draws its desktop in software. Either way the log matters most. Every exchange that is Intel's own gets a line in `daemon.out` starting with `intel`, and with `GUESTHOUSE_VERBOSE` set the log holds the whole of each one too, so a bug report from one run says how far the guest got and where it stopped. The app turns that on for a machine on an Intel card, and the daemon keeps the log under 64 MiB.
+The daemon built with the `intel` feature answers Intel's Windows driver in the guest, so that it loads and makes its devices, contexts, queues and memory, and it runs the guest's work on the card, as "Work on the card" below says. Where the card doesn't pass its own test at the start, nothing is run and Windows draws its desktop in software. Either way the log matters most. Every exchange that is Intel's own gets a line in `daemon.out` starting with `intel`, and with `GUESTHOUSE_VERBOSE` set the log holds the repeats of each kind too, so a bug report from one run says how far the guest got and where it stopped. The contents of the guest's buffers are never written to `daemon.out` unless `GUESTHOUSE_INTEL_DUMP_BUFFERS` is set, which the app never does. The daemon keeps the log under 64 MiB.
 
 It only takes Intel's driver 32.0.101.9175 in the guest, as the data it passes around changes from one release to the next.
 

@@ -204,6 +204,13 @@ mod frame_ring;
 mod freeing;
 mod handles;
 mod indirect;
+mod map_bounds;
+mod opening;
+mod restart;
+mod ring_owner;
+mod state_limits;
+mod video_guard;
+mod waiting_limits;
 
 mod dispatch {
     use super::*;
@@ -913,7 +920,7 @@ mod allocations {
     #[test]
     fn a_shared_resource_lasts_until_its_last_user() {
         let mut session = session();
-        let (resource, handle) = allocate(&mut session, private(0x1000));
+        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
         assert_eq!(u32_at(&open(&mut session, resource, 1), 8), Ok(handle));
         destroy(&mut session, resource, &[]);
         assert!(session.allocations.contains_key(&handle));
@@ -924,7 +931,7 @@ mod allocations {
     #[test]
     fn a_frame_another_process_opened_survives_its_maker_naming_it() {
         let mut session = session();
-        let (resource, handle) = allocate(&mut session, private(0x1000));
+        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
         open(&mut session, resource, 1);
         destroy(&mut session, 0, &[handle]);
         assert!(session.allocations.contains_key(&handle));
@@ -2062,7 +2069,7 @@ mod fences {
         assert_eq!(notices, [Notice::WakeEvent { event: 0xE1, release: 0 }]);
     }
 
-    fn wait_message(objects: &[u32], values: &[u64], any: bool, event: u64) -> Vec<u8> {
+    pub(super) fn wait_message(objects: &[u32], values: &[u64], any: bool, event: u64) -> Vec<u8> {
         let mut request = message(Command::WaitOnCpu, 0x38);
         set_u32(&mut request, 0x1C, objects.len() as u32);
         set_u32(&mut request, 0x20, u32::from(any));
@@ -3470,34 +3477,5 @@ mod reservations {
         reserve(&mut session, &request(WANTED, 0, 0, 0x1_0000));
         send(&mut session, &free(None, WANTED));
         assert_ne!(reserve(&mut session, &request(0, 0, 0, 0x1_0000)), WANTED);
-    }
-}
-
-mod video_guard {
-    use super::*;
-    use guesthouse_backend_standin::NODE_WITHOUT_CHANNEL;
-
-    #[test]
-    fn a_context_on_a_node_with_no_channel_is_refused_with_a_zero_handle() {
-        let mut session = session();
-        assert_eq!(create_context(&mut session, NODE_WITHOUT_CHANNEL), 0);
-        assert!(session.context_nodes.is_empty());
-    }
-
-    #[test]
-    fn a_context_whose_private_data_is_refused_gets_a_zero_handle() {
-        let mut session = session();
-        session.backend_mut().refuse_private_data = true;
-        assert_eq!(create_context(&mut session, 0), 0);
-        assert!(session.context_nodes.is_empty());
-    }
-
-    #[test]
-    fn a_refusal_makes_no_handle() {
-        let mut session = session();
-        create_context(&mut session, NODE_WITHOUT_CHANNEL);
-        let first = create_context(&mut session, 0);
-        let mut fresh = self::session();
-        assert_eq!(create_context(&mut fresh, 0), first);
     }
 }

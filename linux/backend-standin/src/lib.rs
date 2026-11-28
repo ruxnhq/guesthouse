@@ -138,6 +138,8 @@ pub struct StandIn {
     pub slots_in_guest_pages: bool,
     /// Set to be given the commands a context's submission names.
     pub context_commands: bool,
+    /// Spaces whose work the pretend driver saw fault, handed to the core one at a time.
+    pub faults: std::collections::VecDeque<SpaceId>,
     /// A monitored fence's GPU address each submission asks the host about, and what the last
     /// answer was.
     pub ask_monitored: Option<u64>,
@@ -238,6 +240,7 @@ impl StandIn {
             last_commands: None,
             slots_in_guest_pages: false,
             context_commands: false,
+            faults: std::collections::VecDeque::new(),
             ask_monitored: None,
             runs_sent: 0,
             runs_ended: None,
@@ -632,6 +635,10 @@ impl Backend for StandIn {
         }
         self.runs_sent += 1;
         Ok(Doorbell::Rung)
+    }
+
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.faults.pop_front()
     }
 
     fn close_queue(&mut self, queue: u32) {

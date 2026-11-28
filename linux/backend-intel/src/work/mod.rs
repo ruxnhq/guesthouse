@@ -10,10 +10,14 @@
 
 mod bans;
 pub mod blits;
+#[cfg(test)]
+mod bound_tests;
 pub mod cap;
 pub mod choices;
 pub mod copies;
+mod cpu_copy;
 pub mod engines;
+mod limits;
 pub mod marks;
 mod memory;
 mod moves;
@@ -65,6 +69,8 @@ pub struct CardWork {
     /// written at the next chance: each with its space and queue, and why.
     left_marks: Vec<(SpaceId, u32, marks::Marks, &'static str)>,
     last_look: Option<Instant>,
+    /// Spaces xe ended work in, for the core's fault count: see [`guesthouse_backend::Backend::take_fault`].
+    faults: std::collections::VecDeque<SpaceId>,
     /// The copy engine's copies, in the daemon's own space.
     blits: blits::Blits,
     /// First locks' moves into the guest's pages.
@@ -115,10 +121,16 @@ impl CardWork {
             closing: Vec::new(),
             left_marks: Vec::new(),
             last_look: None,
+            faults: std::collections::VecDeque::new(),
             blits: blits::Blits::new(card.main_gt().map_or(0, |gt| gt.ip.major)),
             moves: moves::Moves::for_card(card.main_gt().map(|gt| gt.ip)),
             wake: wake::Wake::default(),
         })
+    }
+
+    /// The next space whose work failed on the card, if any.
+    pub fn take_fault(&mut self) -> Option<SpaceId> {
+        self.faults.pop_front()
     }
 
     pub fn stage(&self) -> Stage {

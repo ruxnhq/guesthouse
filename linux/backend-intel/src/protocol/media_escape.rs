@@ -155,6 +155,9 @@ impl fmt::Display for Answered {
     }
 }
 
+/// How many (process, node) pairs are kept in the count of streams held.
+const MOST_HELD: usize = 4096;
+
 /// What the kernel driver keeps for the media escapes: the reset count, and how many streams each
 /// process holds on each engine node.
 #[derive(Debug, Default)]
@@ -215,7 +218,7 @@ impl MediaEscapes {
             // A node the card doesn't run would be refused, and the stream would have no engine; it
             // is given the one whose turn it is, which it reads back and uses.
             Request::Take if nodes.contains(&named) => {
-                *self.held.entry((process, named)).or_default() += 1;
+                self.hold(process, named);
                 named
             }
             Request::Take => self.hand_out(process, nodes, kind),
@@ -232,6 +235,16 @@ impl MediaEscapes {
         Some(Answered::Engine { kind, request, named, node, held })
     }
 
+    /// Counts one more stream of `process` on `node`. Counts stop at the most a u32 holds, and
+    /// past [`MOST_HELD`] distinct holders a new one is not kept.
+    fn hold(&mut self, process: u32, node: u32) {
+        if self.held.len() >= MOST_HELD && !self.held.contains_key(&(process, node)) {
+            return;
+        }
+        let count = self.held.entry((process, node)).or_default();
+        *count = count.saturating_add(1);
+    }
+
     /// The node whose turn it is among `nodes`, counted by the streams every process holds on them,
     /// now held once more by `process`. With no engine of the kind the first node is given, which is
     /// also what the media driver uses when the kernel driver can't answer.
@@ -242,10 +255,13 @@ impl MediaEscapes {
                 EngineKind::VideoEnhance => VIDEO_ENHANCE_NODES[0],
             };
         };
-        let held: u32 =
-            self.held.iter().filter(|((_, node), _)| nodes.contains(node)).map(|(_, &count)| count).sum();
+        let held = self
+            .held
+            .iter()
+            .filter(|((_, node), _)| nodes.contains(node))
+            .fold(0u32, |sum, (_, &count)| sum.saturating_add(count));
         let node = nodes.get(held as usize % nodes.len()).copied().unwrap_or(first);
-        *self.held.entry((process, node)).or_default() += 1;
+        self.hold(process, node);
         node
     }
 }
@@ -409,6 +425,23 @@ pub(crate) mod tests {
         escapes.answer(EDGE, &mut unknown, &engines);
         assert_eq!(unknown, question(EngineKind::VideoDecode, 7, 0));
         assert_eq!(ask(&mut escapes, EDGE, &mut question(EngineKind::VideoDecode, 0, 0), &engines), 1);
+    }
+
+    #[test]
+    fn counts_of_streams_stop_at_the_most_and_the_holders_are_few() {
+        let mut escapes = MediaEscapes::default();
+        let engines = b580();
+        escapes.held.insert((EDGE, 1), u32::MAX);
+        escapes.held.insert((PLAYER, 1), u32::MAX);
+        for process in [EDGE, PLAYER] {
+            ask(&mut escapes, process, &mut question(EngineKind::VideoDecode, 2, 1), &engines);
+            ask(&mut escapes, process, &mut question(EngineKind::VideoDecode, 0, 0), &engines);
+        }
+        assert_eq!(escapes.held[&(EDGE, 1)], u32::MAX);
+        for process in 0..MOST_HELD as u32 * 2 {
+            ask(&mut escapes, process, &mut question(EngineKind::VideoDecode, 2, 1), &engines);
+        }
+        assert_eq!(escapes.held.len(), MOST_HELD);
     }
 
     #[test]

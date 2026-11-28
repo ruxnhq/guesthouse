@@ -2,9 +2,8 @@
 //
 // A log for ruxnumd.dll, for the lab only: when the process that loads the
 // driver has RUXNUMD_LOG set to a file name, each step of the adapter and
-// device appends a line there. umdtest sets it. Otherwise, if the lab's
-// folder C:\ruxnlog exists (wddm.ps1 makes it), each process writes
-// umd-PID.txt there, the compositor included.
+// device appends a line there. umdtest sets it. Without it nothing is
+// written.
 
 #include "umd.h"
 
@@ -20,29 +19,9 @@ static HANDLE open_log(void)
 	if (log_tried)
 		return log_file;
 	log_tried = TRUE;
-	if (!GetEnvironmentVariableW(L"RUXNUMD_LOG", path, LOG_PATH_CHARS)) {
-		static const WCHAR digits[] = L"0123456789";
-		static const WCHAR prefix[] = L"C:\\ruxnlog\\umd-";
-		DWORD pid = GetCurrentProcessId(), n = 0, i;
-		WCHAR number[12];
-
-		for (i = 0; prefix[i]; i++)
-			path[n++] = prefix[i];
-		i = 0;
-		do {
-			number[i++] = digits[pid % 10];
-			pid /= 10;
-		} while (pid);
-		while (i)
-			path[n++] = number[--i];
-		path[n++] = L'.';
-		path[n++] = L't';
-		path[n++] = L'x';
-		path[n++] = L't';
-		path[n] = 0;
-		if (GetFileAttributesW(L"C:\\ruxnlog") == INVALID_FILE_ATTRIBUTES)
-			return INVALID_HANDLE_VALUE;
-	}
+	// Only a file the process's own environment names; none otherwise.
+	if (!GetEnvironmentVariableW(L"RUXNUMD_LOG", path, LOG_PATH_CHARS))
+		return INVALID_HANDLE_VALUE;
 	log_file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
 			       OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	return log_file;

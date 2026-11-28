@@ -11,7 +11,8 @@
 //   wddmtool pvg        prints the counters of the tasks, the surfaces, the
 //                       display and the flips (no device access)
 //   wddmtool allocs     lists the live allocations, made and opened, with the
-//                       process of each and whether it still runs
+//                       process of each and whether it still runs;
+//                       administrators only
 //   wddmtool klog FILE  writes the lines that processes which cannot write a
 //                       log sent to the driver (Parameters\SandboxLog 1);
 //                       administrators only

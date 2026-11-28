@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 #
-# Lists what a refused command buffer held: the file wm_refused.c writes in
-# the guest (C:\ruxnlog\refused-PID-N.bin), its resources, and for each
+# Lists what a refused command buffer held: the bytes wm_refused.c keeps in
+# the guest, its resources, and for each
 # segment its kind and its commands, each with its number, its length and
 # its first words. The numbers are pvg_wire's: render 26 is a pass, 137
 # useResource, 206 a compute texture binding, and so on (pvg_wire.c).

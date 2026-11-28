@@ -52,8 +52,10 @@ unix:/x/run/watch.sock,server=on,wait=off
 unix:/x/run/input.sock,server=on,wait=off
 -qmp
 unix:/x/run/display.sock,server=on,wait=off
+-add-fd
+fd=56,set=56,opaque=guesthouse-serial:serial.log
 -serial
-file:/x/run/serial.log
+file:/dev/fdset/56
 -D
 /x/run/qemu.log
 -blockdev

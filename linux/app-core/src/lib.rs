@@ -17,6 +17,7 @@ pub mod android_setup;
 pub mod app_windows;
 pub mod auto_snapshot;
 pub mod bridge;
+pub mod capped_log;
 pub mod card_choice;
 pub mod card_share;
 pub mod carry;

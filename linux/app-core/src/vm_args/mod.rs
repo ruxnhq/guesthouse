@@ -16,6 +16,7 @@ mod nic;
 mod own_linux;
 mod passt_age;
 mod qemu_jail;
+mod serial;
 mod standalone;
 mod throwaway;
 mod ubuntu;
@@ -29,6 +30,7 @@ pub use nic::{
 };
 pub use passt_age::PasstAge;
 pub use qemu_jail::{PASST_FD, PID_FILE, TAP_FD};
+pub use serial::SERIAL_FD;
 pub use standalone::memory_files_in;
 pub use throwaway::{THROWAWAY_FDS, THROWAWAY_MARK, throwaway_disk};
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};

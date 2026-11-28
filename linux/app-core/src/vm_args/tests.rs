@@ -33,6 +33,11 @@ fn has(arguments: &[String], word: &str) -> bool {
     arguments.iter().any(|found| found == word)
 }
 
+/// Whether any of a machine's drives is handed over in a descriptor set: those are 40 and on.
+fn hands_drives(arguments: &[String]) -> bool {
+    arguments.iter().any(|word| word.starts_with("fd=4") || word.contains("/dev/fdset/4"))
+}
+
 /// The guest has seen this order, so a change here is a change for every machine.
 #[test]
 fn a_gpu_vms_arguments_stay_word_for_word_the_same() {
@@ -69,6 +74,9 @@ fn memory_by_path_changes_the_two_paths_and_nothing_else() {
         .map(|line| line.replace("0x10000000000", &base))
         .map(|line| line.replace("/proc/self/fd/12", "/dev/shm/gpupv-window.standalone"))
         .map(|line| line.replace("/proc/self/fd/13", "/dev/shm/gpupv-ram.standalone"))
+        // QEMU run by hand writes the serial log itself.
+        .filter(|line| line != "-add-fd" && !line.starts_with("fd=56,"))
+        .map(|line| line.replace("file:/dev/fdset/56", "file:/x/run/serial.log"))
         .collect();
     assert_eq!(plan.qemu_arguments(), expected);
     assert_eq!(plan.qemu_command()[0], plan.qemu.to_string_lossy(), "nothing goes in front of QEMU");
@@ -499,7 +507,7 @@ fn a_drive_is_handed_over_and_put_on_the_first_free_port() {
     let machine = with_drives(plain_machine(), &["ata-Disk_1"]);
     let (_scratch, plan) = plan(&machine, plain_boot());
     let arguments = plan.qemu_arguments();
-    let at = arguments.iter().position(|word| word == "-add-fd").unwrap();
+    let at = arguments.iter().position(|word| word == "fd=40,set=40").unwrap() - 1;
     assert_eq!(
         arguments[at..],
         [
@@ -536,7 +544,7 @@ fn drives_come_last_and_change_nothing_before_them() {
         let (before, after) = (plain.qemu_arguments(), driven.qemu_arguments());
         assert_eq!(after[..before.len()], before[..]);
         assert_eq!(after.len(), before.len() + 12);
-        assert!(!has(&before, "-add-fd") && !before.iter().any(|word| word.contains("fdset")));
+        assert!(!hands_drives(&before));
     }
 }
 
@@ -546,14 +554,14 @@ fn an_install_and_ubuntu_are_given_no_drives() {
     let machine = with_drives(windows(), &["a"]);
     let install = Boot::Install { iso: String::new(), answer: "/m/answer.iso".into() };
     let (_scratch, installing) = plan(&machine, install);
-    assert!(installing.drives.is_empty() && !has(&installing.qemu_arguments(), "-add-fd"));
+    assert!(installing.drives.is_empty() && !hands_drives(&installing.qemu_arguments()));
     let (_scratch, unfinished) = plan(&Machine { installing: true, ..machine.clone() }, plain_boot());
     assert!(unfinished.drives.is_empty());
     let (_scratch, running) = plan(&machine, Boot::Gpu);
     assert_eq!(running.drives, machine.drives);
     let ubuntu = Machine { kind: Kind::Linux, ..machine };
     let (_scratch, ubuntu_plan) = plan(&ubuntu, Boot::Ubuntu(UbuntuBoot::NoGpu { reason_file: "/r".into() }));
-    assert!(ubuntu_plan.drives.is_empty() && !has(&ubuntu_plan.qemu_arguments(), "-add-fd"));
+    assert!(ubuntu_plan.drives.is_empty() && !hands_drives(&ubuntu_plan.qemu_arguments()));
 }
 
 #[test]

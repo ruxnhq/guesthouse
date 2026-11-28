@@ -17,6 +17,7 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::os::fd::FromRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
@@ -36,6 +37,8 @@ const AGENT_FORWARD: &str = "hostfwd=tcp:127.0.0.1:0-:8765";
 static AGENT_PORT: AtomicU16 = AtomicU16::new(0);
 /// How the guest's memfds show in `/proc`.
 const GUEST_MEMORY: &str = "/memfd:gpupv-";
+/// What the pretend guest says on its serial port.
+const SERIAL_WORDS: &[u8] = b"BdsDxe: starting Boot0001\n";
 
 fn serve_monitor(mut stream: UnixStream) {
     let _ = stream.write_all(b"{\"QMP\": {}}\n");
@@ -141,6 +144,13 @@ fn pretend_qemu(arguments: &[String]) {
         if (pair[0] == "-nic" || pair[0] == "-netdev") && pair[1].contains(AGENT_FORWARD) {
             serve_agent();
         }
+        if pair[0] == "-add-fd" && pair[1].contains("opaque=guesthouse-serial:") {
+            // The guest's first words, through the pipe QEMU is handed, from inside its jail.
+            let fd = pair[1].split(',').find_map(|part| part.strip_prefix("fd=")).unwrap().parse().unwrap();
+            // SAFETY: the descriptor the app left open for this, which nothing else here uses.
+            let mut port = unsafe { fs::File::from_raw_fd(fd) };
+            port.write_all(SERIAL_WORDS).unwrap();
+        }
     }
     thread::sleep(PRETEND_LIFE);
 }
@@ -170,6 +180,17 @@ fn pretend_daemon(base: &str) {
     let folder = Slot::from_environment().unwrap().run_folder(Path::new(base));
     let _sockets = ["vgpu.sock", "global.sock"].map(|name| UnixListener::bind(folder.join(name)).unwrap());
     thread::sleep(PRETEND_LIFE);
+}
+
+fn wait_until(done: impl Fn() -> bool) -> bool {
+    let end = Instant::now() + MOST_WAIT;
+    while !done() {
+        if Instant::now() >= end {
+            return false;
+        }
+        thread::sleep(POLL);
+    }
+    true
 }
 
 fn wait_for(context: &Context, machine: &Machine, wanted: impl Fn(&Status) -> bool) -> Status {
@@ -219,6 +240,9 @@ fn start_and_stop(context: &Context, machine: &Machine) -> Slot {
     assert_eq!(running.error, "", "{running:?}");
     println!("{} is running in slot {:?}", machine.name, running.slot);
     let slot = Slot::parse(running.slot.map(|number| number.to_string()).as_deref()).unwrap();
+    let serial = slot.run_folder(&context.paths.runtime).join("serial.log");
+    let said = wait_until(|| fs::read(&serial).is_ok_and(|words| words == SERIAL_WORDS));
+    assert!(said, "the guest's serial port reaches its log: {:?}", fs::read(&serial));
     if machine.has_gpu() {
         let qemu = qemu_pid(context, Some(slot)).unwrap();
         assert!(jailed(qemu), "QEMU runs jailed");
@@ -336,6 +360,13 @@ fn outer() {
 
 /// The real task, with the one difference that it can't be refused for what else the PC is doing.
 fn task_with_room(arguments: &[String]) {
+    if let [word, file, most] = arguments
+        && word == guesthouse_app_core::capped_log::KEEP_LOG
+    {
+        let most = most.parse().unwrap();
+        guesthouse_app_core::capped_log::keep(std::io::stdin().lock(), Path::new(file), most).unwrap();
+        return;
+    }
     let [action, machine, rest @ ..] = arguments else { panic!("a task needs an action and a machine") };
     let mut context = Context::from_process().unwrap();
     context.meminfo = env::var_os(MEMINFO_VARIABLE).unwrap().into();

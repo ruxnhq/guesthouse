@@ -68,7 +68,10 @@ fn the_qemu_words_are_the_guests_machine_in_the_same_order() {
     let base = format!("{:#x}", window_base());
     let fixture = include_str!("../../vm_args/gpu-arguments.txt").lines();
     let device_words = fixture
-        .filter(|word| !word.contains('/') && *word != "-L")
+        // A printed command writes the serial log itself, with no pipe to hand QEMU.
+        .filter(|word| {
+            !word.contains('/') && *word != "-L" && *word != "-add-fd" && !word.starts_with("fd=56,")
+        })
         .map(|word| word.replace("0x10000000000", &base));
     let mut remaining = words.iter();
     for wanted in device_words {

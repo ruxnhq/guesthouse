@@ -118,9 +118,8 @@ impl VmPlan {
             // No monitor's path names the run folder then, and the app finds QEMU by this.
             arguments.extend(words(&["-pidfile", &self.in_run_folder(PID_FILE)]));
         }
+        arguments.extend(self.serial_arguments("serial.log"));
         arguments.extend(words(&[
-            "-serial",
-            &format!("file:{}", self.in_run_folder("serial.log")),
             "-D",
             &self.in_run_folder("qemu.log"),
             "-blockdev",

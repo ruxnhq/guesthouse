@@ -88,9 +88,8 @@ impl VmPlan {
             "dbus,p2p=yes",
             "-vga",
             "std",
-            "-serial",
-            &format!("file:{}", self.in_run_folder(INSTALL_LOG)),
         ]));
+        arguments.extend(self.serial_arguments(INSTALL_LOG));
         arguments.extend(self.monitor_arguments());
         arguments
     }
@@ -189,7 +188,7 @@ impl VmPlan {
             UbuntuBoot::Amd(amd) => Self::amd_screen_arguments(amd, None),
             _ => words(&["-vga", "std", "-display", "dbus,p2p=yes"]),
         });
-        arguments.extend(words(&["-serial", &format!("file:{}", self.in_run_folder(SERIAL_LOG))]));
+        arguments.extend(self.serial_arguments(SERIAL_LOG));
         arguments.extend(self.monitor_arguments());
         arguments.extend(self.with_gpu_arguments(boot));
         arguments.extend(self.qemu_sandbox_arguments());
@@ -408,6 +407,6 @@ mod tests {
         assert_eq!(value_after(&arguments, "-kernel"), "/m/boot/vmlinuz");
         assert_eq!(value_after(&arguments, "-m"), "8G");
         assert!(arguments.iter().any(|word| word == "file=/iso/a,,b.iso,format=raw,media=cdrom,readonly=on"));
-        assert!(arguments.iter().any(|word| word.ends_with("/install-serial.log")));
+        assert!(arguments.iter().any(|word| word.ends_with(":install-serial.log")));
     }
 }

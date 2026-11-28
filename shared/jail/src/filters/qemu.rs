@@ -79,6 +79,19 @@ const BY_PATH: [c_long; 18] = [
     SYS_truncate,
 ];
 
+/// Setting a file's mode by its path, which swtpm does to the socket it makes. Nothing else of
+/// [`BY_PATH`] is let.
+const MODE_BY_PATH: [c_long; 3] = [SYS_chmod, SYS_fchmodat, SYS_fchmodat2];
+
+/// The filter for the virtual TPM: QEMU's, but that it may set a file's mode by its path, as swtpm
+/// sets its socket's. Landlock still keeps it to its own folder and the run folder for every other
+/// right, and in a jail of its own it reaches no file of QEMU's.
+pub fn tpm() -> Filter {
+    let mut filter = qemu(false, false, false);
+    filter.rules.retain(|rule| !(MODE_BY_PATH.contains(&rule.call) && rule.when.is_none()));
+    filter
+}
+
 /// System V's shared memory, queues and semaphores, and POSIX queues, which no rule of Landlock's
 /// names. QEMU shares memory through descriptors.
 const IPC: [c_long; 17] = [
@@ -208,6 +221,18 @@ mod tests {
         assert_eq!(rules[0].action, Action::Allow);
         assert_eq!((rules[1].when, rules[1].action), (None, Action::Fail(EPERM)), "any other pid");
         assert!(denies(&filter, SYS_process_vm_writev));
+    }
+
+    #[test]
+    fn the_tpm_may_set_a_mode_by_path_and_nothing_else_qemu_may_not() {
+        let tpm = tpm();
+        for call in MODE_BY_PATH {
+            assert!(!denies(&tpm, call), "{call}");
+            assert!(denies(&qemu(false, false, false), call), "QEMU still may not: {call}");
+        }
+        for call in [SYS_chown, SYS_utimensat, SYS_setxattr, SYS_truncate, SYS_shmget, SYS_ptrace] {
+            assert!(denies(&tpm, call), "{call}");
+        }
     }
 
     #[test]

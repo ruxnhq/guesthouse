@@ -5,7 +5,7 @@ mod daemon;
 mod qemu;
 
 pub use daemon::daemon;
-pub use qemu::qemu;
+pub use qemu::{qemu, tpm};
 
 use crate::seccomp::{Action, Rule};
 

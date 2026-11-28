@@ -1,10 +1,11 @@
 //! The jail around a machine's virtual TPM. swtpm reads the system's libraries and its crypto
-//! settings, and writes only the machine's TPM folder and the run folder, where its socket and log
-//! are. It has no network, and the same filter as QEMU. It starts when QEMU is jailed, by the same
-//! launcher, and with QEMU unjailed it runs as it is.
+//! settings, and writes only the machine's TPM folder and the run folder, where it makes its socket
+//! and log as it always has. It has no network, and QEMU's filter but for setting a file's mode by
+//! its path, which it does to its socket. It starts when QEMU is jailed, by the same launcher, and
+//! with QEMU unjailed it runs as it is.
 
 use super::VmPlan;
-use guesthouse_jail::launch::{Launch, UnixSocket};
+use guesthouse_jail::launch::Launch;
 use guesthouse_jail::{Grant, Plan, system};
 use std::path::PathBuf;
 
@@ -19,9 +20,6 @@ const SYSTEM: [(Grant, &str); 6] = [
     (Grant::Read, "/proc"),
 ];
 const DEVICES: [&str; 3] = ["/dev/null", "/dev/random", "/dev/urandom"];
-/// Where the launcher leaves the TPM's socket, made and listening, for swtpm to take its clients on.
-const SOCKET_FD: i32 = 20;
-const CONTROL: &str = "--ctrl";
 
 impl VmPlan {
     /// What swtpm may reach.
@@ -41,29 +39,19 @@ impl VmPlan {
 
     /// The words that start the virtual TPM: in the launcher's jail when QEMU has one.
     pub fn swtpm_command(&self) -> Option<Vec<String>> {
-        let mut arguments = self.swtpm_arguments()?;
+        let arguments = self.swtpm_arguments()?;
         let program = super::program_on_path(SWTPM).unwrap_or_else(|| PathBuf::from(SWTPM));
         let mut words = Vec::new();
         if let (Some(jail), Some(plan)) = (&self.jail, self.tpm_jail_plan()) {
-            // swtpm sets the mode of a socket it makes by its path, which the jail's filter refuses,
-            // so the launcher makes it, and swtpm takes it by its number.
-            let control = arguments.iter().position(|word| word == CONTROL).map(|at| at + 1);
-            if let Some(at) = control {
-                arguments[at] = format!("type=unixio,fd={SOCKET_FD}");
-            }
-            let socket = UnixSocket {
-                path: self.run_folder.join(super::qemu_jail::TPM_SOCKET),
-                fd: SOCKET_FD,
-                listen: true,
-            };
             let jailing = Launch {
                 plan: Some(plan),
                 passt: None,
                 tap: None,
-                unix_sockets: vec![socket],
+                unix_sockets: Vec::new(),
                 no_new_unix_sockets: false,
                 reads_own_memory: false,
                 pings: false,
+                tpm: true,
                 program: Vec::new(),
             };
             words.push(jail.launcher.display().to_string());
@@ -114,9 +102,9 @@ mod tests {
             !command.iter().any(|word| word == "/m/win/disk.qcow2" || word == "/m/win"),
             "no machine file"
         );
-        let listen = command.iter().position(|word| word == "--unix-listen").unwrap();
-        assert_eq!(command[listen + 1], plan.run_folder.join("tpm.sock").display().to_string());
-        assert!(command.contains(&format!("type=unixio,fd={}", command[listen + 2])), "{command:?}");
+        assert!(command.contains(&"--tpm".to_owned()), "its own filter");
+        let socket = format!("type=unixio,path={}", plan.run_folder.join("tpm.sock").display());
+        assert!(command.contains(&socket), "its socket where it always was: {command:?}");
     }
 
     #[test]

@@ -366,6 +366,7 @@ impl VmPlan {
             no_new_unix_sockets: false,
             reads_own_memory: false,
             pings: false,
+            tpm: false,
             program: Vec::new(),
         };
         let mut words = vec![self.launcher.display().to_string()];
@@ -390,6 +391,7 @@ impl VmPlan {
             no_new_unix_sockets: self.passes_unix_sockets(),
             reads_own_memory: self.macos_boot().is_some(),
             pings: self.user_network_is_nat(),
+            tpm: false,
             program: Vec::new(),
         };
         let launcher = jail.launcher.display().to_string();
@@ -404,6 +406,7 @@ impl VmPlan {
                     no_new_unix_sockets: false,
                     reads_own_memory: false,
                     pings: false,
+                    tpm: false,
                     program: Vec::new(),
                 };
                 words.push(launcher.clone());

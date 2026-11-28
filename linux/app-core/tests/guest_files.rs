@@ -228,7 +228,7 @@ fn only_the_host_reaches_the_agent() {
     let agent = fs::read_to_string(guest_file("agent.ps1")).unwrap();
     assert!(agent.contains("[string]$HostAddress = '10.0.2.2'"));
     assert!(agent.contains("RemoteEndPoint"));
-    assert!(agent.contains("ReadTimeout"));
+    assert!(agent.contains("$lineMilliseconds = 10000"));
 }
 
 #[test]

@@ -89,3 +89,24 @@ fn the_agent_runs_a_script_with_the_token_and_nothing_without_it() {
     assert_eq!(agent.ask(TOKEN, "Write-Output 'ran it'").trim(), "ran it");
     assert_eq!(agent.ask("ffffffffffffffffffffffffffffffff", "Write-Output 'ran it'"), "");
 }
+
+#[test]
+fn a_connection_that_sends_nothing_does_not_hold_up_the_next() {
+    let Some(shell) = shell() else { return };
+    let agent = Agent::start(shell);
+    let idle: Vec<TcpStream> =
+        (0..3).map(|_| TcpStream::connect((Ipv4Addr::LOCALHOST, agent.port)).unwrap()).collect();
+    let started = Instant::now();
+    assert_eq!(agent.ask(TOKEN, "Write-Output 'ran it'").trim(), "ran it");
+    assert!(started.elapsed() < Duration::from_secs(5), "it waited {:?} behind them", started.elapsed());
+    drop(idle);
+}
+
+/// A helper's start carries the helper in Base64, which makes a line of megabytes.
+#[test]
+fn a_line_of_megabytes_is_read_whole() {
+    let Some(shell) = shell() else { return };
+    let agent = Agent::start(shell);
+    let script = format!("$helper = '{}'\nWrite-Output $helper.Length", "a".repeat(2 << 20));
+    assert_eq!(agent.ask(TOKEN, &script).trim(), (2 << 20).to_string());
+}

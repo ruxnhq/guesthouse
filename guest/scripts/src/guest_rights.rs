@@ -229,3 +229,39 @@ fn the_windows_hosts_report_removes_the_answer_file_the_same_way() {
     let text = std::fs::read_to_string(&report).unwrap();
     assert!(text.contains("Remove-AnswerFile 'C:\\Windows\\Panther\\unattend.xml' 'HKLM:\\SYSTEM\\Setup'"));
 }
+
+/// A recipe's runner writes in the run's folder it is given, in the account's profile in a guest,
+/// and in nothing of SYSTEM's: here it runs a script step from a recipe in a stand-in folder.
+#[cfg(windows)]
+#[test]
+fn a_recipe_writes_only_in_its_runs_own_folder() {
+    let Some(shell) = shell() else { return };
+    let scratch = Scratch::new();
+    let runs = scratch.path("runs");
+    std::fs::create_dir_all(runs.join("earlier")).unwrap();
+    std::fs::write(runs.join("earlier/status.txt"), "end\n").unwrap();
+    let data = scratch.path("data.json");
+    std::fs::write(
+        &data,
+        r#"{"winget_seconds": 1, "steps": [{"number": 1, "kind": "script", "value": "exit 0"}]}"#,
+    )
+    .unwrap();
+    let work = runs.join("this");
+    let said = run(
+        shell,
+        &format!(
+            "& {} -Work {} -Data {}",
+            quote(&guest_script("recipe-run.ps1")),
+            quote(&work),
+            quote(&data)
+        ),
+    );
+    let status = std::fs::read_to_string(work.join("status.txt")).unwrap_or_default();
+    assert_eq!(status.lines().collect::<Vec<_>>(), ["begin", "start 1", "ok 1", "end"], "{said}");
+    assert!(work.join("run.pid").is_file() && work.join("step-1.ps1").is_file(), "{said}");
+    assert!(!runs.join("earlier").exists(), "an earlier run's folder goes{said}");
+    assert_eq!(
+        crate::names(scratch.path("").as_path()),
+        ["data.json", "runs/this/run.pid", "runs/this/status.txt", "runs/this/step-1.ps1"]
+    );
+}

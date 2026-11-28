@@ -1,5 +1,5 @@
 use super::super::tests::{machine, plain_task_context, with_vm_running};
-use super::windows::{Progress, read_progress};
+use super::windows::{Progress, STATUS_ASK, read_progress};
 use super::*;
 use crate::agent::stand_in::ScriptedAgent;
 use crate::context::Context;
@@ -63,12 +63,30 @@ fn running_the_steps_again_ends_the_earlier_runs_own_process_tree_first() {
     let wrote = run.find("Set-Content -LiteralPath (Join-Path $folder 'run.pid') -Value $PID").unwrap();
     assert!(wrote < run.find("Say 'begin'").unwrap(), "written before any step starts");
     let start = guest_script("recipe-start.ps1");
-    let read = start.find("Get-Content -LiteralPath \"$folder\\run.pid\"").unwrap();
+    let read = start.find("Get-Content -LiteralPath (Join-Path $earlierWork 'run.pid')").unwrap();
     let only_the_runner = start.find("CommandLine -like '*-File C:\\gpupv\\recipe\\run.ps1*'").unwrap();
     let ended = start.find("taskkill.exe /PID $earlier /T /F").unwrap();
     let cleared = start.find("Remove-Item \"$folder\\*\"").unwrap();
     assert!(read < only_the_runner && only_the_runner < ended && ended < cleared, "{start}");
     assert!(!start.contains("Stop-Process -Name") && !start.contains("/IM "), "never by name");
+}
+
+/// The account may not write in C:\gpupv, so the steps write in a folder of its own, in its profile,
+/// a new one each run. SYSTEM gives the account no rights anywhere and takes nothing away there.
+#[test]
+fn the_steps_write_in_the_accounts_own_folder_and_nothing_of_systems() {
+    let start = guest_script("recipe-start.ps1");
+    assert!(start.contains("$work = Join-Path $profileFolder ('AppData\\Local\\Guesthouse\\recipe\\' + [guid]::NewGuid().ToString('N'))"));
+    assert!(start.contains("-File C:\\gpupv\\recipe\\run.ps1 -Work \"' + $work + '\"'"));
+    for giving in ["icacls", "Set-Acl", "AddAccessRule"] {
+        assert!(!start.contains(giving), "{giving}");
+    }
+    assert_eq!(start.matches("Remove-Item").count(), 1);
+    assert!(start.contains("Remove-Item \"$folder\\*\""), "only in SYSTEM's own folder");
+    let run = guest_script("recipe-run.ps1");
+    assert!(run.contains("param([string]$Work, [string]$Data = 'C:\\gpupv\\recipe\\data.json')"));
+    assert!(run.contains("$folder = $Work\n"));
+    assert!(STATUS_ASK.contains("C:\\gpupv\\recipe\\work.txt") && STATUS_ASK.contains("'status.txt'"));
 }
 
 #[test]

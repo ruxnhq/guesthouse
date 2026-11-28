@@ -82,6 +82,25 @@ qemu_words() {
     '
 }
 
+# Whether each path, and each folder above it, is root's and only root can write to it.
+root_owned() {
+    for path in "$@"; do
+        while :; do
+            # shellcheck disable=SC2012
+            set -- $(ls -ldn -- "$path" 2>/dev/null | awk '{ print $1, $3 }')
+            [ "${2:-}" = 0 ] || return 1
+            case $1 in
+                ?????w????* | ????????w?*)
+                    # A folder writable by all with its sticky bit, like /tmp, still keeps others' files apart, but not this.
+                    return 1
+                    ;;
+            esac
+            [ "$path" = / ] && break
+            path=$(dirname -- "$path")
+        done
+    done
+}
+
 main() {
     user=${SUDO_USER:-} slot='' ram='' storage=local render_address=0x6 dry_run=''
     while [ $# -gt 0 ]; do
@@ -111,6 +130,8 @@ main() {
     program=$home/.local/lib/guesthouse/current
     [ -x "$program/guesthouse-vm" ] || die "$user has no Guesthouse at $program."
     [ -f "$HERE/hookscript.sh" ] || die "hookscript.sh isn't beside this script."
+    root_owned "$HERE" "$HERE/hookscript.sh" "$HERE/setup-vm.sh" ||
+        die "$HERE has a file or folder that someone other than root can change, and the hookscript from it runs as root. Clone Guesthouse as root into a folder of root's, as docs/proxmox.md says."
 
     config=$(qm config "$vmid") || die "there's no VM $vmid."
     status=$(qm status "$vmid")

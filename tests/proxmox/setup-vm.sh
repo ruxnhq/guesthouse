@@ -149,6 +149,18 @@ EOS
     [ "$input" = 0 ] || { expect "it had input to read"; return 1; }
 }
 
+test_a_checkout_others_can_change_is_refused() {
+    mkdir -p "$T/checkout"
+    : >"$T/checkout/hookscript.sh"
+    status=0
+    "$SHELL_UNDER_TEST" -c '. "$1"; root_owned "$2"' sh "$T/functions.sh" "$T/checkout/hookscript.sh" >"$T/out" 2>&1 ||
+        status=$?
+    [ "$status" -ne 0 ] || { expect "a file of $(id -un)'s counted as root's"; return 1; }
+    status=0
+    "$SHELL_UNDER_TEST" -c '. "$1"; root_owned /usr/bin' sh "$T/functions.sh" >"$T/out" 2>&1 || status=$?
+    [ "$status" -eq 0 ] || { expect "/usr/bin wasn't root's"; return 1; }
+}
+
 for name in $(declare -F | awk '{ print $3 }' | grep '^test_'); do
     check "$name" "$name"
 done

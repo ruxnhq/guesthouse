@@ -345,6 +345,21 @@ impl GuestVolume {
                         format!("{} is a folder, not a file", self.shown(relative)),
                     ));
                 }
+                // A read-only file would refuse to be replaced, so it's cleared first.
+                if attributes & FILE_ATTRIBUTE_READONLY != 0 {
+                    drop(there);
+                    let there =
+                        open_at(at.raw(), name, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, FILE_OPEN, 0)
+                            .map_err(|error| self.context(relative, error))?;
+                    if basic(&there)?.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                        return Err(link_refused(&self.shown(relative)));
+                    }
+                    let cleared = (attributes & !FILE_ATTRIBUTE_READONLY).max(FILE_ATTRIBUTE_NORMAL);
+                    set_basic_raw(
+                        there.as_raw_handle(),
+                        FILE_BASIC_INFORMATION { FileAttributes: cleared, ..zeroed_basic() },
+                    )?;
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(self.context(relative, error)),

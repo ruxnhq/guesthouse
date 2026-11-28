@@ -142,6 +142,12 @@ fn files_are_written_read_copied_and_listed_inside_the_volume() {
     assert!(volume.is_dir("Guesthouse"));
     assert!(volume.is_file(r"guesthouse\SCREEN\Encoder.txt"), "names match whatever their case");
     assert!(volume.write("Guesthouse", "a folder is no file").is_err());
+    let kept = scratch.volume.join(r"Guesthouse\screen\setup.exe");
+    let mut permissions = fs::metadata(&kept).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&kept, permissions).unwrap();
+    volume.write(r"Guesthouse\screen\setup.exe", "newer").unwrap();
+    assert_eq!(fs::read_to_string(&kept).unwrap(), "newer", "a read-only file is replaced too");
     volume.remove_file(r"Guesthouse\screen\encoder.txt").unwrap();
     assert_eq!(volume.entry(r"Guesthouse\screen\encoder.txt").unwrap(), None);
     assert_eq!(volume.entry(r"Nothing\here").unwrap(), None);

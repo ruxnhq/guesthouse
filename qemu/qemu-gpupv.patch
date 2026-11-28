@@ -10893,3 +10893,92 @@ index dac3812..6a41e70 100644
 2.56.1
 
 
+From d244dda0c92aff307e63647c24b67209c9363480 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:26:33 -0800
+Subject: [PATCH] hw/hyperv: hold at most 64 MiB of GPU-PV frames for a guest
+
+Frames from the backend wait in QEMU until the guest's ring has room. When
+16 MiB are waiting, the channel takes no more packets from the guest until it
+reads; past 64 MiB, further frames from the backend are dropped, and that is
+said once. Neither side ever waits on the other for it.
+---
+ hw/hyperv/gpupv.c | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/hw/hyperv/gpupv.c b/hw/hyperv/gpupv.c
+index 23bd512..3b0ee40 100644
+--- a/hw/hyperv/gpupv.c
++++ b/hw/hyperv/gpupv.c
+@@ -57,6 +57,12 @@
+ #define GPUPV_EVT_ARENA     0xf010
+ 
+ #define GPUPV_MAX_FRAME     (4 * 1024 * 1024)
++/*
++ * Backend frames waiting for room in the guest's ring. Past the first figure no more packets are
++ * taken from the guest until it reads; past the second, frames from the backend are dropped.
++ */
++#define GPUPV_QUEUE_PAUSE   (16 * 1024 * 1024)
++#define GPUPV_QUEUE_MOST    (64 * 1024 * 1024)
+ 
+ typedef struct QEMU_PACKED GpupvFrame {
+     uint32_t len;
+@@ -81,6 +87,7 @@ struct GpupvChannel {
+     CharFrontend chr;
+     GByteArray *rx;
+     GQueue out;
++    uint64_t out_bytes; /* the frames in `out` */
+ 
+     /* Memory shared with the backend, for fences. Only the global channel has it. */
+     HostMemoryBackend *iomem;
+@@ -136,6 +143,7 @@ static void gpupv_flush(GpupvChannel *s)
+             error_report("gpupv: send to guest failed");
+         }
+         g_queue_pop_head(&s->out);
++        s->out_bytes -= o->len;
+         g_free(o);
+     }
+ }
+@@ -172,6 +180,10 @@ static void gpupv_chan_notify(VMBusChannel *chan)
+     bool got_packet;
+ 
+     gpupv_flush(s);
++    if (s->out_bytes >= GPUPV_QUEUE_PAUSE) {
++        /* The guest is not reading its replies. Its next packets wait until it frees room. */
++        return;
++    }
+ 
+     /*
+      * The guest signals only when it finds the ring empty. A packet it writes
+@@ -273,6 +285,11 @@ static void gpupv_chr_read(void *opaque, const uint8_t *buf, int size)
+             continue;
+         }
+ 
++        if (s->out_bytes + len > GPUPV_QUEUE_MOST) {
++            error_report_once("gpupv: the guest is not reading, so frames for it are dropped");
++            g_byte_array_remove_range(s->rx, 0, sizeof(f) + len);
++            continue;
++        }
+         o = g_malloc(sizeof(*o) + len);
+         o->type = le16_to_cpu(f.type);
+         o->need_comp = le16_to_cpu(f.flags) & GPUPV_FRAME_NEED_COMP;
+@@ -280,6 +297,7 @@ static void gpupv_chr_read(void *opaque, const uint8_t *buf, int size)
+         o->len = len;
+         memcpy(o->data, s->rx->data + sizeof(f), len);
+         g_queue_push_tail(&s->out, o);
++        s->out_bytes += len;
+ 
+         g_byte_array_remove_range(s->rx, 0, sizeof(f) + len);
+     }
+@@ -294,6 +312,7 @@ static void gpupv_drop_pending(GpupvChannel *s)
+     while ((o = g_queue_pop_head(&s->out))) {
+         g_free(o);
+     }
++    s->out_bytes = 0;
+ }
+ 
+ static int gpupv_open_channel(VMBusChannel *chan)
+-- 
+2.56.1
+
+

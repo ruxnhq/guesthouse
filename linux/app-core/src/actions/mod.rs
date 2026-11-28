@@ -276,8 +276,11 @@ pub fn smaller_start_note(gib: u32, own: u32) -> String {
 fn boot(task: &mut Task) -> Result<()> {
     task.step("Starting the VM");
     let shown = start_gpu_vm(task)?;
-    crate::token_change::finish_token_change(task.context, &task.machine, task.context.agent_port(None));
+    let agent = crate::guest_end::GuestEnd::agent(task.context, &task.machine, None);
+    crate::token_change::finish_token_change(task.context, &task.machine, &agent);
     install::keep_guest_folder(task);
+    let said = crate::agent::keep_agent_current(task.context, &task.machine, None);
+    let _ = crate::log::write_log(task.context, &format!("{}: {said}", task.machine.id));
     // Before anything here uses the GPU, as it may restart Windows.
     let ready = nv_store::refresh_driver_store(task).and_then(|()| get_ready(task, shown));
     if ready.is_err() {
@@ -731,5 +734,7 @@ fn keep_ended_run(context: &Context, action: &str) {
     }
 }
 
+#[cfg(test)]
+mod agent_update_tests;
 #[cfg(test)]
 pub(crate) mod tests;

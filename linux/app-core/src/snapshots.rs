@@ -181,8 +181,15 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
     }
     fs::rename(&new, &machine.vars)?;
     if new_tpm.is_dir() {
-        let _ = fs::remove_dir_all(&tpm);
-        fs::rename(new_tpm, tpm)?;
+        // The old TPM is put aside, not removed, until the new one is in its place, so no moment
+        // leaves the machine with none: see [`finish_tpm_swap`].
+        let old_tpm = with_suffix(&tpm, ".old");
+        let _ = fs::remove_dir_all(&old_tpm);
+        if tpm.exists() {
+            fs::rename(&tpm, &old_tpm)?;
+        }
+        fs::rename(&new_tpm, &tpm)?;
+        let _ = fs::remove_dir_all(&old_tpm);
     }
     snapshot_state::restore(context, &task.machine, &snapshot_file(context, &machine, tag, ".state"))?;
     let saved = snapshot_file(context, &machine, tag, ".json");
@@ -195,6 +202,23 @@ pub fn go_back(task: &mut Task, tag: &str) -> Result<()> {
         crate::scan_exclusions::mark_for_look(&machine.folder(context))?;
     }
     Ok(())
+}
+
+/// Finishes a swap of the TPM that was cut short, before a start looks at the TPM's folder: with none
+/// there and the snapshot's put aside beside it, that one is put in place; with the old one put aside
+/// and no new one, the old one is put back; once one is in place what is put aside is removed.
+pub fn finish_tpm_swap(tpm: &Path) {
+    let (new, old) = (with_suffix(tpm, ".new"), with_suffix(tpm, ".old"));
+    if !tpm.exists() {
+        if new.is_dir() && old.is_dir() {
+            let _ = fs::rename(&new, tpm);
+        } else if old.is_dir() {
+            let _ = fs::rename(&old, tpm);
+        }
+    }
+    if tpm.exists() {
+        let _ = fs::remove_dir_all(&old);
+    }
 }
 
 pub fn delete_snapshot(task: &mut Task, tag: &str) -> Result<()> {
@@ -228,6 +252,45 @@ mod tests {
     use crate::vm_host::stand_in::RecordingHost;
     use std::io::{BufRead, BufReader, Write};
     use std::process::Stdio;
+
+    #[test]
+    fn a_swap_of_the_tpm_that_was_cut_short_is_finished_or_undone_before_a_start() {
+        let scratch = Scratch::new();
+        let folder = |name: &str, said: &str| {
+            let path = scratch.path(name);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("state"), said).unwrap();
+            path
+        };
+        let said = |path: &Path| fs::read_to_string(path.join("state")).unwrap();
+        // Cut after the old one was put aside: the snapshot's goes in its place.
+        let one = scratch.path("a/tpm");
+        fs::create_dir_all(scratch.path("a")).unwrap();
+        folder("a/tpm.old", "old");
+        folder("a/tpm.new", "snapshot's");
+        finish_tpm_swap(&one);
+        assert_eq!(said(&one), "snapshot's");
+        assert!(!with_suffix(&one, ".old").exists() && !with_suffix(&one, ".new").exists());
+        // Cut after the new one was in place: what was put aside goes.
+        let two = scratch.path("b/tpm");
+        fs::create_dir_all(scratch.path("b")).unwrap();
+        folder("b/tpm", "snapshot's");
+        folder("b/tpm.old", "old");
+        finish_tpm_swap(&two);
+        assert_eq!(said(&two), "snapshot's");
+        assert!(!with_suffix(&two, ".old").exists());
+        // Only the old one is left: it is put back.
+        let three = scratch.path("c/tpm");
+        fs::create_dir_all(scratch.path("c")).unwrap();
+        folder("c/tpm.old", "old");
+        finish_tpm_swap(&three);
+        assert_eq!(said(&three), "old");
+        // No swap at all: nothing changes, and a TPM with no folder yet is left for swtpm to make.
+        let four = scratch.path("d/tpm");
+        fs::create_dir_all(scratch.path("d")).unwrap();
+        finish_tpm_swap(&four);
+        assert!(!four.exists());
+    }
 
     fn fill(disk: &str, byte: u8) {
         let write = format!("write -P {byte} 0 64k");

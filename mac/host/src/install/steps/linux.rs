@@ -83,10 +83,7 @@ impl RealSteps<'_> {
     /// The Linux package to install: the lab's folder when it holds one (it may hold Windows'
     /// instead, since one setting names both), else the one fetched with the installer.
     fn linux_package(&self) -> Option<PathBuf> {
-        self.setup
-            .driver_dir
-            .clone()
-            .filter(|dir| dir.join(driver::LINUX_SCRIPT).is_file())
+        self.lab_folder(driver::LINUX_SCRIPT)
             .or_else(|| driver::kept_package_of(&LINUX, &self.setup.downloads))
     }
 

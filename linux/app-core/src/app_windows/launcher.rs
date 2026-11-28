@@ -15,6 +15,7 @@
 //! Every file names its machine in `X-Guesthouse-Machine`, and that is how they are found again, so
 //! that removing a machine takes its entries with it.
 
+pub use super::icon_check::valid_icon;
 use super::message::Launch;
 use crate::context::Context;
 use crate::failure::{Failure, Result};
@@ -277,33 +278,6 @@ pub fn icon_path(context: &Context, app_id: &str) -> Option<PathBuf> {
     icon_of(context, app_id).map(|_| icon_file(context, app_id))
 }
 
-/// The most an icon may take, in bytes, and the most it may measure each way. A program's icon is a
-/// small picture, and what the guest sends is not trusted: it ends up as a file that the desktop's
-/// image loaders open.
-const ICON_MOST_BYTES: usize = 1 << 20;
-const ICON_MOST_SIDE: u32 = 512;
-const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-/// The length of an IHDR chunk's data, and the signature, length, name, data and checksum before the first chunk's end.
-const IHDR_LENGTH: u32 = 13;
-const IHDR_END: usize = 8 + 4 + 4 + 13 + 4;
-/// The last chunk of every PNG, IEND, with its length of nothing and its checksum.
-const IEND: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82];
-
-/// Whether these bytes are a PNG of a sane size that is whole: its signature, an IHDR first with each
-/// side from 1 to 512, and IEND at the end.
-pub fn valid_icon(png: &[u8]) -> bool {
-    if png.len() < IHDR_END + IEND.len() || png.len() > ICON_MOST_BYTES || png[..8] != PNG_SIGNATURE {
-        return false;
-    }
-    let number = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]);
-    let side = |value: u32| (1..=ICON_MOST_SIDE).contains(&value);
-    number(8) == IHDR_LENGTH
-        && &png[12..16] == b"IHDR"
-        && side(number(16))
-        && side(number(20))
-        && png.ends_with(&IEND)
-}
-
 /// Writes a file whole or not at all, in the folder it is for. Each write has a file of its own to
 /// write into before it takes the name, as more than one thread or process may write the same entry.
 fn write_whole(file: &Path, data: &[u8]) -> Result<()> {
@@ -346,11 +320,32 @@ fn is_visible_entry(text: &[u8]) -> bool {
     !String::from_utf8_lossy(text).lines().any(|line| line == "NoDisplay=true")
 }
 
+/// The most entries a machine keeps that the user did not ask for, which are only there to name a
+/// window in the task bar. A new one past this takes the place of the oldest.
+pub const MOST_HIDDEN_ENTRIES: usize = 64;
+
+/// Removes the oldest hidden entries of the machine until there is room for one more.
+fn make_room(context: &Context, machine: &Machine) {
+    let mut hidden: Vec<Listed> =
+        list_all(context, machine).into_iter().filter(|entry| entry.hidden).collect();
+    if hidden.len() < MOST_HIDDEN_ENTRIES {
+        return;
+    }
+    hidden.sort_by_key(|entry| fs::metadata(&entry.file).and_then(|found| found.modified()).ok());
+    let extra = hidden.len() + 1 - MOST_HIDDEN_ENTRIES;
+    for entry in hidden.iter().take(extra) {
+        let _ = delete_entry(context, entry);
+    }
+}
+
 fn write_entry(context: &Context, machine: &Machine, program: &Program, hidden: bool) -> Result<PathBuf> {
     if !valid_id(&machine.id) {
         return Err(Failure(format!("{} has an id that is not safe in a file name.", machine.name)));
     }
     let id = app_id(machine, &program.exe);
+    if hidden && !entry_file(context, &id).exists() {
+        make_room(context, machine);
+    }
     let icon = match &program.icon {
         Some(png) if valid_icon(png) => {
             let file = icon_file(context, &id);
@@ -492,76 +487,15 @@ pub fn remove(context: &Context, machine: &Machine, key: &str) -> Result<Listed>
     }
 }
 
+/// Removes the machine's entries that only name windows in the task bar, as its windows are gone. The
+/// ones the user asked for stay. Says how many went.
+pub fn remove_hidden(context: &Context, machine: &Machine) -> usize {
+    let hidden = list_all(context, machine).into_iter().filter(|entry| entry.hidden);
+    hidden.filter(|entry| delete_entry(context, entry).is_ok()).count()
+}
+
 /// Removes every entry of the machine, hidden ones too, as the machine itself is removed. Says how many
 /// went. An entry that cannot be removed is skipped: the machine's removal is not held up by it.
 pub fn remove_all(context: &Context, machine: &Machine) -> usize {
     list_all(context, machine).iter().filter(|entry| delete_entry(context, entry).is_ok()).count()
-}
-
-#[cfg(test)]
-mod icon_tests {
-    use super::*;
-
-    /// A PNG's frame with the sides given, and no picture data between the header and the end, which
-    /// is all `valid_icon` looks at.
-    fn png(width: u32, height: u32) -> Vec<u8> {
-        let mut bytes = PNG_SIGNATURE.to_vec();
-        bytes.extend(IHDR_LENGTH.to_be_bytes());
-        bytes.extend(b"IHDR");
-        bytes.extend(width.to_be_bytes());
-        bytes.extend(height.to_be_bytes());
-        bytes.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
-        bytes.extend(IEND);
-        bytes
-    }
-
-    #[test]
-    fn a_whole_small_png_is_an_icon() {
-        assert!(valid_icon(&png(48, 48)));
-        assert!(valid_icon(&png(512, 1)));
-    }
-
-    #[test]
-    fn what_is_not_a_png_is_not() {
-        assert!(!valid_icon(b""));
-        assert!(!valid_icon(
-            b"<svg xmlns='http://www.w3.org/2000/svg'/> and some more bytes to be long enough ....."
-        ));
-        let mut wrong = png(48, 48);
-        wrong[1] = b'X';
-        assert!(!valid_icon(&wrong));
-    }
-
-    #[test]
-    fn a_png_cut_short_is_not_whole() {
-        let whole = png(48, 48);
-        assert!(!valid_icon(&whole[..whole.len() - 1]));
-        assert!(!valid_icon(&whole[..20]));
-        assert!(!valid_icon(&PNG_SIGNATURE));
-    }
-
-    #[test]
-    fn a_picture_that_is_huge_or_has_no_area_is_not_an_icon() {
-        assert!(!valid_icon(&png(513, 48)));
-        assert!(!valid_icon(&png(48, 513)));
-        assert!(!valid_icon(&png(65_000, 65_000)));
-        assert!(!valid_icon(&png(0, 48)));
-        assert!(!valid_icon(&png(48, 0)));
-    }
-
-    #[test]
-    fn a_png_over_the_byte_cap_is_not_an_icon() {
-        let mut big = png(48, 48);
-        let end = big.split_off(big.len() - IEND.len());
-        big.resize(ICON_MOST_BYTES, 0);
-        big.extend(end);
-        assert!(!valid_icon(&big));
-    }
-
-    #[test]
-    fn a_header_that_says_another_chunk_is_not_a_png() {
-        let mut other = png(48, 48);
-        other[12..16].copy_from_slice(b"IDAT");
-        assert!(!valid_icon(&other));
-    }
 }

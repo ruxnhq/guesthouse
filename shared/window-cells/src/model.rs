@@ -22,6 +22,8 @@ use super::message::{Cell, Desktop, Display, Hello, Layout, Size, State};
 
 /// How deep a popup of a popup of a popup may go before it is taken for a loop in the helper's data.
 const MOST_DEPTH: usize = 8;
+/// The most cells one layout may hold; the rest are not taken.
+pub const MOST_CELLS: usize = 256;
 
 /// What differs between two states of one cell.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -180,6 +182,7 @@ impl Model {
     pub fn layout(&mut self, layout: &Layout) -> Applied {
         let seq_went_back = self.seq.is_some_and(|last| layout.seq < last);
         self.seq = Some(layout.seq);
+        let cells = &layout.cells[..layout.cells.len().min(MOST_CELLS)];
         let mut changes = Vec::new();
         if self.screen != layout.screen {
             // The first layout of a model that has had no hello is not a change of screen.
@@ -190,21 +193,21 @@ impl Model {
         }
         let old = std::mem::take(&mut self.cells);
         let mut gone: Vec<Cell> =
-            old.iter().filter(|cell| !layout.cells.iter().any(|new| new.id == cell.id)).cloned().collect();
+            old.iter().filter(|cell| !cells.iter().any(|new| new.id == cell.id)).cloned().collect();
         gone.sort_by_key(|cell| std::cmp::Reverse(depth(&old, cell)));
         changes.extend(gone.into_iter().map(Change::Removed));
         let mut added: Vec<&Cell> =
-            layout.cells.iter().filter(|new| !old.iter().any(|cell| cell.id == new.id)).collect();
-        added.sort_by_key(|cell| depth(&layout.cells, cell));
+            cells.iter().filter(|new| !old.iter().any(|cell| cell.id == new.id)).collect();
+        added.sort_by_key(|cell| depth(cells, cell));
         changes.extend(added.into_iter().cloned().map(Change::Added));
-        for new in &layout.cells {
+        for new in cells {
             let Some(before) = old.iter().find(|cell| cell.id == new.id) else { continue };
             let what = Fields::between(before, new);
             if what.any() {
                 changes.push(Change::Changed { id: new.id.clone(), what });
             }
         }
-        self.cells = layout.cells.clone();
+        self.cells = cells.to_vec();
         Applied { changes, seq_went_back }
     }
 

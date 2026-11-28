@@ -111,16 +111,14 @@ impl VmPlan {
         !matches!(self.boot, Boot::Ubuntu(_) | Boot::UbuntuInstall(_))
     }
 
-    /// What QEMU's user network listens on: the agent, the files helper and the forwards, or for
-    /// Ubuntu its SSH.
+    /// What QEMU's user network listens on: the forwards, and a port it picks for each of the agent's
+    /// and the helpers', or for Ubuntu its SSH.
     fn listened_ports(&self) -> Vec<u16> {
         if !self.has_machine_line() {
             return vec![self.ssh_port()];
         }
-        let mut ports = vec![self.agent_port];
-        ports.extend(self.files_port);
-        ports.extend(self.app_windows_port);
-        ports.extend(self.forwarded_ports(Protocol::Tcp));
+        let mut ports = self.forwarded_ports(Protocol::Tcp);
+        ports.push(EPHEMERAL_PORT);
         ports
     }
 
@@ -131,7 +129,7 @@ impl VmPlan {
         let mut tcp_bind = self.listened_ports();
         // The user network reaches the shared folder's program through a pair of loopback TCP
         // sockets it makes for each connection, on a port it can't know beforehand.
-        if self.shared_folder().is_some() {
+        if self.shared_folder().is_some() && !tcp_bind.contains(&EPHEMERAL_PORT) {
             tcp_bind.push(EPHEMERAL_PORT);
         }
         let tcp_bind = Ports::Only(tcp_bind);
@@ -139,12 +137,13 @@ impl VmPlan {
             return Network { tcp_bind, tcp_connect: Ports::Any, udp_bind: Ports::Any, udp_send: Ports::Any };
         }
         // A restricted user network only answers forwards, and asks the host's resolver for names.
-        let mut udp_forwards = self.forwarded_ports(Protocol::Udp);
-        udp_forwards.extend(self.remote_view_port);
+        let udp_forwards = self.forwarded_ports(Protocol::Udp);
         // A UDP forward answers to whatever port the program on this PC sent from, such as
         // Moonlight's for Sunshine's video, so its replies can go to any port. The guest still
-        // can't start anything of its own: the restricted network drops it.
-        let udp_send = if udp_forwards.is_empty() { Ports::Only(vec![DNS_PORT]) } else { Ports::Any };
+        // can't start anything of its own: the restricted network drops it. The remote view's
+        // forward is on a port QEMU picks, which the first word lets it bind.
+        let any_udp_forward = !udp_forwards.is_empty() || self.remote_view_forward;
+        let udp_send = if any_udp_forward { Ports::Any } else { Ports::Only(vec![DNS_PORT]) };
         let mut udp_bind = vec![EPHEMERAL_PORT];
         udp_bind.extend(udp_forwards);
         let tcp_connect = if self.shared_folder().is_some() {
@@ -274,7 +273,7 @@ impl VmPlan {
             words: self.passt_words(),
             only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
                 interface: through.interface.clone(),
-                cut_file: self.run_folder.join(launch::CUT_FILE),
+                cut_file: crate::paths::notes_beside(&self.run_folder).join(launch::CUT_FILE),
             }),
         })
     }

@@ -21,6 +21,7 @@ pub mod jail;
 /// name.
 pub use guesthouse_daemon_shell::logger;
 pub mod memory_files;
+pub mod note_file;
 pub mod router;
 pub mod server;
 #[cfg(feature = "nvidia")]

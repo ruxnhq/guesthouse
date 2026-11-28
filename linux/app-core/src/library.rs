@@ -2,6 +2,7 @@
 
 use crate::account;
 use crate::context::Context;
+use crate::duplicate::removal_problem;
 use crate::failure::{Failure, Result};
 use crate::gpu_maker::GpuMaker;
 use crate::gpu_support::{NO_GPU_PART, gpu_ready};
@@ -34,7 +35,6 @@ pub const MAX_DISK_GIB: u32 = 16384;
 /// A finished install, and the install disc beside it.
 pub const INSTALL_ROOM_GIB: u64 = 40;
 pub const NO_DRIVER_FILES: &str = "Windows needs NVIDIA's driver first. Run Setup Again from the menu.";
-const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 const NO_FIRMWARE: &str = "QEMU's UEFI firmware isn't installed. Install ovmf, which Fedora calls edk2-ovmf.";
 /// The file a disk is called in its machine's folder.
 pub const DISK_FILE: &str = "disk.qcow2";
@@ -381,12 +381,6 @@ fn store_password(file: &Path, password: &str) -> Result<()> {
     let mut new = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)?;
     writeln!(new, "{password}")?;
     Ok(())
-}
-
-/// Says why this machine's files can't go now. A running VM or task still needs them.
-fn removal_problem(context: &Context, machine: &Machine) -> Option<Failure> {
-    let current = status(context, machine);
-    (current.state != State::Off || current.busy).then(|| Failure::new(SHUT_DOWN_FIRST))
 }
 
 /// The folders a delete empties, as a question about it names them.

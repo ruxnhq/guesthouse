@@ -23,6 +23,23 @@ const CONNECT_SECONDS: u64 = 10;
 const SSH_FAILED: i32 = 255;
 /// The end of what a command said is what a person needs: the reason is last.
 const MOST_OUTPUT: usize = 8 * 1024;
+/// Reads `stream` to its end and keeps only the last `most` bytes, so what a guest says over a long
+/// time takes no more room than that.
+fn read_tail(stream: &mut impl Read, most: usize) -> Vec<u8> {
+    let (mut kept, mut piece) = (Vec::new(), [0u8; 8192]);
+    while let Ok(read) = stream.read(&mut piece) {
+        if read == 0 {
+            break;
+        }
+        kept.extend_from_slice(&piece[..read]);
+        if kept.len() > most * 2 {
+            kept.drain(..kept.len() - most);
+        }
+    }
+    let start = kept.len().saturating_sub(most);
+    kept.split_off(start)
+}
+
 const WATCH: Duration = Duration::from_millis(100);
 
 pub struct ShellRequest<'a> {
@@ -111,13 +128,7 @@ impl GuestShell for SshShell {
         ]
         .into_iter()
         .flatten()
-        .map(|mut stream| {
-            thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = stream.read_to_end(&mut bytes);
-                bytes
-            })
-        })
+        .map(|mut stream| thread::spawn(move || read_tail(&mut stream, MOST_OUTPUT)))
         .collect();
         let end = Instant::now() + Duration::from_secs(request.seconds);
         let status = loop {
@@ -220,6 +231,15 @@ mod tests {
     use super::*;
     use crate::testing::{Scratch, scratch_context};
     use std::fs;
+
+    #[test]
+    fn a_guest_that_never_stops_talking_leaves_only_the_end_of_it() {
+        let mut endless = std::io::repeat(b'x').take(64 << 20).chain(&b"the end"[..]);
+        let kept = read_tail(&mut endless, MOST_OUTPUT);
+        assert_eq!(kept.len(), MOST_OUTPUT);
+        assert!(kept.ends_with(b"the end"));
+        assert_eq!(read_tail(&mut &b"short"[..], MOST_OUTPUT), b"short");
+    }
 
     /// An `ssh` that writes down its arguments and stdin, and then does what the test's first word said.
     fn fake_ssh(scratch: &Scratch, behaviour: &str) -> SshShell {

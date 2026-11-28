@@ -4,7 +4,7 @@
 //! Linux host's own); running curl is this file's.
 
 use guesthouse_report_core::contract::{MOST_REPORT_BYTES, report_address};
-use guesthouse_report_core::send::{curl_arguments, read_reply};
+use guesthouse_report_core::send::{curl_arguments, read_reply, summary_file, write_summary_file};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -17,11 +17,14 @@ pub fn send(archive: &Path, summary_header: &str) -> Result<String, String> {
         return Err("The report is too big to send. Save it to a file instead.".into());
     }
     let answer_file = archive.with_extension("answer");
+    let _ = fs::remove_file(summary_file(archive));
+    write_summary_file(archive, summary_header).map_err(|e| e.to_string())?;
     let output = Command::new("curl")
         .args(curl_arguments(&report_address(), summary_header, archive, &answer_file))
         .output();
     let body = fs::read_to_string(&answer_file).unwrap_or_default();
     let _ = fs::remove_file(&answer_file);
+    let _ = fs::remove_file(summary_file(archive));
     let output = output.map_err(|e| format!("curl could not run, so nothing was sent: {e}"))?;
     read_reply(
         &String::from_utf8_lossy(&output.stdout),

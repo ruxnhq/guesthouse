@@ -6,8 +6,11 @@
 use super::message::{
     Layout, PROTOCOL_VERSION, SIDE_WORD, Size, answer_line, desktop_line, hello_line, layout_line,
 };
+use crate::guest_end::GuestEnd;
+use crate::testing::QemuStandIn;
+use guesthouse_basics::capped_line::read_capped_line;
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,6 +50,8 @@ pub struct Inner {
 
 pub struct FakeHelper {
     pub port: u16,
+    /// This test process stands in for the machine's QEMU, which the link checks it reaches.
+    qemu: QemuStandIn,
     inner: Arc<Mutex<Inner>>,
     responder: Arc<Mutex<Responder>>,
     stop: Arc<AtomicBool>,
@@ -63,6 +68,11 @@ fn answer_all(request: &Value, inner: &Mutex<Inner>) -> Vec<String> {
 }
 
 impl FakeHelper {
+    /// The helper's port as a machine's guest is reached at it.
+    pub fn end(&self) -> GuestEnd {
+        self.qemu.end()
+    }
+
     pub fn start(token: &str) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -84,7 +94,9 @@ impl FakeHelper {
         }));
         let responder: Arc<Mutex<Responder>> = Arc::new(Mutex::new(Box::new(answer_all)));
         let stop = Arc::new(AtomicBool::new(false));
-        let helper = Self { port, inner: inner.clone(), responder: responder.clone(), stop: stop.clone() };
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_APP_WINDOWS_PORT, port);
+        let helper =
+            Self { port, qemu, inner: inner.clone(), responder: responder.clone(), stop: stop.clone() };
         let token = token.to_owned();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -168,11 +180,14 @@ impl Drop for FakeHelper {
     }
 }
 
+/// The longest line a connection is read for.
+const MOST_LINE: usize = 1 << 16;
+
 fn serve(stream: TcpStream, token: &str, inner: &Mutex<Inner>, responder: &Mutex<Responder>) {
     let Ok(reading) = stream.try_clone() else { return };
     let mut reader = BufReader::new(reading);
-    let mut first = String::new();
-    let read = reader.read_line(&mut first);
+    let read = read_capped_line(&mut reader, MOST_LINE);
+    let first = read.as_ref().ok().cloned().flatten().unwrap_or_default();
     let (given, side) = match first.trim_end().split_once(' ') {
         Some((given, word)) if word == SIDE_WORD => (given, true),
         _ => (first.trim_end(), false),
@@ -212,12 +227,8 @@ fn serve(stream: TcpStream, token: &str, inner: &Mutex<Inner>, responder: &Mutex
         }
         Welcome::Silent => {}
     }
-    let mut line = String::new();
     loop {
-        line.clear();
-        if !matches!(reader.read_line(&mut line), Ok(count) if count > 0) {
-            return;
-        }
+        let Ok(Some(line)) = read_capped_line(&mut reader, MOST_LINE) else { return };
         let Ok(request) = serde_json::from_str::<Value>(line.trim_end()) else { continue };
         inner.lock().unwrap().requests.push(request.clone());
         let replies = (responder.lock().unwrap())(&request, inner);

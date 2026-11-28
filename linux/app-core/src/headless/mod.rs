@@ -10,6 +10,7 @@ mod idle;
 mod make;
 mod open;
 mod pick;
+mod plain;
 mod programs;
 mod recipes;
 mod setup;
@@ -137,7 +138,7 @@ impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(text) => f.write_str(text),
-            Self::Failed(failure) => failure.fmt(f),
+            Self::Failed(failure) => f.write_str(&guesthouse_basics::text::shown(&failure.to_string(), true)),
         }
     }
 }
@@ -156,6 +157,8 @@ impl From<io::Error> for Problem {
 
 /// Runs what the words ask, writing what a person should read to `out`.
 pub fn run(context: &Context, arguments: &[String], out: &mut dyn Write) -> std::result::Result<(), Problem> {
+    let mut plain = plain::Plain(out);
+    let out: &mut dyn Write = &mut plain;
     match parse(arguments)? {
         Command::Help => writeln!(out, "{USAGE}")?,
         Command::List => list(context, out)?,

@@ -3,6 +3,7 @@
 use crate::context::Context;
 use crate::driver_modes::{DriverModes, Mode};
 use crate::failure::{Failure, Result};
+use crate::guest_end::GuestEnd;
 use crate::guest_files::Helper;
 use crate::machine::Machine;
 use crate::random::random_hex;
@@ -10,7 +11,7 @@ use crate::text::{base64_decode, base64_encode};
 use guesthouse_daemon::slot::Slot;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::TcpStream;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -40,21 +41,21 @@ const WINDOW_SIZE_HELPER: &str = "window-size";
 const HELPER_STOP_SCRIPT: &str = "helper-stop.ps1";
 
 pub trait GuestAgent: Send + Sync {
-    /// Runs PowerShell in the guest, and returns what it said. Nothing if the agent isn't up yet.
-    fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String;
+    /// Runs PowerShell in the guest, and returns what it said. Nothing if the agent isn't up yet, or
+    /// the machine's QEMU isn't there to reach it through.
+    fn ask(&self, end: &GuestEnd, token: &str, script: &str, seconds: u64) -> String;
 }
 
 pub struct TcpAgent;
 
 impl GuestAgent for TcpAgent {
-    fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
-        talk(port, token, script, seconds).unwrap_or_default()
+    fn ask(&self, end: &GuestEnd, token: &str, script: &str, seconds: u64) -> String {
+        talk(end, token, script, seconds).unwrap_or_default()
     }
 }
 
-fn talk(port: u16, token: &str, script: &str, seconds: u64) -> std::io::Result<String> {
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(CONNECT_SECONDS))?;
+fn talk(end: &GuestEnd, token: &str, script: &str, seconds: u64) -> std::io::Result<String> {
+    let mut stream = end.connect(Duration::from_secs(CONNECT_SECONDS))?;
     stream.set_write_timeout(Some(Duration::from_secs(seconds.max(1))))?;
     writeln!(stream, "{token} {}", base64_encode(script.as_bytes()))?;
     let answer = read_answer(&mut stream, Duration::from_secs(seconds))?;
@@ -151,15 +152,38 @@ impl Context {
     /// token, which from the app's side is the same thing.
     pub fn ask_guest(&self, machine: &Machine, script: &str, seconds: u64, slot: Option<Slot>) -> String {
         let Some(token) = read_token(self, machine) else { return String::new() };
-        let port = self.agent_port(slot);
-        let answer = self.agent.ask(port, &token, script, seconds);
+        let end = GuestEnd::agent(self, machine, slot);
+        let answer = self.agent.ask(&end, &token, script, seconds);
         if !answer.is_empty() {
             return answer;
         }
-        match crate::token_change::recovered_token(self, machine, port) {
-            Some(token) => self.agent.ask(port, &token, script, seconds),
+        match crate::token_change::recovered_token(self, machine, &end) {
+            Some(token) => self.agent.ask(&end, &token, script, seconds),
             None => answer,
         }
+    }
+}
+
+/// The agent's own file, which setup puts in the guest.
+const AGENT_SCRIPT: &str = "agent.ps1";
+const AGENT_UPDATE_SCRIPT: &str = "agent-update.ps1";
+/// Where setup puts it in the guest, and the guest's task runs it from.
+const AGENT_IN_GUEST: &str = "C:\\gpupv\\agent.ps1";
+
+/// Puts this app's agent in the guest in place of an earlier one, for the guest to run from its next
+/// boot. What the guest said, or why nothing was sent.
+pub fn keep_agent_current(context: &Context, machine: &Machine, slot: Option<Slot>) -> String {
+    let script =
+        fs::read(context.paths.guest_files().join(AGENT_SCRIPT)).map_err(Failure::from).and_then(|agent| {
+            Ok(format!(
+                "$agent = '{}'\n$path = '{AGENT_IN_GUEST}'\n{}",
+                base64_encode(&agent),
+                guest_script(context, AGENT_UPDATE_SCRIPT)?
+            ))
+        });
+    match script {
+        Ok(script) => context.ask_guest(machine, &script, QUICK_SECONDS, slot).trim().to_owned(),
+        Err(failure) => failure.0,
     }
 }
 
@@ -219,7 +243,7 @@ pub fn stop_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>
 /// to start one.
 pub fn files_helper(context: &Context, machine: &Machine, slot: Option<Slot>) -> Option<Helper> {
     let token = read_token(context, machine)?;
-    Some(Helper::new(slot.unwrap_or(context.slot).files_port(), &token))
+    Some(Helper::new(GuestEnd::new(context, machine, slot, crate::network::GUEST_FILES_PORT), &token))
 }
 
 /// What the helper answered, or `None` if it didn't. The agent can wrap long lines.
@@ -316,7 +340,8 @@ pub mod stand_in {
     #[derive(Default)]
     pub struct ScriptedAgent {
         pub answers: Mutex<VecDeque<String>>,
-        pub requests: Mutex<Vec<(u16, String, String)>>,
+        /// What was asked: the monitor of the slot it went through, the token and the script.
+        pub requests: Mutex<Vec<(std::path::PathBuf, String, String)>>,
     }
 
     impl ScriptedAgent {
@@ -327,8 +352,8 @@ pub mod stand_in {
     }
 
     impl GuestAgent for ScriptedAgent {
-        fn ask(&self, port: u16, token: &str, script: &str, _seconds: u64) -> String {
-            self.requests.lock().unwrap().push((port, token.to_owned(), script.to_owned()));
+        fn ask(&self, end: &GuestEnd, token: &str, script: &str, _seconds: u64) -> String {
+            self.requests.lock().unwrap().push((end.monitor.clone(), token.to_owned(), script.to_owned()));
             self.answers.lock().unwrap().pop_front().unwrap_or_default()
         }
     }
@@ -339,9 +364,9 @@ mod tests {
     use super::stand_in::ScriptedAgent;
     use super::*;
     use crate::slots;
-    use crate::testing::{Scratch, scratch_context};
+    use crate::testing::{QemuStandIn, Scratch, scratch_context};
     use std::io::{BufRead, BufReader};
-    use std::net::TcpListener;
+    use std::net::{Ipv4Addr, TcpListener};
     use std::os::unix::fs::MetadataExt;
     use std::sync::Arc;
     use std::thread;
@@ -391,7 +416,8 @@ mod tests {
             }
         });
         let start = Instant::now();
-        let answer = TcpAgent.ask(port, "token", "up", 1);
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        let answer = TcpAgent.ask(&qemu.end(), "token", "up", 1);
         assert!(start.elapsed() < Duration::from_secs(3), "it took {:?}", start.elapsed());
         assert!(!answer.is_empty());
     }
@@ -402,13 +428,15 @@ mod tests {
             let block = vec![b'x'; 1 << 20];
             while stream.write_all(&block).is_ok() {}
         });
-        assert_eq!(TcpAgent.ask(port, "token", "up", 20).len(), MOST_ANSWER);
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 20).len(), MOST_ANSWER);
     }
 
     #[test]
     fn a_whole_answer_comes_back() {
         let port = answering_with(|mut stream| stream.write_all(b"finished\r\n").unwrap());
-        assert_eq!(TcpAgent.ask(port, "token", "up", 5), "finished\r\n");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 5), "finished\r\n");
     }
 
     #[test]
@@ -472,7 +500,8 @@ mod tests {
         let token = make_token(&context, &vm).unwrap();
         assert_eq!(context.ask_guest(&vm, "x", 1, Some(slots::number(2))), "up");
         let requests = agent.requests.lock().unwrap();
-        assert_eq!(requests[0], (18767, token, "x".to_owned()));
+        let monitor = context.run_folder(Some(slots::number(2))).join(crate::monitor::MAIN_SOCKET);
+        assert_eq!(requests[0], (monitor, token, "x".to_owned()));
     }
 
     #[test]
@@ -486,7 +515,8 @@ mod tests {
             stream.write_all(b"answered").unwrap();
             line
         });
-        assert_eq!(TcpAgent.ask(port, "token", "Get-Date", 5), "answered");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "Get-Date", 5), "answered");
         let line = server.join().unwrap();
         let (token, script) = line.trim().split_once(' ').unwrap();
         assert_eq!((token, base64_decode(script).unwrap()), ("token", b"Get-Date".to_vec()));
@@ -495,7 +525,8 @@ mod tests {
     #[test]
     fn no_listener_is_an_empty_answer() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        assert_eq!(TcpAgent.ask(port, "token", "up", 1), "");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 1), "");
     }
 
     #[test]

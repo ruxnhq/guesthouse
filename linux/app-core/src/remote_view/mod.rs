@@ -25,6 +25,7 @@ mod control;
 mod machine;
 mod mdns;
 mod process;
+pub mod revoked;
 mod settings;
 
 #[cfg(test)]

@@ -130,6 +130,16 @@ fn ipv6_dns_words(resolver: Option<&str>) -> Vec<String> {
     words
 }
 
+/// A forward from a loopback port that QEMU picks to `guest` in the guest.
+pub fn picked_port_forward(guest: u16) -> String {
+    format!("hostfwd=tcp:127.0.0.1:0-:{guest}")
+}
+
+/// The same for UDP.
+pub fn picked_udp_port_forward(guest: u16) -> String {
+    format!("hostfwd=udp:127.0.0.1:0-:{guest}")
+}
+
 impl VmPlan {
     fn passt_settings(&self) -> Vec<PasstSetting> {
         passt_settings(self.network.passt_age, self.network.resolver.as_deref())
@@ -166,33 +176,37 @@ impl VmPlan {
     }
 
     /// The agent, the files helper, the share and any forwards always go through QEMU's user network, as nothing else
-    /// can run a program per connection. Restricted, that network carries them and nothing more.
+    /// can run a program per connection. Restricted, that network carries them and nothing more. The
+    /// forwards the app reaches the agent and the guest's helpers by take a loopback port QEMU picks
+    /// when it starts, which its monitor tells the app. They come after the user's own, which name
+    /// their ports, so a port QEMU picks is never one of those.
     fn private_link(&self) -> String {
-        let mut link = format!("hostfwd=tcp:127.0.0.1:{}-:{GUEST_AGENT_PORT}", self.agent_port);
-        if let Some(port) = self.files_port {
-            link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_FILES_PORT}");
-        }
-        if let Some(port) = self.app_windows_port {
-            link += &format!(",hostfwd=tcp:127.0.0.1:{port}-:{GUEST_APP_WINDOWS_PORT}");
-        }
-        if let Some(port) = self.remote_view_port {
-            link += &format!(",hostfwd=udp:127.0.0.1:{port}-:{REMOTEMAN_PORT}");
+        let mut words = Vec::new();
+        if self.remote_view_forward {
+            words.push(picked_udp_port_forward(REMOTEMAN_PORT));
         }
         if self.share.is_some() {
             let program = shell_quote(&self.share_program.to_string_lossy());
-            link += &format!(",guestfwd=tcp:{SHARE_ADDRESS}:80-cmd:{}", qemu_value(&program));
+            words.push(format!("guestfwd=tcp:{SHARE_ADDRESS}:80-cmd:{}", qemu_value(&program)));
         }
         // QEMU answers a guest's UDP from the first forward to its port, so a second one to
         // remoteman's port would take the remote view's replies: the remote view's is the one.
         let taken = |item: &&crate::network::Forward| {
-            self.remote_view_port.is_some()
+            self.remote_view_forward
                 && item.protocol == crate::network::Protocol::Udp
                 && item.guest == u32::from(REMOTEMAN_PORT)
         };
         for item in self.network.forwards.iter().filter(|item| !taken(item)) {
-            link += &format!(",hostfwd={}:127.0.0.1:{}-:{}", item.protocol.word(), item.host, item.guest);
+            words.push(format!("hostfwd={}:127.0.0.1:{}-:{}", item.protocol.word(), item.host, item.guest));
         }
-        link
+        words.push(picked_port_forward(GUEST_AGENT_PORT));
+        if self.files_forward {
+            words.push(picked_port_forward(GUEST_FILES_PORT));
+        }
+        if self.app_windows_forward {
+            words.push(picked_port_forward(GUEST_APP_WINDOWS_PORT));
+        }
+        words.join(",")
     }
 
     /// Whether QEMU's own network is given [`NO_HOST_LOOPBACK`], which its QEMU then has to know.

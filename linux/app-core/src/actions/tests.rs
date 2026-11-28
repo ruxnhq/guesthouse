@@ -961,7 +961,7 @@ fn a_run_that_ends_is_kept_where_a_reboot_leaves_it() {
     let vm = machine(&context);
     let run = context.run_folder(None);
     fs::create_dir_all(&run).unwrap();
-    fs::write(run.join(crate::vm_host::MACHINE_NOTE), &vm.id).unwrap();
+    crate::run_files::plant_note(&run, crate::vm_host::MACHINE_NOTE, &vm.id);
     fs::write(run.join("daemon.out"), "the daemon's last words").unwrap();
     let host = RecordingHost::default();
     run_task(&context, &host, "clean_up", &vm.id, &[]).unwrap();

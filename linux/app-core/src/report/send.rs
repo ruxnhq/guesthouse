@@ -4,7 +4,7 @@
 use super::bundle::Bundle;
 use super::endpoint::{MOST_REPORT_BYTES, report_address};
 use crate::failure::{Failure, Result};
-use guesthouse_report_core::send::{curl_arguments, read_reply};
+use guesthouse_report_core::send::{curl_arguments, read_reply, summary_file, write_summary_file};
 use std::fs;
 use std::process::Command;
 
@@ -17,11 +17,15 @@ pub fn send(bundle: &Bundle) -> Result<String> {
     }
     let address = report_address();
     let answer_file = bundle.path.with_extension("answer");
+    let summary = bundle.summary.header();
+    let _ = fs::remove_file(summary_file(&bundle.path));
+    write_summary_file(&bundle.path, &summary)?;
     let mut curl = Command::new("curl");
-    curl.args(curl_arguments(&address, &bundle.summary.header(), &bundle.path, &answer_file));
+    curl.args(curl_arguments(&address, &summary, &bundle.path, &answer_file));
     let result = curl.output();
     let answer = fs::read_to_string(&answer_file).unwrap_or_default();
     let _ = fs::remove_file(&answer_file);
+    let _ = fs::remove_file(summary_file(&bundle.path));
     let result =
         result.map_err(|error| Failure(format!("curl could not run, so nothing was sent: {error}")))?;
     read_reply(

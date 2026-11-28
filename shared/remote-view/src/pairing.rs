@@ -280,7 +280,8 @@ impl Pairing {
             open,
             until_ms,
             pending: device.map(|device| device.pending.clone()),
-            pending_until_ms: device.map(|device| device.seen_at + device.pending.seconds * 1000),
+            pending_until_ms: device
+                .map(|device| device.seen_at.saturating_add(device.pending.seconds.saturating_mul(1000))),
             closed_reason: self.outcome.as_ref().map(|outcome| outcome.reason),
             paired: self.outcome.as_ref().and_then(|outcome| outcome.paired.clone()),
         }
@@ -484,7 +485,7 @@ impl Pairing {
     /// A waiting device went without appearing: its time was up, or it was turned away.
     fn gone(&mut self, now: Millis, device: &Device, commands: &mut Commands) {
         let waited = now.saturating_sub(device.seen_at) + TIMEOUT_SLACK_MS;
-        let reason = if device.pending.seconds * 1000 <= waited {
+        let reason = if device.pending.seconds.saturating_mul(1000) <= waited {
             CloseReason::Timeout
         } else {
             CloseReason::Declined

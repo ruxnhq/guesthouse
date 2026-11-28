@@ -11,6 +11,7 @@
 
 use super::driver;
 use guesthouse_account_core::common::{MOST_WINDOWS_NAME_CHARS, WINDOWS_RESERVED};
+use guesthouse_answers_core::linux_host::editions::edition_key;
 use guesthouse_answers_core::windows_host::escape;
 use guesthouse_basics::text::base64_encode;
 use std::path::{Path, PathBuf};
@@ -61,6 +62,8 @@ pub fn mac_user() -> String {
 
 /// What the guest says on its serial port, which the host reads from the machine's `serial.log`.
 pub mod marker {
+    /// Every line the guest's own scripts say begins so; the firmware's lines do not.
+    pub const GUEST_SAYS: &str = "guesthouse: ";
     pub const SYSTEM_INSTALLED: &str = "guesthouse: system installed";
     pub const DRIVER_INSTALLED: &str = "guesthouse: driver installed";
     /// Followed by the code Windows gave.
@@ -81,6 +84,39 @@ pub struct Answers<'a> {
     pub computer_name: &'a str,
     /// The edition to install, by its name in the installer ("Windows 11 Pro").
     pub edition: &'a str,
+    /// The language Setup shows its own pages in and the system is installed in, when it is
+    /// known to be on the installer (`en-US`). With none, the installer's own default stands.
+    pub ui_language: Option<&'a str>,
+}
+
+/// The locale Setup and the installed system start with: the same as the Linux host's answer file
+/// gives, which never leaves a language page or a keyboard page to be answered by hand.
+const LOCALE: &str = "en-US";
+
+/// The component that settles Setup's language and keyboard pages, as the shared answer file for
+/// the Linux host has it. Its UI language is the one thing left to the installer when none is known:
+/// naming one the installer does not carry makes Setup stop, and a single-language installer
+/// shows no language page.
+fn international_core(ui_language: Option<&str>) -> String {
+    let ui = ui_language.map_or(String::new(), |language| {
+        let language = escape(language);
+        format!("<SetupUILanguage><UILanguage>{language}</UILanguage></SetupUILanguage><UILanguage>{language}</UILanguage>")
+    });
+    format!(
+        r#"<component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      {ui}<InputLocale>{LOCALE}</InputLocale><SystemLocale>{LOCALE}</SystemLocale><UserLocale>{LOCALE}</UserLocale>
+    </component>
+    "#
+    )
+}
+
+/// Setup's `<ProductKey>`: the generic key Microsoft publishes for the edition, from the shared
+/// table (`edition_key`). It only tells Setup which edition to install, so the product key page
+/// is not shown; Windows stays unactivated. An edition the table does not have gets none.
+fn product_key(edition: &str) -> String {
+    edition_key(edition).map_or(String::new(), |key| {
+        format!("<ProductKey><Key>{key}</Key><WillShowUI>OnError</WillShowUI></ProductKey>")
+    })
 }
 
 fn say(text: &str) -> String {
@@ -131,7 +167,7 @@ pub fn autounattend(answers: &Answers) -> String {
         r#"<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
-    <component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+    {international}<component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
@@ -163,7 +199,7 @@ pub fn autounattend(answers: &Answers) -> String {
           <InstallFrom><MetaData wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Key>/IMAGE/NAME</Key><Value>{edition}</Value></MetaData></InstallFrom>
         </OSImage>
       </ImageInstall>
-      <UserData><AcceptEula>true</AcceptEula></UserData>
+      <UserData>{key}<AcceptEula>true</AcceptEula></UserData>
     </component>
   </settings>
   <settings pass="specialize">
@@ -205,6 +241,8 @@ pub fn autounattend(answers: &Answers) -> String {
   </settings>
 </unattend>
 "#,
+        international = international_core(answers.ui_language),
+        key = product_key(answers.edition),
         password = escape(answers.password),
         edition = escape(answers.edition),
         computer = escape(answers.computer_name),

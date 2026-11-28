@@ -48,6 +48,13 @@ struct InstallStepList: View {
             }
             if now {
                 ProgressView(value: step.fraction).padding(.leading, 36)
+                if let minutes = install.quietMinutes {
+                    Text(InstallText.quietHint(minutes: minutes))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 36)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.horizontal, 20)

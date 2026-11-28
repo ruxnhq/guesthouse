@@ -584,7 +584,7 @@ impl Machine {
         if !valid_id(&self.id) {
             found.push("The machine's id can only hold small letters, digits and dashes.".to_owned());
         }
-        if self.name.trim().is_empty() {
+        if self.name.trim().is_empty() || self.name.chars().any(guesthouse_basics::text::is_hidden) {
             found.push("The machine needs a name.".to_owned());
         }
         found.extend(account::name_problem(self.kind, &self.user));
@@ -784,17 +784,7 @@ pub type SettingsChanges = Vec<(String, Option<serde_json::Value>)>;
 /// The settings changed from `before` to `after`, as New Machine's draft of a machine's settings gives
 /// them, to be applied once the machine is made.
 pub fn settings_changes(before: &Machine, after: &Machine) -> SettingsChanges {
-    let as_map = |machine: &Machine| match serde_json::to_value(machine) {
-        Ok(serde_json::Value::Object(map)) => map,
-        _ => serde_json::Map::new(),
-    };
-    let (before, after) = (as_map(before), as_map(after));
-    let mut changes: SettingsChanges = after
-        .iter()
-        .filter(|(key, value)| before.get(*key) != Some(*value))
-        .map(|(key, value)| (key.clone(), Some(value.clone())))
-        .collect();
-    changes.extend(before.keys().filter(|key| !after.contains_key(*key)).map(|key| (key.clone(), None)));
+    let mut changes = crate::machine_save::field_changes(before, after);
     changes.retain(|(key, _)| !MADE_FIELDS.contains(&key.as_str()));
     changes
 }

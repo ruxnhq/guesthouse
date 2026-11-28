@@ -39,6 +39,9 @@ mod forward;
 mod geometry;
 #[cfg(test)]
 mod geometry_tests;
+mod icon_check;
+#[cfg(test)]
+pub(crate) use icon_check::{sample_png, sample_png_with};
 pub mod launcher;
 mod link;
 mod message;

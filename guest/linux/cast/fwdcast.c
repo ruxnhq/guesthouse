@@ -32,6 +32,8 @@ static uint32_t frame_stride;
 
 static GDBusConnection *bus;
 static char *rd_session, *sc_stream;
+/* The unique name of the service that makes the screen cast; its signals are the only ones taken. */
+static char *sc_owner;
 static struct pw_thread_loop *loop;
 static struct pw_stream *stream;
 static struct spa_hook stream_hook;
@@ -218,6 +220,9 @@ static void notify(const char *method, GVariant *args)
 static void on_stream_added(GDBusConnection *c, const char *sender, const char *path, const char *iface, const char *signal, GVariant *args, gpointer data)
 {
     uint32_t node;
+    if (g_strcmp0(sender, sc_owner)) {
+        return;
+    }
     g_variant_get(args, "(u)", &node);
     fprintf(stderr, "fwdcast: PipeWire node %u\n", node);
     if (!getenv("FWDCAST_INPUT_ONLY")) { /* on KMS the frames go another way: the stream is there only to aim the pointer */
@@ -317,7 +322,9 @@ int main(int argc, char **argv)
     g_variant_builder_add(&o, "{sv}", "cursor-mode", g_variant_new_uint32(getenv("FWD_NO_CURSOR") ? 0 : 1));
     r = call("org.gnome.Mutter.ScreenCast", sc_session, "org.gnome.Mutter.ScreenCast.Session", "RecordMonitor", g_variant_new("(sa{sv})", "", &o));
     g_variant_get(r, "(o)", &sc_stream);
-    g_dbus_connection_signal_subscribe(bus, NULL, "org.gnome.Mutter.ScreenCast.Stream", "PipeWireStreamAdded", sc_stream, NULL, G_DBUS_SIGNAL_FLAGS_NONE, on_stream_added, NULL, NULL);
+    r = call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner", g_variant_new("(s)", "org.gnome.Mutter.ScreenCast"));
+    g_variant_get(r, "(s)", &sc_owner);
+    g_dbus_connection_signal_subscribe(bus, sc_owner, "org.gnome.Mutter.ScreenCast.Stream", "PipeWireStreamAdded", sc_stream, NULL, G_DBUS_SIGNAL_FLAGS_NONE, on_stream_added, NULL, NULL);
     call("org.gnome.Mutter.RemoteDesktop", rd_session, "org.gnome.Mutter.RemoteDesktop.Session", "Start", NULL);
     if (argc > 3) {
         pthread_t input;

@@ -42,6 +42,7 @@
 //! ring, table, descriptions and page lists are copied the same way, into a range that only the
 //! mapper is shown.
 
+mod child;
 mod mapper;
 mod ring;
 mod shadow;

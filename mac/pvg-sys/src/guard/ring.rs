@@ -8,10 +8,10 @@ use super::{
 use crate::memory::GuestMemory;
 use crate::profile::{Command, PAGE_BYTES};
 
-const WORD_BYTES: u32 = 4;
+pub(super) const WORD_BYTES: u32 = 4;
 /// Where a command's number, its length and its payload lie, in words from its start.
-const NUMBER: u32 = 0;
-const LENGTH: u32 = 1;
+pub(super) const NUMBER: u32 = 0;
+pub(super) const LENGTH: u32 = 1;
 const PAYLOAD: u32 = 3;
 /// A table of one level names this many pages, and the guard takes no deeper table.
 const MOST_TASK_PAGES: u64 = 4096;
@@ -30,7 +30,7 @@ const BUFFER_WORDS: u32 = 4;
 const COLOUR_TABLE_WORDS: std::ops::Range<u32> = 4..10;
 
 /// What the guard makes of one command.
-enum Judged {
+pub(super) enum Judged {
     /// Pass it with its neighbours.
     Plain,
     /// Pass it alone, and ask the device how it went.
@@ -39,26 +39,26 @@ enum Judged {
 }
 
 /// One command in the host's copy of the ring, for reading its words.
-struct Words<'a> {
+pub(super) struct Words<'a> {
     /// The host's pages, where the copy is.
-    ring: &'a GuestMemory,
+    pub(super) ring: &'a GuestMemory,
     /// The guest's memory, for what a command names there.
-    guest: &'a GuestMemory,
+    pub(super) guest: &'a GuestMemory,
     /// Where commands start in the copy, and how many bytes they wrap in.
-    base: u64,
-    room: u32,
-    position: u32,
+    pub(super) base: u64,
+    pub(super) room: u32,
+    pub(super) position: u32,
 }
 
 impl Words<'_> {
     /// A command may lie across the ring's end, so each word wraps by itself. Positions are
     /// counters that wrap at 2^32, and the place is the counter modulo the room.
-    fn address(&self, word: u32) -> u64 {
+    pub(super) fn address(&self, word: u32) -> u64 {
         let place = self.position.wrapping_add(word * WORD_BYTES) % self.room;
         self.base + u64::from(place)
     }
 
-    fn word(&self, word: u32) -> Option<u32> {
+    pub(super) fn word(&self, word: u32) -> Option<u32> {
         self.ring.word(self.address(word))
     }
 
@@ -67,7 +67,7 @@ impl Words<'_> {
         self.ring.set_word(self.address(PAYLOAD + word), value);
     }
 
-    fn payload(&self, word: u32) -> Option<u32> {
+    pub(super) fn payload(&self, word: u32) -> Option<u32> {
         self.word(PAYLOAD + word)
     }
 
@@ -176,7 +176,7 @@ impl Guard {
     /// Whether the stretch from `passed` to `target` lies within a ring's room of the device's
     /// read position `read`, which is at or before `passed`. All three are counters that wrap at
     /// 2^32.
-    fn fits_after_read(read: u32, passed: u32, target: u32, room: u32) -> bool {
+    pub(super) fn fits_after_read(read: u32, passed: u32, target: u32, room: u32) -> bool {
         let unread = passed.wrapping_sub(read);
         unread <= room && target.wrapping_sub(passed) <= room - unread
     }
@@ -317,7 +317,7 @@ impl Guard {
         }
     }
 
-    fn judge(&self, words: &Words<'_>, number: u32, payload_bytes: u32) -> Judged {
+    pub(super) fn judge(&self, words: &Words<'_>, number: u32, payload_bytes: u32) -> Judged {
         let commands = &self.profile.commands;
         let is = |command: Command| command.number == number;
         let Some(command) = [
@@ -840,7 +840,6 @@ impl Guard {
         Ok(Judged::Plain)
     }
 
-    /// Where a child ring's descriptor is in the root page the device has, which is the host's.
     /// Forgets what the device forgets when the guest turns the first ring off, as seen on QEMU's
     /// device: every task, the kernel task too, every child ring and the display's page. The
     /// device then clears the display's word and each child ring's defined bit in its root page,
@@ -877,134 +876,5 @@ impl Guard {
             self.mirror_now().set_state_page(port, None);
             self.state_pages[port as usize] = 0;
         }
-    }
-
-    fn child_descriptor(&self, id: u32) -> u64 {
-        let child = &self.profile.child;
-        self.shadow.root() + child.descriptors_at + u64::from(id.max(1) - 1) * child.descriptor_bytes
-    }
-
-    /// A child ring. The guest has written its descriptor into its own root page: that is read
-    /// here, once, and the device gets a descriptor in the host's root page that names pages of
-    /// the host's for the ring. The ring has to start empty: the device runs at once whatever
-    /// lies before the written position.
-    fn judge_define_ring(&self, words: &Words<'_>) -> Result<Judged, Why> {
-        let child = &self.profile.child;
-        let memory = words.guest;
-        let id = words.payload(0).ok_or(Why::RingLayout)?;
-        if id == 0 || id > child.most_id {
-            return Err(Why::RingId);
-        }
-        if self.children.contains_key(&id) {
-            return Err(Why::RingExists);
-        }
-        let ours = self.child_descriptor(id);
-        let theirs = page_address(self.ring.root_page) + (ours - self.shadow.root());
-        let word = |at: u64| memory.word(theirs + at).ok_or(Why::NotGuestMemory);
-        let (written, stamp_cell, list_page) =
-            (word(child.written_at)?, word(child.stamp_at)?, word(child.list_page_at)?);
-        // Cell 0 is the first ring's own, and what lies above the index is the device's to write.
-        if written != 0 || stamp_cell == 0 || stamp_cell >= self.profile.ring.stamp_cells {
-            return Err(Why::ChildRingLayout);
-        }
-        let list = page_address(list_page);
-        let pages: Vec<u32> = (0..u64::from(child.pages))
-            .map(|index| memory.word(list + index * u64::from(WORD_BYTES)).ok_or(Why::NotGuestMemory))
-            .collect::<Result<_, _>>()?;
-        if !pages.iter().all(|&page| memory.holds(page_address(page), PAGE_BYTES)) {
-            return Err(Why::NotGuestMemory);
-        }
-
-        let shadow = self.shadow.memory();
-        shadow.zero(self.shadow.child_list(id), PAGE_BYTES);
-        for index in 0..u64::from(child.pages) {
-            let page = page_number(self.shadow.child_ring(id) + index * PAGE_BYTES);
-            shadow.set_word(self.shadow.child_list(id) + index * u64::from(WORD_BYTES), page);
-        }
-        shadow.set_word(ours + child.written_at, 0);
-        shadow.set_word(ours + child.read_at, 0);
-        shadow.set_word(ours + child.fault_at, child.no_fault);
-        shadow.set_word(ours + child.stamp_at, stamp_cell);
-        shadow.set_word(ours + child.list_page_at, page_number(self.shadow.child_list(id)));
-        // The cell may hold the last stamp of whoever had it before.
-        self.mirror_now().empty_stamp_cell(stamp_cell);
-        Ok(Judged::Alone(Effect::DefineRing { id, pages, stamp_cell }))
-    }
-
-    /// Judges the guest's wish to tell the device of new commands in a child ring. The written
-    /// position is read from the guest's descriptor, once; the new commands are copied to the
-    /// host's pages for the ring and judged there, as the first ring's are; and the device's
-    /// descriptor gets the position. The caller then writes the ring's id to the device.
-    ///
-    /// A command that would change what the guard keeps is not passed in a child ring.
-    pub fn wake(&mut self, memory: &GuestMemory, id: u32, refused: &mut Vec<Refusal>) -> Result<(), Refusal> {
-        let child = &self.profile.child;
-        let registers = &self.profile.registers;
-        let header = self.profile.ring.header_bytes;
-        let no = |why| Err(Refusal { what: What::DeviceWrite { offset: registers.wake, value: id }, why });
-        let Some(Child { pages, passed }) = self.children.get(&id).cloned() else {
-            return no(Why::NoSuchRing);
-        };
-        let ours = self.child_descriptor(id);
-        let theirs = page_address(self.ring.root_page) + (ours - self.shadow.root());
-        let Some(target) = memory.word(theirs + child.written_at) else {
-            return no(Why::NotGuestMemory);
-        };
-        let ahead = target.wrapping_sub(passed);
-        if ahead > child.bytes {
-            return no(if ahead > u32::MAX / 2 { Why::PositionWentBack } else { Why::PositionTooFar });
-        }
-        // As in the first ring, the copy only goes into the room after the device's read
-        // position, which the device keeps in its descriptor in the host's root page.
-        let read = self.shadow.memory().word(ours + child.read_at);
-        if !read.is_some_and(|read| Self::fits_after_read(read, passed, target, child.bytes)) {
-            return no(Why::PositionTooFar);
-        }
-
-        // The copy, a page's piece at a time: the guest's pages lie anywhere, the host's in a row.
-        let shadow = self.shadow.memory();
-        let base = self.shadow.child_ring(id);
-        let mut position = passed;
-        while position != target {
-            let within = u64::from(position % child.bytes);
-            let piece = (PAGE_BYTES - within % PAGE_BYTES).min(u64::from(target.wrapping_sub(position)));
-            let from = page_address(pages[(within / PAGE_BYTES) as usize]) + within % PAGE_BYTES;
-            if !memory.copy_to(from, piece, shadow, base + within) {
-                return no(Why::NotGuestMemory);
-            }
-            position = position.wrapping_add(piece as u32);
-        }
-
-        let mut words = Words { ring: shadow, guest: memory, base, room: child.bytes, position: passed };
-        let reached = loop {
-            let position = words.position;
-            if position == target {
-                break target;
-            }
-            let left = target.wrapping_sub(position);
-            let (number, length) = (words.word(NUMBER).unwrap_or(0), words.word(LENGTH).unwrap_or(0));
-            let what = What::ChildCommand { ring: id, position, number };
-            if left < header || length < header || !length.is_multiple_of(WORD_BYTES) || length > left {
-                // The device is told of what lies before, and of no more until the guest
-                // writes a position that ends a command.
-                refused.push(Refusal { what, why: Why::BrokenCommand });
-                break position;
-            }
-            let why = match self.judge(&words, number, length - header) {
-                Judged::Plain => None,
-                Judged::No(why) => Some(why),
-                Judged::Alone(_) => Some(Why::NotInAChildRing),
-            };
-            if let Some(why) = why {
-                shadow.set_word(words.address(NUMBER), self.profile.commands.refused);
-                refused.push(Refusal { what, why });
-            }
-            words.position = position.wrapping_add(length);
-        };
-        shadow.set_word(ours + child.written_at, reached);
-        if let Some(child) = self.children.get_mut(&id) {
-            child.passed = reached;
-        }
-        Ok(())
     }
 }

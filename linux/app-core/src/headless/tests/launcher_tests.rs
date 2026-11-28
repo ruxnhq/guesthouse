@@ -6,8 +6,10 @@ use crate::testing::Scratch;
 use std::fs;
 use std::path::Path;
 
-/// A small PNG with no picture in it (see `small_png`), in Base64, as an icon of a program is sent.
-const ICON: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAAAAAAAAAAAElFTkSuQmCC";
+/// The small PNG of `small_png`, in Base64, as an icon of a program is sent.
+fn icon_text() -> String {
+    crate::text::base64_encode(&small_png())
+}
 
 fn applications(scratch: &Scratch) -> std::path::PathBuf {
     scratch.path("home/.local/share/applications")
@@ -28,7 +30,8 @@ fn lists(rig: &Rig, apps: &str) {
         let n = request["n"].as_u64().unwrap_or(0);
         if request["t"] == "apps" {
             let icons = request["icons"].as_bool().unwrap_or(false);
-            let apps = apps.replace("ICON", if icons { ICON } else { "" }).replace('\n', "");
+            let apps =
+                apps.replace("ICON", &if icons { icon_text() } else { String::new() }).replace('\n', "");
             vec![format!("{{\"t\":\"answer\",\"re\":{n},\"ok\":true,\"apps\":{apps}}}")]
         } else {
             vec![answer_line(n, true, "")]
@@ -235,13 +238,8 @@ fn only_a_windows_machine_with_app_windows_on_is_given_entries() {
     assert!(files_in(&applications(&scratch)).is_empty() && files_in(&applications(&other)).is_empty());
 }
 
-/// The smallest thing the launcher takes as an icon: a PNG's frame of 16 by 16, with no picture in it.
 fn small_png() -> Vec<u8> {
-    let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
-    bytes.extend(b"IHDR");
-    bytes.extend([0, 0, 0, 16, 0, 0, 0, 16, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
-    bytes.extend([0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82]);
-    bytes
+    crate::app_windows::sample_png(16, 16)
 }
 
 fn program(name: &str, exe: &str) -> Program {
@@ -296,6 +294,21 @@ fn a_machine_keeps_no_more_hidden_entries_than_the_limit_and_the_newest_stay() {
     let last = format!("guesthouse-work-prog{:03}", most + 19);
     assert!(applications(&scratch).join(format!("{last}.desktop")).exists());
     assert!(!applications(&scratch).join("guesthouse-work-prog000.desktop").exists());
+}
+
+#[test]
+fn the_entries_that_only_named_windows_go_and_the_chosen_ones_stay() {
+    let scratch = Scratch::new();
+    let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
+    let (context, machine) = (&rig.context, &rig.machine);
+    launcher::add(context, machine, &program("Chosen", "chosen.exe")).unwrap();
+    launcher::ensure_for_window(context, machine, &program("A", "a.exe")).unwrap();
+    launcher::ensure_for_window(context, machine, &program("B", "b.exe")).unwrap();
+    assert_eq!(launcher::remove_hidden(context, machine), 2);
+    let left = launcher::list_all(context, machine);
+    assert_eq!(left.len(), 1);
+    assert!(!left[0].hidden);
+    assert_eq!(files_in(&scratch.path("home/.local/share/icons/hicolor/48x48/apps")).len(), 1);
 }
 
 #[test]
@@ -359,10 +372,7 @@ fn entries_written_at_once_are_each_whole_and_a_chosen_one_is_never_hidden_again
     let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
     let (context, machine) = (&rig.context, &rig.machine);
     // A large icon, so a write takes long enough for another to come in the middle of it.
-    let mut icon = small_png();
-    let end = icon.split_off(icon.len() - 12);
-    icon.resize(250_000, 7);
-    icon.extend(end);
+    let icon = crate::app_windows::sample_png_with(48, 48, 200_000);
     let calculator = Program { icon: Some(icon.clone()), ..program("Calculator", "Calculator.exe") };
     let start = std::sync::Barrier::new(9);
     std::thread::scope(|threads| {

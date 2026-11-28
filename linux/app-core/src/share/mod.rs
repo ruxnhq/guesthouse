@@ -15,8 +15,10 @@ use http::{Request, reply};
 use inside::{Folder, url_path};
 use listing::{entry, http_date, lock_body, proppatch_body, xml_response};
 use std::io::{self, BufRead, ErrorKind, Read, Write, copy};
+use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::time::Duration;
 
 /// Windows sends a few hundred bytes. This is the only body held whole.
 const MOST_PROPPATCH: u64 = 256 << 10;
@@ -27,6 +29,27 @@ const ANY_FILE: &str = "application/octet-stream";
 /// Locks are granted and not kept: one guest, one user.
 const LOCK_TOKEN: &str = "opaquelocktoken:guesthouse";
 const CLOSE: [(&str, &str); 1] = [("Connection", "close")];
+/// How long a connection may say nothing before its program ends. The guest's client opens a new
+/// one when it wants the share again.
+pub const MOST_QUIET: Duration = Duration::from_secs(60);
+
+/// Ends the connection's reads after `quiet` of silence. A connection that isn't a socket, such as a
+/// pipe given by hand, is left as it is.
+pub fn limit_quiet(connection: impl AsFd, quiet: Duration) -> io::Result<()> {
+    match rustix::net::sockopt::set_socket_timeout(
+        &connection,
+        rustix::net::sockopt::Timeout::Recv,
+        Some(quiet),
+    ) {
+        Err(rustix::io::Errno::NOTSOCK) => Ok(()),
+        done => Ok(done?),
+    }
+}
+
+/// A read that ended because the connection was quiet for too long.
+fn is_quiet(error: &io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
 
 pub struct Share {
     folder: Folder,
@@ -40,7 +63,12 @@ impl Share {
     /// Answers requests until the connection ends.
     pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> io::Result<()> {
         loop {
-            let Some(mut request) = Request::read(&mut input, &mut output)? else { return Ok(()) };
+            let mut request = match Request::read(&mut input, &mut output) {
+                Ok(Some(request)) => request,
+                Ok(None) => return Ok(()),
+                Err(error) if is_quiet(&error) => return Ok(()),
+                Err(error) => return Err(error),
+            };
             let keep_going = self.answer(&mut request, &mut input, &mut output)?;
             output.flush()?;
             if !keep_going || request.close {

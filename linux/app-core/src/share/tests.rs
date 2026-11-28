@@ -319,3 +319,19 @@ fn a_folder_cannot_be_copied_into_itself_through_a_link() {
     assert_eq!(codes_in_time(&root, vec![copy]), Some(vec![403]));
     assert!(!root.join("sub/all").exists());
 }
+
+#[test]
+fn a_quiet_connection_ends() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let (ours, guest) = std::os::unix::net::UnixStream::pair().unwrap();
+    limit_quiet(&ours, std::time::Duration::from_millis(200)).unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ended = Share::new(&root).unwrap().serve(io::BufReader::new(&ours), &ours);
+        sender.send(ended.is_ok())
+    });
+    let ended = receiver.recv_timeout(std::time::Duration::from_secs(5));
+    assert_eq!(ended, Ok(true), "a connection that says nothing must end by itself");
+    drop(guest);
+}

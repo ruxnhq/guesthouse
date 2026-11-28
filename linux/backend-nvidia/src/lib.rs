@@ -588,6 +588,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn escape(&mut self, process: u32, data: &mut [u8], books: &GuestBooks<'_>) {
         log::debug!("escape {:02x?}, {} bytes", data.get(0x10..0x14), data.len());
+        self.encode_sessions.expire(&mut self.device, std::time::Instant::now());
         let live = self.sensors.as_ref().and_then(|sensors| sensors.latest());
         let facts =
             escape::EscapeFacts { channel_classes: &self.channel_classes, nodes: &self.nodes, books, live };

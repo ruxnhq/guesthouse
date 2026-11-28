@@ -10982,3 +10982,70 @@ index 23bd512..3b0ee40 100644
 2.56.1
 
 
+From a913abf7ac33df214746456f304098fd13671b62 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:47:21 -0800
+Subject: [PATCH] hw/misc/nvfwd: give mapped guest pages back on every answer
+ made in the device
+
+A call answered in the device after its guest pages were mapped (by the sensor
+objects, a refused question, an object the host doesn't have, or another
+card) now unmaps them and gives their room back, as a refused call does. A
+guest file holds up to sixteen sensor objects.
+---
+ hw/misc/nvfwd/forward.c | 4 ++++
+ hw/misc/nvfwd/sensors.c | 2 +-
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 34f8a0f..02e18f0 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -461,6 +461,7 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+             }
+         }
+         if (sensors_answer(s->sensors, &sensor_call)) {
++            undo_runs(s->objects, &account);
+             r->ret = 0;
+             return;
+         }
+@@ -477,6 +478,7 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+             uint32_t st = STATUS_NOT_SUPPORTED;
+             note_once(s, "REFUSED", "question in ctrl", KEY(K_QUESTION, cmd), cmd);
+             memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++            undo_runs(s->objects, &account);
+             r->ret = 0;
+             return;
+         }
+@@ -489,12 +491,14 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+                  */
+                 uint32_t st = 0x57;
+                 memcpy(arg + RM_CONTROL_STATUS, &st, 4);
++                undo_runs(s->objects, &account);
+                 r->ret = 0;
+                 return;
+             }
+         }
+     }
+     if (!uvm && !card_allows(&s->card, nr, arg, size)) {
++        undo_runs(s->objects, &account);
+         refuse_other_card(s, r, nr, arg, size);
+         return;
+     }
+diff --git a/hw/misc/nvfwd/sensors.c b/hw/misc/nvfwd/sensors.c
+index ccdf892..4bc00f0 100644
+--- a/hw/misc/nvfwd/sensors.c
++++ b/hw/misc/nvfwd/sensors.c
+@@ -62,7 +62,7 @@
+ #define MAP_TOKEN 0x1000
+ 
+ #define MAX_OBJECTS 64
+-#define MAX_OBJECTS_PER_FILE 8 /* a driver makes one or two: no file takes every slot */
++#define MAX_OBJECTS_PER_FILE 16 /* a driver makes one or two: no file takes every slot */
+ #define MAX_MAPPING_FILES 4096
+ #define MAX_REFUSALS_LOGGED 64
+ 
+-- 
+2.56.1
+
+

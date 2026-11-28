@@ -38,7 +38,7 @@ See `mac/README.md` for how to build it.
 
 ## Nightly builds
 
-A nightly build of the Mac app is built from `main` each night, if `main` has changed, by `.github/workflows/mac-nightly.yml` on a GitHub-hosted Mac (the `xcode-27` image, which has Xcode 27 and macOS 27). `mac/nightly.sh` does the building: a Release build, every program in it signed with the hardened runtime, a signed disk image, notarisation and stapling, then the image, its `.sha256` and `guesthouse-macos-nightly.json` (version, commit, date, file, size, sha256 and the lowest macOS). The app's Settings can look for it: Updates, Look for nightly builds, which is off unless you turn it on.
+A nightly build of the Mac app is built from `main` each night, if `main` has changed, by `.github/workflows/mac-nightly.yml` on a GitHub-hosted Mac (the `xcode-27` image, which has Xcode 27 and macOS 27). `mac/nightly.sh` does the building in two parts, `--stage` (the build, in a job with no key) and `--from-stage` (the signing, in the one job that has the keys, which builds nothing): a Release build, every program in it signed with the hardened runtime, a signed disk image, notarisation and stapling, then the image, its `.sha256` and `guesthouse-macos-nightly.json` (version, commit, date, file, size, sha256 and the lowest macOS). The app's Settings can look for it: Updates, Look for nightly builds, which is off unless you turn it on.
 
 None has been published yet. Until the first one is on files.ruxn.com there is nothing to download, and the app's switch finds nothing.
 

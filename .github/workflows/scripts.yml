@@ -33,6 +33,8 @@ jobs:
         run: bash tests/packages/page.sh
       - name: Release notes, on a made-up repo
         run: python3 tests/release-notes/test.py
+      - name: Credits, with odd titles
+        run: python3 tests/release-credits/test.py
 
   psscriptanalyzer:
     name: PSScriptAnalyzer

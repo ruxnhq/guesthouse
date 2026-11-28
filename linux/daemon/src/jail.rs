@@ -170,6 +170,9 @@ impl Needs {
     /// The jail names each file, so each must be there before it: see [`make_if_missing`].
     pub fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.run_folder)?;
+        for folder in self.shared_files.iter().filter_map(|file| file.parent()) {
+            guesthouse_sensors::words::make_private_folder(folder)?;
+        }
         self.shared_files.iter().try_for_each(|file| make_if_missing(file))
     }
 }
@@ -355,15 +358,16 @@ mod tests {
         let card = guesthouse_backend::PciAddress::parse("0000:01:00.0").unwrap();
         let slot = crate::slot::Slot::parse(Some("1")).unwrap();
         let needs = Needs::of_card(slot, Path::new("/project"), Path::new("/store/driver"), Some(&card));
-        let shared = needs.plan().paths.into_iter().filter(|(_, path)| path.starts_with("/dev/shm"));
+        let folder = guesthouse_sensors::shared_folder();
+        let shared = needs.plan().paths.into_iter().filter(|(_, path)| path.starts_with(&folder));
         let shared: Vec<_> = shared.map(|(grant, path)| (grant, path.display().to_string())).collect();
         let user = guesthouse_sensors::snapshot_path().display().to_string();
         let user = user.rsplit('-').nth(1).unwrap().to_owned();
         assert_eq!(
             shared,
             [
-                (Grant::Write, format!("/dev/shm/gpupv-sensors-{user}-2-0000:01:00.0")),
-                (Grant::Write, format!("/dev/shm/gpupv-processes-{user}-1-0000:01:00.0")),
+                (Grant::Write, format!("{}/gpupv-sensors-{user}-2-0000:01:00.0", folder.display())),
+                (Grant::Write, format!("{}/gpupv-processes-{user}-1-0000:01:00.0", folder.display())),
             ]
         );
     }

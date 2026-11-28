@@ -37,6 +37,21 @@ impl Drop for Mapping {
 }
 
 /// `COUNT` numbers after the counter. See the module documentation.
+/// Makes the folder, for the owner alone, and refuses one that is anyone else's or open to others.
+pub fn make_private_folder(folder: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(folder)?;
+    let details = std::fs::symlink_metadata(folder)?;
+    // SAFETY: this asks for a number and can't fail.
+    if !details.is_dir() || details.uid() != unsafe { libc::getuid() } || details.mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "someone else's folder, or one open to others",
+        ));
+    }
+    Ok(())
+}
+
 pub struct SharedWords<const COUNT: usize> {
     /// Each open of the file has a lock of its own, which is what lets processes take turns.
     file: File,
@@ -58,6 +73,10 @@ impl<const COUNT: usize> SharedWords<COUNT> {
     }
 
     fn open_with(path: &Path, make: bool) -> io::Result<Self> {
+        // The shared readings' folder is made here, by whichever of the app and the daemon comes first.
+        if make && let Some(folder) = path.parent().filter(|folder| *folder == crate::shared_folder()) {
+            make_private_folder(folder)?;
+        }
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(make).truncate(false);
         let file = options.mode(ONLY_THE_OWNER).custom_flags(libc::O_NOFOLLOW).open(path)?;
@@ -143,6 +162,21 @@ impl<const COUNT: usize> SharedWords<COUNT> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_folder_open_to_others_is_refused_and_a_new_one_is_the_owners_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("gh-sensor-folder-{}", std::process::id()));
+        let open = base.join("open");
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(make_private_folder(&open).is_err());
+        let new = base.join("new");
+        make_private_folder(&new).unwrap();
+        assert_eq!(std::fs::metadata(&new).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     use super::*;
     use std::fs;
 

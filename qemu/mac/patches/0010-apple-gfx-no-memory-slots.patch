@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 12:14:43 -0800
+Subject: hw/display/apple-gfx: refuse memory slots and maxmem
+
+The guest's memory is handed to the framework once, when the device is made,
+so memory added to the guest later would not be in its map. The device now
+refuses to be made on a machine that has slots for memory to be added.
+---
+ hw/display/apple-gfx.m | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/hw/display/apple-gfx.m b/hw/display/apple-gfx.m
+index c3ec0fa..fd4bd2e 100644
+--- a/hw/display/apple-gfx.m
++++ b/hw/display/apple-gfx.m
+@@ -23,6 +23,7 @@
+ #include "system/dma.h"
+ #include "migration/blocker.h"
+ #include "system/memory.h"
++#include "hw/core/boards.h"
+ #include "ui/console.h"
+ #include "apple-gfx.h"
+ #include "trace.h"
+@@ -798,6 +799,17 @@ bool apple_gfx_common_realize(AppleGFXState *s, DeviceState *dev,
+     uint32_t num_display_modes = ARRAY_SIZE(apple_gfx_default_modes);
+     NSArray<PGDisplayMode *> *mode_array;
+ 
++    if (@available(macOS 15.4, *)) {
++        /* The map is made once, here: memory added to the guest later would not be in it. */
++        MachineState *ms = MACHINE(qdev_get_machine());
++
++        if (ms->ram_slots || ms->device_memory) {
++            error_setg(errp, "apple-gfx maps the guest's memory once, so it "
++                             "cannot be used with memory slots or maxmem");
++            return false;
++        }
++    }
++
+     if (apple_gfx_mig_blocker == NULL) {
+         error_setg(&apple_gfx_mig_blocker,
+                   "Migration state blocked by apple-gfx display device");

@@ -124,9 +124,13 @@ static void on_process(void *data)
     }
     struct spa_data *d = &last->buffer->datas[0];
     uint32_t slot;
-    if (d->data && d->chunk->size && !(d->chunk->flags & SPA_CHUNK_FLAG_CORRUPTED) && ioctl(show_fd, NVFWD_SHOW_IOC_NEXT, &slot) == 0) {
+    uint32_t stride = d->chunk->stride ? (uint32_t)d->chunk->stride : width * 4;
+    /* The frame is copied at the size asked for, so it has to be that size and lie inside its buffer. */
+    bool fits = format.size.width == width && format.size.height == height && stride >= width * 4 &&
+                (uint64_t)d->chunk->offset + (uint64_t)(height - 1) * stride + width * 4 <= d->maxsize;
+    if (d->data && d->chunk->size && fits && !(d->chunk->flags & SPA_CHUNK_FLAG_CORRUPTED) &&
+        ioctl(show_fd, NVFWD_SHOW_IOC_NEXT, &slot) == 0 && slot < NVFWD_SHOW_SLOTS) {
         uint64_t t0 = now_ns();
-        uint32_t stride = d->chunk->stride ? d->chunk->stride : width * 4;
         const uint8_t *src = (const uint8_t *)d->data + d->chunk->offset;
         frame_stride = stride;
         if (stride == pitch) {
@@ -268,6 +272,9 @@ static void *input_thread(void *data)
         }
         have -= start - buf;
         memmove(buf, start, have);
+        if (have == sizeof(buf) - 1) { /* a line longer than any the viewer sends: dropped */
+            have = 0;
+        }
     }
     return NULL;
 }

@@ -280,7 +280,7 @@ pub fn icon_path(context: &Context, app_id: &str) -> Option<PathBuf> {
 /// The most an icon may take, in bytes, and the most it may measure each way. A program's icon is a
 /// small picture, and what the guest sends is not trusted: it ends up as a file that the desktop's
 /// image loaders open.
-const ICON_MOST_BYTES: usize = 1 << 20;
+const ICON_MOST_BYTES: usize = 256 << 10;
 const ICON_MOST_SIDE: u32 = 512;
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 /// The length of an IHDR chunk's data, and the signature, length, name, data and checksum before the first chunk's end.
@@ -346,11 +346,32 @@ fn is_visible_entry(text: &[u8]) -> bool {
     !String::from_utf8_lossy(text).lines().any(|line| line == "NoDisplay=true")
 }
 
+/// The most entries a machine keeps that the user did not ask for, which are only there to name a
+/// window in the task bar. A new one past this takes the place of the oldest.
+pub const MOST_HIDDEN_ENTRIES: usize = 64;
+
+/// Removes the oldest hidden entries of the machine until there is room for one more.
+fn make_room(context: &Context, machine: &Machine) {
+    let mut hidden: Vec<Listed> =
+        list_all(context, machine).into_iter().filter(|entry| entry.hidden).collect();
+    if hidden.len() < MOST_HIDDEN_ENTRIES {
+        return;
+    }
+    hidden.sort_by_key(|entry| fs::metadata(&entry.file).and_then(|found| found.modified()).ok());
+    let extra = hidden.len() + 1 - MOST_HIDDEN_ENTRIES;
+    for entry in hidden.iter().take(extra) {
+        let _ = delete_entry(context, entry);
+    }
+}
+
 fn write_entry(context: &Context, machine: &Machine, program: &Program, hidden: bool) -> Result<PathBuf> {
     if !valid_id(&machine.id) {
         return Err(Failure(format!("{} has an id that is not safe in a file name.", machine.name)));
     }
     let id = app_id(machine, &program.exe);
+    if hidden && !entry_file(context, &id).exists() {
+        make_room(context, machine);
+    }
     let icon = match &program.icon {
         Some(png) if valid_icon(png) => {
             let file = icon_file(context, &id);

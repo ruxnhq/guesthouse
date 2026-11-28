@@ -277,6 +277,28 @@ fn a_window_with_no_entry_gets_a_hidden_one_and_a_chosen_entry_is_left_alone() {
 }
 
 #[test]
+fn a_machine_keeps_no_more_hidden_entries_than_the_limit_and_the_newest_stay() {
+    let scratch = Scratch::new();
+    let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
+    let (context, machine) = (&rig.context, &rig.machine);
+    let sibling = make(context, "work-2", "Second", Kind::Windows);
+    launcher::add(context, machine, &program("Chosen", "chosen.exe")).unwrap();
+    launcher::ensure_for_window(context, &sibling, &program("Theirs", "theirs.exe")).unwrap();
+    let most = launcher::MOST_HIDDEN_ENTRIES;
+    for n in 0..most + 20 {
+        launcher::ensure_for_window(context, machine, &program("P", &format!("prog{n:03}.exe"))).unwrap();
+    }
+    let hidden =
+        |of: &Machine| launcher::list_all(context, of).into_iter().filter(|entry| entry.hidden).count();
+    assert_eq!(hidden(machine), most);
+    assert_eq!(hidden(&sibling), 1, "another machine's entries are not counted or taken");
+    assert_eq!(launcher::list(context, machine).len(), 1, "the one the user asked for stays");
+    let last = format!("guesthouse-work-prog{:03}", most + 19);
+    assert!(applications(&scratch).join(format!("{last}.desktop")).exists());
+    assert!(!applications(&scratch).join("guesthouse-work-prog000.desktop").exists());
+}
+
+#[test]
 fn a_hidden_entry_with_no_icon_is_written_again_once_there_is_one() {
     let scratch = Scratch::new();
     let rig = rig_with(&scratch, Kind::Windows, true, &[], true, false);
@@ -339,7 +361,7 @@ fn entries_written_at_once_are_each_whole_and_a_chosen_one_is_never_hidden_again
     // A large icon, so a write takes long enough for another to come in the middle of it.
     let mut icon = small_png();
     let end = icon.split_off(icon.len() - 12);
-    icon.resize(900_000, 7);
+    icon.resize(250_000, 7);
     icon.extend(end);
     let calculator = Program { icon: Some(icon.clone()), ..program("Calculator", "Calculator.exe") };
     let start = std::sync::Barrier::new(9);

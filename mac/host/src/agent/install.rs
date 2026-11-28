@@ -306,15 +306,19 @@ impl Agent {
         // path's QEMU as the app finds it with none named (the environment, the lab's build).
         let mut qemus: Vec<PathBuf> = tools.qemu.iter().map(PathBuf::from).collect();
         qemus.extend(config.qemu.clone());
-        qemus.extend(
-            tools::locate(Tool::PvgQemu, &Places::on_this_mac(Tool::PvgQemu, None, None))
-                .ok()
-                .map(|found| found.path),
-        );
+        if !config.signed {
+            qemus.extend(
+                tools::locate(Tool::PvgQemu, &Places::on_this_mac(Tool::PvgQemu, None, None, false))
+                    .ok()
+                    .map(|found| found.path),
+            );
+        }
         let mut firmware_dirs: Vec<PathBuf> = qemus.iter().flat_map(|q| firmware_dirs_of(q)).collect();
         firmware_dirs.extend(config.install.firmware_dir.clone());
-        firmware_dirs
-            .extend(std::env::var_os("HOME").and_then(|home| crate::lab::firmware_dir(Path::new(&home))));
+        if !config.signed {
+            firmware_dirs
+                .extend(std::env::var_os("HOME").and_then(|home| crate::lab::firmware_dir(Path::new(&home))));
+        }
         let setup = Setup {
             machines: machines.clone(),
             id: id.to_string(),

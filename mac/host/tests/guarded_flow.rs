@@ -61,6 +61,7 @@ impl Support {
             rmhost: None,
             pvg_host: Some(PathBuf::from(FAKE_PVG_HOST)),
             install: Default::default(),
+            signed: false,
             shutdown_timeout: Duration::from_secs(5),
             start_timeout: Duration::from_secs(10),
         })
@@ -345,6 +346,7 @@ fn a_new_agent_that_finds_a_machine_running_with_sharing_on_shares_it() {
         rmhost: Some(rmhost),
         pvg_host: Some(PathBuf::from(FAKE_PVG_HOST)),
         install: Default::default(),
+        signed: false,
         shutdown_timeout: Duration::from_secs(5),
         start_timeout: Duration::from_secs(10),
     });

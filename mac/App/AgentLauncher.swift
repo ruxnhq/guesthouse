@@ -8,8 +8,8 @@ nonisolated enum AgentLauncher {
     /// The switch between the two ways. On, the app registers the agent with launchd
     /// (`SMAppService`) and reaches it over XPC, and falls back to the second way if that does
     /// not work. Off, it only ever starts the agent itself. `GUESTHOUSE_AGENT=socket` in the
-    /// environment turns it off for one run.
-    static let preferLaunchd = ProcessInfo.processInfo.environment["GUESTHOUSE_AGENT"] != "socket"
+    /// environment turns it off for one run. A Developer ID-signed build has only the first way.
+    static let preferLaunchd = isSignedBuild() || ProcessInfo.processInfo.environment["GUESTHOUSE_AGENT"] != "socket"
 
     private static let plistName = "com.ruxn.guesthouse.agent.plist"
     private static let log = Logger(subsystem: "com.ruxn.guesthouse", category: "agent")

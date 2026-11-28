@@ -51,6 +51,7 @@ impl Support {
                 driver_dir: Some(self.0.join("driver")),
                 firmware_dir: Some(support::firmware_dir(&self.0)),
             },
+            signed: false,
             shutdown_timeout: Duration::from_secs(5),
             start_timeout: Duration::from_secs(10),
         })

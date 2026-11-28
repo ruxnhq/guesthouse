@@ -23,7 +23,8 @@ unsafe fn text<'a>(text: *const c_char) -> Option<&'a str> {
     unsafe { CStr::from_ptr(text) }.to_str().ok()
 }
 
-/// Finds the program `tool` ("qemu", "rmhost", "pvg-host" or "pvg-qemu") to run. `setting` is what Settings holds (null or
+/// Finds the program `tool` ("qemu", "rmhost", "pvg-host" or "pvg-qemu") to run. `signed` says the app's code
+/// carries a Developer ID signature, and then only `bundled` is looked at. `setting` is what Settings holds (null or
 /// empty for nothing) and `bundled` where the app bundle keeps its own copy (null for none). Returns
 /// `{"path", "source", "why"}`, with `source` one of `setting`, `environment`, `bundled` or
 /// `lab`, or `{"error": "..."}` with a sentence saying what is missing.
@@ -35,6 +36,7 @@ pub unsafe extern "C" fn guesthouse_tool_locate(
     tool: *const c_char,
     setting: *const c_char,
     bundled: *const c_char,
+    signed: bool,
 ) -> *mut c_char {
     // SAFETY: passed on from the caller.
     let (tool, setting, bundled) = unsafe { (text(tool), text(setting), text(bundled)) };
@@ -47,7 +49,7 @@ pub unsafe extern "C" fn guesthouse_tool_locate(
             return into_c_string(error_json("the tool is not qemu, rmhost, pvg-host or pvg-qemu"));
         }
     };
-    let places = Places::on_this_mac(tool, setting.map(String::from), bundled.map(PathBuf::from));
+    let places = Places::on_this_mac(tool, setting.map(String::from), bundled.map(PathBuf::from), signed);
     into_c_string(match tools::locate_checked(tool, &places) {
         Ok(found) => json!({
             "path": found.path.display().to_string(),

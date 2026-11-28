@@ -35,7 +35,7 @@ fn spawn(program: &Path, args: &[&str]) -> Guard {
 
 #[test]
 fn a_viewer_through_rmhost_serve_and_a_second_reader_both_get_frames_from_one_publisher() {
-    let Ok(found) = tools::locate(Tool::Rmhost, &Places::on_this_mac(Tool::Rmhost, None, None)) else {
+    let Ok(found) = tools::locate(Tool::Rmhost, &Places::on_this_mac(Tool::Rmhost, None, None, false)) else {
         eprintln!("\n*** readers SKIPPED: rmhost is not built here (set GUESTHOUSE_RMHOST) ***\n");
         return;
     };

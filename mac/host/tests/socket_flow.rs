@@ -35,6 +35,7 @@ fn the_socket_is_owner_only_in_an_owner_only_folder_and_its_owner_can_use_it() {
         rmhost: None,
         pvg_host: None,
         install: InstallConfig { fake: true, driver_dir: None, firmware_dir: None },
+        signed: false,
         shutdown_timeout: Duration::from_secs(5),
         start_timeout: Duration::from_secs(10),
     });

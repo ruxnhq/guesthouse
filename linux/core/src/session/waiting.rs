@@ -41,6 +41,8 @@ impl GpuTook {
 
 impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// Does something once the GPU has finished what it has been given so far, or now if it has.
+    /// The queues' fences say when the guest's work is through, and the backend says when every run
+    /// it sent has ended, which is the word that lets memory go.
     pub(crate) fn defer(&mut self, action: DeferredAction) {
         let waits: Vec<(u32, u64)> = self
             .queues
@@ -50,25 +52,50 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                 (!queue.failed && self.fence_value(queue.fence) < value).then_some((handle, value))
             })
             .collect();
-        if waits.is_empty() {
+        let runs = self.runs_on_card();
+        if waits.is_empty() && runs.is_none() {
             self.run_deferred_action(action);
         } else {
-            self.deferred.push(Deferred { waits, action });
+            self.deferred.push(Deferred { waits, runs, action });
         }
     }
 
-    /// Finishes whatever has stopped waiting. A queue that has gone or failed waits for nothing.
+    /// The runs sent so far, if the backend says some of them haven't ended. Asked once for each
+    /// message or poll while nothing new is sent, as each free in a message would ask again.
+    pub(crate) fn runs_on_card(&mut self) -> Option<u64> {
+        let sent = self.backend.work_sent();
+        let ended = self.runs_ended(sent);
+        (ended < sent).then_some(sent)
+    }
+
+    fn runs_ended(&mut self, sent: u64) -> u64 {
+        match self.runs_seen {
+            Some((seen, ended)) if seen == sent => ended,
+            _ => {
+                let ended = self.backend.work_ended();
+                self.runs_seen = Some((sent, ended));
+                ended
+            }
+        }
+    }
+
+    /// Finishes whatever has stopped waiting. A queue that has gone or failed waits for nothing
+    /// more, but the runs it sent still have to end.
     pub(crate) fn run_deferred(&mut self) {
         if self.deferred.is_empty() {
             return;
         }
+        let sent = self.backend.work_sent();
+        let ended = self.backend.work_ended();
+        self.runs_seen = Some((sent, ended));
         for mut item in std::mem::take(&mut self.deferred) {
             item.waits.retain(|&(handle, value)| {
                 self.queues
                     .get(&handle)
                     .is_some_and(|queue| !queue.failed && self.fence_value(queue.fence) < value)
             });
-            if item.waits.is_empty() {
+            item.runs = item.runs.filter(|&runs| ended < runs);
+            if item.waits.is_empty() && item.runs.is_none() {
                 self.run_deferred_action(item.action);
             } else {
                 self.deferred.push(item);
@@ -102,8 +129,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
     }
 
-    pub(crate) fn free_allocation(&mut self, freed: FreedAllocation) {
-        for mapping in &freed.mappings {
+    /// Unmaps a freed allocation, then lets its memory and pages go. Runs sent while it was still
+    /// mapped may use it, so once it has been unmapped those go first: later ones can't reach it.
+    pub(crate) fn free_allocation(&mut self, mut freed: FreedAllocation) {
+        let mappings = std::mem::take(&mut freed.mappings);
+        for mapping in &mappings {
             if !self.closed_spaces.contains(&mapping.space) {
                 self.log_unmap_in_flight("a free", mapping.address, mapping.length);
                 let unmap = UnmapRequest {
@@ -117,6 +147,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                 }
             }
             self.give_back_mapping(mapping.address, freed.in_system_memory());
+        }
+        if !mappings.is_empty()
+            && let Some(runs) = self.runs_on_card()
+        {
+            let action = DeferredAction::FreeAllocation(freed);
+            self.deferred.push(Deferred { waits: Vec::new(), runs: Some(runs), action });
+            return;
         }
         self.backend.release_memory(freed.memory);
         if let Some(view) = freed.view {
@@ -578,6 +615,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// Checks everything that is waiting, and says how soon to look again. `now` decides deadlines,
     /// and tests pass their own.
     pub fn poll(&mut self, now: Instant) -> Waiting {
+        self.runs_seen = None;
         if !self.copies.is_empty() {
             self.poll_copies(now);
         }

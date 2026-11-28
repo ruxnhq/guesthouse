@@ -1040,6 +1040,15 @@ impl Backend for IntelBackend {
         self.work.as_ref().is_some_and(CardWork::needs_polling)
     }
 
+    fn work_sent(&self) -> u64 {
+        self.work.as_ref().map_or(0, CardWork::runs_sent)
+    }
+
+    /// From xe's timelines, which only the kernel signals. While listening nothing reaches the card.
+    fn work_ended(&mut self) -> u64 {
+        self.work.as_mut().map_or(0, CardWork::runs_ended)
+    }
+
     fn close_queue(&mut self, queue: u32) {
         self.traffic.queue_closed(queue);
         if let Some(work) = &mut self.work {

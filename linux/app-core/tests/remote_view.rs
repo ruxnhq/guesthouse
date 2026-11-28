@@ -2,7 +2,7 @@
 //! QEMU is stood in for by a process of the test's own.
 
 use guesthouse_app_core::remote_view::{
-    PID_FILE, RelayReply, RelayStatus, Request, Settings, ShareState, Watched, ask, socket_path,
+    RelayReply, RelayStatus, Request, Settings, ShareState, Watched, ask, pid_file, socket_path,
 };
 use guesthouse_jail::launch::start_time;
 use rustix::process::{Pid, Signal, kill_process};
@@ -95,7 +95,7 @@ fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
 }
 
 fn nothing_left(folder: &Path) {
-    assert!(!folder.join(PID_FILE).exists(), "the pid file is gone");
+    assert!(!pid_file(folder).exists(), "the pid file is gone");
     assert!(!socket_path(folder).exists(), "the socket is gone");
 }
 
@@ -143,7 +143,7 @@ fn the_network_side_opens_carries_both_ways_and_closes_while_the_program_runs() 
 #[test]
 fn sigterm_ends_it_cleanly_with_its_files_put_away() {
     let mut run = start("term", 19065, Some("127.0.0.1:0"));
-    assert!(run.folder.join(PID_FILE).exists());
+    assert!(pid_file(&run.folder).exists());
     assert_eq!(status(&run, Request::Status).state, ShareState::Listening);
     // The program is this test's own child, started above and still running.
     kill_process(Pid::from_raw(run.program.id() as i32).unwrap(), Signal::TERM).unwrap();

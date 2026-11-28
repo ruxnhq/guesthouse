@@ -79,13 +79,19 @@ pub fn merge_trust(viewer: &str, current: Option<&str>) -> Result<String, String
 pub fn read_list(path: &Path) -> Option<String> {
     let mut bytes = Vec::new();
     std::fs::File::open(path).ok()?.take(MOST_LIST_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    Some(list_from(bytes))
+}
+
+/// The guest's list from the bytes of its file, read up to `MOST_LIST_BYTES` and one more, for a
+/// host that reads the file its own way. Past the most, only the whole lines before it are kept.
+pub fn list_from(mut bytes: Vec<u8>) -> String {
     if bytes.len() as u64 > MOST_LIST_BYTES {
         bytes.truncate(MOST_LIST_BYTES as usize);
         let whole = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |last| last + 1);
         bytes.truncate(whole);
     }
     let text = String::from_utf8_lossy(&bytes);
-    Some(text.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&text).to_string())
+    text.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&text).to_string()
 }
 
 /// What the host gives a Windows guest about whom to trust, in its screen folder.
@@ -101,8 +107,12 @@ pub struct Given {
 
 /// The lists for a guest whose Windows volume is at `root`, with the guest's own list read there.
 pub fn given(viewer: &str, root: &Path) -> Result<Given, String> {
-    let current = read_list(&root.join(GUEST_TRUST_FILE));
-    Ok(Given { viewer: crate::trust_list(viewer), trusted: merge_trust(viewer, current.as_deref())? })
+    given_from(viewer, read_list(&root.join(GUEST_TRUST_FILE)).as_deref())
+}
+
+/// The lists for a guest whose own list is `current` (see `list_from`), `None` when it has none.
+pub fn given_from(viewer: &str, current: Option<&str>) -> Result<Given, String> {
+    Ok(Given { viewer: crate::trust_list(viewer), trusted: merge_trust(viewer, current)? })
 }
 
 #[cfg(test)]

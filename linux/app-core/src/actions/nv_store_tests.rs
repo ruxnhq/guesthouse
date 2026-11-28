@@ -165,7 +165,7 @@ fn the_driver_disc_goes_where_the_tools_disc_would_and_qemu_may_read_it() {
     let mut plan = crate::actions::plan_for(&setup.context, &setup.machine, Boot::Gpu);
     plan.driver_disc = Some(disc.clone());
     let arguments = plan.qemu_arguments();
-    let drive = format!("if=none,id=cd1,media=cdrom,readonly=on,file={}", disc.display());
+    let drive = format!("if=none,id=cd1,format=raw,media=cdrom,readonly=on,file={}", disc.display());
     assert!(arguments.contains(&drive), "{arguments:?}");
     let jail = crate::vm_args::QemuJail {
         launcher: "/bin/guesthouse-jail".into(),

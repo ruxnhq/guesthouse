@@ -65,6 +65,11 @@ impl<T> VideoRuns<T> {
         self.on_card.push_back(OnCard { slot, retired, queue, fence, sent: now });
     }
 
+    /// What each run still on the card was sent with, oldest first.
+    pub fn on_card(&self) -> impl Iterator<Item = &T> {
+        self.on_card.iter().map(|run| &run.retired)
+    }
+
     /// Whether any run is still on the card.
     pub fn any_on_card(&self) -> bool {
         !self.on_card.is_empty()

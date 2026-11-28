@@ -12,6 +12,7 @@
 
 mod agent;
 mod ctl_channel;
+mod guest_rights;
 mod nv_files;
 mod nv_store;
 mod screen;
@@ -110,6 +111,22 @@ fn quote(path: &Path) -> String {
 
 fn guest_script(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../windows").join(name)
+}
+
+/// PowerShell that loads these functions, and nothing else, from the script at `script`, as a script
+/// that runs Windows' own commands at its end can't be run whole in a test.
+fn functions_from(script: &Path, functions: &[&str]) -> String {
+    let names = functions.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ");
+    format!(
+        "$script = [System.Management.Automation.Language.Parser]::ParseFile({}, [ref]$null, [ref]$null)
+        foreach ($name in {names}) {{
+            $found = $script.Find({{ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }}, $true)
+            if (-not $found) {{ throw \"no function $name\" }}
+            . ([scriptblock]::Create($found.Extent.Text))
+        }}
+        ",
+        quote(script)
+    )
 }
 
 static NEXT: AtomicU32 = AtomicU32::new(0);

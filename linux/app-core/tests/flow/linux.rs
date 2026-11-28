@@ -269,7 +269,7 @@ fn inner() {
         let on_passt = Machine { passt: true, ..windows };
         on_passt.save(&context).unwrap();
         let slot = start_and_stop(&context, &on_passt);
-        let pid_file = context.run_folder(Some(slot)).join(PASST_PID_FILE);
+        let pid_file = context.notes_folder(Some(slot)).join(PASST_PID_FILE);
         let noted = fs::read_to_string(pid_file).unwrap();
         let passt: u32 = noted.split_whitespace().next().unwrap().parse().unwrap();
         assert!(!Path::new(&format!("/proc/{passt}")).exists(), "passt went with QEMU");

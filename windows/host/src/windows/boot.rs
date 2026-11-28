@@ -14,11 +14,13 @@ use crate::machine::Guest;
 use crate::record::{Record, files_disk};
 use crate::settings::BootSettings;
 use guesthouse_hcs::host;
+use guesthouse_hcs::hvsock::parse_guid;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::network::{Network, bridged_network_id, bridged_network_name};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
-use guesthouse_hcs::serial::SerialPort;
+use guesthouse_hcs::serial::{self, OpenError, SerialPort, Server};
 use guesthouse_hcs::system::{self, ComputeSystem};
+use guesthouse_hcs::worker;
 use guesthouse_jail::windows::{Handles, Jail, Jailed};
 use std::io::{PipeReader, Read, Write};
 use std::os::windows::io::OwnedHandle;
@@ -150,7 +152,7 @@ fn run(
             sink.as_ref(),
         )?,
         Guest::Linux => {
-            linux::refresh_disk(&files_disk(&disk), card.as_ref(), &shares, sink.as_ref())?;
+            linux::refresh_disk(&files_disk(&disk), card.as_ref(), &shares, record.installed, sink.as_ref())?;
             if !record.installed {
                 sink.note("This boot installs Ubuntu. The machine turns itself off when it's done.");
             }
@@ -162,7 +164,10 @@ fn run(
     } else {
         (None, None)
     };
-    let mut machine = machine(settings, disk, &record, adapter);
+    // The pipes are named afresh each boot, with a random word.
+    let pipe_tag =
+        serial::pipe_tag().map_err(|error| format!("This boot's pipes couldn't be named: {error}"))?;
+    let mut machine = machine(settings, disk, &record, adapter, pipe_tag);
     machine.shares = shares;
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
@@ -183,6 +188,7 @@ fn run(
     sink.note(format!("{} started.", machine.name));
     if !machine.console_access.is_empty() {
         sink.note(format!("Its console is Remote Desktop on {}.", machine.console_pipe()));
+        sink.console(&machine.console_pipe());
     }
     sink.state(State::Running);
 
@@ -208,6 +214,15 @@ fn run(
     }
 
     let pipe = machine.serial_pipe();
+    // The serial port is taken only from the machine's own worker, which runs as the machine's account.
+    let serial_pipe = running
+        .properties()
+        .map_err(|error| error.to_string())
+        .and_then(|properties| {
+            parse_guid(&properties.runtime_id)
+                .ok_or_else(|| format!("HCS gave the machine the runtime ID {:?}", properties.runtime_id))
+        })
+        .map(|id| SerialPipe { name: pipe, worker: Server::Account(worker::account(id)) });
     let unjailed = !settings.jail;
     let disk = machine.disk.clone();
     let heard = Arc::new(AtomicBool::new(false));
@@ -256,9 +271,16 @@ fn run(
     // down and, a Windows guest, for remoteman's commands.
     let serial_ctl = ctl.clone();
     let answers = guest == Guest::Windows;
-    thread::spawn(move || {
-        print_serial(&pipe, unjailed, on_line, serial_sink, &serial_ended, &serial_ctl, answers)
-    });
+    match serial_pipe {
+        Ok(pipe) => {
+            thread::spawn(move || {
+                print_serial(&pipe, unjailed, on_line, serial_sink, &serial_ended, &serial_ctl, answers)
+            });
+        }
+        Err(error) => sink.problem(format!(
+            "The guest's serial port is left unread, as the machine's worker couldn't be known: {error}"
+        )),
+    }
     sink.note("Waiting for the guest.");
     let limit = settings.for_minutes.map(|minutes| Duration::from_secs(minutes * 60));
     let silence = installing.then_some((INSTALL_SILENCE, heard));
@@ -444,7 +466,7 @@ fn wait(
 /// open, and the lines of `ctl`'s channel go to it and nowhere else; `answers` says whether the
 /// guest is one that answers on it.
 fn print_serial(
-    pipe: &str,
+    pipe: &SerialPipe,
     unjailed: bool,
     mut on_line: impl FnMut(&str),
     sink: Arc<dyn Sink>,
@@ -484,26 +506,42 @@ fn print_serial(
     }
 }
 
-/// The serial port, once HCS serves it. The first time it has a while to appear before that's told
-/// as a problem; after a restart it's waited for for as long as the machine runs.
+/// A machine's serial port's pipe, and who must be serving it: the machine's worker.
+struct SerialPipe {
+    name: String,
+    worker: Server,
+}
+
+/// The serial port, once the machine's worker serves it. The first time it has a while to appear
+/// before that's told as a problem; after a restart it's waited for for as long as the machine runs.
+/// A pipe of its name served by any other process is let go, told once, and the port looked for
+/// again.
 fn open_port(
-    pipe: &str,
+    SerialPipe { name: pipe, worker }: &SerialPipe,
     opened_before: bool,
     ended: &AtomicBool,
     sink: &dyn Sink,
 ) -> Option<Arc<SerialPort>> {
     let started = Instant::now();
+    let mut told = false;
     loop {
         if ended.load(Ordering::SeqCst) {
             return None;
         }
-        match SerialPort::open(pipe) {
+        match SerialPort::open(pipe, worker) {
             Ok(port) => return Some(Arc::new(port)),
             Err(error) if !opened_before && started.elapsed() >= Duration::from_secs(SERIAL_SECONDS) => {
                 sink.problem(format!("The guest's serial port at {pipe} could not be opened: {error}"));
                 return None;
             }
-            Err(_) => thread::sleep(POLL),
+            Err(error @ OpenError::OtherServer { .. }) => {
+                if !told {
+                    told = true;
+                    sink.problem(format!("The pipe {pipe} isn't taken as the guest's serial port: {error}."));
+                }
+                thread::sleep(POLL);
+            }
+            Err(OpenError::Io(_)) => thread::sleep(POLL),
         }
     }
 }

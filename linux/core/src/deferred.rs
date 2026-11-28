@@ -37,5 +37,8 @@ impl FreedAllocation {
 #[derive(Debug)]
 pub struct Deferred {
     pub waits: Vec<(u32, u64)>,
+    /// How many runs the backend had sent the card, all of which it has to say have ended first.
+    /// A queue's fence is guest memory, and a failed queue's runs are no longer waited for.
+    pub runs: Option<u64>,
     pub action: DeferredAction,
 }

@@ -33,7 +33,7 @@ fn run(settings: &Settings) -> std::io::Result<()> {
     signal::watch_for_end()?;
     remote_view::write_pid_file(&settings.run_folder, processes)?;
     let result = serve_until_done(settings, processes);
-    let _ = std::fs::remove_file(settings.run_folder.join(remote_view::PID_FILE));
+    let _ = std::fs::remove_file(remote_view::pid_file(&settings.run_folder));
     let _ = std::fs::remove_file(remote_view::socket_path(&settings.run_folder));
     result
 }

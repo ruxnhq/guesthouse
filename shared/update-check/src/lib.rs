@@ -3,6 +3,9 @@
 
 use serde::Deserialize;
 
+pub mod driver_manifest;
+pub mod signed;
+
 /// Where a Linux release says it's the latest, last of all once its packages are up, so a package
 /// install and install.sh's --check-update both read it. `.github/workflows/packages.yml` writes it.
 pub const LINUX_LATEST_URL: &str = "https://pkg.ruxn.com/guesthouse/latest.json";

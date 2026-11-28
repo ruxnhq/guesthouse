@@ -8,6 +8,7 @@ mod copies;
 mod copy_bounds;
 mod first_lock;
 mod frame_ring;
+mod handle_use;
 mod indirect;
 mod mapping;
 mod reserving;
@@ -142,6 +143,8 @@ pub struct Session<B, M> {
     /// Each process's program, by its file name, where the guest named it.
     pub(crate) programs: HashMap<u32, String>,
     pub(crate) spaces: HashMap<u32, SpaceId>,
+    /// The devices the guest has made and not destroyed.
+    pub(crate) devices: HashSet<u32>,
     /// The daemon's own address space, apart from `spaces` so that no message can name it.
     own_space: Option<SpaceId>,
     pub(crate) closed_spaces: HashSet<SpaceId>,
@@ -233,6 +236,8 @@ pub struct Session<B, M> {
     pub(crate) timings: Timings,
 
     pub(crate) deferred: Vec<Deferred>,
+    /// What the backend last said of its runs, as (sent, ended), for the message or poll at hand.
+    pub(crate) runs_seen: Option<(u64, u64)>,
     pub(crate) pending: Vec<Pending>,
     pub(crate) pending_spare: Vec<Pending>,
     pub(crate) notices: Vec<Notice>,
@@ -264,6 +269,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             fences: FencePool::new(),
             io_space: None,
             processes_32_bit: HashSet::new(),
+            devices: HashSet::new(),
             guest_pids: HashMap::new(),
             programs: HashMap::new(),
             spaces: HashMap::new(),
@@ -316,6 +322,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             replies: Vec::new(),
             timings: Timings::new(false),
             deferred: Vec::new(),
+            runs_seen: None,
             pending: Vec::new(),
             pending_spare: Vec::new(),
             notices: Vec::new(),
@@ -423,6 +430,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         out.clear();
         self.ticket = ticket;
         self.held = false;
+        self.runs_seen = None;
         let command = MessageHeader::parse(message).map(|header| header.command);
         if let Err(failure) = self.dispatch(command, message, out) {
             log::warn!("{command:?} failed: {failure}");
@@ -483,7 +491,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             Some(C::CreateProcess) => self.create_process(message, out)?,
             Some(C::DestroyProcess) => self.destroy_process(message, out)?,
             Some(C::CreateDevice) => {
-                let handle = self.handles.take();
+                let handle = self.take_handle()?;
+                self.devices.insert(handle);
                 put_u32(out, handle);
             }
 

@@ -1,9 +1,11 @@
-//! One viewer for a machine. The viewer holds an exclusive lock on a file in the machine's run folder
-//! for as long as it lives, and a second viewer for the same machine, however it came to start, finds
+//! One viewer for a machine. The viewer holds an exclusive lock on a file in the notes folder beside
+//! the machine's run folder (see [`crate::paths::notes_beside`]), which no jail reaches, for as long
+//! as it lives, and a second viewer for the same machine, however it came to start, finds
 //! the lock taken and ends at once. The lock is the operating system's, so it goes with the process,
 //! however the process ends, and never outlives it.
 
-use crate::context::Context;
+use crate::context::{Context, make_private_folder};
+use crate::paths::notes_beside;
 use guesthouse_daemon::slot::Slot;
 use rustix::fs::{FlockOperation, flock};
 use std::fs::{File, OpenOptions};
@@ -17,7 +19,18 @@ const PRIVATE: u32 = 0o600;
 
 /// The viewer's lock for the machine that runs in this slot.
 pub fn lock_file(context: &Context, slot: Slot) -> PathBuf {
-    context.run_folder(Some(slot)).join(LOCK_FILE)
+    context.notes_folder(Some(slot)).join(LOCK_FILE)
+}
+
+/// The lock of the machine in this run folder.
+fn lock_in(run_folder: &Path) -> PathBuf {
+    notes_beside(run_folder).join(LOCK_FILE)
+}
+
+/// The same, with the notes folder made if it isn't there yet.
+fn made_lock_in(run_folder: &Path) -> io::Result<PathBuf> {
+    make_private_folder(&notes_beside(run_folder))?;
+    Ok(lock_in(run_folder))
 }
 
 /// Held by the one viewer of a machine.
@@ -36,7 +49,7 @@ impl ViewerLock {
 /// The process id the holder of this run folder's lock wrote, if it wrote one. Nothing says the
 /// process is still the holder: `modes` checks that before it signals anything.
 pub fn recorded_pid(run_folder: &Path) -> Option<u32> {
-    std::fs::read_to_string(run_folder.join(LOCK_FILE)).ok()?.trim().parse().ok()
+    std::fs::read_to_string(lock_in(run_folder)).ok()?.trim().parse().ok()
 }
 
 /// Takes the lock, or says `None` if a viewer of this machine already has it.
@@ -65,7 +78,7 @@ pub const TRIES: u32 = 5;
 pub const TRY_AGAIN: Duration = Duration::from_millis(60);
 
 fn open(run_folder: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).truncate(false).write(true).mode(PRIVATE).open(run_folder.join(LOCK_FILE))
+    OpenOptions::new().create(true).truncate(false).write(true).mode(PRIVATE).open(made_lock_in(run_folder)?)
 }
 
 /// Whether some process holds this lock now. The look takes it shared, and only for an instant: two
@@ -77,7 +90,7 @@ pub fn held_file(file: &Path) -> io::Result<bool> {
 
 /// Whether a viewer has the lock in this run folder now.
 pub fn held_in(run_folder: &Path) -> io::Result<bool> {
-    held_file(&run_folder.join(LOCK_FILE))
+    held_file(&made_lock_in(run_folder)?)
 }
 
 /// Whether a viewer of the machine has the lock now.

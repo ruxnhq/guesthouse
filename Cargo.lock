@@ -1387,6 +1387,7 @@ version = "0.12.0"
 name = "guesthouse-update-check"
 version = "0.12.0"
 dependencies = [
+ "ring",
  "serde",
  "serde_json",
 ]

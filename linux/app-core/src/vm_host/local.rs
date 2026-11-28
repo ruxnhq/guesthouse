@@ -338,6 +338,8 @@ impl LocalHost<'_> {
 
 impl VmHost for LocalHost<'_> {
     fn start(&self, plan: &VmPlan, machine: &Machine) -> Result<()> {
+        // QEMU opens whatever a disk's header names, jailed or not, and it may have written the header.
+        plan.checked_backing_files()?;
         self.context.make_run_folder(Some(plan.slot))?;
         // Before anything is started, so a drive that can't be had leaves nothing running.
         let drives = OpenDrives::open(self.context, &plan.drives)?;
@@ -349,6 +351,10 @@ impl VmHost for LocalHost<'_> {
         }
         let run = kept.as_ref().filter(|_| throwaway);
         let plan = run.map_or_else(|| Ok(plan.clone()), |run| run.applied_to(plan))?;
+        // A kept run's own disks are checked too, jailed or not.
+        if run.is_some() {
+            plan.checked_backing_files()?;
+        }
         let handed = Handed { drives: &drives, throwaway: run };
         let started = if !plan.is_gpu() {
             self.start_plain(&plan, machine, &handed)

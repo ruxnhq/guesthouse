@@ -56,8 +56,8 @@ unix:/x/run/display.sock,server=on,wait=off
 file:/x/run/serial.log
 -D
 /x/run/qemu.log
--drive
-if=none,id=hd0,file=/m/disk.qcow2,format=qcow2,cache=writeback,discard=unmap
+-blockdev
+{"backing":null,"cache":{"direct":false,"no-flush":false},"discard":"unmap","driver":"qcow2","file":{"discard":"unmap","driver":"file","filename":"/m/disk.qcow2"},"node-name":"hd0"}
 -device
 ide-hd,bus=ahci.0,drive=hd0,bootindex=1
 -drive

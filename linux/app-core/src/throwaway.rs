@@ -357,9 +357,11 @@ impl ThrowawayRun {
                 (Boot::Macos(boot), Some((opencore, home)), _) => {
                     Boot::Macos(MacosBoot { opencore: opencore.clone(), home: home.clone(), ..boot.clone() })
                 }
-                (Boot::Android(boot), _, Some(data)) => {
-                    Boot::Android(AndroidBoot { data: data.clone(), ..boot.clone() })
-                }
+                (Boot::Android(boot), _, Some(data)) => Boot::Android(AndroidBoot {
+                    data: data.clone(),
+                    data_base: Some(boot.data.clone()),
+                    ..boot.clone()
+                }),
                 (boot, _, _) => boot.clone(),
             },
             ..plan.clone()

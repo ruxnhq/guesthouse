@@ -30,7 +30,7 @@ Host drives stay with the original, as two guests can't share a whole drive. Add
 
 Ubuntu's host name stays the same, as it's the same for every Ubuntu guest Guesthouse installs, copy or not: `sudo hostnamectl set-hostname NAME` in the guest changes it. The Windows computer name stays the same too, for the same reason, and changing it would need a restart in the middle of the start. Windows' own machine id (its SID) can only be made new by Sysprep, which takes the guest back to its first-run setup, so it stays as well. Two Windows machines on one bridged network show up under one name. The TPM's own identity is the same, so a service that checks it can tell the two apart only by the rest.
 
-A machine whose disk is outside its folder, as the first one imported from the scripts can be, makes a copy that has its disk in its own folder and can be deleted with it. A disk built on a backing file keeps reading the same backing file.
+A machine whose disk is outside its folder, as the first one imported from the scripts can be, makes a copy that has its disk in its own folder and can be deleted with it. A disk built on a backing file keeps reading the same backing file, the one the original's settings name: see [A disk built on another file](headless.md#a-disk-built-on-another-file).
 
 ## Throwaway machines
 

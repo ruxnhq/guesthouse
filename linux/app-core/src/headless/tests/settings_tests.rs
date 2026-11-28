@@ -404,3 +404,50 @@ fn the_apps_copy_catches_up_with_the_file_and_keeps_what_it_has_not_saved() {
     let caught_up = copy.caught_up(&known, &file).unwrap();
     assert_eq!((caught_up.network_mode, caught_up.cores), (Mode::None, 3));
 }
+
+/// A disk built on a file by hand is started once its settings name that file, and only that one.
+#[test]
+fn the_files_a_disk_is_built_on_are_recorded_only_as_its_header_names_them() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let (base, disk) = (scratch.path("bases/base.qcow2"), scratch.path("work/disk.qcow2"));
+    for file in [&base, &disk] {
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+    }
+    let qemu_img = |words: &[&str]| {
+        assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+    };
+    qemu_img(&["create", "-q", "-f", "qcow2", base.to_str().unwrap(), "1G"]);
+    qemu_img(&[
+        "create",
+        "-q",
+        "-f",
+        "qcow2",
+        "-F",
+        "qcow2",
+        "-b",
+        "../bases/base.qcow2",
+        disk.to_str().unwrap(),
+    ]);
+    let machine =
+        Machine { kind: Kind::Plain, ..Machine::new("work", "Office PC", disk.to_str().unwrap(), "/v") };
+    fs::create_dir_all(machine.folder(&context)).unwrap();
+    machine.save(&context).unwrap();
+    let other = scratch.write("other.img", vec![0; 4096]);
+    let refused_with = |value: &str| refused(&context, &format!("set work backing-files {value}"));
+    assert!(refused_with(other.to_str().unwrap()).starts_with("The disk is built on "));
+    assert!(refused_with("none").contains("/bases/base.qcow2 (qcow2)"));
+    assert!(load(&context, "work").unwrap().backing_files.is_empty(), "a refusal changes nothing");
+    let set = said(&context, &format!("set work backing-files {}", base.display()));
+    assert_eq!(set.1, Ok(()));
+    let machine = load(&context, "work").unwrap();
+    let recorded: Vec<(&str, &str)> =
+        machine.backing_files.iter().map(|file| (file.path.as_str(), file.format.as_str())).collect();
+    assert_eq!(recorded, [(base.canonicalize().unwrap().to_str().unwrap(), "qcow2")]);
+    assert_eq!(
+        crate::disk_image::backing::checked_chain(&disk, &machine.backing_files).unwrap().len(),
+        1,
+        "a start takes it"
+    );
+    assert!(said(&context, "show work").0.contains("backing-files"));
+}

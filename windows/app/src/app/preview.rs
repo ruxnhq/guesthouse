@@ -68,7 +68,7 @@ pub fn stage(main: &mut Main) {
     // As an installed app, which looks for updates, though it never reaches the file drop.
     main.installed = true;
     main.updater = Arc::new(Fake::finding(Fetched::Unreached));
-    main.updates = Updates::new(true, guesthouse_control::WINDOWS_VERSION);
+    main.updates = Updates::new(true, guesthouse_control::WINDOWS_VERSION).with_stand_in_key();
     main.theme = match std::env::var(THEME).as_deref() {
         Ok("light") => WindowTheme::Light,
         Ok("dark") => WindowTheme::Dark,
@@ -168,7 +168,7 @@ pub fn stage(main: &mut Main) {
         "updates-repo" => {
             main.page = Page::AppSettings;
             main.installed = false;
-            main.updates = Updates::new(false, guesthouse_control::WINDOWS_VERSION);
+            main.updates = Updates::new(false, guesthouse_control::WINDOWS_VERSION).with_stand_in_key();
         }
         "report-new" => {
             show(main, "win11", State::Off);
@@ -296,7 +296,7 @@ fn hyper_v(main: &mut Main, state: &str) {
 /// with `None`, and found what `fetched` says otherwise. Look now finds the same again.
 fn updates(main: &mut Main, fetched: Option<Fetched>) {
     main.installed = true;
-    main.updates = Updates::new(true, guesthouse_control::WINDOWS_VERSION);
+    main.updates = Updates::new(true, guesthouse_control::WINDOWS_VERSION).with_stand_in_key();
     main.updater = Arc::new(Fake::finding(fetched.clone().unwrap_or(Fetched::Unreached)));
     let [update::Effect::Fetch { attempt }] = main.updates.step(update::Input::Look, NOW)[..] else {
         return;
@@ -577,6 +577,7 @@ fn status() -> Status {
         address: address.map(str::to_owned),
         remote_view: false,
         remote_port: None,
+        console_pipe: None,
     };
     let card = |name: &str, memory_mb, default| CardInfo { name: name.to_owned(), memory_mb, default };
     Status {

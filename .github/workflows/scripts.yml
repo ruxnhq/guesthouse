@@ -1,4 +1,4 @@
-# Lints for the shell and PowerShell in the repo, and the release notes script's tests.
+# Lints for the shell and PowerShell in the repo, the release notes script's tests, and the file size limit.
 name: Scripts
 
 on:
@@ -39,6 +39,20 @@ jobs:
         run: python3 tests/release-notes/test.py
       - name: Credits, with odd titles
         run: python3 tests/release-credits/test.py
+
+  file-size:
+    name: File size
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: No source file past 1000 lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: sh scripts/check-file-size.sh "$BASE"
 
   psscriptanalyzer:
     name: PSScriptAnalyzer

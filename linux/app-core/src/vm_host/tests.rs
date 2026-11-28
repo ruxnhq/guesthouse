@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::make_token;
 use crate::agent::stand_in::ScriptedAgent;
 use crate::clock::Clock;
+use crate::disk_image::backing::BackingFile;
 use crate::machine::Kind;
 use crate::slots;
 use crate::testing::{Scratch, scratch_context};
@@ -223,7 +224,7 @@ fn a_passt_left_running_is_ended_at_a_stop() {
     context.processes = "/proc".into();
     context.clock = Arc::new(QuickClock::default());
     context.make_run_folder(None).unwrap();
-    let pid_file = context.run_folder(None).join(crate::vm_args::PASST_PID_FILE);
+    let pid_file = context.notes_folder(None).join(crate::vm_args::PASST_PID_FILE);
     let mut passt = Command::new("sleep").arg(PRETEND_LIFE_SECONDS.to_string()).spawn().unwrap();
     let stat = fs::read_to_string(format!("/proc/{}/stat", passt.id())).unwrap();
     let started = guesthouse_jail::launch::start_time(&stat).unwrap();
@@ -323,7 +324,9 @@ fn a_jailed_start_with_a_missing_backing_file_says_so_and_starts_nothing() {
     create(&["create", "-q", "-f", "qcow2", base.to_str().unwrap(), "1G"]);
     create(&["create", "-q", "-f", "qcow2", "-b", "base.qcow2", "-F", "qcow2", disk.to_str().unwrap()]);
     fs::remove_file(&base).unwrap();
-    let machine = Machine::new("vm", "VM", disk.to_str().unwrap(), "/v");
+    let named = BackingFile { path: base.display().to_string(), format: "qcow2".into() };
+    let machine =
+        Machine { backing_files: vec![named], ..Machine::new("vm", "VM", disk.to_str().unwrap(), "/v") };
     let plan = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
     let refused = LocalHost::new(&context).start(&plan, &machine).unwrap_err();
     assert_eq!(
@@ -496,4 +499,57 @@ fn a_throwaway_run_keeps_its_overlay_for_the_task_and_the_next_task_gets_a_new_o
     assert!(lines.iter().all(|line| line.ends_with(" (deleted)")), "{lines:?}");
     assert_eq!(lines[0], lines[1], "one task, one overlay");
     assert_ne!(lines[1], lines[2], "a new task, a new one");
+}
+
+/// QEMU opens what a disk's header names, jailed or not, so a start checks it first.
+#[test]
+fn a_plain_start_refuses_a_disk_built_on_a_file_its_settings_dont_name() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    let marker = scratch.path("qemu-ran");
+    context.paths.qemu = scratch.program("not-qemu", &format!("#!/bin/sh\ntouch {}\n", marker.display()));
+    let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+    let disk = scratch.path("machines/vm/disk.qcow2");
+    fs::create_dir_all(disk.parent().unwrap()).unwrap();
+    let qemu_img = |words: &[&str]| assert!(Command::new("qemu-img").args(words).status().unwrap().success());
+    qemu_img(&["create", "-q", "-f", "qcow2", disk.to_str().unwrap(), "1G"]);
+    qemu_img(&[
+        "rebase",
+        "-u",
+        "-f",
+        "qcow2",
+        "-F",
+        "raw",
+        "-b",
+        other.to_str().unwrap(),
+        disk.to_str().unwrap(),
+    ]);
+    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", disk.to_str().unwrap(), "/v") };
+    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    let error = LocalHost::new(&context).start(&plan, &machine).unwrap_err();
+    assert!(error.0.contains(&other.display().to_string()), "{error}");
+    assert!(!marker.exists(), "QEMU never ran");
+}
+
+/// QEMU and the daemon may write anything in the run folder, so a note there is never what the app
+/// signals by.
+#[test]
+fn a_passt_note_in_the_run_folder_is_never_signalled() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    context.processes = "/proc".into();
+    context.clock = Arc::new(QuickClock::default());
+    context.make_run_folder(None).unwrap();
+    let mut other = Command::new("sleep").arg(PRETEND_LIFE_SECONDS.to_string()).spawn().unwrap();
+    let stat = fs::read_to_string(format!("/proc/{}/stat", other.id())).unwrap();
+    let started = guesthouse_jail::launch::start_time(&stat).unwrap();
+    let in_run_folder = context.run_folder(None).join(crate::vm_args::PASST_PID_FILE);
+    fs::write(&in_run_folder, format!("{} {started}\n", other.id())).unwrap();
+    let plain = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    LocalHost::new(&context).stop(&plain, 1).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let left_alone = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(left_alone, "the process was signalled");
 }

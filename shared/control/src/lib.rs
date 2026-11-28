@@ -504,6 +504,12 @@ pub struct Machine {
     /// Its port on this PC's network for that, which it keeps once given, on or off.
     #[serde(default)]
     pub remote_port: Option<u16>,
+    /// The pipe its console is served on while it runs: its own display, which HCS's worker serves
+    /// for Windows' Remote Desktop control to reach through RdpBase's named-pipe connector, for only
+    /// the user at the console and administrators. Its name is new each boot. None while it's off, or
+    /// from a service from before this, which has no console to offer.
+    #[serde(default)]
+    pub console_pipe: Option<String>,
 }
 
 /// One of a machine's snapshots.
@@ -554,17 +560,10 @@ pub use guesthouse_basics::json_lines::write_line;
 /// The IPv4 address in one of a guest's report lines, other than loopback.
 pub use guesthouse_serial_words_core::windows_host::address_in;
 
-/// HCS's ID for machine `name`, which also names its pipes. Every other program's machines are left
-/// alone.
+/// HCS's ID for machine `name`, which also starts its pipes' names. Every other program's machines
+/// are left alone.
 pub fn vm_id(name: &str) -> String {
     format!("guesthouse-{name}")
-}
-
-/// The pipe machine `name`'s console is served on: its own display, which HCS's worker serves for
-/// Windows' Remote Desktop control to reach through RdpBase's named-pipe connector, for only the
-/// user at the console and administrators.
-pub fn console_pipe(name: &str) -> String {
-    format!(r"\\.\pipe\{}-console", vm_id(name))
 }
 
 /// Whether `name` can name a machine: its folder and its VM take it as it is.

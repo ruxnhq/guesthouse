@@ -432,10 +432,12 @@ fn console_row(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> V
                  The keyboard and mouse go to the guest while its window has them.";
     let open = main.console.as_ref().filter(|open| open.machine == machine.name);
     let Some(open) = open else {
-        let on = matches!(
-            machine.state,
-            State::Starting | State::Running | State::Stopping | State::StoppingStalled
-        );
+        // The service names the console's pipe once the machine runs.
+        let on = machine.console_pipe.is_some()
+            && matches!(
+                machine.state,
+                State::Starting | State::Running | State::Stopping | State::StoppingStalled
+            );
         let button = button("Open console", context.message(Message::Console), false).is_enabled(on);
         return row("Console", &[about], Some(button.into()));
     };

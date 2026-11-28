@@ -6,11 +6,13 @@ use std::thread;
 
 pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(name) = args.first() else {
-        eprintln!("Give the machine's name, and if you like HCS's RuntimeId for it.");
+    // The pipe is named afresh at each boot: the machine's events say it as it starts.
+    let Some(pipe) = args.first().cloned() else {
+        eprintln!(
+            "Give the console's pipe, as the machine's events say it, and if you like HCS's RuntimeId for it."
+        );
         return ExitCode::FAILURE;
     };
-    let pipe = format!(r"\\.\pipe\guesthouse-{name}-console");
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
         Ok(listener) => listener,
         Err(error) => {

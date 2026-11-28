@@ -100,7 +100,7 @@ fn going_back_needs_a_start_that_failed_after_a_snapshot_and_a_yes() {
 fn recording_tasks(scratch: &Scratch, context: &mut Context) -> std::path::PathBuf {
     watching_real_tasks(context);
     context.make_run_folder(None).unwrap();
-    let record = context.run_folder(None).join("guesthouse-task.json");
+    let record = crate::tasks::task_path(context, None);
     let asked = scratch.path("asked");
     let script = format!(
         "#!/bin/sh\ntries=0\nuntil grep -Eq '\"pid\": ?'$$'[,}}]' '{record}' 2>/dev/null || [ $tries -ge 100 ]; do\n  \

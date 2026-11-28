@@ -1,5 +1,6 @@
 //! QEMU's arguments, in the order the guest has already seen.
 
+use super::disk_node::{Cache, DiskOptions, disk_node};
 use super::qemu_jail::{GLOBAL_SOCKET, PID_FILE, TPM_SOCKET, VGPU_SOCKET};
 use super::{Boot, DISPLAY_SOCKET, Sound, VmPlan};
 use crate::firmware::format_of;
@@ -121,11 +122,12 @@ impl VmPlan {
             &format!("file:{}", self.in_run_folder("serial.log")),
             "-D",
             &self.in_run_folder("qemu.log"),
-            "-drive",
-            &format!(
-                "if=none,id=hd0,file={},format=qcow2,cache={},discard=unmap",
-                qemu_value(&self.disk),
-                self.disk_cache()
+            "-blockdev",
+            &disk_node(
+                "hd0",
+                &self.disk,
+                &self.disk_chain(),
+                DiskOptions { cache: Some(self.disk_cache()), discard: true },
             ),
             "-device",
             if self.nvme { NVME_DISK } else { SATA_DISK },
@@ -138,11 +140,11 @@ impl VmPlan {
     /// them, which only suits a disk nothing is kept from: Windows setup, which flushes a lot and is
     /// started over on a new disk if it is cut short, and a throwaway run's overlay, which goes when
     /// the run ends.
-    pub(super) fn disk_cache(&self) -> &'static str {
+    pub(super) fn disk_cache(&self) -> Cache {
         if matches!(self.boot, Boot::Install { .. }) || self.throwaway.is_some() {
-            "unsafe"
+            Cache::Unsafe
         } else {
-            "writeback"
+            Cache::Writeback
         }
     }
 
@@ -165,10 +167,12 @@ impl VmPlan {
         ])
     }
 
+    /// A disc is raw: QEMU is told so, rather than guessing from its first bytes. An empty tray has no
+    /// format to name.
     fn cdrom(id: &str, file: &str) -> String {
         match file {
             "" => format!("if=none,id={id},media=cdrom,readonly=on"),
-            _ => format!("if=none,id={id},media=cdrom,readonly=on,file={}", qemu_value(file)),
+            _ => format!("if=none,id={id},format=raw,media=cdrom,readonly=on,file={}", qemu_value(file)),
         }
     }
 

@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 37] = [
+const SENT_TO_THE_GUEST: [&str; 39] = [
     "SetupComplete.cmd",
     "agent-update.ps1",
     "agent.ps1",
@@ -24,12 +24,14 @@ const SENT_TO_THE_GUEST: [&str; 37] = [
     "files-start.ps1",
     "files.ps1",
     "finish.ps1",
+    "guest-rights.ps1",
     "helper-stop.ps1",
     "idle-input.ps1",
     "idle.ps1",
     "lean-check.ps1",
     "lean-start.ps1",
     "lean.ps1",
+    "logon-secret.ps1",
     "nv-files.ps1",
     "nv-media-foundation.ps1",
     "nv-profiles.ps1",
@@ -47,6 +49,23 @@ const SENT_TO_THE_GUEST: [&str; 37] = [
 
 fn guest_file(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guest/windows").join(name)
+}
+
+/// The token is for SYSTEM and administrators alone, so every helper that reads it in the user's
+/// session has its start let that account read it first.
+#[test]
+fn each_helper_that_reads_the_token_is_let_read_it() {
+    let grant = "icacls C:\\gpupv\\token.txt /grant \"${user}:(R)\" | Out-Null";
+    for helper in ["clipboard", "files", "app-windows", "window-size"] {
+        let start = fs::read_to_string(guest_file(&format!("{helper}-start.ps1"))).unwrap();
+        let granted =
+            start.find(grant).unwrap_or_else(|| panic!("{helper}-start.ps1 doesn't let it read the token"));
+        let started = start.find("Start-ScheduledTask").unwrap();
+        assert!(granted < started, "{helper}-start.ps1 starts the helper first");
+        assert!(fs::read_to_string(guest_file(&format!("{helper}.ps1"))).unwrap().contains("token.txt"));
+    }
+    let rights = fs::read_to_string(guest_file("guest-rights.ps1")).unwrap();
+    assert!(rights.contains("Set-TokenRules (Join-Path $Folder 'token.txt') $ownerSid"));
 }
 
 #[test]
@@ -159,12 +178,15 @@ fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
         assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
     }
     let windows = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(windows.contains("try { listener.Start(); } catch { Environment.Exit(1); }"));
     assert!(
-        windows.contains(
-            "try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }"
-        )
+        windows
+            .contains("try { client = listener.AcceptTcpClient(); } catch { Environment.Exit(1); return; }")
     );
-    assert!(windows.contains("try { client = listener.AcceptTcpClient(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); return; }"));
+    // It writes nothing in the guest's folder, which is SYSTEM's and the administrators'.
+    for write in ["File.WriteAllText", "File.AppendAllText", "File.Create(", "StreamWriter(Dir"] {
+        assert!(!windows.contains(write), "{write}");
+    }
     for name in ["clipboard", "files", "window-size", "app-windows"] {
         let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();
         assert!(start.contains(&format!("-File C:\\gpupv\\{name}.ps1")), "the stop finds it by this: {name}");

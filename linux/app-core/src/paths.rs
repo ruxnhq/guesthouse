@@ -136,6 +136,17 @@ pub struct Paths {
     pub firmware: Firmware,
 }
 
+/// What a slot's notes folder is called after its run folder's name.
+const NOTES_SUFFIX: &str = "-notes";
+
+/// Beside a slot's run folder, the app's own notes of what runs there: the pids it may signal, with
+/// their start times, and the task's record. No jail is given this folder, so QEMU and the daemon,
+/// which may write anything in the run folder, can't write a pid here for the app to signal.
+pub fn notes_beside(run_folder: &Path) -> PathBuf {
+    let name = run_folder.file_name().unwrap_or_default().to_string_lossy();
+    run_folder.with_file_name(format!("{name}{NOTES_SUFFIX}"))
+}
+
 impl Paths {
     pub fn from_process() -> Self {
         let helpers = env::current_exe().ok().and_then(|path| Some(path.parent()?.to_owned()));
@@ -200,6 +211,11 @@ impl Paths {
 
     pub fn run_folder(&self, slot: Slot) -> PathBuf {
         self.own_run.clone().unwrap_or_else(|| slot.run_folder(&self.runtime))
+    }
+
+    /// The app's own notes for a slot: see [`notes_beside`].
+    pub fn notes_folder(&self, slot: Slot) -> PathBuf {
+        notes_beside(&self.run_folder(slot))
     }
 
     /// A file in shared memory, like `ram`, `iomem` or `display`.

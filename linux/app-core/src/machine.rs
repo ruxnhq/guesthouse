@@ -2,6 +2,7 @@
 
 use crate::account;
 use crate::context::Context;
+use crate::disk_image::backing::BackingFile;
 use crate::failure::{Failure, Result};
 use crate::gpu_maker::GpuMaker;
 use crate::network::{self, Forward, Mode};
@@ -245,6 +246,12 @@ pub struct Machine {
     /// an older build can still read it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<Drive>,
+    /// The files the disk is built on, nearest first, which a start checks the disk's header against.
+    /// None for a disk that stands alone, which is every disk the app makes, and every machine from
+    /// before this setting: a disk built on a file by hand has it recorded with `guesthouse-vm set`.
+    /// Left out of the file when there are none, so an older build can still read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backing_files: Vec<BackingFile>,
     /// Windows shows every program that draws in a window without a copy of each frame, not only
     /// the ones it counts as games. The user turns it off when a program's window goes wrong. Left
     /// out of the file until then, so an older build can still read it.
@@ -347,6 +354,7 @@ impl Machine {
             gpu_maker: None,
             user: String::new(),
             drives: Vec::new(),
+            backing_files: Vec::new(),
             window_speed_off: false,
             file_drop_off: false,
             nvapi_wrapper_off: false,

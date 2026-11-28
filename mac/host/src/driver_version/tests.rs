@@ -13,7 +13,7 @@ fn world(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (root, machine)
 }
 
-/// A support folder that has kept a released package (the stand-in's, version 0.0.0-fake).
+/// A support folder that has kept a released package (the stand-in's, version 0.0.0).
 fn with_package(root: &Path) {
     fetch_package(&mut FakeNetwork, &root.join("Downloads")).unwrap();
 }
@@ -30,8 +30,8 @@ fn with_no_released_package_known_nothing_is_said() {
 fn an_older_reported_version_is_old_and_a_same_or_newer_one_is_current() {
     let (root, machine) = world("old");
     with_package(&root);
-    assert_eq!(released_version(&root).as_deref(), Some("0.0.0-fake"));
-    // The stand-in's version is not three numbers, so it is not newer than anything.
+    assert_eq!(released_version(&root).as_deref(), Some("0.0.0"));
+    // The stand-in's version is older than the one reported.
     record_reported(&machine, "0.1.0").unwrap();
     assert_eq!(state(&root, &machine), DriverState::Current);
     let _ = fs::remove_dir_all(root);

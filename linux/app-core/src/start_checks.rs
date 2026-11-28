@@ -93,10 +93,11 @@ fn real(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
-/// The files a machine's QEMU opens: its disk and the files it's built on, its disc, its firmware
-/// settings, and OpenCore's and Android's disks.
+/// The files a machine's QEMU takes as they are: its disk and the files it's built on, its firmware
+/// settings, and OpenCore's and Android's disks. Its disc is read as raw bytes and never written, so
+/// a share may hold it.
 fn files_qemu_opens(machine: &Machine) -> impl Iterator<Item = &str> {
-    let own = [&machine.disk, &machine.iso, &machine.vars, &machine.opencore, &machine.android_data];
+    let own = [&machine.disk, &machine.vars, &machine.opencore, &machine.android_data];
     let backing = machine.backing_files.iter().map(|file| &file.path);
     own.into_iter().chain(backing).map(String::as_str).filter(|path| !path.is_empty())
 }
@@ -114,7 +115,7 @@ fn machine_file_in(folder: &Path, machines: &[Machine]) -> Option<String> {
     file_in(folder, machines).map(|(machine, file)| {
         format!(
             "The shared folder holds {file}, which {} starts from, and the guest can change anything in it. \
-             Share a folder that holds no machine's disk, disc or firmware settings.",
+             Share a folder that holds no machine's disk or firmware settings.",
             machine.name
         )
     })
@@ -308,6 +309,14 @@ mod tests {
         on_base.save(&context).unwrap();
         let bases = scratch.path("home/Bases").display().to_string();
         assert!(share_problem(&context, &bases).unwrap().contains("base.qcow2"), "a backing file");
+        // Only the disc in a folder: it can be shared. The firmware settings alone can't.
+        let mut apart = kept_in(&context, &scratch, "apart", "home/Apart");
+        apart.iso = scratch.write("home/Downloads/apart.iso", "x").display().to_string();
+        apart.vars = scratch.write("home/Firmware/apart-vars.fd", "x").display().to_string();
+        apart.save(&context).unwrap();
+        assert_eq!(share_problem(&context, &scratch.path("home/Downloads").display().to_string()), None);
+        let firmware = scratch.path("home/Firmware").display().to_string();
+        assert!(share_problem(&context, &firmware).unwrap().contains("apart-vars.fd"), "firmware settings");
     }
 
     #[test]
@@ -320,7 +329,7 @@ mod tests {
         own.share = scratch.path("home/Downloads").display().to_string();
         let found = start_problems(&context, &own).unwrap();
         assert!(says(&found, "The shared folder holds"), "its own share holds its files: {found:?}");
-        // A disc alone in the share is refused too.
+        // A disc alone in the share is allowed, as QEMU reads it as raw bytes and never writes it.
         let disc_only = Machine {
             disk: scratch.write("home/Other/lab2.qcow2", "x").display().to_string(),
             ..lab.clone()
@@ -329,7 +338,7 @@ mod tests {
         disc_only.save(&context).unwrap();
         let found =
             start_problems(&context, &Machine { share: own.share.clone(), ..disc_only.clone() }).unwrap();
-        assert!(says(&found, "lab.iso"), "{found:?}");
+        assert!(!says(&found, "shared folder"), "{found:?}");
         lab.save(&context).unwrap();
         let mut other = kept_in(&context, &scratch, "other", "home/Other");
         other.share = scratch.path("home/Downloads").display().to_string();

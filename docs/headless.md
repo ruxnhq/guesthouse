@@ -149,7 +149,7 @@ A Windows machine gets Remote Desktop and no SSH, as the dialog starts it. `--re
 | `bridge` | the bridge's name | not Ubuntu |
 | `only-through` | an interface's name such as wg0, or off, with NAT | not Ubuntu |
 | `dns` | an IPv4 address, or auto | not Ubuntu |
-| `share` | a folder, or `none`. Not one that holds a machine's disk, the files a disk is built on, its disc or its firmware settings, as the guest can change anything in it. A start checks that again, for its own folder and every other machine's | not Ubuntu |
+| `share` | a folder, or `none`. Not one that holds a machine's disk, the files a disk is built on or its firmware settings, as the guest can change anything in it. A disc may be in it, as every disc is read as it is and never written. A start checks that again, for its own folder and every other machine's | not Ubuntu |
 | `auto-snapshot` | on or off: whether a start takes a snapshot first when it has a risky change to make | Windows |
 | `remote-desktop` | on or off | Windows |
 | `app-windows` | on or off: whether the machine gets a way in for the app windows helper, and the commands `windows` and `app` work. It counts from the next start. | Windows |

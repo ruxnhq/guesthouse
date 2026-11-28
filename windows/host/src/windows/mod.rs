@@ -15,7 +15,7 @@ use crate::settings::{BootSettings, GpuChoice, Share};
 use guesthouse_hcs::disk::{Kind, VirtualDisk, Volume};
 use guesthouse_hcs::drivers::copy_driver;
 use guesthouse_hcs::gpu::{self, Card};
-use guesthouse_hcs::guest_volume::GuestVolume;
+use guesthouse_hcs::guest_volume::{Grant, GuestVolume};
 use guesthouse_hcs::host;
 use guesthouse_hcs::schema::{Attachment, AttachmentType};
 use guesthouse_remote_view_core::trust;
@@ -66,6 +66,13 @@ const WINFSP_INSTALLER_NAME: &str = "winfsp.msi";
 /// are `crate::guest::share_marker`'s. With no share it isn't there.
 pub const SHARE_FILE: &str = r"Guesthouse\share.txt";
 
+/// The folder Guesthouse keeps its files in, from the root of a Windows guest's volume:
+/// `C:\Guesthouse`, where the guest's SYSTEM runs `report.ps1`, the screen's script and the
+/// installers from.
+const GUESTHOUSE_FOLDER: &str = "Guesthouse";
+/// Who may use that folder: the guest's SYSTEM and its administrators. Whoever owns a file in it
+/// may only read its permissions.
+const GUEST_FOLDER_GRANTS: [Grant; 3] = [("SY", "FA"), ("BA", "FA"), ("OW", "RC")];
 /// The most of a guest's report that is read back.
 const MOST_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -212,6 +219,8 @@ fn refresh_windows_disk(
         .filter_map(|volume| GuestVolume::open(&volume.root).ok())
         .find(|volume| volume.is_dir(r"Windows\System32"))
         .ok_or_else(|| format!("{} has no volume with Windows on it.", disk.display()))?;
+    // Before anything is written in it, at every start, so a guest made before it has it too.
+    give_guest_folder(&windows)?;
     if let Some(card) = card {
         let folder = card.driver_folder.as_ref().ok_or_else(|| {
             format!(
@@ -231,6 +240,12 @@ fn refresh_windows_disk(
             Ok(())
         }
     }
+}
+
+/// Makes the guest's Guesthouse folder if it isn't there, and lets only the guest's SYSTEM and
+/// administrators change it and what is in it.
+pub(crate) fn give_guest_folder(guest: &GuestVolume) -> Result<(), String> {
+    guest.give_only(GUESTHOUSE_FOLDER, &GUEST_FOLDER_GRANTS).map_err(|error| error.to_string())
 }
 
 /// Tells the guest of its shares, with the marker `report.ps1` reads, and gives it the program that
@@ -528,5 +543,19 @@ mod tests {
         assert_eq!(names, ["screen.ps1"], "nothing was written through the junction");
         drop(guest);
         let _ = std::fs::remove_dir_all(disk.parent().unwrap());
+    }
+
+    #[test]
+    fn only_the_guests_system_and_administrators_may_change_its_guesthouse_folder() {
+        let writers: Vec<&str> = GUEST_FOLDER_GRANTS
+            .iter()
+            .filter(|(_, rights)| *rights != "RC")
+            .map(|(trustee, _)| *trustee)
+            .collect();
+        assert_eq!(writers, ["SY", "BA"]);
+        assert!(
+            GUEST_FOLDER_GRANTS.contains(&("OW", "RC")),
+            "an owner gets no more than reading permissions"
+        );
     }
 }

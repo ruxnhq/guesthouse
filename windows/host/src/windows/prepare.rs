@@ -4,7 +4,9 @@
 //! report and the card's driver go on it, and the first start finishes the rest. An Ubuntu ISO goes
 //! to `linux` instead, where Ubuntu's own installer does the work on the first boot.
 
-use super::{absolute, chosen_card, copy_into, linux, need_elevation, system_program, volumes};
+use super::{
+    absolute, chosen_card, copy_into, give_guest_folder, linux, need_elevation, system_program, volumes,
+};
 use crate::events::Sink;
 use crate::guest;
 use crate::machine::Guest;
@@ -144,6 +146,7 @@ fn fill(
     let password = new_password()?;
     let windows_volume =
         GuestVolume::open(&windows_root).map_err(|error| format!("{}: {error}", windows_root.display()))?;
+    give_guest_folder(&windows_volume)?;
     write(&windows_volume, guest::ANSWER_FILE_PATH, &guest::answer_file(&settings.user, &password))?;
     write(&windows_volume, guest::SETUP_COMPLETE_PATH, guest::SETUP_COMPLETE)?;
     write(&windows_volume, guest::REPORT_PATH, guest::REPORT)?;

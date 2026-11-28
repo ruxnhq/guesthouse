@@ -543,10 +543,14 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         if ring_request::is_ring_request(&self.guest.allocation, private)
             && let Some(memory) = memory
         {
-            let handle = self.device.new_handle();
-            ring_request::answer_with_handle(private, handle);
-            self.ring_moves.answered(memory, handle, size);
-            log::info!("a ring of {size:#x} bytes can be moved to with handle {handle:#x}");
+            match self.device.new_handle() {
+                Ok(handle) => {
+                    ring_request::answer_with_handle(private, handle);
+                    self.ring_moves.answered(memory, handle, size);
+                    log::info!("a ring of {size:#x} bytes can be moved to with handle {handle:#x}");
+                }
+                Err(error) => log::warn!("no handle for a ring to move to: {error}"),
+            }
         }
     }
 

@@ -2,7 +2,8 @@
 
 use crate::fake_display;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process;
@@ -41,10 +42,43 @@ fn listen_on(path: &Path) {
     });
 }
 
+/// Where a forward's connections go: a port on this PC, as no guest is behind them.
+pub const FORWARD_TO_VARIABLE: &str = "PAGE_SHOTS_FORWARD_TO";
+
+/// Passes each connection to a port of the user network's forwards on to `to`, as QEMU passes it
+/// to the guest, so the app reaches a pretend helper through this process as it would through QEMU.
+fn forward(word: &str, to: u16) {
+    for rule in word.split(',').filter_map(|part| part.strip_prefix("hostfwd=tcp:127.0.0.1:")) {
+        let Some(Ok(port)) = rule.split('-').next().map(str::parse::<u16>) else { continue };
+        let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)) else { continue };
+        thread::spawn(move || {
+            for outside in listener.incoming().map_while(Result::ok) {
+                let Ok(inside) = TcpStream::connect((Ipv4Addr::LOCALHOST, to)) else { continue };
+                for (mut from, mut into) in
+                    [(outside.try_clone(), inside.try_clone()), (Ok(inside), Ok(outside))]
+                        .into_iter()
+                        .filter_map(|(from, into)| Some((from.ok()?, into.ok()?)))
+                {
+                    thread::spawn(move || {
+                        let _ = io::copy(&mut from, &mut into);
+                        let _ = into.shutdown(Shutdown::Write);
+                    });
+                }
+            }
+        });
+    }
+}
+
 /// Takes the arguments the app gave QEMU.
 pub fn run(arguments: &[String]) -> ! {
     for pair in arguments.windows(2).filter(|pair| pair[0] == "-qmp") {
         listen_on(Path::new(pair[1].trim_start_matches("unix:").split(',').next().unwrap()));
+    }
+    let to = std::env::var(FORWARD_TO_VARIABLE).ok().and_then(|port| port.parse().ok());
+    for pair in arguments.windows(2).filter(|pair| pair[0] == "-nic") {
+        if let Some(to) = to {
+            forward(&pair[1], to);
+        }
     }
     thread::sleep(LIFE);
     process::exit(0)

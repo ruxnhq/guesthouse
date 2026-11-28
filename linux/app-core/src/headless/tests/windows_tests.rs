@@ -6,6 +6,7 @@ use crate::app_windows::{
     Caption, Cell, Layout, LinkSettings, Point, Rect, Size, State, Timing, answer_line, forward_word,
     host_port, layout_line, set_on,
 };
+use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,6 +71,8 @@ pub(super) struct Rig {
     pub agent: Arc<ScriptedAgent>,
     pub helper: FakeHelper,
     pub machine: Machine,
+    /// The test process as the machine's QEMU, while the machine is up.
+    _qemu: Option<UnixListener>,
 }
 
 /// A Windows machine that runs as pid 40, whose helper is a pretend one on a port of its own, and whose
@@ -112,14 +115,14 @@ pub(super) fn rig_with(
     if on && kind == Kind::Windows {
         set_on(&context, &machine, true).unwrap();
     }
-    if up {
-        start_process(&context, &machine);
-    }
-    Rig { context, agent, helper, machine }
+    let qemu = up.then(|| start_process(&context, &machine));
+    Rig { context, agent, helper, machine, _qemu: qemu }
 }
 
-/// The machine's QEMU, as the system would show it.
-pub(super) fn start_process(context: &Context, machine: &Machine) {
+/// The machine's QEMU, as the system would show it, and the test process as the QEMU the link
+/// reaches for as long as the listener is kept.
+#[must_use]
+pub(super) fn start_process(context: &Context, machine: &Machine) -> UnixListener {
     let qemu = context.paths.qemu.display().to_string();
     let monitor = format!("unix:{}/qmp.sock,server=on", context.run_folder(None).display());
     let disk = format!("file={},format=qcow2", machine.disk);
@@ -131,6 +134,7 @@ pub(super) fn start_process(context: &Context, machine: &Machine) {
         &[],
         "",
     );
+    crate::testing::act_as_qemu(context, machine, None)
 }
 
 fn two_cells() -> Layout {

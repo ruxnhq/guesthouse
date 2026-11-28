@@ -37,6 +37,7 @@ pub mod gpu_maker;
 pub mod gpu_sample;
 pub mod gpu_support;
 pub mod guest_driver_store;
+pub mod guest_end;
 pub mod guest_files;
 pub mod guest_memory;
 pub mod guest_shell;

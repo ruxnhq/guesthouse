@@ -109,7 +109,7 @@ mod tests {
     }
 
     impl GuestAgent for Guest {
-        fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
             if script == RESTART_SCRIPT {
                 self.files.requests.lock().unwrap().push(script.to_owned());
                 if self.restarts {
@@ -131,7 +131,7 @@ mod tests {
                     > 1;
                 return format!("gpu working {}\n", u8::from(has_kernel && booted_since));
             }
-            self.files.ask(port, token, script, seconds)
+            self.files.ask(end, token, script, seconds)
         }
     }
 

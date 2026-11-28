@@ -135,7 +135,7 @@ mod tests {
     }
 
     impl GuestAgent for PackageGuest {
-        fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
             if script.ends_with(SCRIPT_TEXT) {
                 self.scripts.lock().unwrap().push(script.to_owned());
                 return self.script.lock().unwrap().clone();
@@ -144,7 +144,7 @@ mod tests {
                 self.files.requests.lock().unwrap().push(script.to_owned());
                 return self.look.lock().unwrap().clone();
             }
-            self.files.ask(port, token, script, seconds)
+            self.files.ask(end, token, script, seconds)
         }
     }
 

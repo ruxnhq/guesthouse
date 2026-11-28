@@ -99,6 +99,7 @@ fn only_a_windows_machine_gets_a_link() {
 fn a_helper_that_is_running_is_never_started() {
     let scratch = Scratch::new();
     let (context, machine, agent) = rig(&scratch, &[], true);
+    let _qemu = crate::testing::act_as_qemu(&context, &machine, None);
     let helper = FakeHelper::start(&token_of(&context, &machine));
     let context = Arc::new(Context {
         app_windows: LinkSettings { port: Some(helper.port), ..quick() },
@@ -199,6 +200,7 @@ fn a_machine_with_no_token_is_refused_in_words() {
 fn a_layout_that_cannot_be_read_is_said_and_not_waited_out() {
     let scratch = Scratch::new();
     let (context, machine, _) = rig(&scratch, &[], true);
+    let _qemu = crate::testing::act_as_qemu(&context, &machine, None);
     let helper = FakeHelper::start(&token_of(&context, &machine));
     // The helper's cells lack the fields the contract names.
     helper.with(|inner| {

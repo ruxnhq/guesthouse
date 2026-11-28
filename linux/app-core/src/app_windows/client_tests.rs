@@ -1,6 +1,7 @@
 use super::message::*;
 use super::stand_in::{FakeHelper, Welcome};
 use super::*;
+use crate::guest_end::GuestEnd;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,9 +50,9 @@ impl HelperStarter for Starter {
     }
 }
 
-fn config(port: u16, starter: Option<&Arc<Starter>>) -> LinkConfig {
+fn config(end: GuestEnd, starter: Option<&Arc<Starter>>) -> LinkConfig {
     LinkConfig {
-        port,
+        end,
         token: TOKEN.to_owned(),
         side: false,
         starter: starter.map(|starter| starter.clone() as Arc<dyn HelperStarter>),
@@ -108,7 +109,7 @@ fn ids(client: &Client) -> Vec<String> {
 fn the_token_hello_and_layout_make_the_model_and_the_link_up() {
     let helper = FakeHelper::start(TOKEN);
     helper.with(|inner| inner.layout = layout(3, vec![cell("10", None), cell("11", Some("10"))]));
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     assert!(client.wait_for(SECONDS, |c| c.model().cells().len() == 2));
     assert_eq!(ids(&client), ["10", "11"]);
@@ -125,7 +126,7 @@ fn the_token_hello_and_layout_make_the_model_and_the_link_up() {
 #[test]
 fn a_layout_the_helper_sends_later_comes_as_changes() {
     let helper = FakeHelper::start(TOKEN);
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     client.poll();
     helper.show(layout(2, vec![cell("10", None)]));
@@ -149,7 +150,7 @@ fn a_layout_the_helper_sends_later_comes_as_changes() {
 #[test]
 fn a_request_is_answered_by_its_number() {
     let helper = FakeHelper::start(TOKEN);
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     let answer = client.ask(Request::Focus { id: "10".into() }, SECONDS).unwrap();
     assert_eq!((answer.re, answer.ok), (1, true));
@@ -169,7 +170,7 @@ fn an_answer_that_says_no_has_the_helpers_words() {
     helper.respond_with(|request, _| {
         vec![answer_line(request["n"].as_u64().unwrap(), false, "no such window")]
     });
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     let answer = client.ask(Request::Close { id: "9".into() }, SECONDS).unwrap();
     assert_eq!((answer.ok, answer.error.as_str()), (false, "no such window"));
@@ -188,7 +189,7 @@ fn answers_come_back_to_the_requests_they_belong_to_whatever_the_order() {
         }
         held.drain(..).rev().map(|n| answer_line(n, true, "")).collect()
     });
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     let first = client.request(Request::Restore { id: "1".into() });
     let second = client.request(Request::Close { id: "2".into() });
@@ -209,7 +210,7 @@ fn answers_come_back_to_the_requests_they_belong_to_whatever_the_order() {
 fn a_request_nobody_answers_times_out_and_the_link_stays_up() {
     let helper = FakeHelper::start(TOKEN);
     helper.respond_with(|_, _| Vec::new());
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     assert_eq!(client.ask(Request::Layout, SECONDS), Err(RequestFailure::TimedOut));
     assert_eq!(*client.status(), Status::Up);
@@ -219,7 +220,7 @@ fn a_request_nobody_answers_times_out_and_the_link_stays_up() {
 fn a_request_while_down_is_refused_at_once_and_not_kept_for_later() {
     let helper = FakeHelper::start(TOKEN);
     helper.with(|inner| inner.welcome = Welcome::Close);
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     down_with(&mut client, "closed");
     assert_eq!(client.ask(Request::Focus { id: "1".into() }, SECONDS), Err(RequestFailure::NotConnected));
     helper.with(|inner| inner.welcome = Welcome::Hello);
@@ -232,7 +233,7 @@ fn a_dropped_connection_fails_what_waited_and_is_made_again_with_the_cells_kept(
     let helper = FakeHelper::start(TOKEN);
     helper.with(|inner| inner.layout = layout(1, vec![cell("10", None)]));
     helper.respond_with(|_, _| Vec::new());
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     assert!(client.wait_for(SECONDS, |c| c.model().cells().len() == 1));
     let n = client.request(Request::Close { id: "10".into() });
@@ -253,7 +254,7 @@ fn a_dropped_connection_fails_what_waited_and_is_made_again_with_the_cells_kept(
 fn a_helper_started_again_replaces_the_cells_and_the_old_handles_are_not_trusted() {
     let helper = FakeHelper::start(TOKEN);
     helper.with(|inner| inner.layout = layout(40, vec![cell("10", None)]));
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     assert!(client.wait_for(SECONDS, |c| c.model().seq() == Some(40)));
     client.poll();
@@ -288,7 +289,7 @@ fn a_helper_started_again_replaces_the_cells_and_the_old_handles_are_not_trusted
 fn a_wrong_token_looks_like_nothing_is_there_and_starts_the_helper_once_in_a_while() {
     let helper = FakeHelper::start("another token");
     let starter = Starter::new();
-    let mut client = Client::start(config(helper.port, Some(&starter)));
+    let mut client = Client::start(config(helper.end(), Some(&starter)));
     down_with(&mut client, "closed");
     assert!(helper.wait_until(|inner| inner.tokens_refused >= 2), "it tries again");
     assert_eq!(starter.count(), 1, "one start, not one a try");
@@ -307,8 +308,9 @@ fn nothing_listening_starts_the_helper() {
         let spare = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         spare.local_addr().unwrap().port()
     };
+    let qemu = crate::testing::QemuStandIn::default();
     let starter = Starter::new();
-    let mut client = Client::start(config(port, Some(&starter)));
+    let mut client = Client::start(config(qemu.end(port), Some(&starter)));
     down_with(&mut client, "refused");
     let until = std::time::Instant::now() + SECONDS;
     while starter.count() == 0 && std::time::Instant::now() < until {
@@ -326,7 +328,7 @@ fn a_helper_that_takes_the_token_and_says_nothing_is_given_up_on_after_the_hello
     let started = starter.clone();
     let for_effect = helper_welcome(&helper);
     *starter.effect.lock().unwrap() = Some(Box::new(for_effect));
-    let mut client = Client::start(config(helper.port, Some(&starter)));
+    let mut client = Client::start(config(helper.end(), Some(&starter)));
     down_with(&mut client, "did not say hello");
     up(&mut client);
     assert_eq!(started.count(), 1, "the start mended it, and nothing started it again");
@@ -343,7 +345,7 @@ fn a_start_that_fails_is_the_reason_the_link_is_down() {
     let helper = FakeHelper::start("another token");
     let starter = Starter::new();
     *starter.says.lock().unwrap() = Err("Restart the machine so that it has the forward.".into());
-    let mut client = Client::start(config(helper.port, Some(&starter)));
+    let mut client = Client::start(config(helper.end(), Some(&starter)));
     down_with(&mut client, "Restart the machine");
     assert!(
         client.poll().iter().any(|update| matches!(update, Update::Note(text) if text.contains("Restart")))
@@ -355,7 +357,7 @@ fn a_helper_of_another_version_is_restarted_once_and_then_left_alone() {
     let helper = FakeHelper::start(TOKEN);
     helper.with(|inner| inner.version = 2);
     let starter = Starter::new();
-    let mut client = Client::start(config(helper.port, Some(&starter)));
+    let mut client = Client::start(config(helper.end(), Some(&starter)));
     down_with(&mut client, "version 2");
     thread_sleep(900);
     assert_eq!(starter.count(), 1, "a second restart would find the same");
@@ -365,7 +367,7 @@ fn a_helper_of_another_version_is_restarted_once_and_then_left_alone() {
 #[test]
 fn a_line_over_the_limit_is_passed_over_and_the_link_goes_on() {
     let helper = FakeHelper::start(TOKEN);
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     client.poll();
     helper.say(&format!(r#"{{"t":"desktop","kind":"normal","pad":"{}"}}"#, "x".repeat(MOST_LINE_BYTES + 10)));
@@ -379,7 +381,7 @@ fn a_line_over_the_limit_is_passed_over_and_the_link_goes_on() {
 #[test]
 fn a_line_that_is_not_a_message_is_noted_and_the_link_goes_on() {
     let helper = FakeHelper::start(TOKEN);
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     client.poll();
     helper.say("this is not json");
@@ -400,7 +402,7 @@ fn an_answer_to_apps_may_be_longer_than_other_lines() {
             r#"{{"t":"answer","re":{n},"ok":true,"apps":[{{"id":"a","name":"A","icon":"{icon}"}}]}}"#
         )]
     });
-    let mut client = Client::start(config(helper.port, None));
+    let mut client = Client::start(config(helper.end(), None));
     up(&mut client);
     let answer = client.ask(Request::Apps { icons: true }, SECONDS).unwrap();
     assert_eq!(answer.apps.unwrap()[0].icon.len(), MOST_LINE_BYTES + 100);
@@ -409,9 +411,9 @@ fn an_answer_to_apps_may_be_longer_than_other_lines() {
 #[test]
 fn a_second_client_takes_the_connection_and_the_first_comes_back_later() {
     let helper = FakeHelper::start(TOKEN);
-    let mut first = Client::start(config(helper.port, None));
+    let mut first = Client::start(config(helper.end(), None));
     up(&mut first);
-    let mut second = Client::start(config(helper.port, None));
+    let mut second = Client::start(config(helper.end(), None));
     up(&mut second);
     assert!(first.wait_for(SECONDS, |c| matches!(c.status(), Status::Down(_))), "the first was replaced");
     up(&mut first);
@@ -421,9 +423,9 @@ fn a_second_client_takes_the_connection_and_the_first_comes_back_later() {
 #[test]
 fn a_side_client_works_beside_the_driving_one_and_does_not_disturb_it() {
     let helper = FakeHelper::start(TOKEN);
-    let mut driver = Client::start(config(helper.port, None));
+    let mut driver = Client::start(config(helper.end(), None));
     up(&mut driver);
-    let mut side = Client::start(LinkConfig { side: true, ..config(helper.port, None) });
+    let mut side = Client::start(LinkConfig { side: true, ..config(helper.end(), None) });
     up(&mut side);
     let answer = side.ask(Request::Layout, SECONDS).unwrap();
     assert!(answer.ok);
@@ -437,11 +439,11 @@ fn a_side_client_works_beside_the_driving_one_and_does_not_disturb_it() {
 #[test]
 fn two_driving_clients_still_take_the_connection_from_each_other() {
     let helper = FakeHelper::start(TOKEN);
-    let mut first = Client::start(config(helper.port, None));
+    let mut first = Client::start(config(helper.end(), None));
     up(&mut first);
-    let mut side = Client::start(LinkConfig { side: true, ..config(helper.port, None) });
+    let mut side = Client::start(LinkConfig { side: true, ..config(helper.end(), None) });
     up(&mut side);
-    let mut second = Client::start(config(helper.port, None));
+    let mut second = Client::start(config(helper.end(), None));
     up(&mut second);
     assert!(
         first.wait_for(SECONDS, |c| matches!(c.status(), Status::Down(_))),

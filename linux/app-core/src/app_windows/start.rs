@@ -9,6 +9,7 @@ use super::switch::{is_on, off_text};
 use crate::agent::{helper_start_with, read_token, stop_helper};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
+use crate::guest_end::GuestEnd;
 use crate::machine::{Kind, Machine};
 use guesthouse_daemon::slot::Slot;
 use std::sync::Arc;
@@ -164,7 +165,7 @@ fn connect_as(
         .ok_or_else(|| Failure(format!("{name} has no token, so there is no agent to start the helper.")))?;
     let starter = Arc::new(AgentStarter::new(context.clone(), machine.clone(), slot));
     let config = LinkConfig {
-        port: host_port(context, slot),
+        end: GuestEnd::new(context, machine, slot, host_port(context, slot)),
         token,
         side,
         starter: Some(starter.clone()),

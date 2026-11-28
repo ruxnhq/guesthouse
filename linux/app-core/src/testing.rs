@@ -2,9 +2,15 @@
 
 use crate::context::Context;
 use crate::firmware::Firmware;
+use crate::guest_end::GuestEnd;
+use crate::machine::Machine;
+use crate::monitor::MAIN_SOCKET;
 use crate::paths::{Paths, Variables};
+use guesthouse_daemon::slot::Slot;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::symlink;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -129,4 +135,48 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     context.apparmor = scratch.path("apparmor.d");
     context.udmabuf_limit = scratch.path("udmabuf-limit");
     context
+}
+
+/// This test process as the slot's QEMU of `machine`, for as long as the listener is kept: it
+/// listens on the slot's monitor, its words open the machine's disk, and the context's `/proc` shows
+/// its open files and this PC's sockets as they are.
+#[must_use]
+pub fn act_as_qemu(context: &Context, machine: &Machine, slot: Option<Slot>) -> UnixListener {
+    context.make_run_folder(slot).unwrap();
+    let pid = std::process::id();
+    let folder = context.processes.join(pid.to_string());
+    fs::create_dir_all(&folder).unwrap();
+    let words = format!("qemu\0-drive\0file={},format=qcow2\0", crate::text::qemu_value(&machine.disk));
+    fs::write(folder.join("cmdline"), words).unwrap();
+    let _ = symlink(format!("/proc/{pid}/fd"), folder.join("fd"));
+    let _ = symlink("/proc/net", context.processes.join("net"));
+    let monitor = context.run_folder(slot).join(MAIN_SOCKET);
+    let _ = fs::remove_file(&monitor);
+    UnixListener::bind(monitor).unwrap()
+}
+
+/// A machine of its own with this test process as its QEMU, while it is kept, for a test that only
+/// needs a way to a port of a guest.
+pub struct QemuStandIn {
+    context: Context,
+    machine: Machine,
+    _monitor: UnixListener,
+    _scratch: Scratch,
+}
+
+impl Default for QemuStandIn {
+    fn default() -> Self {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let machine = Machine::new("vm", "vm", &scratch.path("vm.qcow2").display().to_string(), "/v");
+        let monitor = act_as_qemu(&context, &machine, None);
+        Self { context, machine, _monitor: monitor, _scratch: scratch }
+    }
+}
+
+impl QemuStandIn {
+    /// A port on this PC, as the machine's guest is reached at it.
+    pub fn end(&self, port: u16) -> GuestEnd {
+        GuestEnd::new(&self.context, &self.machine, None, port)
+    }
 }

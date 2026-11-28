@@ -125,7 +125,7 @@ pub fn still_running(context: &Context, qemu: Seen) -> bool {
 
 /// Whether one of QEMU's words opens this machine's disk. A comma after the name ends it, unless it's
 /// doubled, when the name goes on and this is some other disk.
-fn opens_disk(word: &[u8], machine: &Machine) -> bool {
+pub(crate) fn opens_disk(word: &[u8], machine: &Machine) -> bool {
     let wanted = format!("file={},", qemu_value(&machine.disk)).into_bytes();
     let found = word.windows(wanted.len()).position(|part| part == wanted);
     found.is_some_and(|at| word.get(at + wanted.len()) != Some(&b',')) || runs_throwaway_of(word, machine)

@@ -75,7 +75,7 @@ fn a_silent_agent_is_cannot_tell_and_not_idle() {
 struct Working(Context);
 
 impl GuestAgent for Working {
-    fn ask(&self, _: u16, _: &str, _: &str, _: u64) -> String {
+    fn ask(&self, _: &crate::guest_end::GuestEnd, _: &str, _: &str, _: u64) -> String {
         write_guest_stat(&self.0, 40, 40, 1000 + 800);
         String::new()
     }

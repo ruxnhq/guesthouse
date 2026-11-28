@@ -1,8 +1,8 @@
 use super::names::{for_windows, is_one_name, not_among};
 use super::*;
-use crate::testing::Scratch;
+use crate::testing::{QemuStandIn, Scratch};
 use std::fs;
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::symlink;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, channel};
@@ -11,7 +11,8 @@ use std::thread;
 const TOKEN: &str = "secret";
 
 /// A helper that gives each connection the next answer, and passes on what it was sent.
-fn fake_helper(answers: &[&[u8]]) -> (Helper, Receiver<Vec<u8>>) {
+fn fake_helper(answers: &[&[u8]]) -> (Helper, Receiver<Vec<u8>>, QemuStandIn) {
+    let qemu = QemuStandIn::default();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let answers: Vec<Vec<u8>> = answers.iter().map(|answer| answer.to_vec()).collect();
@@ -34,7 +35,7 @@ fn fake_helper(answers: &[&[u8]]) -> (Helper, Receiver<Vec<u8>>) {
             stream.write_all(&answer).unwrap();
         }
     });
-    (Helper::new(port, TOKEN), requests)
+    (Helper::new(qemu.end(port), TOKEN), requests, qemu)
 }
 
 fn text(request: &[u8]) -> String {
@@ -99,7 +100,7 @@ fn sending_makes_the_folders_and_puts_the_files_with_the_token_first() {
     let scratch = Scratch::new();
     fs::create_dir_all(scratch.path("trip")).unwrap();
     fs::write(scratch.path("trip/a.txt"), "hello").unwrap();
-    let (helper, requests) = fake_helper(&[b"ok\n", b"ok\n"]);
+    let (helper, requests, _qemu) = fake_helper(&[b"ok\n", b"ok\n"]);
     let files = dropped_files(&[scratch.path("trip")]);
     send(&helper, "d1", &files, &AtomicBool::new(false)).unwrap();
     assert_eq!(text(&requests.recv().unwrap()), "secret folder d1 dHJpcA==\n");
@@ -111,7 +112,7 @@ fn sending_stops_when_it_is_told_to_and_when_the_guest_refuses() {
     let scratch = Scratch::new();
     fs::write(scratch.path("a.txt"), "hello").unwrap();
     let files = dropped_files(&[scratch.path("a.txt")]);
-    let (helper, _requests) = fake_helper(&[b"failed There is not enough space on the disk.\n"]);
+    let (helper, _requests, _qemu) = fake_helper(&[b"failed There is not enough space on the disk.\n"]);
     let stopped = send(&helper, "d1", &files, &AtomicBool::new(true)).unwrap_err();
     assert_eq!(stopped.kind(), ErrorKind::Interrupted);
     let refused = send(&helper, "d1", &files, &AtomicBool::new(false)).unwrap_err();
@@ -120,7 +121,7 @@ fn sending_stops_when_it_is_told_to_and_when_the_guest_refuses() {
 
 #[test]
 fn the_drag_says_whether_a_press_can_reach_it_and_how_it_ended() {
-    let (helper, requests) =
+    let (helper, requests, _qemu) =
         fake_helper(&[b"shown\n", b"covered\n", b"desktop\n", b"", b"files 0\n", b"files 1\n"]);
     assert!(helper.drag("d1").unwrap());
     assert!(!helper.drag("d1").unwrap());
@@ -135,7 +136,7 @@ fn the_drag_says_whether_a_press_can_reach_it_and_how_it_ended() {
 #[test]
 fn a_caught_drag_lists_its_files_and_they_land_under_the_folder() {
     let listing = b"files\nfolder 0 dHJpcA==\nfile 5 dHJpcC9hLnR4dA==\nfile 2 Yi50eHQ=\n";
-    let (helper, requests) = fake_helper(&[listing, b"ok 5\nhello", b"ok 2\nhi"]);
+    let (helper, requests, _qemu) = fake_helper(&[listing, b"ok 5\nhello", b"ok 2\nhi"]);
     let entries = helper.catch(Duration::from_millis(100)).unwrap().unwrap();
     assert_eq!(entries[1], Entry { name: "trip/a.txt".to_owned(), is_folder: false, size: 5 });
     let scratch = Scratch::new();
@@ -148,13 +149,13 @@ fn a_caught_drag_lists_its_files_and_they_land_under_the_folder() {
 
 #[test]
 fn no_drag_in_the_guest_is_nothing_caught() {
-    let (helper, _requests) = fake_helper(&[b"none\n"]);
+    let (helper, _requests, _qemu) = fake_helper(&[b"none\n"]);
     assert_eq!(helper.catch(Duration::from_millis(100)).unwrap(), None);
 }
 
 #[test]
 fn a_guests_name_that_leads_out_of_the_folder_is_refused() {
-    let (helper, _requests) = fake_helper(&[]);
+    let (helper, _requests, _qemu) = fake_helper(&[]);
     let scratch = Scratch::new();
     for name in ["../out.txt", "/etc/passwd", "a//b"] {
         let entries = [Entry { name: name.to_owned(), is_folder: false, size: 1 }];
@@ -166,7 +167,7 @@ fn a_guests_name_that_leads_out_of_the_folder_is_refused() {
 
 #[test]
 fn a_file_that_ends_early_is_an_error() {
-    let (helper, _requests) = fake_helper(&[b"ok 9\nshort"]);
+    let (helper, _requests, _qemu) = fake_helper(&[b"ok 9\nshort"]);
     let got = helper.get("a.txt", &mut Vec::new()).unwrap_err();
     assert_eq!(got.kind(), ErrorKind::UnexpectedEof);
 }

@@ -1,7 +1,7 @@
 //! The Apps page of a Windows machine in each of its states, for `PAGE_SHOTS_WALK=apps`. The machine is
 //! a stand-in, its helper is the pretend one of `app_windows::stand_in` on this process's own loopback
 //! port, the agent that would start the helper is a stub, and QEMU is a sleeping process with the words
-//! of a machine that has the way in to its helper. Nothing here reaches a guest or a viewer: an Open is
+//! of a machine that has the way in to its helper, which it passes on to the pretend one. Nothing here reaches a guest or a viewer: an Open is
 //! only ever answered with silence or a refusal, so no viewer is started.
 
 use super::*;
@@ -23,7 +23,13 @@ pub const TOKEN: &str = "page-shots-token";
 struct Nobody;
 
 impl GuestAgent for Nobody {
-    fn ask(&self, _port: u16, _token: &str, _script: &str, _seconds: u64) -> String {
+    fn ask(
+        &self,
+        _end: &guesthouse_app_core::guest_end::GuestEnd,
+        _token: &str,
+        _script: &str,
+        _seconds: u64,
+    ) -> String {
         "nobody is logged in".to_owned()
     }
 }
@@ -50,7 +56,10 @@ pub fn prepare(context: &mut Context, folder: &Path) {
         request: Duration::from_secs(5),
         apps_request: Duration::from_secs(3),
     };
-    context.app_windows = LinkSettings { port: Some(helper.port), timing, patience: Duration::from_secs(2) };
+    // The app reaches the helper through the pretend QEMU's forward, on a port of its own.
+    let forward = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = forward.local_addr().unwrap().port();
+    context.app_windows = LinkSettings { port: Some(port), timing, patience: Duration::from_secs(2) };
     context.agent = Arc::new(Nobody);
     let guest = PathBuf::from(env::var("GUESTHOUSE_PROGRAM").expect("the script sets it")).join("guest");
     fs::create_dir_all(&guest).unwrap();
@@ -175,6 +184,7 @@ fn vm_with(context: &Context, machine: &Machine, forward: bool) -> Child {
     let drive = format!("file={},format=qcow2", machine.disk);
     let mut command = Command::new(env::current_exe().unwrap());
     command.arg0(context.paths.qemu.as_os_str()).args(["-qmp", &socket, "-drive", &drive]);
+    command.env(fake_qemu::FORWARD_TO_VARIABLE, helper().port.to_string());
     if forward {
         command.args(["-nic", &format!("user,{}", forward_word(host_port(context, None)))]);
     }

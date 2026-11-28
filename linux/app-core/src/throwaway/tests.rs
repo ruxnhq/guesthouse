@@ -268,7 +268,7 @@ fn a_jail_chosen_before_the_run_still_lets_qemu_read_the_disk() {
 struct Guest(Mutex<String>);
 
 impl GuestAgent for Guest {
-    fn ask(&self, _port: u16, token: &str, script: &str, _seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, token: &str, script: &str, _seconds: u64) -> String {
         let mut held = self.0.lock().unwrap();
         if *held != token {
             return String::new();
@@ -291,7 +291,11 @@ fn each_run_moves_the_guest_to_a_token_of_its_own_and_the_machines_stays() {
     fs::write(machine.token_file(&context), "base\n").unwrap();
     fs::write(crate::token_change::next_token_file(&context, &machine), "from a duplicate\n").unwrap();
     ThrowawayRun::prepare(&context, &machine).unwrap();
-    crate::token_change::finish_token_change(&context, &machine, 1);
+    crate::token_change::finish_token_change(
+        &context,
+        &machine,
+        &crate::guest_end::GuestEnd::agent(&context, &machine, None),
+    );
     let run = fs::read_to_string(run_token_file(&context, &machine)).unwrap();
     assert_eq!(*guest.0.lock().unwrap(), run.trim());
     assert_eq!(

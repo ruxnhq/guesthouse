@@ -96,12 +96,11 @@ static void test_objects(void)
 
     /* Local objects are told apart, per client. */
     {
-        ObjectClaim c = { MEMORY_NONE, 0 };
-        ObjectInfo info = { .client = 3, .parent = 3, .object = 6, .local = true };
+        ObjectInfo info = { .client = 3, .parent = 3, .object = 6 };
 
-        assert(objects_claim(o, &c));
-        objects_add(o, &c, 0, &info);
-        assert(objects_is_local(o, 3, 6) && !objects_is_local(o, 4, 6));
+        add(o, 3, 3, 3, MEMORY_NONE, 0, 1);
+        assert(objects_add_local(o, &info) == LOCAL_ADDED);
+        assert(objects_is_local(o, 3, 6) && !objects_is_local(o, 4, 6) && !objects_is_local(o, 3, 3));
     }
 
     /* A handle made again replaces the old object and its charge. */
@@ -111,9 +110,79 @@ static void test_objects(void)
     assert(objects_bytes(o, MEMORY_VIDEO) == 2 * MIB);
 }
 
+/* A local object goes under a client the guest has, and never in the place of anything already there. */
+static void test_local_objects(void)
+{
+    ObjectLimits limits = { .max_objects = 4, .max_bytes = { 0, 100 * MIB, 10 * MIB } };
+    Objects *o = objects_new(&limits, gone, &gone_calls);
+    ObjectInfo on_client = { .client = 1, .parent = 1, .object = 1 };
+    ObjectInfo on_memory = { .client = 1, .parent = 2, .object = 3 };
+    ObjectInfo stranger = { .client = 7, .parent = 7, .object = 7 };
+    ObjectInfo fresh = { .client = 1, .parent = 2, .object = 4 };
+
+    add(o, 1, 1, 1, MEMORY_NONE, 0, 1);
+    add(o, 1, 1, 2, MEMORY_NONE, 0, 1);
+    add(o, 1, 2, 3, MEMORY_VIDEO, 40 * MIB, 1);
+
+    /* The client's own handle and a handle in use stay as they are, with their charges. */
+    assert(objects_add_local(o, &on_client) == LOCAL_HANDLE_TAKEN);
+    assert(objects_add_local(o, &on_memory) == LOCAL_HANDLE_TAKEN);
+    assert(objects_bytes(o, MEMORY_VIDEO) == 40 * MIB && objects_count(o) == 3);
+    assert(!objects_is_local(o, 1, 1) && !objects_is_local(o, 1, 3));
+
+    /* A client nobody made is not made by naming it. */
+    assert(objects_add_local(o, &stranger) == LOCAL_NO_CLIENT);
+    assert(!objects_has_client(o, 7) && objects_count(o) == 3);
+
+    /* A new handle under a known client is answered, counted, and the count still stops. */
+    assert(objects_add_local(o, &fresh) == LOCAL_ADDED);
+    assert(objects_is_local(o, 1, 4) && objects_count(o) == 4);
+    fresh.object = 5;
+    assert(objects_add_local(o, &fresh) == LOCAL_FULL);
+
+    /* It goes with its client. */
+    objects_remove(o, 1, 1);
+    assert(objects_count(o) == 0 && objects_bytes(o, MEMORY_VIDEO) == 0);
+}
+
+/* Guest pages mapped for the driver stay inside the guest's memory and a count of mappings, and come back with their object. */
+static void test_page_budget(void)
+{
+    ObjectLimits limits = { .max_objects = 8, .max_bytes = { 0, 100 * MIB, 10 * MIB },
+                            .max_page_bytes = 100 * MIB, .max_page_runs = 10 };
+    Objects *o = objects_new(&limits, gone, &gone_calls);
+    int calls = gone_calls;
+
+    add(o, 1, 1, 1, MEMORY_NONE, 0, 1);
+    assert(objects_take_pages(o, 6, 40 * MIB));
+    assert(!objects_take_pages(o, 5, MIB));       /* past the count of mappings */
+    assert(!objects_take_pages(o, 1, 61 * MIB));  /* past the guest's memory */
+    assert(!objects_take_pages(o, UINT32_MAX, 0) && !objects_take_pages(o, 0, UINT64_MAX));
+    {
+        ObjectClaim c = { MEMORY_NONE, 0 };
+        ObjectInfo info = { .client = 1, .parent = 1, .object = 2, .file = 1,
+                            .host_range = &limits, .host_bytes = 40 * MIB, .host_runs = 6 };
+
+        assert(objects_claim(o, &c));
+        objects_add(o, &c, 0, &info);
+    }
+    /* The same pages again, over and over, are charged each time. */
+    assert(objects_take_pages(o, 4, 40 * MIB));
+    assert(!objects_take_pages(o, 1, 40 * MIB));
+    objects_give_pages(o, 4, 40 * MIB);
+
+    /* Freeing the object gives its room back. */
+    objects_remove(o, 1, 2);
+    assert(gone_calls == calls + 1);
+    assert(objects_take_pages(o, 10, 100 * MIB));
+    objects_give_pages(o, 10, 100 * MIB);
+}
+
 int main(void)
 {
     test_objects();
+    test_local_objects();
+    test_page_budget();
     puts("ok");
     return 0;
 }

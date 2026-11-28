@@ -10011,3 +10011,885 @@ index 2226ba8..d258fcc 100644
 -- 
 2.56.1
 
+From a1a2cdd5f9d1e54b87078610d3d6cc9147530bd8 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:17:19 -0800
+Subject: [PATCH] hw/misc/nvfwd: answer a local object only under a known
+ client, with a new handle
+
+The device answers a few allocations itself, with no host object behind them.
+Such an object now goes only under a client the guest has made, with a handle
+the device does not hold yet, and is refused as the host's driver would
+refuse it otherwise. An object the driver made is never replaced by one
+answered here.
+---
+ hw/misc/nvfwd/forward.c   | 29 +++++++++++---------
+ hw/misc/nvfwd/objects.c   | 56 +++++++++++++++++++++++++++++++--------
+ hw/misc/nvfwd/objects.h   |  7 +++++
+ hw/misc/nvfwd/rm_layout.h |  2 ++
+ 4 files changed, 71 insertions(+), 23 deletions(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index fec8b5a..2805fa8 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -184,6 +184,21 @@ static void undo_runs(AccountCall *account)
+     }
+ }
+ 
++/* What the host's driver answers when it can't make an object for these reasons. */
++static uint32_t local_status(LocalResult result)
++{
++    switch (result) {
++    case LOCAL_ADDED:
++        return STATUS_OK;
++    case LOCAL_NO_CLIENT:
++        return STATUS_INVALID_CLIENT;
++    case LOCAL_HANDLE_TAKEN:
++        return STATUS_DUPLICATE_HANDLE;
++    default:
++        return STATUS_INSUFFICIENT_RESOURCES;
++    }
++}
++
+ /* Answers made here without the host: returns true if the call is finished. */
+ static bool answer_display(NvfwdState *s, struct nvfwd_req *r, uint32_t nr, uint8_t *arg, uint32_t size)
+ {
+@@ -192,17 +207,12 @@ static bool answer_display(NvfwdState *s, struct nvfwd_req *r, uint32_t nr, uint
+         memcpy(&hclass, arg + RM_ALLOC_CLASS, 4);
+         if (hclass == CLASS_DISPLAY_COMMON || hclass == CLASS_DISP_SW) {
+             /* The driver insists on this object, and display classes never reach the host. */
+-            ObjectClaim claim = { MEMORY_NONE, 0 };
+             ObjectInfo info = { .file = r->fdid, .local = true };
+             memcpy(&info.client, arg + RM_ALLOC_ROOT, 4);
+             memcpy(&info.parent, arg + RM_ALLOC_PARENT, 4);
+             memcpy(&info.object, arg + RM_ALLOC_OBJECT, 4);
+             note_local(s, "class", K_CLASS, hclass);
+-            if (objects_claim(s->objects, &claim)) {
+-                objects_add(s->objects, &claim, 0, &info);
+-            } else {
+-                st = STATUS_INSUFFICIENT_RESOURCES;
+-            }
++            st = local_status(objects_add_local(s->objects, &info));
+             memcpy(arg + account_status_at(nr, size), &st, 4);
+             r->ret = 0;
+             return true;
+@@ -225,17 +235,12 @@ static bool answer_display(NvfwdState *s, struct nvfwd_req *r, uint32_t nr, uint
+         memcpy(&hclass, arg + RM_MEMORY_CLASS, 4);
+         if (hclass == CLASS_MEMORY_REGISTERS) {
+             /* A handle the driver asks for at start and never uses, so the host need not make one. */
+-            ObjectClaim claim = { MEMORY_NONE, 0 };
+             ObjectInfo info = { .file = r->fdid, .local = true };
+             memcpy(&info.client, arg + RM_MEMORY_ROOT, 4);
+             memcpy(&info.parent, arg + RM_MEMORY_PARENT, 4);
+             memcpy(&info.object, arg + RM_MEMORY_OBJECT, 4);
+             note_local(s, "memclass", K_MEMCLASS, hclass);
+-            if (objects_claim(s->objects, &claim)) {
+-                objects_add(s->objects, &claim, 0, &info);
+-            } else {
+-                st = STATUS_INSUFFICIENT_RESOURCES;
+-            }
++            st = local_status(objects_add_local(s->objects, &info));
+             memcpy(arg + RM_MEMORY_LIMIT, &limit, 8);
+             memcpy(arg + RM_MEMORY_STATUS, &st, 4);
+             r->ret = 0;
+diff --git a/hw/misc/nvfwd/objects.c b/hw/misc/nvfwd/objects.c
+index 5e79dc3..20cf339 100644
+--- a/hw/misc/nvfwd/objects.c
++++ b/hw/misc/nvfwd/objects.c
+@@ -114,9 +114,28 @@ static void forget(Objects *o, Entry *e)
+     g_free(e);
+ }
+ 
++/* With the lock held. */
++static void insert(Objects *o, Entry *e)
++{
++    Entry *parent;
++    const ObjectInfo *info = &e->info;
++
++    o->count++;
++    o->used[e->kind] += e->bytes;
++    g_hash_table_insert(o->entries, &e->key, e);
++    /* An object the parent of which was never seen still goes with its client. */
++    parent = find(o, info->client, info->parent);
++    if (!parent) {
++        parent = find(o, info->client, info->client);
++    }
++    if (parent && parent != e) {
++        link_child(parent, e);
++    }
++}
++
+ void objects_add(Objects *o, const ObjectClaim *claim, uint64_t bytes, const ObjectInfo *info)
+ {
+-    Entry *e = g_new0(Entry, 1), *parent;
++    Entry *e = g_new0(Entry, 1);
+ 
+     e->info = *info;
+     e->kind = claim->kind;
+@@ -128,18 +147,33 @@ void objects_add(Objects *o, const ObjectClaim *claim, uint64_t bytes, const Obj
+     if (find(o, info->client, info->object)) {
+         forget(o, find(o, info->client, info->object));
+     }
+-    o->count++;
+-    o->used[e->kind] += bytes;
+-    g_hash_table_insert(o->entries, &e->key, e);
+-    /* An object the parent of which was never seen still goes with its client. */
+-    parent = find(o, info->client, info->parent);
+-    if (!parent) {
+-        parent = find(o, info->client, info->client);
+-    }
+-    if (parent && parent != e) {
+-        link_child(parent, e);
++    insert(o, e);
++    g_mutex_unlock(&o->lock);
++}
++
++LocalResult objects_add_local(Objects *o, const ObjectInfo *info)
++{
++    LocalResult result = LOCAL_ADDED;
++    Entry *e;
++
++    g_mutex_lock(&o->lock);
++    if (!find(o, info->client, info->client)) {
++        result = LOCAL_NO_CLIENT;
++    } else if (find(o, info->client, info->object)) {
++        result = LOCAL_HANDLE_TAKEN; /* the client itself among them */
++    } else if (o->count >= o->limits.max_objects) {
++        result = LOCAL_FULL;
++    } else {
++        e = g_new0(Entry, 1);
++        e->info = *info;
++        e->info.local = true;
++        e->info.host_range = NULL;
++        e->kind = MEMORY_NONE;
++        e->key = key_of(info->client, info->object);
++        insert(o, e);
+     }
+     g_mutex_unlock(&o->lock);
++    return result;
+ }
+ 
+ void objects_remove(Objects *o, uint32_t client, uint32_t object)
+diff --git a/hw/misc/nvfwd/objects.h b/hw/misc/nvfwd/objects.h
+index 0f168e3..dce6794 100644
+--- a/hw/misc/nvfwd/objects.h
++++ b/hw/misc/nvfwd/objects.h
+@@ -44,6 +44,13 @@ void objects_drop_claim(Objects *o, const ObjectClaim *claim);
+ /* Turns a claim into an object, charged `bytes` as the driver reports them. */
+ void objects_add(Objects *o, const ObjectClaim *claim, uint64_t bytes, const ObjectInfo *info);
+ 
++/*
++ * An object the device answers for itself, with no host object behind it. Only under a client of the
++ * guest's, with a handle nothing holds yet: the device's books are about real objects.
++ */
++typedef enum { LOCAL_ADDED, LOCAL_NO_CLIENT, LOCAL_HANDLE_TAKEN, LOCAL_FULL } LocalResult;
++LocalResult objects_add_local(Objects *o, const ObjectInfo *info);
++
+ /* The object and everything under it. A client is an object with itself as parent. */
+ void objects_remove(Objects *o, uint32_t client, uint32_t object);
+ 
+diff --git a/hw/misc/nvfwd/rm_layout.h b/hw/misc/nvfwd/rm_layout.h
+index c6ef907..112a3ab 100644
+--- a/hw/misc/nvfwd/rm_layout.h
++++ b/hw/misc/nvfwd/rm_layout.h
+@@ -109,5 +109,7 @@
+ #define STATUS_INVALID_CLASS 0x22 /* what the RM says to a device instance it doesn't have */
+ #define STATUS_NO_MEMORY 0x51
+ #define STATUS_NOT_SUPPORTED 0x56
++#define STATUS_DUPLICATE_HANDLE 0x19 /* NV_ERR_INSERT_DUPLICATE_NAME: a handle the client already has */
++#define STATUS_INVALID_CLIENT 0x23
+ 
+ #endif
+-- 
+2.56.1
+
+
+From 55f4f7ac5bf0fa0d69ca501a90b06a578716d64b Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:19:33 -0800
+Subject: [PATCH] hw/misc/nvfwd: keep guest pages mapped for the driver inside
+ a budget
+
+Each run of guest pages an OS descriptor allocation hands the driver is a
+mapping of QEMU's. All such pages together now stay within the guest's
+memory size, and all runs together within half the kernel's map count, so
+QEMU's own mappings always have room. The room comes back when the object
+goes, or when the call makes nothing.
+---
+ hw/misc/nvfwd/accounting.c |  1 +
+ hw/misc/nvfwd/accounting.h |  1 +
+ hw/misc/nvfwd/forward.c    | 25 +++++++++++++++----------
+ hw/misc/nvfwd/nvfwd.c      | 22 ++++++++++++++++++++++
+ hw/misc/nvfwd/objects.c    | 31 +++++++++++++++++++++++++++++++
+ hw/misc/nvfwd/objects.h    | 14 ++++++++++++++
+ 6 files changed, 84 insertions(+), 10 deletions(-)
+
+diff --git a/hw/misc/nvfwd/accounting.c b/hw/misc/nvfwd/accounting.c
+index 76933e6..d3d0fee 100644
+--- a/hw/misc/nvfwd/accounting.c
++++ b/hw/misc/nvfwd/accounting.c
+@@ -186,6 +186,7 @@ static void describe(const AccountCall *call, MemoryKind hold_kind, ObjectInfo *
+         info->object = read32(arg + RM_MEMORY_OBJECT);
+         info->host_range = call->host_range;
+         info->host_bytes = call->host_bytes;
++        info->host_runs = call->host_runs;
+         break;
+     case ESC_RM_DUP_OBJECT:
+         info->client = read32(arg + RM_DUP_CLIENT);
+diff --git a/hw/misc/nvfwd/accounting.h b/hw/misc/nvfwd/accounting.h
+index 240fff1..b9dccac 100644
+--- a/hw/misc/nvfwd/accounting.h
++++ b/hw/misc/nvfwd/accounting.h
+@@ -19,6 +19,7 @@ typedef struct AccountCall {
+     uint64_t data_size;
+     void *host_range; /* guest pages mapped for this call, if any */
+     uint64_t host_bytes;
++    uint32_t host_runs; /* the mappings they took, from objects_take_pages() */
+     bool failed; /* the ioctl itself failed, so the driver wrote no status */
+ } AccountCall;
+ 
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 2805fa8..e516e34 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -50,29 +50,33 @@ static void *map_run(const struct nvfwd_run *run, uint8_t *at)
+ }
+ 
+ /* `needed` is how much the host driver will touch, from the list's first offset. */
+-static uint64_t map_runs(const struct nvfwd_runs *runs, uint32_t room, uint64_t needed,
++static uint64_t map_runs(Objects *o, const struct nvfwd_runs *runs, uint32_t room, uint64_t needed,
+                          AccountCall *account)
+ {
+     uint64_t total, done = 0;
+     uint8_t *base;
+     uint32_t i;
+ 
+-    if (!runs_check(runs, room, current_machine->ram_size, needed, &total)) {
++    if (!runs_check(runs, room, current_machine->ram_size, needed, &total) ||
++        !objects_take_pages(o, runs->count, total)) {
+         return 0;
+     }
+     base = mmap(NULL, total, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+     if (base == MAP_FAILED) {
++        objects_give_pages(o, runs->count, total);
+         return 0;
+     }
+     for (i = 0; i < runs->count; i++) {
+         if (map_run(&runs->run[i], base + done) == MAP_FAILED) {
+             munmap(base, total);
++            objects_give_pages(o, runs->count, total);
+             return 0;
+         }
+         done += runs->run[i].len;
+     }
+     account->host_range = base;
+     account->host_bytes = total;
++    account->host_runs = runs->count;
+     return (uint64_t)base + runs->first_offset;
+ }
+ 
+@@ -163,8 +167,8 @@ static int filter_rm(NvfwdState *s, uint32_t nr, uint8_t *arg, uint32_t size)
+  * memory of an OS descriptor allocation. Its limit is what the driver will pin, so the list has to
+  * cover that much.
+  */
+-static uint64_t fix_pages(const struct nvfwd_fix *f, const uint8_t *arg, uint8_t *data, uint32_t len,
+-                          AccountCall *account)
++static uint64_t fix_pages(Objects *o, const struct nvfwd_fix *f, const uint8_t *arg, uint8_t *data,
++                          uint32_t len, AccountCall *account)
+ {
+     uint64_t limit;
+ 
+@@ -172,14 +176,15 @@ static uint64_t fix_pages(const struct nvfwd_fix *f, const uint8_t *arg, uint8_t
+     if (f->target >= len || account->host_range || limit == UINT64_MAX) {
+         return 0;
+     }
+-    return map_runs((const struct nvfwd_runs *)(data + f->target), len - f->target, limit + 1, account);
++    return map_runs(o, (const struct nvfwd_runs *)(data + f->target), len - f->target, limit + 1, account);
+ }
+ 
+ 
+-static void undo_runs(AccountCall *account)
++static void undo_runs(Objects *o, AccountCall *account)
+ {
+     if (account->host_range) {
+         munmap(account->host_range, account->host_bytes);
++        objects_give_pages(o, account->host_runs, account->host_bytes);
+         account->host_range = NULL;
+     }
+ }
+@@ -285,7 +290,7 @@ static int apply_fields(NvfwdState *s, Bounce *b, const RmField *fields, const i
+             bounce_patch(b, field->at, &value, sizeof(value));
+             break;
+         case NVFWD_FIX_PAGES:
+-            value = fix_pages(f, arg, data, r->len, account);
++            value = fix_pages(s->objects, f, arg, data, r->len, account);
+             if (!value) {
+                 return -EFAULT;
+             }
+@@ -434,7 +439,7 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+     }
+     rc = apply_fields(s, b, fields, matched, count, arg, &account, held, nheld);
+     if (rc < 0) {
+-        undo_runs(&account);
++        undo_runs(s->objects, &account);
+         r->ret = rc;
+         return;
+     }
+@@ -497,7 +502,7 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+         account.size = size;
+         refused = account_before(s->objects, &account, &hold);
+         if (refused) {
+-            undo_runs(&account);
++            undo_runs(s->objects, &account);
+             card_fix_answer(&s->card, nr, arg, size);
+             memcpy(arg + account_status_at(nr, size), &refused, sizeof(refused));
+             note_once(s, "OVER", "limit", KEY(K_LIMIT, nr), nr);
+@@ -522,7 +527,7 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+     if (account.arg) {
+         account.failed = rc < 0;
+         if (!account_after(s->objects, &account, &hold)) {
+-            undo_runs(&account); /* the object that would have owned these pages does not exist */
++            undo_runs(s->objects, &account); /* the object that would have owned these pages does not exist */
+         }
+     }
+     if (s->trace) {
+diff --git a/hw/misc/nvfwd/nvfwd.c b/hw/misc/nvfwd/nvfwd.c
+index b4675a3..3ad6536 100644
+--- a/hw/misc/nvfwd/nvfwd.c
++++ b/hw/misc/nvfwd/nvfwd.c
+@@ -9,6 +9,7 @@
+ #include "hw/core/qdev-properties.h"
+ #include <sys/mman.h>
+ #include <poll.h>
++#include "hw/core/boards.h"
+ #include "nvfwd.h"
+ 
+ /* Defaults for the settings of the same name. guest/linux/README.md says how they were chosen. */
+@@ -129,6 +130,25 @@ static const MemoryRegionOps mmio_ops = {
+     .impl = { .min_access_size = 4, .max_access_size = 8 },
+ };
+ 
++/*
++ * Each run of guest pages mapped for the driver is a mapping of QEMU's, and the kernel allows a
++ * process only so many. Runs get half of them, so QEMU's own always have room.
++ */
++static uint32_t page_runs_allowed(void)
++{
++    g_autofree char *text = NULL;
++    uint64_t most = 65530; /* the kernel's default */
++
++    if (g_file_get_contents("/proc/sys/vm/max_map_count", &text, NULL, NULL)) {
++        uint64_t read = g_ascii_strtoull(text, NULL, 10);
++
++        if (read) {
++            most = read;
++        }
++    }
++    return MIN(most / 2, UINT32_MAX);
++}
++
+ static void nvfwd_realize(PCIDevice *pdev, Error **errp)
+ {
+     NvfwdState *s = NVFWD(pdev);
+@@ -163,6 +183,8 @@ static void nvfwd_realize(PCIDevice *pdev, Error **errp)
+     s->objects = objects_new(&(ObjectLimits) {
+         .max_objects = s->max_objects,
+         .max_bytes = { [MEMORY_VIDEO] = s->max_vram, [MEMORY_SYSTEM] = s->max_sysmem },
++        .max_page_bytes = current_machine->ram_size,
++        .max_page_runs = page_runs_allowed(),
+     }, unmap_runs, s);
+     s->maps = maps_new(s->max_maps, s->max_uvm);
+     callrate_init(&s->rate, s->max_call_rate, s->max_call_burst);
+diff --git a/hw/misc/nvfwd/objects.c b/hw/misc/nvfwd/objects.c
+index 20cf339..9af03d7 100644
+--- a/hw/misc/nvfwd/objects.c
++++ b/hw/misc/nvfwd/objects.c
+@@ -20,6 +20,8 @@ struct Objects {
+     void *opaque;
+     uint32_t count; /* entries and claims */
+     uint64_t used[MEMORY_KINDS];
++    uint64_t page_bytes; /* guest pages mapped, see objects_take_pages() */
++    uint32_t page_runs;
+ };
+ 
+ static uint64_t key_of(uint32_t client, uint32_t object)
+@@ -69,6 +71,34 @@ static void drop_claim(Objects *o, const ObjectClaim *claim)
+     o->used[claim->kind] -= claim->bytes;
+ }
+ 
++bool objects_take_pages(Objects *o, uint32_t runs, uint64_t bytes)
++{
++    bool ok;
++
++    g_mutex_lock(&o->lock);
++    ok = runs <= o->limits.max_page_runs && o->page_runs <= o->limits.max_page_runs - runs &&
++         bytes <= o->limits.max_page_bytes && o->page_bytes <= o->limits.max_page_bytes - bytes;
++    if (ok) {
++        o->page_runs += runs;
++        o->page_bytes += bytes;
++    }
++    g_mutex_unlock(&o->lock);
++    return ok;
++}
++
++static void give_pages(Objects *o, uint32_t runs, uint64_t bytes)
++{
++    o->page_runs -= runs;
++    o->page_bytes -= bytes;
++}
++
++void objects_give_pages(Objects *o, uint32_t runs, uint64_t bytes)
++{
++    g_mutex_lock(&o->lock);
++    give_pages(o, runs, bytes);
++    g_mutex_unlock(&o->lock);
++}
++
+ void objects_drop_claim(Objects *o, const ObjectClaim *claim)
+ {
+     g_mutex_lock(&o->lock);
+@@ -109,6 +139,7 @@ static void forget(Objects *o, Entry *e)
+     o->count--;
+     o->used[e->kind] -= e->bytes;
+     if (e->info.host_range) {
++        give_pages(o, e->info.host_runs, e->info.host_bytes);
+         o->gone(o->opaque, e->info.host_range, e->info.host_bytes);
+     }
+     g_free(e);
+diff --git a/hw/misc/nvfwd/objects.h b/hw/misc/nvfwd/objects.h
+index dce6794..2f2e9ed 100644
+--- a/hw/misc/nvfwd/objects.h
++++ b/hw/misc/nvfwd/objects.h
+@@ -17,6 +17,12 @@ typedef enum { MEMORY_NONE, MEMORY_VIDEO, MEMORY_SYSTEM, MEMORY_KINDS } MemoryKi
+ typedef struct ObjectLimits {
+     uint32_t max_objects;
+     uint64_t max_bytes[MEMORY_KINDS];
++    /*
++     * Guest pages mapped for the driver: in all, no more bytes than the guest has, and no more runs
++     * than leave QEMU room for mappings of its own. Each run is a mapping.
++     */
++    uint64_t max_page_bytes;
++    uint32_t max_page_runs;
+ } ObjectLimits;
+ 
+ /* What a call is about to add. Held from before the call to after it, so vCPUs cannot pass a limit together. */
+@@ -30,6 +36,7 @@ typedef struct ObjectInfo {
+     bool local;       /* answered in the device: the host has no such object */
+     void *host_range; /* guest pages mapped for the driver, unmapped when the object goes */
+     uint64_t host_bytes;
++    uint32_t host_runs; /* the mappings they took, held from objects_take_pages() */
+ } ObjectInfo;
+ 
+ typedef struct Objects Objects;
+@@ -41,6 +48,13 @@ Objects *objects_new(const ObjectLimits *limits, ObjectGoneFn *gone, void *opaqu
+ bool objects_claim(Objects *o, const ObjectClaim *claim);
+ void objects_drop_claim(Objects *o, const ObjectClaim *claim);
+ 
++/*
++ * Room for `runs` mappings of guest pages adding up to `bytes`, held before they are mapped. It
++ * goes back with objects_give_pages(), or with the object they are given to (ObjectInfo.host_runs).
++ */
++bool objects_take_pages(Objects *o, uint32_t runs, uint64_t bytes);
++void objects_give_pages(Objects *o, uint32_t runs, uint64_t bytes);
++
+ /* Turns a claim into an object, charged `bytes` as the driver reports them. */
+ void objects_add(Objects *o, const ObjectClaim *claim, uint64_t bytes, const ObjectInfo *info);
+ 
+-- 
+2.56.1
+
+
+From 1cd85aeeefd8b4ad7aa6596d4afff2ad4f1c3567 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:21:15 -0800
+Subject: [PATCH] hw/misc/nvfwd: read allocation parameters at the class
+ table's size
+
+NVIDIA's driver copies an allocation's parameters at the size its class
+table gives, whatever size the call names. The device now bounds the
+parameters and checks the clients named in them at that same size.
+---
+ hw/misc/nvfwd/clients.c | 4 +---
+ hw/misc/nvfwd/rmargs.c  | 8 +++-----
+ hw/misc/nvfwd/rmargs.h  | 6 ++++++
+ 3 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/hw/misc/nvfwd/clients.c b/hw/misc/nvfwd/clients.c
+index 9cfdac4..631de0d 100644
+--- a/hw/misc/nvfwd/clients.c
++++ b/hw/misc/nvfwd/clients.c
+@@ -140,8 +140,6 @@ bool clients_rm_known(const RmCall *call, ClientKnownFn *known, void *opaque)
+     }
+     if (call->nr == ESC_RM_ALLOC) {
+         uint32_t hclass = read32(arg + RM_ALLOC_CLASS);
+-        bool long_form = call->size == RM_ALLOC_LONG_BYTES;
+-        uint32_t size = read32(arg + (long_form ? RM_ALLOC_LONG_PARAMS_SIZE : RM_ALLOC_SHORT_PARAMS_SIZE));
+ 
+         if (hclass == CLASS_ROOT || hclass == CLASS_ROOT_CLIENT) {
+             return true; /* this makes the client */
+@@ -151,7 +149,7 @@ bool clients_rm_known(const RmCall *call, ClientKnownFn *known, void *opaque)
+         }
+         return !target_of(call, call->arg_at + RM_ALLOC_PARAMS, &params) ||
+                extras_known(alloc_clients, ARRAY_LENGTH(alloc_clients), hclass, call->data + params,
+-                            size ? size : call->len - params, known, opaque);
++                            rmargs_class_params_bytes(hclass), known, opaque);
+     }
+     if (!known(opaque, read32(arg))) {
+         return false;
+diff --git a/hw/misc/nvfwd/rmargs.c b/hw/misc/nvfwd/rmargs.c
+index 60e261d..8d58ae6 100644
+--- a/hw/misc/nvfwd/rmargs.c
++++ b/hw/misc/nvfwd/rmargs.c
+@@ -258,7 +258,7 @@ static void walk_control(Walk *w)
+     }
+ }
+ 
+-static uint32_t class_params_bytes(uint32_t hclass)
++uint32_t rmargs_class_params_bytes(uint32_t hclass)
+ {
+     for (size_t i = 0; i < branch->count; i++) {
+         if (branch->sizes[i].hclass == hclass) {
+@@ -280,10 +280,8 @@ static void walk_alloc(Walk *w)
+         return;
+     }
+     hclass = read32(arg + RM_ALLOC_CLASS);
+-    size = read32(arg + (long_form ? RM_ALLOC_LONG_PARAMS_SIZE : RM_ALLOC_SHORT_PARAMS_SIZE));
+-    if (!size) { /* the driver then takes the size from its class table */
+-        size = class_params_bytes(hclass);
+-    }
++    /* The driver reads the size its class table gives, whatever the call says. */
++    size = rmargs_class_params_bytes(hclass);
+     if (long_form) {
+         field(w, c->arg_at + RM_ALLOC_RIGHTS, NVFWD_FIX_PTR, HANDLE_BYTES, NULL);
+     }
+diff --git a/hw/misc/nvfwd/rmargs.h b/hw/misc/nvfwd/rmargs.h
+index ab1a507..0a4932b 100644
+--- a/hw/misc/nvfwd/rmargs.h
++++ b/hw/misc/nvfwd/rmargs.h
+@@ -50,6 +50,12 @@ int rmargs_fields(const RmCall *call, RmField *fields, int *matched);
+ int rmargs_uvm_fields(uint32_t cmd, uint32_t len, const struct nvfwd_fix *fix, uint32_t nfix,
+                       RmField *fields, int *matched);
+ 
++/*
++ * The bytes of parameters the host's driver reads for an allocation of this class, from its class
++ * table: 0 for a class that takes none.
++ */
++uint32_t rmargs_class_params_bytes(uint32_t hclass);
++
+ /* False for a control the device takes at one size only, asked at another. */
+ bool rmargs_control_size_ok(uint32_t cmd, uint32_t size);
+ 
+-- 
+2.56.1
+
+
+From 61cf6604de678d77f08b0fb6d16d1adba0e700a3 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:23:13 -0800
+Subject: [PATCH] hw/misc/nvfwd: check a shown buffer's shape in 64 bits, and
+ log show calls a few times only
+
+A buffer offered to the viewer has no side past 32768 pixels, and its four
+bytes a pixel are compared with the pitch in 64 bits. The show calls write
+their first 64 lines to the device's log, then say no more follow.
+---
+ hw/misc/nvfwd/nvfwd.h         |  1 +
+ hw/misc/nvfwd/show.c          | 39 ++++++++++++++++++++++++++---------
+ hw/misc/nvfwd/show_geometry.h | 20 ++++++++++++++++++
+ 3 files changed, 50 insertions(+), 10 deletions(-)
+ create mode 100644 hw/misc/nvfwd/show_geometry.h
+
+diff --git a/hw/misc/nvfwd/nvfwd.h b/hw/misc/nvfwd/nvfwd.h
+index c73977d..c647b51 100644
+--- a/hw/misc/nvfwd/nvfwd.h
++++ b/hw/misc/nvfwd/nvfwd.h
+@@ -70,6 +70,7 @@ struct NvfwdState {
+     uint32_t show_ready, show_pending, show_turn, show_w, show_h, show_pitch;
+     int show_newest;
+     uint64_t show_sequence;
++    uint32_t show_lines; /* lines the show calls have written to the log, see show_may_log() */
+     uint64_t *show_latest;
+     uint32_t *show_held;
+     uint64_t *show_present;
+diff --git a/hw/misc/nvfwd/show.c b/hw/misc/nvfwd/show.c
+index bfb7bc6..9055704 100644
+--- a/hw/misc/nvfwd/show.c
++++ b/hw/misc/nvfwd/show.c
+@@ -11,6 +11,7 @@
+ #include <sys/socket.h>
+ #include <sys/un.h>
+ #include "nvfwd.h"
++#include "show_geometry.h"
+ 
+ #define DISPLAY_LATEST 0x40 /* newest finished frame: sequence << 8 | slot */
+ #define DISPLAY_HELD 0x48 /* the slots the viewer still needs, written by the viewer */
+@@ -25,6 +26,20 @@
+ #define NVKMS_LAYOUT_PITCH 1
+ #define MODIFIER_NVIDIA_BLOCK_LINEAR 0x0300000000606010ull /* sector layout 1, generation 2, kind 6, as the guest driver offers; low bits are log2 height */
+ 
++#define SHOW_LOG_LINES 64 /* a buffer set or two at each start of a session, and then quiet */
++
++/* True for the first lines the show calls write; the line after them says no more follow. */
++static bool show_may_log(NvfwdState *s)
++{
++    uint32_t n = qatomic_fetch_inc(&s->show_lines);
++
++    if (n == SHOW_LOG_LINES) {
++        fprintf(s->log, "show: no more of these lines are logged\n");
++        fflush(s->log);
++    }
++    return n < SHOW_LOG_LINES;
++}
++
+ /* The card's render node: the one at its address, or with none given, the first NVIDIA drives. */
+ static int render_node(const char *address)
+ {
+@@ -61,8 +76,11 @@ static int import_dmabuf_laid_out(NvfwdState *s, int exported, uint64_t size, ui
+         s->render = render_node(s->card_sysfs);
+     }
+     if (s->render < 0 || ioctl(s->render, DRM_IOCTL_NVIDIA_IMPORT_MEMORY, &req)) {
+-        fprintf(s->log, "show: gem import of %#llx bytes failed: %s\n", (unsigned long long)size, strerror(errno));
+-        fflush(s->log);
++        if (show_may_log(s)) {
++            fprintf(s->log, "show: gem import of %#llx bytes failed: %s\n", (unsigned long long)size,
++                    strerror(errno));
++            fflush(s->log);
++        }
+         return -1;
+     }
+     prime.handle = close_req.handle = req.handle;
+@@ -154,8 +172,7 @@ void do_show_buffer(NvfwdState *s, struct nvfwd_req *r)
+     uint32_t slot = r->a0, width = r->a1, height = r->a1 >> 32, pitch = r->a2;
+     uint64_t size = r->a3;
+ 
+-    if (fd < 0 || !s->show_path || slot >= NVFWD_SHOW_SLOTS || !width || !height || pitch < width * 4 ||
+-        (uint64_t)pitch * height > size || size & 4095) {
++    if (fd < 0 || !s->show_path || slot >= NVFWD_SHOW_SLOTS || !show_geometry_ok(width, height, pitch, size)) {
+         r->ret = -EINVAL;
+         return;
+     }
+@@ -187,13 +204,13 @@ void do_show_buffer(NvfwdState *s, struct nvfwd_req *r)
+     qatomic_set(s->show_claimed, s->show_pending);
+     show_announce(s);
+     qemu_mutex_unlock(&s->show_lock);
+-    {
++    if (show_may_log(s)) {
+         struct stat st = { 0 };
+         fstat(dmabuf, &st);
+         fprintf(s->log, "show: slot %u %ux%u pitch %u size %#llx dmabuf %d inode %llu\n", slot, width, height, pitch,
+                 (unsigned long long)size, dmabuf, (unsigned long long)st.st_ino);
++        fflush(s->log);
+     }
+-    fflush(s->log);
+     r->ret = 0;
+ }
+ 
+@@ -205,8 +222,7 @@ void do_show_surface(NvfwdState *s, struct nvfwd_req *r)
+     uint64_t size = r->a3;
+     int dmabuf;
+ 
+-    if (fd < 0 || !s->show_path || id >= NVFWD_SHOW_MAX_SURFACES || !width || !height || pitch < width * 4 ||
+-        (uint64_t)pitch * height > size || size & 4095) {
++    if (fd < 0 || !s->show_path || id >= NVFWD_SHOW_MAX_SURFACES || !show_geometry_ok(width, height, pitch, size)) {
+         r->ret = -EINVAL;
+         return;
+     }
+@@ -228,8 +244,11 @@ void do_show_surface(NvfwdState *s, struct nvfwd_req *r)
+     s->surf_modifier[id] = layout == NVKMS_LAYOUT_BLOCK_LINEAR ? MODIFIER_NVIDIA_BLOCK_LINEAR | gobs_y : 0;
+     show_announce_surface(s, id);
+     qemu_mutex_unlock(&s->show_lock);
+-    fprintf(s->log, "show: surface %u %ux%u pitch %u format %#x size %#llx\n", id, width, height, pitch, format, (unsigned long long)size);
+-    fflush(s->log);
++    if (show_may_log(s)) {
++        fprintf(s->log, "show: surface %u %ux%u pitch %u format %#x size %#llx\n", id, width, height, pitch, format,
++                (unsigned long long)size);
++        fflush(s->log);
++    }
+     r->ret = 0;
+ }
+ 
+diff --git a/hw/misc/nvfwd/show_geometry.h b/hw/misc/nvfwd/show_geometry.h
+new file mode 100644
+index 0000000..b928359
+--- /dev/null
++++ b/hw/misc/nvfwd/show_geometry.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * The shape of a buffer a guest offers the viewer: no side past the largest surface the card makes,
++ * four bytes a pixel that fit the pitch, and every row inside the buffer's whole pages.
++ */
++#ifndef NVFWD_SHOW_GEOMETRY_H
++#define NVFWD_SHOW_GEOMETRY_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#define SHOW_LARGEST_SIDE 32768u
++
++static inline bool show_geometry_ok(uint32_t width, uint32_t height, uint32_t pitch, uint64_t size)
++{
++    return width && height && width <= SHOW_LARGEST_SIDE && height <= SHOW_LARGEST_SIDE &&
++           (uint64_t)width * 4 <= pitch && (uint64_t)pitch * height <= size && !(size & 4095);
++}
++
++#endif
+-- 
+2.56.1
+
+
+From f9edc4fa006ab453c76f429739467da834e455ad Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:25:35 -0800
+Subject: [PATCH] hw/misc/nvfwd: a sensor object takes a handle of its own, and
+ a file holds a few
+
+A sensor object goes only under a client and handle the device holds no
+object for, and one guest file holds at most eight. The short form of the
+allocation gets its refusal where that form carries its status.
+---
+ hw/misc/nvfwd/forward.c |  4 ++++
+ hw/misc/nvfwd/objects.c | 10 ++++++++++
+ hw/misc/nvfwd/objects.h |  1 +
+ hw/misc/nvfwd/sensors.c | 27 +++++++++++++++++++++++++--
+ hw/misc/nvfwd/sensors.h |  1 +
+ 5 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index e516e34..34f8a0f 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -451,6 +451,10 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+     if (s->sensors && !uvm) {
+         SensorCall sensor_call = { .nr = nr, .arg = arg, .size = size, .file = r->fdid,
+                                    .map_file = r->fdid, .data = data, .data_size = r->len };
++        if (nr == ESC_RM_ALLOC && size >= RM_ALLOC_SHORT_BYTES) {
++            sensor_call.handle_taken = objects_has(s->objects, ldl_he_p(arg + RM_ALLOC_ROOT),
++                                                   ldl_he_p(arg + RM_ALLOC_OBJECT));
++        }
+         for (i = 0; i < r->nfix; i++) {
+             if (r->fix[i].kind == NVFWD_FIX_FD) {
+                 sensor_call.map_file = r->fix[i].target;
+diff --git a/hw/misc/nvfwd/objects.c b/hw/misc/nvfwd/objects.c
+index 9af03d7..777ca83 100644
+--- a/hw/misc/nvfwd/objects.c
++++ b/hw/misc/nvfwd/objects.c
+@@ -261,6 +261,16 @@ bool objects_is_local(Objects *o, uint32_t client, uint32_t object)
+     return local;
+ }
+ 
++bool objects_has(Objects *o, uint32_t client, uint32_t object)
++{
++    bool found;
++
++    g_mutex_lock(&o->lock);
++    found = find(o, client, object) != NULL;
++    g_mutex_unlock(&o->lock);
++    return found;
++}
++
+ uint32_t objects_count(Objects *o)
+ {
+     uint32_t count;
+diff --git a/hw/misc/nvfwd/objects.h b/hw/misc/nvfwd/objects.h
+index 2f2e9ed..4400dbd 100644
+--- a/hw/misc/nvfwd/objects.h
++++ b/hw/misc/nvfwd/objects.h
+@@ -73,6 +73,7 @@ void objects_file_closed(Objects *o, uint32_t file);
+ 
+ bool objects_has_client(Objects *o, uint32_t client);
+ bool objects_is_local(Objects *o, uint32_t client, uint32_t object);
++bool objects_has(Objects *o, uint32_t client, uint32_t object);
+ uint32_t objects_count(Objects *o);
+ uint64_t objects_bytes(Objects *o, MemoryKind kind);
+ 
+diff --git a/hw/misc/nvfwd/sensors.c b/hw/misc/nvfwd/sensors.c
+index a8ad41b..ccdf892 100644
+--- a/hw/misc/nvfwd/sensors.c
++++ b/hw/misc/nvfwd/sensors.c
+@@ -24,6 +24,8 @@
+ #define STATUS_OK 0
+ #define STATUS_OBJECT_NOT_FOUND 0x57
+ #define STATUS_NOT_SUPPORTED 0x56
++#define STATUS_INSUFFICIENT_RESOURCES 0x1a
++#define STATUS_DUPLICATE_HANDLE 0x19
+ 
+ /* Where things sit in the driver's argument structures. */
+ #define ALLOC_ARGS_BYTES 48
+@@ -33,6 +35,7 @@
+ #define ALLOC_PARAMS 16
+ #define ALLOC_PARAMS_SIZE 32
+ #define ALLOC_STATUS 40
++#define ALLOC_SHORT_STATUS 28 /* where the short form, with no parameters, has it */
+ #define FREE_ARGS_BYTES 16
+ #define FREE_CLIENT 0
+ #define FREE_OBJECT 8
+@@ -59,6 +62,7 @@
+ #define MAP_TOKEN 0x1000
+ 
+ #define MAX_OBJECTS 64
++#define MAX_OBJECTS_PER_FILE 8 /* a driver makes one or two: no file takes every slot */
+ #define MAX_MAPPING_FILES 4096
+ #define MAX_REFUSALS_LOGGED 64
+ 
+@@ -285,6 +289,16 @@ static SensorObject *free_object_slot(Sensors *s)
+     return NULL;
+ }
+ 
++static int objects_of_file(Sensors *s, uint32_t file)
++{
++    int i, n = 0;
++
++    for (i = 0; i < MAX_OBJECTS; i++) {
++        n += s->objects[i].used && s->objects[i].file == file;
++    }
++    return n;
++}
++
+ static bool mask_allowed(Sensors *s, uint64_t mask)
+ {
+     if (mask & ~(uint64_t)RUSD_GUEST_POLL_MASK) {
+@@ -311,6 +325,12 @@ static uint32_t alloc_object(Sensors *s, const SensorCall *call)
+         }
+         mask = read64(params);
+     }
++    if (call->handle_taken || find_object(s, read32(call->arg + ALLOC_CLIENT), read32(call->arg + ALLOC_OBJECT))) {
++        return STATUS_DUPLICATE_HANDLE;
++    }
++    if (objects_of_file(s, call->file) >= MAX_OBJECTS_PER_FILE) {
++        return STATUS_INSUFFICIENT_RESOURCES;
++    }
+     if (!mask_allowed(s, mask) || !start_page(s)) {
+         return STATUS_NOT_SUPPORTED;
+     }
+@@ -332,8 +352,11 @@ static bool answer_alloc(Sensors *s, const SensorCall *call)
+         return false;
+     }
+     /* Only the long form of the call carries parameters, and a mask must never go unread. */
+-    write32(call->arg + ALLOC_STATUS, call->size == ALLOC_ARGS_BYTES ? alloc_object(s, call)
+-                                                                     : STATUS_NOT_SUPPORTED);
++    if (call->size == ALLOC_ARGS_BYTES) {
++        write32(call->arg + ALLOC_STATUS, alloc_object(s, call));
++    } else if (call->size >= ALLOC_SHORT_STATUS + 4) {
++        write32(call->arg + ALLOC_SHORT_STATUS, STATUS_NOT_SUPPORTED);
++    }
+     return true;
+ }
+ 
+diff --git a/hw/misc/nvfwd/sensors.h b/hw/misc/nvfwd/sensors.h
+index dac3812..6a41e70 100644
+--- a/hw/misc/nvfwd/sensors.h
++++ b/hw/misc/nvfwd/sensors.h
+@@ -23,6 +23,7 @@ typedef struct SensorCall {
+     uint32_t map_file; /* for a mapping, the guest file it is aimed at */
+     uint8_t *data;     /* the buffer that all of the call's parameters must lie in */
+     uint32_t data_size;
++    bool handle_taken; /* for an allocation: the device already holds an object of this client and handle */
+ } SensorCall;
+ 
+ /*
+-- 
+2.56.1
+
+

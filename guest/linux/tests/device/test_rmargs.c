@@ -301,6 +301,13 @@ static void test_alloc_and_memory(void)
     assert(walk(RM_CMD(ESC_RM_ALLOC, 48), 120, &params, 1) == 2);
     assert(walk(RM_CMD(ESC_RM_ALLOC, 48), 119, &params, 1) == -EINVAL);
     assert(walk(RM_CMD(ESC_RM_ALLOC, 40), 120, &params, 1) == -EINVAL);
+    /* A smaller size in the call changes nothing: the driver reads its class table's. */
+    put32(RM_ALLOC_LONG_PARAMS_SIZE, 4);
+    assert(walk(RM_CMD(ESC_RM_ALLOC, 48), 119, &params, 1) == -EINVAL);
+    assert(walk(RM_CMD(ESC_RM_ALLOC, 48), 120, &params, 1) == 2);
+    put32(RM_ALLOC_LONG_PARAMS_SIZE, 4096);
+    assert(walk(RM_CMD(ESC_RM_ALLOC, 48), 120, &params, 1) == 2);
+    put32(RM_ALLOC_LONG_PARAMS_SIZE, 0);
 
     memset(data, 0, sizeof(data));
     put32(RM_ALLOC_CLASS, CLASS_EVENT);

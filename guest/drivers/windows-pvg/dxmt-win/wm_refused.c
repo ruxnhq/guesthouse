@@ -5,8 +5,8 @@
 // The device says only that it refused a submit, not which command (run
 // rn8: dwm's eleven-segment command buffer, 0xC000009C, and nothing in the
 // host's log). So the first few refused submits of a process are written to
-// C:\ruxnlog\refused-PID-N.bin, when that folder exists, and refused.py on
-// the Mac lists their segments and commands. With RUXN_KEEP_SUBMIT=N in a
+// the driver's log as hex lines, and refused.py on the Mac lists their
+// segments and commands. With RUXN_KEEP_SUBMIT=N in a
 // process's environment its Nth submitted command buffer is kept the same
 // way, as submit-PID-N.bin (wm_commands.c), to read what a program sent.
 //
@@ -100,25 +100,12 @@ static struct gather gathered(const uint32_t *ids, const uint32_t *flags, unsign
 	return g;
 }
 
-// To C:\ruxnlog\NAME, or to the log as hex lines where no file can be written.
+// To the log as hex lines; no file is written.
 static bool keep(const char *name, struct gather *g)
 {
-	WCHAR path[MAX_PATH];
-	HANDLE file = INVALID_HANDLE_VALUE;
-	DWORD written;
-
 	if (!g->ok)
 		return false;
-	if (GetFileAttributesW(L"C:\\ruxnlog") != INVALID_FILE_ATTRIBUTES) {
-		swprintf(path, MAX_PATH, L"C:\\ruxnlog\\%hs", name);
-		file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	}
-	if (file != INVALID_HANDLE_VALUE) {
-		g->ok = WriteFile(file, g->bytes, (DWORD)g->length, &written, NULL) && written == g->length;
-		CloseHandle(file);
-	} else {
-		to_log(name, g);
-	}
+	to_log(name, g);
 	return g->ok;
 }
 

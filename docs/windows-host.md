@@ -227,7 +227,7 @@ An install over an earlier one stops the service first, which asks each running 
 
 The uninstaller, in Settings > Apps or `uninstall.exe` in the install folder, removes the service and the files, remoteman's with them. What remoteman's host installed in a guest stays in the guest. Your machines in `%ProgramData%\Guesthouse` stay, so installing again finds them, unless you tick Also delete my machines. Virtual Machine Platform stays on.
 
-`--silent` has no pages, `--uninstall --delete-machines` deletes the machines too, and `--dry-run` shows every page and walks every step with no administrator and no change to the PC. Its log is `%TEMP%\guesthouse-setup.log`, and the install's own is `setup.log` in the install folder. `windows/setup/test/walk.ps1` drives the pages in a dry run and takes a picture of each.
+`--silent` has no pages, `--uninstall --delete-machines` deletes the machines too, and `--dry-run` shows every page and walks every step with no administrator and no change to the PC. Its log is `%TEMP%\guesthouse-setup.log`, and the install's own is `setup.log` in the install folder. The part that runs as an administrator reads the setup file once, into a copy in a folder only administrators may change, and runs from there; the DLLs it loads come from System32 only. It adds its lines to the log only while that is a plain file of the user's own. `windows/setup/test/walk.ps1` drives the pages in a dry run and takes a picture of each.
 
 ## A Windows guest's screen
 

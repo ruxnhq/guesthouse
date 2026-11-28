@@ -99,7 +99,7 @@ Opened from the file manager, it shows Guesthouse's own install window. That's t
 
 Started from a terminal, it installs in that terminal. Once this release or a newer one is installed, opening it again only starts the app, so it can be deleted after the first time. Updates come from the app, as for any install. `guesthouse-installer-VERSION.AppImage install --dry-run` shows the plan and stops, and `guesthouse-installer-VERSION.AppImage uninstall` runs the installed `uninstall.sh`.
 
-The app doesn't run from inside the AppImage. Its folder goes away when the AppImage stops, and a VM's QEMU has to keep running after the app closes. Check the AppImage against `SHA256SUMS` on the release, as nothing else checks it.
+The app doesn't run from inside the AppImage. Its folder goes away when the AppImage stops, and a VM's QEMU has to keep running after the app closes. Check the AppImage against `SHA256SUMS` on the release, as nothing else checks it. `gh attestation verify FILE --repo ruxnlabs/guesthouse` checks it was built by this repo's release workflow.
 
 A word on the checksum. It proves the download is the release the script names, and that's all. It can't protect you from the script, which is why you should read it.
 

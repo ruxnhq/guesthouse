@@ -25,6 +25,7 @@ from urllib.parse import quote_plus
 # These write as the project. Their pull requests are not thanked as outside work.
 OWN = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 PAGES, PAGE = 3, 100
+MAX_TITLE = 200
 START, END = "<!-- credits:start -->", "<!-- credits:end -->"
 # A pull request that only signs the CLA isn't a contribution to thank. Credits are never tied to the CLA.
 CLA_PATHS = ("CLA/", "CLA-SIGNERS.md")
@@ -85,9 +86,19 @@ def changed_files(repo: str, number: int) -> list[str]:
     return [f["filename"] for f in answer if isinstance(f, dict) and isinstance(f.get("filename"), str)]
 
 
+def literal(title: str) -> str:
+    """A title as plain text in the notes: in a code span, so none of it is read as Markdown, a link,
+    a mention or HTML, with angle brackets shown as single quotes so a title can't hold the markers."""
+    text = title.replace("<", "\u2039").replace(">", "\u203a")
+    if len(text) > MAX_TITLE:
+        text = text[: MAX_TITLE - 1].rstrip() + "\u2026"
+    ticks = "`" * (max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
+    return f"{ticks} {text} {ticks}"
+
+
 def section(pulls: list[tuple[int, str, str]]) -> str:
     """The notes' section, between markers so a second run finds it again."""
-    lines = [f"- {title} (#{number}, thanks @{login})" for number, title, login in pulls]
+    lines = [f"- {literal(title)} (#{number}, thanks @{login})" for number, title, login in pulls]
     return "\n".join([START, "**Thanks**", "", *lines, END])
 
 

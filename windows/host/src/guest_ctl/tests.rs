@@ -312,3 +312,26 @@ fn a_status_nobody_answers_gives_up_sooner_than_a_command() {
     let took = began.elapsed();
     assert!(took >= STATUS_WAIT && took < ANSWER_WAIT, "{took:?}");
 }
+
+/// A guest that never ends a line, and then goes away with an error.
+struct NoLineEnd(usize);
+
+impl Read for NoLineEnd {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.0 == 0 {
+            return Err(io::ErrorKind::ConnectionReset.into());
+        }
+        let count = buffer.len().min(self.0);
+        buffer[..count].fill(b'a');
+        self.0 -= count;
+        Ok(count)
+    }
+}
+
+#[test]
+fn a_line_that_never_ends_is_taken_in_pieces_and_not_held_whole() {
+    let (ctl, kept) = (GuestCtl::new(), Kept::default());
+    let mut handed = Vec::new();
+    read_lines(NoLineEnd(LINE_LIMIT * 10), &mut |line: &str| handed.push(line.len()), &kept, &ctl);
+    assert!(handed.len() >= 9, "{} pieces", handed.len());
+}

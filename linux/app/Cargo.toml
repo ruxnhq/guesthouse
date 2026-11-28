@@ -19,6 +19,7 @@ hdr = ["gtk/v4_16"]
 
 [dependencies]
 guesthouse-app-core.workspace = true
+guesthouse-basics.workspace = true
 # What viewing from other devices looks like, and the words for it.
 guesthouse-remote-view-core.workspace = true
 # The UI. These are the oldest that do: what Ubuntu 24.04 has.

@@ -77,6 +77,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.context_processes.retain(|_, owner| *owner != process);
         self.reservations.retain(|&(owner, _), _| owner != process);
         self.described_surfaces.remove(&process);
+        for object in self.sync_objects.close_held_by(process).into_iter().filter(|object| object.fence != 0)
+        {
+            self.defer(DeferredAction::ReturnFence((object.fence, object.gpu_address)));
+        }
         if self.newest_description.is_some_and(|(owner, _, _)| owner == process) {
             self.newest_description = None;
         }

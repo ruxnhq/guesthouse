@@ -7,9 +7,11 @@
 #
 # It runs on main only, from the schedule or by hand, never on a pull request, and it does nothing
 # when main hasn't changed since the last nightly. The signing keys are in the `mac-nightly`
-# environment, which only main may use, and only the signing step has them: the helper programs (the
-# graphics process, QEMU and rmhost, which carry a lot of other people's build scripts) are built in a job
-# of their own with no secret, no environment and no token, and handed over as a tar. They are never in a log: nightly.sh prints none, and puts the
+# environment, which only main may use, and only the signing step has them. Everything that runs
+# other people's build scripts has none: the helper programs (the graphics process, QEMU and rmhost)
+# are built in a job of their own, the app in another, each with no secret, no environment and no
+# token, and handed on as tars; the job that signs runs only codesign, the notary tool and the disk
+# image tools on the app it is handed. They are never in a log: nightly.sh prints none, and puts the
 # certificate in a keychain of its own that it deletes. The upload has no secret: scripts/files-publish.sh
 # sends this job's GitHub OIDC token, as release-files.yml does.
 #
@@ -114,19 +116,17 @@ jobs:
           if-no-files-found: error
 
   build:
-    name: build, sign and notarise
+    name: build the app
     needs: [plan, helpers]
     if: needs.plan.outputs.build == 'true'
     # The runner is one line: the image that has Xcode 27 and macOS 27, as the app's deployment
-    # target needs. Self-hosted, it would be a Mac that only ever runs this job.
+    # target needs. Self-hosted, it would be a Mac that only ever runs this job. Like the helpers
+    # job, it has no secret, no environment and no token: it runs the crates' build scripts, Xcode
+    # and Homebrew's XcodeGen, and leaves an app that is not signed.
     runs-on: xcode-27
-    timeout-minutes: 90
-    # The environment holds the signing keys, and only main may use it.
-    environment: mac-nightly
+    timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,7 +145,50 @@ jobs:
           set -eu
           mkdir "$RUNNER_TEMP/helpers"
           tar -xf "$RUNNER_TEMP/helpers-tar/helpers.tar" -C "$RUNNER_TEMP/helpers"
-      - name: Build, sign and notarise
+      - name: Build the app and put the helpers in it
+        run: |
+          set -eu
+          sh mac/nightly.sh --stage "$RUNNER_TEMP/stage" --helpers "$RUNNER_TEMP/helpers"
+          tar -cf "$RUNNER_TEMP/stage.tar" -C "$RUNNER_TEMP/stage" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guesthouse-macos-stage
+          path: ${{ runner.temp }}/stage.tar
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  sign:
+    name: sign and notarise
+    needs: [plan, build]
+    if: needs.plan.outputs.build == 'true'
+    # The only job with the keys, and the only step in it that has them. It runs codesign, the
+    # notary tool and the disk image tools from this repository's own scripts on the app the build
+    # job left, and builds nothing: no cargo, no Xcode build, no Homebrew. It has no token to
+    # publish with either; the image is attested and published by a job after the check.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    # The environment holds the signing keys, and only main may use it.
+    environment: mac-nightly
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - name: Use Xcode 27.2
+        run: sudo xcode-select -s "$XCODE"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guesthouse-macos-stage
+          path: ${{ runner.temp }}/stage-tar
+      - name: Unpack the app
+        run: |
+          set -eu
+          mkdir "$RUNNER_TEMP/stage"
+          tar -xf "$RUNNER_TEMP/stage-tar/stage.tar" -C "$RUNNER_TEMP/stage"
+      - name: Sign and notarise
         env:
           MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
           GUESTHOUSE_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
@@ -160,16 +203,7 @@ jobs:
           printf '%s' "$MAC_SIGN_P12_BASE64" | base64 --decode >"$keys/identity.p12"
           printf '%s' "$MAC_NOTARY_KEY" >"$keys/notary.p8"
           GUESTHOUSE_SIGN_P12="$keys/identity.p12" GUESTHOUSE_NOTARY_KEY_PATH="$keys/notary.p8" \
-            sh mac/nightly.sh --out "$RUNNER_TEMP/nightly" --helpers "$RUNNER_TEMP/helpers"
-      - name: Check what is in the app
-        run: |
-          set -eu
-          for dmg in "$RUNNER_TEMP"/nightly/Guesthouse-nightly-*.dmg; do
-            sh mac/Nightly/check-bundle.sh "$dmg"
-          done
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ runner.temp }}/nightly/*.dmg
+            sh mac/nightly.sh --from-stage "$RUNNER_TEMP/stage" --out "$RUNNER_TEMP/nightly"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: guesthouse-macos-nightly
@@ -178,14 +212,40 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  check:
+    name: check what is in the app
+    needs: [plan, sign]
+    # The check starts the QEMU and the graphics process that are in the image, so it runs where
+    # there is no key and no token, after the job that had them is over.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guesthouse-macos-nightly
+          path: ${{ runner.temp }}/nightly
+      - name: Check what is in the app
+        run: |
+          set -eu
+          for dmg in "$RUNNER_TEMP"/nightly/Guesthouse-nightly-*.dmg; do
+            sh mac/Nightly/check-bundle.sh "$dmg"
+          done
+
   publish:
     name: put it on files.ruxn.com
-    needs: [plan, build]
+    needs: [plan, check]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,6 +266,9 @@ jobs:
           [ -f "$dmg" ] && [ -f "$dmg.sha256" ]
           sha256sum -c "$dmg.sha256"
           [ "$(sha256sum "$dmg" | cut -d ' ' -f 1)" = "$(jq -r .sha256 guesthouse-macos-nightly.json)" ]
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: nightly/*.dmg
       - name: Publish it, its hash, a copy under a fixed name, and the nightly file last
         working-directory: nightly
         run: |

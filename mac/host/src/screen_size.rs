@@ -11,8 +11,9 @@
 //! app. The scaling is not sent: a Linux guest is given its scale when it starts
 //! (`launch::SCALE_FILE`).
 
+use guesthouse_basics::capped_line::read_capped_line;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -135,19 +136,22 @@ pub fn send(id: &str, control: &Path, wanted: Wanted) -> Result<Told, String> {
     }
 }
 
+/// The longest answer taken from the graphics process. Its answers are a few numbers.
+const LONGEST_ANSWER: usize = 64 * 1024;
+
 /// One line to the graphics process and its one line back.
 fn ask(mut stream: &UnixStream, line: &str) -> std::io::Result<String> {
     stream.set_read_timeout(Some(ANSWER_WAIT))?;
     stream.set_write_timeout(Some(ANSWER_WAIT))?;
     writeln!(stream, "{line}")?;
-    let mut answer = String::new();
-    BufReader::new(stream).read_line(&mut answer)?;
+    let answer = read_capped_line(&mut BufReader::new(stream), LONGEST_ANSWER)?.unwrap_or_default();
     Ok(answer.trim().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
 
     #[test]
     fn the_last_size_asked_for_is_the_one_kept() {
@@ -231,5 +235,20 @@ mod tests {
         let odd = Wanted { width_px: 10, height_px: 10, scaling_percent: 150 };
         assert!(record("screen-size-bad", odd).unwrap_err().contains("150%"));
         assert_eq!(last("screen-size-bad"), None);
+    }
+
+    #[test]
+    fn an_answer_with_no_end_is_refused() {
+        let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        thread::spawn(move || {
+            let chunk = [b'a'; 4096];
+            for _ in 0..(LONGEST_ANSWER / chunk.len() + 2) {
+                if theirs.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+        });
+        let error = ask(&ours, "size").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 }

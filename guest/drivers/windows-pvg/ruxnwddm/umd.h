@@ -117,14 +117,6 @@ void APIENTRY umd_unmap(D3D10DDI_HDEVICE, D3D10DDI_HRESOURCE, UINT);
 void umd_fill_dxgi(void *table, SIZE_T bytes);
 HRESULT umd_create_kernel_context(UMD_DEVICE *dev);
 
-// umd_capture.c: the lab's copy of each shader the runtime hands over.
-void APIENTRY umd_capture_vertex(D3D10DDI_HDEVICE, const UINT *, D3D10DDI_HSHADER, D3D10DDI_HRTSHADER,
-				 const D3D11_1DDIARG_STAGE_IO_SIGNATURES *);
-void APIENTRY umd_capture_geometry(D3D10DDI_HDEVICE, const UINT *, D3D10DDI_HSHADER, D3D10DDI_HRTSHADER,
-				   const D3D11_1DDIARG_STAGE_IO_SIGNATURES *);
-void APIENTRY umd_capture_pixel(D3D10DDI_HDEVICE, const UINT *, D3D10DDI_HSHADER, D3D10DDI_HRTSHADER,
-				const D3D11_1DDIARG_STAGE_IO_SIGNATURES *);
-
 // umd_residency.c
 void umd_make_resident(UMD_DEVICE *dev, D3DKMT_HANDLE allocation);
 

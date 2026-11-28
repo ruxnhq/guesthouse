@@ -274,3 +274,92 @@ fn both_rules_are_narrowed_and_remotemans_again_after_its_installer_opened_it() 
         "{said}"
     );
 }
+
+/// Runs the script's Set-SignIn on a stand-in for Winlogon's key, with `$values` its values to begin
+/// with, and with Windows taking the LSA secret or not. Nothing reads or writes the registry or the
+/// LSA: the commands it calls are stood in for, and the key's name is no key at all. It says the
+/// answer, the values after, one per line in order, and the secret Windows was given.
+fn sign_in(shell: &str, values: &str, user: &str, secret: &str, takes: bool) -> Said {
+    let takes = if takes { "$true" } else { "$false" };
+    run(
+        shell,
+        &format!(
+            "$ErrorActionPreference = 'Stop'
+            {}
+            $values = @{{ {values} }}
+            $given = @{{}}
+            function Get-ItemProperty {{ param($LiteralPath, $Name, $ErrorAction)
+                if ($LiteralPath -ne 'stand-in') {{ throw \"asked $LiteralPath\" }}
+                if ($values.ContainsKey($Name)) {{ [pscustomobject]@{{ $Name = $values[$Name] }} }} }}
+            function Set-ItemProperty {{ param($LiteralPath, $Name, $Value, $Type)
+                if ($LiteralPath -ne 'stand-in') {{ throw \"asked $LiteralPath\" }}
+                $values[$Name] = $Value }}
+            function Remove-ItemProperty {{ param($LiteralPath, $Name, $ErrorAction)
+                if ($LiteralPath -ne 'stand-in') {{ throw \"asked $LiteralPath\" }}
+                $values.Remove($Name) }}
+            function Save-LogonSecret {{ param($Secret) $given['secret'] = $Secret; {takes} }}
+            \"answer $(Set-SignIn 'stand-in' '{user}' '{secret}')\"
+            foreach ($name in @($values.Keys | Sort-Object)) {{ \"$name=$($values[$name])\" }}
+            \"secret $($given['secret'])\"",
+            crate::functions_from(&screen_script(), &["Set-SignIn"])
+        ),
+    )
+}
+
+#[test]
+fn signing_in_by_itself_keeps_the_password_out_of_the_registry() {
+    let Some(shell) = shell() else { return };
+    let said = sign_in(shell, "", "guest", "1234abcd", true);
+    assert_eq!(said.code, Some(0), "{said}");
+    let computer =
+        said.lines().iter().find_map(|line| line.strip_prefix("DefaultDomainName=")).unwrap_or("").to_owned();
+    assert_eq!(
+        said.lines(),
+        [
+            "answer kept".to_owned(),
+            "AutoAdminLogon=1".to_owned(),
+            format!("DefaultDomainName={computer}"),
+            "DefaultUserName=guest".to_owned(),
+            "secret 1234abcd".to_owned(),
+        ],
+        "{said}"
+    );
+}
+
+/// A guest set up before has the password in the registry: it moves to the secret, and the rest of
+/// what Windows signs in with stays as it was.
+#[test]
+fn a_password_left_in_the_registry_moves_to_the_secret() {
+    let Some(shell) = shell() else { return };
+    let said = sign_in(
+        shell,
+        "AutoAdminLogon = '1'; DefaultUserName = 'guest'; DefaultPassword = 'old1234'",
+        "",
+        "",
+        true,
+    );
+    assert_eq!(said.code, Some(0), "{said}");
+    assert_eq!(
+        said.lines(),
+        ["answer kept", "AutoAdminLogon=1", "DefaultUserName=guest", "secret old1234"],
+        "{said}"
+    );
+}
+
+/// When Windows doesn't take the secret, the password still doesn't stay in the registry, and Windows
+/// isn't told to sign in by itself with no password.
+#[test]
+fn a_secret_windows_refuses_leaves_no_password_behind() {
+    let Some(shell) = shell() else { return };
+    let said = sign_in(shell, "DefaultPassword = 'old1234'", "guest", "1234abcd", false);
+    assert_eq!(said.code, Some(0), "{said}");
+    assert_eq!(said.lines(), ["answer refused", "secret 1234abcd"], "{said}");
+}
+
+#[test]
+fn with_no_password_anywhere_nothing_changes() {
+    let Some(shell) = shell() else { return };
+    let said = sign_in(shell, "AutoAdminLogon = '0'", "", "", true);
+    assert_eq!(said.code, Some(0), "{said}");
+    assert_eq!(said.lines(), ["answer none", "AutoAdminLogon=0", "secret"], "{said}");
+}

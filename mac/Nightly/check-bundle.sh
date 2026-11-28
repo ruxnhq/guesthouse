@@ -7,7 +7,7 @@
 #
 # It checks that
 #   - Contents/Helpers has qemu-system-aarch64, guesthouse-pvg-host and rmhost, Contents/Frameworks has
-#     the libraries QEMU loads, and Contents/Resources/qemu has the firmware and the licences;
+#     the libraries QEMU loads, and Contents/Resources/qemu has the firmware, the framebuffer ROM and the licences;
 #   - codesign --verify --deep --strict passes, every Mach-O file has the hardened runtime and all have
 #     the identity the app has (the Team ID, or ad hoc together), so library validation lets QEMU load
 #     its libraries;
@@ -52,6 +52,8 @@ for program in qemu-system-aarch64 guesthouse-pvg-host rmhost; do
     check "$program is in Contents/Helpers" test -x "$helpers/$program"
 done
 check "QEMU's firmware is in Contents/Resources/qemu" test -s "$app/Contents/Resources/qemu/edk2-aarch64-code.fd" -a -s "$app/Contents/Resources/qemu/edk2-aarch64-vars.fd"
+check "the framebuffer option ROM is in Contents/Resources/qemu, a whole number of 16 KiB" \
+    test -s "$app/Contents/Resources/qemu/pvgfb.rom" -a "$(( $(wc -c <"$app/Contents/Resources/qemu/pvgfb.rom") % 16384 ))" -eq 0
 check "the libraries QEMU loads are in Contents/Frameworks" test -n "$(ls "$app/Contents/Frameworks" 2>/dev/null)"
 check "the notice and the licences are in the app" test -s "$app/Contents/Resources/NOTICE.txt" -a -s "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt" -a -d "$app/Contents/Resources/qemu/licences"
 check "codesign --verify --deep --strict" codesign --verify --deep --strict "$app"

@@ -95,6 +95,14 @@ nonisolated enum InstallText {
         return (text, enough, warning)
     }
 
+    /// The line under the bar when the guest's disk has written nothing for a while: a hint, not an
+    /// error, since a working install and a stuck one look the same on a bar that counts time.
+    static func quietHint(minutes: Int) -> String {
+        minutes == 1
+            ? String(localized: "The disk has not been written to for a minute. If this goes on, Watch It Install shows what the installer is waiting for.")
+            : String(localized: "The disk has not been written to for \(minutes) minutes. If this goes on, Watch It Install shows what the installer is waiting for.")
+    }
+
     /// A name no machine has: the wanted name, or the wanted name and the first number after it.
     static func freeName(_ wanted: String, taken: [String]) -> String {
         if !taken.contains(wanted) { return wanted }

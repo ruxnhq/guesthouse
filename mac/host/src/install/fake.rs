@@ -195,6 +195,11 @@ pub struct FakeGuest {
     pub stick_line: Option<String>,
     /// When the stand-in guest turns itself off after a driver that failed.
     pub off_at: Option<u64>,
+    /// The keys pressed in the guest, and when.
+    pub pressed: Vec<(u64, String)>,
+    /// The bytes the guest's disk has written, from when: the last one at or before now is the
+    /// answer. None named, the machine cannot say.
+    pub written: Vec<(u64, u64)>,
 }
 
 /// After a start with the driver's disk, when the stand-in guest says what `install.sh` says,
@@ -299,6 +304,15 @@ impl MachineControl for FakeGuest {
 
     fn serial(&mut self, _: &str) -> String {
         self.says.iter().filter(|(at, _)| *at <= self.now).map(|(_, t)| format!("{t}\n")).collect()
+    }
+
+    fn press_key(&mut self, _: &str, qcode: &str) -> Result<(), String> {
+        self.pressed.push((self.now, qcode.to_string()));
+        Ok(())
+    }
+
+    fn disk_written(&mut self, _: &str) -> Option<u64> {
+        self.written.iter().rfind(|(from, _)| *from <= self.now).map(|(_, bytes)| *bytes)
     }
 
     fn now_ms(&mut self) -> u64 {

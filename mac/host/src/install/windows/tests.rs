@@ -23,6 +23,7 @@ fn the_answers_name_the_account_with_its_password_and_trust_the_public_certifica
         password: "k7mn-p3xq-ab9d-w4ht",
         computer_name: "GUESTHOUSE",
         edition: "Windows 11 Pro",
+        ui_language: None,
     };
     let text = autounattend(&answers);
     assert!(text.contains("<Name>nick</Name>"));
@@ -53,7 +54,8 @@ fn the_answers_name_the_account_with_its_password_and_trust_the_public_certifica
 
 #[test]
 fn what_a_person_types_cannot_break_the_answers_out_of_their_place() {
-    let answers = Answers { account: "a<b>&\"c", password: "x", computer_name: "X", edition: "E" };
+    let answers =
+        Answers { account: "a<b>&\"c", password: "x", computer_name: "X", edition: "E", ui_language: None };
     let text = autounattend(&answers);
     assert!(text.contains("<Name>a&lt;b&gt;&amp;&quot;c</Name>"));
     assert!(!text.contains("a<b>"));
@@ -88,8 +90,62 @@ fn base64_is_the_standard_one_for_utf16_text() {
 
 #[test]
 fn the_second_start_says_so_through_a_run_once_that_needs_no_quoting() {
-    let text = autounattend(&Answers { account: "nick", password: "x", computer_name: "X", edition: "E" });
+    let text = autounattend(&Answers {
+        account: "nick",
+        password: "x",
+        computer_name: "X",
+        edition: "E",
+        ui_language: None,
+    });
     assert!(text.contains("RunOnce"));
     assert!(text.contains("-EncodedCommand "));
     assert!(!text.contains("first start ok"), "the words are in the encoded command, not the plain text");
+}
+
+#[test]
+fn setup_gets_the_generic_key_of_the_edition_so_the_product_key_page_is_not_shown() {
+    let for_edition = |edition: &str| {
+        autounattend(&Answers { account: "a", password: "x", computer_name: "X", edition, ui_language: None })
+    };
+    // The shared table's keys, each in the user data beside the licence.
+    let pro = for_edition("Windows 11 Pro");
+    assert!(pro.contains(
+        "<UserData><ProductKey><Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key><WillShowUI>OnError</WillShowUI></ProductKey><AcceptEula>true</AcceptEula></UserData>"
+    ));
+    let iot = for_edition("Windows 11 IoT Enterprise LTSC");
+    assert!(iot.contains("<Key>KBN8V-HFGQ4-MGXVD-347P6-PDQGT</Key>"));
+    // The image's own yearly name picks the same edition.
+    assert!(for_edition("Windows 11 IoT Enterprise LTSC 2024").contains("<Key>KBN8V-"));
+    // An edition the table lacks is installed as it is named, with no key made up for it.
+    let other = for_edition("Windows 11 Home");
+    assert!(!other.contains("<ProductKey>") && other.contains("<UserData><AcceptEula>"));
+}
+
+#[test]
+fn setup_is_given_its_locale_so_no_keyboard_or_language_page_is_left_for_a_person() {
+    let text = autounattend(&Answers {
+        account: "a",
+        password: "x",
+        computer_name: "X",
+        edition: "E",
+        ui_language: None,
+    });
+    // The component is in the windowsPE pass, before Setup's own, as the shared answer file has it.
+    let international = text.find("Microsoft-Windows-International-Core-WinPE").expect("the component");
+    assert!(international < text.find("Microsoft-Windows-Setup").unwrap());
+    assert!(text.contains(
+        "<InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UserLocale>en-US</UserLocale>"
+    ));
+    // No language is named that the installer might not carry.
+    assert!(!text.contains("<UILanguage>") && !text.contains("<SetupUILanguage>"));
+    let named = autounattend(&Answers {
+        account: "a",
+        password: "x",
+        computer_name: "X",
+        edition: "E",
+        ui_language: Some("en-US"),
+    });
+    assert!(named.contains(
+        "<SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage><UILanguage>en-US</UILanguage>"
+    ));
 }

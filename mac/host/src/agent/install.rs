@@ -132,6 +132,15 @@ impl MachineControl for AgentControl {
         fs::read_to_string(self.run_dir.join("serial.log")).unwrap_or_default()
     }
 
+    fn press_key(&mut self, _: &str, qcode: &str) -> Result<(), String> {
+        crate::control::send_key(&self.run_dir.join("qmp.sock"), qcode)
+            .map_err(|e| format!("Could not press a key in the machine: {e}"))
+    }
+
+    fn disk_written(&mut self, _: &str) -> Option<u64> {
+        crate::control::bytes_written(&self.run_dir.join("qmp.sock")).ok().flatten()
+    }
+
     fn now_ms(&mut self) -> u64 {
         self.clock.now().as_millis() as u64
     }

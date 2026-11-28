@@ -224,7 +224,7 @@ fn a_machine_held_to_an_interface_has_the_launcher_guard_its_passt_with_or_witho
         let (_scratch, plan) = held_to_wg0(windows(), jailed_too);
         let command = plan.qemu_command();
         let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
-        let cut_file = plan.run_folder.join("network-cut").display().to_string();
+        let cut_file = crate::paths::notes_beside(&plan.run_folder).join("network-cut").display().to_string();
         assert_eq!(command[guard + 1..guard + 3], ["wg0".to_owned(), cut_file]);
     }
     let (_scratch, plan) = on_passt(windows(), true);

@@ -178,14 +178,19 @@ fn status_says_when_a_machine_held_to_an_interface_had_its_network_cut() {
     let words = [&qemu, "-qmp", &monitor, &disk, "-nic", "socket,model=e1000e,fd=11"];
     fake_process(&context, 40, &words, &[], "");
     let run_folder = context.run_folder(None);
+    let notes = context.notes_folder(None);
     std::fs::create_dir_all(&run_folder).unwrap();
-    std::fs::write(run_folder.join("network-cut"), "wg0 went away\n").unwrap();
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("network-cut"), "wg0 went away\n").unwrap();
     let (out, _) = said(&context, "status work");
     assert!(!out.contains("network is cut"), "a file an earlier machine left: {out}");
     Machine { only_through: "wg0".into(), ..machine }.save(&context).unwrap();
     let (out, _) = said(&context, "status work");
     assert!(out.contains("State: Running") && out.contains("Its network is cut"), "{out}");
-    std::fs::remove_file(run_folder.join("network-cut")).unwrap();
+    std::fs::remove_file(notes.join("network-cut")).unwrap();
+    assert!(!said(&context, "status work").0.contains("network is cut"));
+    // The run folder is the jailed programs' to write in, so a file there says nothing.
+    std::fs::write(run_folder.join("network-cut"), "forged\n").unwrap();
     assert!(!said(&context, "status work").0.contains("network is cut"));
 }
 

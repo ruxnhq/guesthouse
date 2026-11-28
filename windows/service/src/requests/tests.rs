@@ -345,7 +345,7 @@ impl Connection for Window {
     }
 
     fn asker(&self) -> Asker {
-        Asker { user: USER.into(), administrator: false, administrators_account: true }
+        Asker { user: USER.into(), administrator: false }
     }
 }
 

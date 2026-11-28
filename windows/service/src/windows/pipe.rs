@@ -13,9 +13,7 @@
 //! is closed at once, and the pipe goes on being served. So does it when no thread can be made.
 
 use super::log;
-use super::security::{
-    Descriptor, SYSTEM, in_administrators, is_administrator, last_error, own_user, token_user, wide,
-};
+use super::security::{Descriptor, SYSTEM, is_administrator, last_error, own_user, token_user, wide};
 use crate::requests::{Asker, Connection, Held, Service, Work};
 use guesthouse_control::protocol::{NOT_A_REQUEST, request_from};
 use guesthouse_control::{Answer, REQUEST_LIMIT, read_line, write_line};
@@ -326,13 +324,13 @@ fn answer<W: Work>(service: &Arc<Service<W>>, pipe: File) {
 /// in at the console. With nobody signed in, as when the service runs at a prompt, the service's
 /// own user stands in for the console's. The system counts as an administrator.
 fn allowed(pipe: &File) -> Result<Asker, String> {
-    let (user, administrator, administrators_account) = as_client(pipe, || {
+    let (user, administrator) = as_client(pipe, || {
         let mut token: HANDLE = null_mut();
         // SAFETY: the thread's token while it impersonates, opened as the service, and closed here.
         if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) } == 0 {
-            return (None, false, false);
+            return (None, false);
         }
-        let answer = (token_user(token), is_administrator(token), in_administrators(token));
+        let answer = (token_user(token), is_administrator(token));
         // SAFETY: ours, and not used after this.
         unsafe { CloseHandle(token) };
         answer
@@ -340,7 +338,7 @@ fn allowed(pipe: &File) -> Result<Asker, String> {
     let user = user.ok_or_else(|| last_error("Reading who is asking"))?;
     let administrator = administrator || user == SYSTEM;
     if administrator || Some(&user) == console_user().or_else(own_user).as_ref() {
-        Ok(Asker { user, administrator, administrators_account })
+        Ok(Asker { user, administrator })
     } else {
         Err(format!("{user} asked, and only the user signed in at the console may use Guesthouse."))
     }

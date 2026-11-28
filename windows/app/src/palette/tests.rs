@@ -31,6 +31,7 @@ fn machine(name: &str, system: System, state: State) -> Machine {
         remote_view: false,
         remote_port: None,
         console_pipe: None,
+        needs_owner: false,
     }
 }
 

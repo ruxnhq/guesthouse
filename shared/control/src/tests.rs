@@ -56,17 +56,13 @@ fn requests_are_tagged_by_what_they_ask() {
 
 #[test]
 fn remote_view_is_asked_for_with_the_other_hosts_words_and_an_older_app_still_reads() {
-    let share: Request =
-        serde_json::from_value(json!({"ask": "share", "name": "win", "on": true})).unwrap();
+    let share: Request = serde_json::from_value(json!({"ask": "share", "name": "win", "on": true})).unwrap();
     assert_eq!(
         share,
         Request::Share { name: "win".into(), on: Some(true), pairing: None, pairing_seconds: None }
     );
     let asked: Request = serde_json::from_value(json!({"ask": "share", "name": "win"})).unwrap();
-    assert_eq!(
-        asked,
-        Request::Share { name: "win".into(), on: None, pairing: None, pairing_seconds: None }
-    );
+    assert_eq!(asked, Request::Share { name: "win".into(), on: None, pairing: None, pairing_seconds: None });
     assert_eq!(
         serde_json::to_value(Request::Share {
             name: "win".into(),
@@ -259,10 +255,9 @@ fn a_networks_mode_and_forwards_read_and_write_as_the_apps_agree() {
     assert_eq!(settings.network_mode, NetworkMode::Bridged { adapter: "Wi-Fi".into() });
     assert_eq!(settings.forwards, [Forward { host_port: 8080, guest_port: 80 }]);
     // A service from before bridging says nothing of it, and a status still reads.
-    let status: Answer = serde_json::from_value(
-        json!({"answer": "status", "version": "0.9.0", "machines": [], "cards": []}),
-    )
-    .unwrap();
+    let status: Answer =
+        serde_json::from_value(json!({"answer": "status", "version": "0.9.0", "machines": [], "cards": []}))
+            .unwrap();
     assert!(matches!(status, Answer::Status { bridging, .. } if !bridging.available));
 }
 
@@ -325,10 +320,7 @@ fn a_line_reads_back_as_it_was_written() {
     write_line(&mut buffer, &Answer::Refused { reason: "busy".into() }).unwrap();
     write_line(&mut buffer, &Answer::Ok).unwrap();
     let mut reader = io::BufReader::new(&buffer[..]);
-    assert_eq!(
-        read_line::<Answer>(&mut reader).unwrap(),
-        Some(Answer::Refused { reason: "busy".into() })
-    );
+    assert_eq!(read_line::<Answer>(&mut reader).unwrap(), Some(Answer::Refused { reason: "busy".into() }));
     assert_eq!(read_line::<Answer>(&mut reader).unwrap(), Some(Answer::Ok));
     assert_eq!(read_line::<Answer>(&mut reader).unwrap(), None);
 }
@@ -406,4 +398,21 @@ fn shares_are_eight_at_most_and_each_folder_once() {
     let many: Vec<Share> = (0..=MOST_SHARES).map(|n| share(&format!(r"C:\{n}"))).collect();
     assert!(shares_refusal(&many).unwrap().contains("at most"));
     assert_eq!(shares_refusal(&many[..MOST_SHARES]), None);
+}
+
+#[test]
+fn a_machine_that_needs_an_owner_is_listed_so_and_assigned_by_name_and_account() {
+    let older = json!({
+        "name": "win", "system": "windows", "state": "off", "set_up": true, "memory_mb": 8192,
+        "processors": 4, "card": null, "address": null
+    });
+    let machine: Machine = serde_json::from_value(older).unwrap();
+    assert!(!machine.needs_owner, "a service from before owners has none waiting");
+    let waiting = serde_json::to_value(Machine { needs_owner: true, ..machine }).unwrap();
+    assert_eq!(waiting["needs_owner"], json!(true));
+    let assign = Request::Assign { name: "win".into(), owner: "S-1-5-21-1-2-3-1001".into() };
+    assert_eq!(
+        serde_json::to_value(&assign).unwrap(),
+        json!({"ask": "assign", "name": "win", "owner": "S-1-5-21-1-2-3-1001"})
+    );
 }

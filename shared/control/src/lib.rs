@@ -119,6 +119,10 @@ pub enum Request {
     /// restart. Asked when it's on already, or waiting for a restart, it answers `Done` at once and
     /// changes nothing. A service from before this answers it with `protocol::NOT_A_REQUEST`.
     EnableHyperV,
+    /// Gives `name`, a machine that needs an owner, to `owner`, a user's account as a SID. Only an
+    /// administrator asking elevated may, so the app asks it from a helper that Windows asks the
+    /// person to allow. `owner` is the app's own user, whoever allows it.
+    Assign { name: String, owner: String },
 }
 
 /// The Windows feature `EnableHyperV` turns on, with its parents, as Microsoft's own instructions
@@ -510,6 +514,11 @@ pub struct Machine {
     /// from a service from before this, which has no console to offer.
     #[serde(default)]
     pub console_pipe: Option<String>,
+    /// Whether it has no owner yet: a machine from before owners that the service couldn't give to
+    /// anyone. Every user at the console sees it, with its name, system and state only, and nothing
+    /// can be done to it but `Assign`, unless they ask elevated.
+    #[serde(default)]
+    pub needs_owner: bool,
 }
 
 /// One of a machine's snapshots.

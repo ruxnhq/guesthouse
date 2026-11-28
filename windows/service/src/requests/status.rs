@@ -4,7 +4,7 @@
 use super::{Asker, Connection, REPORT_TAIL, Service, Work, no_machine, send_text, words};
 use crate::report_parts::tail_file;
 use crate::store::Store;
-use guesthouse_control::{Answer, Card, Machine, SnapshotInfo, System};
+use guesthouse_control::{Answer, Card, Machine, NetworkMode, SnapshotInfo, System};
 use guesthouse_host_windows::machine::Guest;
 use guesthouse_host_windows::record::Record;
 use guesthouse_host_windows::snapshots;
@@ -25,10 +25,10 @@ impl<W: Work> Service<W> {
             .machines
             .lock()
             .iter()
-            .filter(|(_, entry)| asker.may_use(entry))
+            .filter(|(_, entry)| asker.may_see(entry))
             .map(|(name, entry)| {
                 let record = Record::load(&self.machines.store.disk(name)).unwrap_or_default();
-                Machine {
+                let machine = Machine {
                     name: name.clone(),
                     system: match record.guest {
                         Guest::Windows => System::Windows,
@@ -70,7 +70,9 @@ impl<W: Work> Service<W> {
                     remote_view: entry.remote_view.values().0,
                     remote_port: entry.remote_view.values().1,
                     console_pipe: entry.console_pipe.clone(),
-                }
+                    needs_owner: entry.settings.owner.is_none(),
+                };
+                if asker.may_use(entry) { machine } else { only_what_it_is(machine) }
             })
             .collect();
         Answer::Status {
@@ -129,6 +131,26 @@ impl<W: Work> Service<W> {
                 format!("{}: {system}, {}, {set_up}\n", machine.name, words(machine.state))
             })
             .collect()
+    }
+}
+
+/// A machine that needs an owner as a user who may not use it sees it: what it is, where it stands
+/// and what it's given, and nothing of where it's kept, how it's reached or what it holds.
+fn only_what_it_is(machine: Machine) -> Machine {
+    Machine {
+        shares: Vec::new(),
+        network_mode: NetworkMode::Shared,
+        forwards: Vec::new(),
+        ssh_port: None,
+        folder: PathBuf::new(),
+        problem: None,
+        snapshots: Vec::new(),
+        working: None,
+        address: None,
+        remote_view: false,
+        remote_port: None,
+        console_pipe: None,
+        ..machine
     }
 }
 

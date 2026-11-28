@@ -578,6 +578,7 @@ fn status() -> Status {
         remote_view: false,
         remote_port: None,
         console_pipe: None,
+        needs_owner: false,
     };
     let card = |name: &str, memory_mb, default| CardInfo { name: name.to_owned(), memory_mb, default };
     Status {

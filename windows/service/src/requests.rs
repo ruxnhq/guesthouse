@@ -242,8 +242,8 @@ impl<W: Work> Service<W> {
     pub fn answer(self: &Arc<Self>, request: Request, connection: &mut dyn Connection) {
         let asker = connection.asker();
         self.take_unowned(&asker);
-        if let Some(asked) = owners::named(&request).filter(|asked| !self.theirs(asked, &asker)) {
-            let _ = connection.send(&no_machine(asked));
+        if let Some(answer) = owners::named(&request).and_then(|asked| self.not_theirs(asked, &asker)) {
+            let _ = connection.send(&answer);
             return;
         }
         let answer = match request {
@@ -277,6 +277,7 @@ impl<W: Work> Service<W> {
                 self.device(&name, |policy| policy.device_revoke(&fingerprint))
             }
             Request::EnableHyperV => return self.enable_hyper_v(connection),
+            Request::Assign { name, owner } => self.assign(&name, &owner, &asker),
         };
         let _ = connection.send(&answer);
     }

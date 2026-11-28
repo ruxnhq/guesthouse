@@ -204,12 +204,8 @@ mod frame_ring;
 mod freeing;
 mod handles;
 mod indirect;
-mod map_bounds;
-mod opening;
-mod restart;
-mod ring_owner;
-mod state_limits;
 mod video_guard;
+mod map_bounds;
 mod waiting_limits;
 
 mod dispatch {
@@ -920,7 +916,7 @@ mod allocations {
     #[test]
     fn a_shared_resource_lasts_until_its_last_user() {
         let mut session = session();
-        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
+        let (resource, handle) = allocate(&mut session, private(0x1000));
         assert_eq!(u32_at(&open(&mut session, resource, 1), 8), Ok(handle));
         destroy(&mut session, resource, &[]);
         assert!(session.allocations.contains_key(&handle));
@@ -931,7 +927,7 @@ mod allocations {
     #[test]
     fn a_frame_another_process_opened_survives_its_maker_naming_it() {
         let mut session = session();
-        let (resource, handle) = super::opening::shared_by_global_handle(&mut session);
+        let (resource, handle) = allocate(&mut session, private(0x1000));
         open(&mut session, resource, 1);
         destroy(&mut session, 0, &[handle]);
         assert!(session.allocations.contains_key(&handle));

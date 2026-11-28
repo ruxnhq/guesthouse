@@ -4,8 +4,8 @@ use super::{Handled, Session, answer_status, services};
 use crate::deferred::{Deferred, DeferredAction, FreedAllocation};
 use crate::fault_rate::{FAULT_WINDOW, MOST_FAULTS};
 use crate::pending::{
-    GATE_TIMEOUT, GateStep, MOST_FAILED_QUEUES, Pending, QUEUE_TIMEOUT, QueueAction, RING_ROOM_TIMEOUT,
-    SharedWait, Signal, Target, Waiting,
+    GATE_TIMEOUT, GateStep, MOST_FAILED_QUEUES, MOST_WAITING, Pending, QUEUE_TIMEOUT, QueueAction,
+    RING_ROOM_TIMEOUT, SharedWait, Signal, Target, Waiting,
 };
 use crate::session::{Answer, HeldReply, ReplyTicket};
 use crate::tables::{Queue, Rung};
@@ -287,6 +287,19 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         Ok(())
     }
 
+    /// How many address updates and CPU waits are waiting, and the bytes the updates hold.
+    pub(super) fn fence_waits(&self) -> usize {
+        self.pending.iter().filter(|item| item.is_fence_wait()).count()
+    }
+
+    pub(super) fn waiting_update_bytes(&self) -> usize {
+        let bytes = self.pending.iter().map(|item| match item {
+            Pending::Update { operations, .. } => operations.len(),
+            _ => 0,
+        });
+        bytes.sum()
+    }
+
     fn signals_finished(&self, signals: &[Signal], wake_on_any: bool) -> bool {
         let reached = |&(handle, value): &Signal| self.fence_reached(handle, value);
         if wake_on_any { signals.iter().any(reached) } else { signals.iter().all(reached) }
@@ -299,9 +312,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if self.signals_finished(&signals, request.wake_on_any) {
             self.take_tokens(&signals, request.wake_on_any);
             self.notices.push(Notice::WakeEvent { event: request.event, release });
+        } else if self.fence_waits() >= MOST_WAITING {
+            log::warn!("refused a CPU wait, as {MOST_WAITING} updates and waits are waiting already");
+            answer_status(Status::NO_MEMORY, out);
+            return Ok(());
         } else {
             let (wake_on_any, event) = (request.wake_on_any, request.event);
-            self.pending.push(Pending::CpuWait { signals, wake_on_any, event, release });
+            let since = Instant::now();
+            self.pending.push(Pending::CpuWait { signals, wake_on_any, event, release, since });
         }
         answer_status(Status::SUCCESS, out);
         Ok(())
@@ -649,7 +667,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         self.count_backend_faults(now);
         if self.pending.is_empty() {
-            return self.how_soon();
+            return self.how_soon(now);
         }
         // The two lists swap places, so polling does not allocate.
         let spare = std::mem::take(&mut self.pending_spare);
@@ -660,14 +678,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             }
         }
         self.pending_spare = items;
-        self.how_soon()
+        self.how_soon(now)
     }
 
-    fn how_soon(&self) -> Waiting {
+    fn how_soon(&self, now: Instant) -> Waiting {
         let copies_or_frames = !self.copies.is_empty() || self.frames.is_urgent();
         // A gate held only until a doorbell's time comes needs no hurry.
         let resting = |queue: u32| self.rings_not_before.contains_key(&queue);
-        let waiting = Waiting::of(self.pending.iter(), copies_or_frames, resting);
+        let waiting = Waiting::of(self.pending.iter(), copies_or_frames, resting, now);
         let look_again = self.frames.wants_a_look() || self.backend.needs_polling();
         if waiting == Waiting::Nothing && look_again { Waiting::Background } else { waiting }
     }
@@ -690,22 +708,22 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                     Some(Pending::AfterQueues { targets, deadline, action })
                 }
             }
-            Pending::CpuWait { signals, wake_on_any, event, release } => {
+            Pending::CpuWait { signals, wake_on_any, event, release, since } => {
                 if self.signals_finished(&signals, wake_on_any) {
                     self.take_tokens(&signals, wake_on_any);
                     self.notices.push(Notice::WakeEvent { event, release });
                     None
                 } else {
-                    Some(Pending::CpuWait { signals, wake_on_any, event, release })
+                    Some(Pending::CpuWait { signals, wake_on_any, event, release, since })
                 }
             }
             Pending::Gate { queue } => (!self.run_gate(queue, now)).then_some(Pending::Gate { queue }),
-            Pending::Update { fence, value, space, operations } => {
+            Pending::Update { fence, value, space, operations, since } => {
                 if self.fence_reached(fence, value) {
                     self.finish_update(&operations, space, fence, value);
                     None
                 } else {
-                    Some(Pending::Update { fence, value, space, operations })
+                    Some(Pending::Update { fence, value, space, operations, since })
                 }
             }
             Pending::Retry { message, ticket, started } => {

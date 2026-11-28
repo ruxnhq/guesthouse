@@ -3,7 +3,7 @@
 use super::{Handled, Session, answer_status};
 use crate::deferred::{DeferredAction, FreedAllocation};
 use crate::gpu_addresses::{ADDRESSES_END, ALLOCATION_ALIGN, AddressUse, LARGE_ALIGN, Window};
-use crate::pending::Pending;
+use crate::pending::{MOST_WAITING, MOST_WAITING_UPDATE_BYTES, Pending};
 use crate::tables::{Allocation, Mapping};
 use guesthouse_backend::{Backend, BackendError, GuestMemory, MapRequest, MemoryId, SpaceId, UnmapRequest};
 use guesthouse_messages::address::{
@@ -11,6 +11,7 @@ use guesthouse_messages::address::{
 };
 use guesthouse_messages::wire::{Malformed, align_up, checked_align_up};
 use guesthouse_messages::{MessageHeader, Status};
+use std::time::Instant;
 
 /// From this size an allocation can use 2 MiB pages.
 const LARGE_PAGES_FROM: u64 = 2 << 20;
@@ -481,7 +482,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(crate) fn note_waiting_updates(&self, queue: u32) {
         let Some(space) = self.queues.get(&queue).map(|queue| queue.space) else { return };
         let mut waiting = self.pending.iter().filter_map(|item| match item {
-            Pending::Update { fence, value, space: waits, operations } if *waits == space => {
+            Pending::Update { fence, value, space: waits, operations, .. } if *waits == space => {
                 Some((*fence, *value, operations))
             }
             _ => None,
@@ -549,12 +550,20 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             }
             self.write_fence(fence, value.saturating_add(1));
         } else {
+            let bytes = request.raw_operations().len();
+            if self.fence_waits() >= MOST_WAITING
+                || self.waiting_update_bytes().saturating_add(bytes) > MOST_WAITING_UPDATE_BYTES
+            {
+                log::warn!("refused an address update, as too many are waiting for their fences already");
+                answer_status(Status::NO_MEMORY, out);
+                return Ok(());
+            }
             let operations = request.raw_operations().to_vec();
             log::debug!(
                 "update waits in {space:?} for fence {fence:#x} to reach {value}: {}",
                 describe_operations(&operations)
             );
-            self.pending.push(Pending::Update { fence, value, space, operations });
+            self.pending.push(Pending::Update { fence, value, space, operations, since: Instant::now() });
         }
         answer_status(Status::SUCCESS, out);
         Ok(())

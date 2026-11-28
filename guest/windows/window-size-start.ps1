@@ -3,6 +3,9 @@
 # device is an administrator's.
 $user = (Get-Process explorer -IncludeUserName -ea 0 | Select -First 1).UserName
 if (-not $user) { 'nobody is logged in'; return }
+# The helper reads the token as that account, which the token's own rules leave to SYSTEM and
+# administrators until a helper's start adds the account.
+icacls C:\gpupv\token.txt /grant "${user}:(R)" | Out-Null
 [IO.File]::WriteAllBytes('C:\gpupv\window-size.ps1', [Convert]::FromBase64String($helper))
 $action = New-ScheduledTaskAction -Execute conhost.exe -Argument '--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\gpupv\window-size.ps1'
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest

@@ -179,7 +179,6 @@ public class AppWindows : Form
     const int UnauthenticatedMax = 8;           // connections still sending their token line; a new one over this is closed
     const int TokenWaitMs = 5000, TokenMaxBytes = 256, LineMaxBytes = 1 << 20, WriteTimeoutMs = 5000;
     const string Dir = @"C:\gpupv\";
-    const string ErrorFile = Dir + "app-windows-error.txt";
     const string QuitFile = Dir + "app-windows.quit";    // written by the stop script, so the layered style is undone first
     const int ProtocolVersion = 1;
 
@@ -522,8 +521,7 @@ public class AppWindows : Form
         // keeps for that monitor too, the next moment there changes no window. DisplayConfig cannot set a monitor that is not shown.
         if (key != screenMonitor && wantedPercent > 0 && PercentNow() != wantedPercent)
         {
-            string why = SetScale(wantedPercent);
-            if (why != null) LogError(new Exception("scale " + wantedPercent + " on the other monitor: " + why));
+            SetScale(wantedPercent);
         }
         if (now - awaySince < AwayMostMs) return true;
         if (key == screenMonitor) takenShape = shape;
@@ -586,7 +584,7 @@ public class AppWindows : Form
                 if (!c.HasOrig) continue;
                 SetWindowPos(h, IntPtr.Zero, c.OrigL, c.OrigT, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
             }
-            catch (Exception ex) { LogError(ex); }
+            catch { }
         }
         try
         {
@@ -594,7 +592,7 @@ public class AppWindows : Form
             if (originalPercent > 0 && PercentNow() != originalPercent) SetScale(originalPercent);
             PutStepsBack();
         }
-        catch (Exception ex) { LogError(ex); }
+        catch { }
     }
 
     void Shutdown()
@@ -685,7 +683,7 @@ public class AppWindows : Form
     {
         work.Stop();
         try { Work(); }
-        catch (Exception ex) { LogError(ex); }
+        catch { }
     }
 
     // Only a slow safety net. Hooks can miss windows of higher integrity and windows that change without an event.
@@ -702,18 +700,13 @@ public class AppWindows : Form
             foreach (Cell c in cells.Values) if (!c.Active) { scanDue = true; break; }   // lets dormant cells expire
             if (scanDue) Kick();
         }
-        catch (Exception ex) { LogError(ex); }
+        catch { }
     }
 
     void RaiseOverlay()
     {
         // Menus and tips are topmost too; putting the overlay back on top keeps real windows out of the picture.
         SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    static void LogError(Exception ex)
-    {
-        try { File.WriteAllText(ErrorFile, DateTime.Now.ToString("s") + "\r\n" + ex.ToString()); } catch { }
     }
 
     // ================================================================ Reading windows
@@ -1680,11 +1673,11 @@ public class AppWindows : Form
     {
         TcpListener listener = new TcpListener(IPAddress.Any, Port);
         // With the port taken or the listener gone there is nothing to serve, and the helper that is not listening ends so it can be started again.
-        try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }
+        try { listener.Start(); } catch { Environment.Exit(1); }
         while (true)
         {
             TcpClient client;
-            try { client = listener.AcceptTcpClient(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); return; }
+            try { client = listener.AcceptTcpClient(); } catch { Environment.Exit(1); return; }
             Thread serving = new Thread(delegate() { Serve(client); });
             serving.IsBackground = true;
             serving.Start();
@@ -1765,10 +1758,7 @@ public class AppWindows : Form
                 BeginInvoke(new MethodInvoker(delegate { OnRequest(mine, text); }));
             }
         }
-        catch (Exception ex)
-        {
-            if (!(ex is IOException) && !(ex is SocketException) && !(ex is ObjectDisposedException) && !(ex is InvalidOperationException)) LogError(ex);
-        }
+        catch { }
         finally
         {
             if (waiting) Interlocked.Decrement(ref unauthenticated);
@@ -2019,8 +2009,7 @@ public class AppWindows : Form
     void KeepScale()
     {
         if (wantedPercent <= 0 || PercentNow() == wantedPercent) return;
-        string why = SetScale(wantedPercent);
-        if (why != null) LogError(new Exception("scale " + wantedPercent + " after a change of mode: " + why));
+        SetScale(wantedPercent);
     }
 
     void OnScaleRequest(Link link, long n, Dictionary<string, object> r)
@@ -2163,7 +2152,7 @@ public class AppWindows : Form
 
     void OnPendingTick(object sender, EventArgs e)
     {
-        try { CheckPending(); } catch (Exception ex) { LogError(ex); }
+        try { CheckPending(); } catch { }
     }
 
     void CheckPending()

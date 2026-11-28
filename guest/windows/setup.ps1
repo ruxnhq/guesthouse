@@ -5,6 +5,10 @@ New-Item -ItemType Directory -Force C:\gpupv, C:\gpupv\cap | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'agent.ps1') C:\gpupv\agent.ps1 -Force
 Copy-Item (Join-Path $PSScriptRoot 'token.txt') C:\gpupv\token.txt -Force
 Copy-Item (Join-Path $PSScriptRoot 'setmode.ps1') C:\gpupv\setmode.ps1 -Force
+# Only SYSTEM and administrators may change what is in C:\gpupv, as SYSTEM runs it. The host sends
+# the same script at every start, after the sign-in step it uses.
+. (Join-Path $PSScriptRoot 'logon-secret.ps1')
+& (Join-Path $PSScriptRoot 'guest-rights.ps1')
 New-NetFirewallRule -DisplayName 'gpupv-agent' -Direction Inbound -Protocol TCP -LocalPort 8765 -RemoteAddress 10.0.2.2 -Action Allow | Out-Null
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\gpupv\agent.ps1'
 $trigger = New-ScheduledTaskTrigger -AtStartup

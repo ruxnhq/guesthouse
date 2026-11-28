@@ -136,13 +136,15 @@ fn run_placed_script(task: &Task, script: SessionScript) -> Result<String> {
     let user = console_user_script(task);
     let (file, result) = (format!("{GUEST_FOLDER}\\{name}.ps1"), format!("{GUEST_FOLDER}\\cap\\{name}.txt"));
     let arguments = session_arguments(&file);
+    // The session can't make files in the guest's folder, so SYSTEM makes its result, empty, and gives
+    // that account alone the right to read and write it.
     let run = format!(
-        "Remove-Item {result} -ea 0; {user} \
+        "{user} [IO.File]::WriteAllText('{result}', ''); icacls '{result}' /grant \"${{u}}:(R,W)\" | Out-Null; \
          $a=New-ScheduledTaskAction -Execute {SESSION_HOST} -Argument \"{arguments}\"; \
          $p=New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive; \
          Register-ScheduledTask -TaskName gh{name} -Action $a -Principal $p -Force | Out-Null; \
          Start-ScheduledTask gh{name}; $t=0; \
-         while(-not (Test-Path {result}) -and $t -lt {patience}){{Start-Sleep 1;$t++}}; \
+         while((Get-Item {result}).Length -eq 0 -and $t -lt {patience}){{Start-Sleep 1;$t++}}; \
          Unregister-ScheduledTask gh{name} -Confirm:$false; Get-Content {result}"
     );
     Ok(task.ask_guest(&run, answer_seconds))

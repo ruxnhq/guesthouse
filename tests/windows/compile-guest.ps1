@@ -11,6 +11,9 @@ param([switch]$ListOnly)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $guest = Join-Path $repo 'guest\windows'
+# The folders whose scripts go into a guest: the Linux host's, and remote view's, which the Windows
+# host writes into its guests.
+$scanned = @('guest\windows', 'shared\remote-view\guest')
 $inCi = $env:GITHUB_ACTIONS -eq 'true'
 $script:problems = 0
 
@@ -63,8 +66,9 @@ function Get-Value($ast, $argument) {
 # Each Add-Type in a guest script that compiles source: the script, its line, the source, the
 # assemblies it names and the line of the script the source starts on.
 function Get-GuestSources {
-    foreach ($file in Get-ChildItem -LiteralPath $guest -Filter '*.ps1' | Sort-Object Name) {
-        $name = "guest/windows/$($file.Name)"
+    foreach ($file in $scanned | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -Filter '*.ps1' | Sort-Object Name }) {
+        $script = ($file.FullName.Substring($repo.Length + 1)) -replace '\\', '/'
+        $name = $script
         $errors = $null
         $ast = [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
         if ($errors) { Say-Problem $name $errors[0].Extent.StartLineNumber "does not parse: $($errors[0].Message)"; continue }
@@ -105,10 +109,10 @@ function Get-GuestSources {
                 }
             }
             if ($null -eq $source -or $null -eq $references) {
-                Say-Problem "guest/windows/$($file.Name)" $line 'Add-Type compiles something this check cannot find in the script. Teach tests/windows/compile-guest.ps1 where it is.'
+                Say-Problem $script $line 'Add-Type compiles something this check cannot find in the script. Teach tests/windows/compile-guest.ps1 where it is.'
                 continue
             }
-            [pscustomobject]@{ Name = $name; Script = "guest/windows/$($file.Name)"; Line = $line; Source = $source; References = $references; Offset = $offset }
+            [pscustomobject]@{ Name = $name; Script = $script; Line = $line; Source = $source; References = $references; Offset = $offset }
         }
     }
 }

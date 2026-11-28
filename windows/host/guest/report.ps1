@@ -459,6 +459,21 @@ if ($shares.Count) {
 }
 Remove-OldShareLink
 
+# Windows' copy of the answer file the host set it up with, which has the account's password in it.
+# It is only needed until setup has finished. guest/windows/guest-rights.ps1 has the same.
+function Remove-AnswerFile([string]$File, [string]$SetupKey) {
+    $setup = Get-ItemProperty -LiteralPath $SetupKey -ErrorAction SilentlyContinue
+    if (-not $setup -or $setup.SystemSetupInProgress -ne 0 -or $setup.OOBEInProgress -ne 0) { return }
+    if (Test-Path -LiteralPath $File -PathType Leaf) {
+        Remove-Item -LiteralPath $File -Force
+        "took away $File"
+    }
+}
+try {
+    $said = Remove-AnswerFile 'C:\Windows\Panther\unattend.xml' 'HKLM:\SYSTEM\Setup'
+    if ($said) { Send-Line "setup: $said" }
+} catch { Send-Line "setup: the answer file stays: $($_.Exception.Message)" }
+
 # The guest's screen, when the host gave it one, before the last line, as the host takes that line
 # to mean the guest is set up.
 $screenScript = 'C:\Guesthouse\screen\screen.ps1'

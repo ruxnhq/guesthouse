@@ -3,7 +3,15 @@
 # to read: begin, waiting winget, start N, ok N, fail N and why, and end. Everything the recipe gave is
 # in data.json and is only read as data here: a package id is one argument to winget, and a script is
 # a file of its own that PowerShell runs.
-$folder = 'C:\gpupv\recipe'
+# $Work is this run's folder in the account's profile, where it writes. $Data is the recipe, which
+# SYSTEM put in C:\gpupv\recipe.
+param([string]$Work, [string]$Data = 'C:\gpupv\recipe\data.json')
+New-Item -ItemType Directory -Force -Path $Work | Out-Null
+# Earlier runs' folders are this account's own, and go.
+Get-ChildItem -LiteralPath (Split-Path -Parent $Work) -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne (Get-Item -LiteralPath $Work).FullName } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$folder = $Work
 $status = Join-Path $folder 'status.txt'
 $wordsLongest = 300
 $idShape = '\A[A-Za-z0-9][A-Za-z0-9._+-]{1,127}\z'
@@ -59,7 +67,7 @@ Set-Content -LiteralPath (Join-Path $folder 'run.pid') -Value $PID -Encoding ASC
 
 $current = 0
 try {
-    $job = Get-Content -LiteralPath (Join-Path $folder 'data.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $job = Get-Content -LiteralPath $Data -Raw -Encoding UTF8 | ConvertFrom-Json
     Say 'begin'
     $winget = $null
     $needsWinget = @($job.steps | Where-Object { $_.kind -eq 'package' }).Count -gt 0

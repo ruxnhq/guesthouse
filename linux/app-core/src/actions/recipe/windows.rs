@@ -12,9 +12,9 @@ use std::time::Duration;
 
 const START_SCRIPT: &str = "recipe-start.ps1";
 const RUN_SCRIPT: &str = "recipe-run.ps1";
-/// The status file the steps write, one line at a time.
-const STATUS_ASK: &str =
-    "Get-Content -LiteralPath C:\\gpupv\\recipe\\status.txt -Raw -ErrorAction SilentlyContinue";
+/// The status file the steps write, one line at a time, in the run's folder that `work.txt` names.
+pub(super) const STATUS_ASK: &str = "$work = Get-Content -LiteralPath C:\\gpupv\\recipe\\work.txt -ErrorAction SilentlyContinue | \
+     Select-Object -First 1; if ($work) { Get-Content -LiteralPath (Join-Path $work 'status.txt') -Raw -ErrorAction SilentlyContinue }";
 const UP_ASK: &str = "'up'";
 const UP_MARK: &str = "up";
 const START_MARK: &str = "started";

@@ -9,11 +9,15 @@ use crate::paths::{Paths, Variables};
 use guesthouse_daemon::slot::Slot;
 use std::fs;
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::symlink;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
 
 /// So that no test depends on how much this PC has free. One about the limit sets its own.
 const PLENTY_OF_GIB: u64 = 64;
@@ -137,11 +141,56 @@ pub fn scratch_context(scratch: &Scratch) -> Context {
     context
 }
 
-/// This test process as the slot's QEMU of `machine`, for as long as the listener is kept: it
-/// listens on the slot's monitor, its words open the machine's disk, and the context's `/proc` shows
-/// its open files and this PC's sockets as they are.
+/// This test process as the slot's QEMU of `machine`, while this is kept: it answers on the slot's
+/// monitor, where it says it forwards each guest port of `forwards` from the loopback port beside it,
+/// its words open the machine's disk, and the context's `/proc` shows its open files and this PC's
+/// sockets as they are.
+pub struct ActingQemu {
+    monitor: PathBuf,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for ActingQemu {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wakes the monitor's thread, which then lets go of the socket.
+        let _ = UnixStream::connect(&self.monitor);
+    }
+}
+
+/// QEMU's table of its user network's connections, with a line for each forward. QEMU lines its
+/// columns up with more spaces than one.
+fn usernet_table(forwards: &[(u16, u16)]) -> String {
+    let mut table = "Protocol[State] FD Source-Address Port Dest.-Address Port RecvQ SendQ\n".to_owned();
+    for (guest, host) in forwards {
+        table += &format!("TCP[HOST_FORWARD] 13 127.0.0.1 {host} 10.0.2.15 {guest} 0 0\n");
+    }
+    table
+}
+
+fn serve_monitor(stream: UnixStream, table: &str) {
+    let Ok(mut writer) = stream.try_clone() else { return };
+    let _ = writer.write_all(b"{\"QMP\": {\"version\": {}, \"capabilities\": []}}\n");
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+        let answer = if request["execute"] == "human-monitor-command"
+            && request["arguments"]["command-line"] == "info usernet"
+        {
+            serde_json::json!({"return": table})
+        } else {
+            serde_json::json!({"return": {}})
+        };
+        let _ = writeln!(writer, "{answer}");
+    }
+}
+
 #[must_use]
-pub fn act_as_qemu(context: &Context, machine: &Machine, slot: Option<Slot>) -> UnixListener {
+pub fn act_as_qemu(
+    context: &Context,
+    machine: &Machine,
+    slot: Option<Slot>,
+    forwards: &[(u16, u16)],
+) -> ActingQemu {
     context.make_run_folder(slot).unwrap();
     let pid = std::process::id();
     let folder = context.processes.join(pid.to_string());
@@ -152,31 +201,42 @@ pub fn act_as_qemu(context: &Context, machine: &Machine, slot: Option<Slot>) -> 
     let _ = symlink("/proc/net", context.processes.join("net"));
     let monitor = context.run_folder(slot).join(MAIN_SOCKET);
     let _ = fs::remove_file(&monitor);
-    UnixListener::bind(monitor).unwrap()
+    let listener = UnixListener::bind(&monitor).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (stopping, table) = (stop.clone(), usernet_table(forwards));
+    thread::spawn(move || {
+        for stream in listener.incoming().map_while(Result::ok) {
+            if stopping.load(Ordering::SeqCst) {
+                return;
+            }
+            let table = table.clone();
+            thread::spawn(move || serve_monitor(stream, &table));
+        }
+    });
+    ActingQemu { monitor, stop }
 }
 
-/// A machine of its own with this test process as its QEMU, while it is kept, for a test that only
-/// needs a way to a port of a guest.
+/// A machine of its own with this test process as its QEMU, which forwards one port of the guest from
+/// a loopback port, while it is kept: for a test that only needs a way to a port of a guest.
 pub struct QemuStandIn {
     context: Context,
     machine: Machine,
-    _monitor: UnixListener,
+    guest_port: u16,
+    _qemu: ActingQemu,
     _scratch: Scratch,
 }
 
-impl Default for QemuStandIn {
-    fn default() -> Self {
+impl QemuStandIn {
+    pub fn forwarding(guest_port: u16, host_port: u16) -> Self {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let machine = Machine::new("vm", "vm", &scratch.path("vm.qcow2").display().to_string(), "/v");
-        let monitor = act_as_qemu(&context, &machine, None);
-        Self { context, machine, _monitor: monitor, _scratch: scratch }
+        let qemu = act_as_qemu(&context, &machine, None, &[(guest_port, host_port)]);
+        Self { context, machine, guest_port, _qemu: qemu, _scratch: scratch }
     }
-}
 
-impl QemuStandIn {
-    /// A port on this PC, as the machine's guest is reached at it.
-    pub fn end(&self, port: u16) -> GuestEnd {
-        GuestEnd::new(&self.context, &self.machine, None, port)
+    /// The guest's port, as the app reaches it.
+    pub fn end(&self) -> GuestEnd {
+        GuestEnd::new(&self.context, &self.machine, None, self.guest_port)
     }
 }

@@ -136,7 +136,7 @@ fn the_slot_sets_every_name() {
     let context = scratch_context(&scratch);
     let plan = VmPlan::new(&context, &windows(), Boot::Gpu, slots::number(2), 0);
     let arguments = plan.qemu_arguments();
-    assert!(value_after(&arguments, "-nic").contains("hostfwd=tcp:127.0.0.1:18767-:8765"));
+    assert!(value_after(&arguments, "-nic").contains("hostfwd=udp:127.0.0.1:19067-:7791"));
     assert!(arguments.iter().any(|word| word.contains("/run-2/qmp.sock,")));
 }
 
@@ -144,7 +144,7 @@ fn the_slot_sets_every_name() {
 #[test]
 fn only_a_windows_guest_gets_the_forward_for_dragged_files() {
     let (_scratch, plan) = plan(&plain_machine(), plain_boot());
-    assert_eq!(plan.files_port, None);
+    assert!(!plan.files_forward);
     assert!(!value_after(&plan.qemu_arguments(), "-nic").contains("8767"));
 }
 
@@ -154,8 +154,8 @@ fn nothing_set_is_the_line_every_machine_had() {
     let arguments = plan.qemu_arguments();
     assert_eq!(
         value_after(&arguments, "-nic"),
-        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
-         hostfwd=udp:127.0.0.1:19065-:7791"
+        "user,model=e1000e,hostfwd=udp:127.0.0.1:19065-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
+         hostfwd=tcp:127.0.0.1:0-:8767"
     );
     assert!(!has(&arguments, "-netdev"), "NAT has one adapter");
 }
@@ -166,7 +166,8 @@ fn no_internet_keeps_the_agent() {
     let (_scratch, plan) = plan(&machine, Boot::Gpu);
     let nic = value_after(&plan.qemu_arguments(), "-nic");
     assert!(nic.starts_with(
-        "user,model=e1000e,restrict=on,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767"
+        "user,model=e1000e,restrict=on,hostfwd=udp:127.0.0.1:19065-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
+         hostfwd=tcp:127.0.0.1:0-:8767"
     ));
 }
 
@@ -187,10 +188,9 @@ fn bridged_goes_through_the_helper_and_adds_the_private_link_last() {
             crate::network::bridge_helper()
         )
     );
-    assert!(
-        value_after(&arguments, "-netdev")
-            .ends_with("-:8767,hostfwd=udp:127.0.0.1:19065-:7791,hostfwd=udp:127.0.0.1:5000-:50")
-    );
+    assert!(value_after(&arguments, "-netdev").ends_with(
+        "hostfwd=udp:127.0.0.1:5000-:50,hostfwd=tcp:127.0.0.1:0-:8765,hostfwd=tcp:127.0.0.1:0-:8767"
+    ));
     assert_eq!(arguments.last().unwrap(), "e1000e,netdev=link,mac=52:54:00:67:68:01,bus=pcie.0,addr=0x1e");
 }
 
@@ -538,16 +538,11 @@ fn app_windows_on_adds_one_forward_for_its_helper_after_the_files_helpers() {
     let context = scratch_context(&scratch);
     with_app_windows(&context, &windows(), true);
     let plan = VmPlan::new(&context, &windows(), Boot::Gpu, slots::first(), 0);
-    assert_eq!(plan.app_windows_port, Some(18965));
+    assert!(plan.app_windows_forward);
     assert_eq!(
         value_after(&plan.qemu_arguments(), "-nic"),
-        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
-         hostfwd=tcp:127.0.0.1:18965-:8769,hostfwd=udp:127.0.0.1:19065-:7791"
-    );
-    let second = VmPlan::new(&context, &windows(), Boot::Gpu, slots::number(2), 0);
-    assert!(
-        value_after(&second.qemu_arguments(), "-nic")
-            .ends_with("hostfwd=tcp:127.0.0.1:18967-:8769,hostfwd=udp:127.0.0.1:19067-:7791")
+        "user,model=e1000e,hostfwd=udp:127.0.0.1:19065-:7791,hostfwd=tcp:127.0.0.1:0-:8765,\
+         hostfwd=tcp:127.0.0.1:0-:8767,hostfwd=tcp:127.0.0.1:0-:8769"
     );
 }
 
@@ -561,7 +556,7 @@ fn with_app_windows_off_or_never_set_qemu_gets_the_words_it_always_did() {
     with_app_windows(&context, &machine, false);
     let off = VmPlan::new(&context, &machine, Boot::Gpu, slots::first(), 0);
     assert_eq!(never.qemu_arguments(), off.qemu_arguments());
-    assert_eq!((never.app_windows_port, off.app_windows_port), (None, None));
+    assert!(!never.app_windows_forward && !off.app_windows_forward);
     assert!(!never.qemu_arguments().join(" ").contains("8769"));
 }
 
@@ -572,7 +567,7 @@ fn only_a_windows_machine_can_have_the_forward_whatever_a_file_says() {
     let machine = plain_machine();
     fs::create_dir_all(machine.folder(&context)).unwrap();
     fs::write(machine.folder(&context).join(crate::app_windows::SWITCH_FILE), "{\"on\":true}").unwrap();
-    assert_eq!(VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0).app_windows_port, None);
+    assert!(!VmPlan::new(&context, &machine, plain_boot(), slots::first(), 0).app_windows_forward);
 }
 
 #[test]
@@ -619,6 +614,26 @@ fn only_a_disk_nothing_is_kept_from_drops_the_guests_flushes() {
             disk_drive(&run).contains("file=/dev/fdset/50,format=qcow2,cache=unsafe,"),
             "{}",
             disk_drive(&run)
+        );
+    }
+}
+
+/// QEMU picks these ports when it starts, and its monitor says which.
+#[test]
+fn the_agent_and_the_helpers_are_forwarded_from_ports_qemu_picks_after_the_users_own() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let machine = Machine { forwards: vec![Forward::new(Protocol::Tcp, 40000, 22)], ..windows() };
+    with_app_windows(&context, &machine, true);
+    for slot in slots::all() {
+        let plan = VmPlan::new(&context, &machine, Boot::Gpu, slot, 0);
+        let nic = value_after(&plan.qemu_arguments(), "-nic");
+        assert!(
+            nic.ends_with(
+                "hostfwd=tcp:127.0.0.1:40000-:22,hostfwd=tcp:127.0.0.1:0-:8765,\
+                 hostfwd=tcp:127.0.0.1:0-:8767,hostfwd=tcp:127.0.0.1:0-:8769"
+            ),
+            "{nic}"
         );
     }
 }

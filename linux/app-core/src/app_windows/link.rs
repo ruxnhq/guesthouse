@@ -96,8 +96,6 @@ impl Default for Timing {
 /// What a process needs to reach helpers, as one value that a test can fill.
 #[derive(Debug, Clone, Copy)]
 pub struct LinkSettings {
-    /// A port on this PC to use for every machine, in place of the slot's own.
-    pub port: Option<u16>,
     pub timing: Timing,
     /// How long a command waits for the helper to come up, which includes starting it in the guest.
     pub patience: Duration,
@@ -105,7 +103,7 @@ pub struct LinkSettings {
 
 impl Default for LinkSettings {
     fn default() -> Self {
-        Self { port: None, timing: Timing::default(), patience: Duration::from_secs(60) }
+        Self { timing: Timing::default(), patience: Duration::from_secs(60) }
     }
 }
 

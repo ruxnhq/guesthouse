@@ -111,12 +111,12 @@ fn a_machine_that_is_off_is_started_and_then_waited_for() {
         ),
     );
     // The pretend task's work: once it was asked, the machine is there.
-    let (context, machine) = (rig.context.clone(), rig.machine.clone());
+    let (context, machine, port) = (rig.context.clone(), rig.machine.clone(), rig.port);
     let (asked_file, go_file) = (asked.clone(), go.clone());
     let worker = std::thread::spawn(move || {
         for _ in 0..200 {
             if asked_file.exists() {
-                let qemu = start_process(&context, &machine);
+                let qemu = start_process(&context, &machine, port);
                 fs::write(&go_file, "").unwrap();
                 return Some(qemu);
             }

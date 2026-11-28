@@ -95,16 +95,14 @@ impl VmPlan {
         !matches!(self.boot, Boot::Ubuntu(_) | Boot::UbuntuInstall(_))
     }
 
-    /// What QEMU's user network listens on: the agent, the files helper and the forwards, or for
-    /// Ubuntu its SSH.
+    /// What QEMU's user network listens on: the forwards, and a port it picks for each of the agent's
+    /// and the helpers', or for Ubuntu its SSH.
     fn listened_ports(&self) -> Vec<u16> {
         if !self.has_machine_line() {
             return vec![self.ssh_port()];
         }
-        let mut ports = vec![self.agent_port];
-        ports.extend(self.files_port);
-        ports.extend(self.app_windows_port);
-        ports.extend(self.forwarded_ports(Protocol::Tcp));
+        let mut ports = self.forwarded_ports(Protocol::Tcp);
+        ports.push(EPHEMERAL_PORT);
         ports
     }
 
@@ -115,7 +113,7 @@ impl VmPlan {
         let mut tcp_bind = self.listened_ports();
         // The user network reaches the shared folder's program through a pair of loopback TCP
         // sockets it makes for each connection, on a port it can't know beforehand.
-        if self.shared_folder().is_some() {
+        if self.shared_folder().is_some() && !tcp_bind.contains(&EPHEMERAL_PORT) {
             tcp_bind.push(EPHEMERAL_PORT);
         }
         let tcp_bind = Ports::Only(tcp_bind);

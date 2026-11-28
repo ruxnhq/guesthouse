@@ -173,10 +173,6 @@ impl Context {
         make_private_folder(&self.run_folder(slot))
     }
 
-    pub fn agent_port(&self, slot: Option<Slot>) -> u16 {
-        self.paths.agent_port(slot.unwrap_or(self.slot))
-    }
-
     pub fn install_room_gib(&self) -> u64 {
         self.install_room.unwrap_or(crate::library::INSTALL_ROOM_GIB)
     }

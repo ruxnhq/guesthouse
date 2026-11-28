@@ -308,9 +308,9 @@ fn nothing_listening_starts_the_helper() {
         let spare = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         spare.local_addr().unwrap().port()
     };
-    let qemu = crate::testing::QemuStandIn::default();
+    let qemu = crate::testing::QemuStandIn::forwarding(crate::network::GUEST_APP_WINDOWS_PORT, port);
     let starter = Starter::new();
-    let mut client = Client::start(config(qemu.end(port), Some(&starter)));
+    let mut client = Client::start(config(qemu.end(), Some(&starter)));
     down_with(&mut client, "refused");
     let until = std::time::Instant::now() + SECONDS;
     while starter.count() == 0 && std::time::Instant::now() < until {

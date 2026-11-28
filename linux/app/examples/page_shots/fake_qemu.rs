@@ -7,6 +7,7 @@ use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -22,6 +23,9 @@ fn serve_monitor(mut stream: UnixStream) {
             Some("query-status") => json!({"return": {"status": "running"}}),
             Some("query-mice") => json!({"return": [], "id": "mice"}),
             Some("system_powerdown") => process::exit(0),
+            Some("human-monitor-command") if request["arguments"]["command-line"] == "info usernet" => {
+                json!({"return": FORWARDS.lock().unwrap().clone()})
+            }
             _ => json!({"return": {}}),
         };
         let _ = writeln!(stream, "{answer}");
@@ -45,12 +49,22 @@ fn listen_on(path: &Path) {
 /// Where a forward's connections go: a port on this PC, as no guest is behind them.
 pub const FORWARD_TO_VARIABLE: &str = "PAGE_SHOTS_FORWARD_TO";
 
+/// The forwards' lines as QEMU's `info usernet` gives them.
+static FORWARDS: Mutex<String> = Mutex::new(String::new());
+
 /// Passes each connection to a port of the user network's forwards on to `to`, as QEMU passes it
 /// to the guest, so the app reaches a pretend helper through this process as it would through QEMU.
 fn forward(word: &str, to: u16) {
     for rule in word.split(',').filter_map(|part| part.strip_prefix("hostfwd=tcp:127.0.0.1:")) {
-        let Some(Ok(port)) = rule.split('-').next().map(str::parse::<u16>) else { continue };
+        let Some((Ok(port), Ok(guest))) =
+            rule.split_once("-:").map(|(port, guest)| (port.parse::<u16>(), guest.parse::<u16>()))
+        else {
+            continue;
+        };
         let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)) else { continue };
+        let Ok(bound) = listener.local_addr() else { continue };
+        *FORWARDS.lock().unwrap() +=
+            &format!("TCP[HOST_FORWARD] 13 127.0.0.1 {} 10.0.2.15 {guest} 0 0\n", bound.port());
         thread::spawn(move || {
             for outside in listener.incoming().map_while(Result::ok) {
                 let Ok(inside) = TcpStream::connect((Ipv4Addr::LOCALHOST, to)) else { continue };

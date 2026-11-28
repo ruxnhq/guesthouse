@@ -14,12 +14,9 @@ pub const SLOTS: u8 = 4;
 const SHARED_MEMORY: &str = "/dev/shm";
 const RUN_FOLDER: &str = "run";
 const SHARED_FILE_PREFIX: &str = "gpupv";
-const AGENT_PORT: u16 = 18765;
 const DEBUG_PORT: u16 = 1234;
 /// The loopback port QEMU forwards the guest's remote view to, which the relay on the network side reads.
 const REMOTE_VIEW_PORT: u16 = 19065;
-/// Where the app reaches the guest's helper for dropped and dragged files.
-const FILES_PORT: u16 = 18865;
 const VNC_DISPLAY: u16 = 77;
 
 /// A slot number that cannot be used. It stops the daemon, as guessing could reach another VM's files.
@@ -78,14 +75,6 @@ impl Slot {
         Path::new(SHARED_MEMORY).join(self.memory_name(word))
     }
 
-    pub fn agent_port(self) -> u16 {
-        AGENT_PORT + u16::from(self.0)
-    }
-
-    pub fn files_port(self) -> u16 {
-        FILES_PORT + u16::from(self.0)
-    }
-
     pub fn remote_view_port(self) -> u16 {
         REMOTE_VIEW_PORT + u16::from(self.0)
     }
@@ -120,8 +109,6 @@ mod tests {
         let slot = Slot::parse(Some("2")).unwrap();
         assert_eq!(slot.run_folder(Path::new("/project")), Path::new("/project/run-2"));
         assert_eq!(slot.shared_file("iomem"), Path::new("/dev/shm/gpupv-iomem-2"));
-        assert_eq!(slot.agent_port(), 18767);
-        assert_eq!(slot.files_port(), 18867);
         assert_eq!(slot.remote_view_port(), 19067);
         assert_eq!(slot.debug_port(), 1236);
         assert_eq!(slot.vnc_display(), 79);

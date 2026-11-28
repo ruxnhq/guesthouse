@@ -12,7 +12,7 @@ use guesthouse_app_core::app_windows::stand_in::{FakeHelper, Welcome};
 use guesthouse_app_core::app_windows::viewer_lock;
 use guesthouse_app_core::app_windows::{
     Caption, Cell as WindowCell, Layout, LinkSettings, Point, Rect, Size, State as WindowState, Timing,
-    answer_line, forward_word, host_port,
+    answer_line, forward_word,
 };
 use guesthouse_app_core::tasks::{State, Status};
 use guesthouse_app_core::text::base64_encode;
@@ -56,10 +56,7 @@ pub fn prepare(context: &mut Context, folder: &Path) {
         request: Duration::from_secs(5),
         apps_request: Duration::from_secs(3),
     };
-    // The app reaches the helper through the pretend QEMU's forward, on a port of its own.
-    let forward = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = forward.local_addr().unwrap().port();
-    context.app_windows = LinkSettings { port: Some(port), timing, patience: Duration::from_secs(2) };
+    context.app_windows = LinkSettings { timing, patience: Duration::from_secs(2) };
     context.agent = Arc::new(Nobody);
     let guest = PathBuf::from(env::var("GUESTHOUSE_PROGRAM").expect("the script sets it")).join("guest");
     fs::create_dir_all(&guest).unwrap();
@@ -186,7 +183,7 @@ fn vm_with(context: &Context, machine: &Machine, forward: bool) -> Child {
     command.arg0(context.paths.qemu.as_os_str()).args(["-qmp", &socket, "-drive", &drive]);
     command.env(fake_qemu::FORWARD_TO_VARIABLE, helper().port.to_string());
     if forward {
-        command.args(["-nic", &format!("user,{}", forward_word(host_port(context, None)))]);
+        command.args(["-nic", &format!("user,{}", forward_word())]);
     }
     command.spawn().unwrap()
 }

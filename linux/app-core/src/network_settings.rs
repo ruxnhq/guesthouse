@@ -21,37 +21,17 @@ pub fn other_machines(context: &Context) -> Vec<Machine> {
     load_all(context).0.into_iter().filter(is_running).collect()
 }
 
-/// The TCP ports on this PC that belong to VMs, whichever slot a machine ends up in.
-pub fn reserved_ports(context: &Context) -> BTreeMap<u32, String> {
-    let mut found = BTreeMap::from([(context.agent_port(None).into(), "this VM's agent".to_owned())]);
-    for slot in slots::all() {
-        let agent = u32::from(slot.agent_port());
-        found.entry(agent).or_insert_with(|| "the port Guesthouse talks to a VM's agent on".to_owned());
-        found.insert(slot.files_port().into(), "the port Guesthouse sends a VM dropped files on".to_owned());
-        found.insert(slot.debug_port().into(), "a VM's debug port".to_owned());
-    }
-    found
+/// The TCP ports on this PC that belong to VMs, whichever slot a machine ends up in. The agent's and
+/// the helpers' are not among them: QEMU picks a free one for each when it starts.
+pub fn reserved_ports() -> BTreeMap<u32, String> {
+    slots::all().map(|slot| (slot.debug_port().into(), "a VM's debug port".to_owned())).collect()
 }
 
 /// Why this forward can't be used beside these running machines.
-pub fn forward_problem(
-    context: &Context,
-    machine: &Machine,
-    item: &Forward,
-    others: &[Machine],
-) -> Option<String> {
+pub fn forward_problem(machine: &Machine, item: &Forward, others: &[Machine]) -> Option<String> {
     let lowest = network::lowest_free_port();
     let windows = machine.kind == Kind::Windows;
-    let mut reserved = reserved_ports(context);
-    // Only a machine with app windows on has its helper's port, so for every other the ports are as free as
-    // they always were.
-    let uses_helper = |machine: &Machine| crate::app_windows::is_on(context, machine);
-    if uses_helper(machine) || others.iter().any(uses_helper) {
-        for slot in slots::all() {
-            let port = crate::app_windows::host_port_of(slot).into();
-            reserved.insert(port, "the port Guesthouse reaches a VM's app windows helper on".to_owned());
-        }
-    }
+    let reserved = reserved_ports();
     network::forward_problem(item, &reserved, windows, lowest).or_else(|| {
         let others: Vec<(&str, &[Forward])> =
             others.iter().map(|other| (other.name.as_str(), other.forwards.as_slice())).collect();
@@ -75,7 +55,7 @@ pub fn read_forward(
     if machine.forwards.iter().any(|old| (old.protocol, old.host) == (item.protocol, item.host)) {
         return Err(Failure(format!("{} on the host is already forwarded.", item.port_text())));
     }
-    match forward_problem(context, machine, &item, &other_machines(context)) {
+    match forward_problem(machine, &item, &other_machines(context)) {
         Some(problem) => Err(Failure(problem)),
         None => Ok(item),
     }
@@ -202,7 +182,7 @@ pub fn network_start_problems(context: &Context, machine: &Machine, others: &[Ma
             network::port_taken(item.protocol, host)
                 .then(|| format!("{} on this PC is in use by another program.", item.port_text()))
         };
-        found.extend(forward_problem(context, machine, item, others).or_else(taken));
+        found.extend(forward_problem(machine, item, others).or_else(taken));
     }
     found
 }
@@ -367,7 +347,7 @@ mod tests {
             ..older.clone()
         };
         let item = Forward::new(Protocol::Tcp, 28081, 22);
-        assert!(forward_problem(&context, &older, &item, &[other]).unwrap().contains("Other"));
+        assert!(forward_problem(&older, &item, &[other]).unwrap().contains("Other"));
     }
 
     #[test]
@@ -381,24 +361,9 @@ mod tests {
     }
 
     #[test]
-    fn every_slots_agent_port_is_reserved() {
-        let scratch = Scratch::new();
-        let context = scratch_context(&scratch);
-        let reserved = reserved_ports(&context);
-        assert!(slots::all().all(|slot| reserved.contains_key(&slot.agent_port().into())));
-    }
-
-    #[test]
-    fn the_app_windows_ports_are_reserved_only_beside_a_machine_that_has_it_on() {
-        let scratch = Scratch::new();
-        let context = scratch_context(&scratch);
-        let machine = Machine::new("win", "Win", "/d", "/v");
-        machine.save(&context).unwrap();
-        let port = u32::from(crate::app_windows::host_port_of(slots::first()));
-        let forward = Forward { protocol: Protocol::Tcp, host: port, guest: 80 };
-        assert_eq!(forward_problem(&context, &machine, &forward, &[]), None, "as on main");
-        crate::app_windows::set_on(&context, &machine, true).unwrap();
-        let problem = forward_problem(&context, &machine, &forward, &[]).unwrap();
-        assert!(problem.contains("app windows helper"), "{problem}");
+    fn every_slots_debug_port_is_reserved_and_no_port_of_the_agents() {
+        let reserved = reserved_ports();
+        assert!(slots::all().all(|slot| reserved.contains_key(&slot.debug_port().into())));
+        assert!(!reserved.contains_key(&18765), "QEMU picks the agent's port when it starts");
     }
 }

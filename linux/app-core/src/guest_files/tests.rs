@@ -12,7 +12,6 @@ const TOKEN: &str = "secret";
 
 /// A helper that gives each connection the next answer, and passes on what it was sent.
 fn fake_helper(answers: &[&[u8]]) -> (Helper, Receiver<Vec<u8>>, QemuStandIn) {
-    let qemu = QemuStandIn::default();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let answers: Vec<Vec<u8>> = answers.iter().map(|answer| answer.to_vec()).collect();
@@ -35,7 +34,8 @@ fn fake_helper(answers: &[&[u8]]) -> (Helper, Receiver<Vec<u8>>, QemuStandIn) {
             stream.write_all(&answer).unwrap();
         }
     });
-    (Helper::new(qemu.end(port), TOKEN), requests, qemu)
+    let qemu = QemuStandIn::forwarding(crate::network::GUEST_FILES_PORT, port);
+    (Helper::new(qemu.end(), TOKEN), requests, qemu)
 }
 
 fn text(request: &[u8]) -> String {

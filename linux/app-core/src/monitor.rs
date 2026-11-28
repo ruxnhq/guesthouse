@@ -46,7 +46,22 @@ pub struct QmpMonitor;
 
 /// A connection that has said hello, ready for commands.
 fn connect(socket: &Path) -> Option<(BufReader<UnixStream>, UnixStream)> {
-    let stream = UnixStream::connect(socket).ok()?;
+    handshake(UnixStream::connect(socket).ok()?)
+}
+
+/// The same, but a monitor whose queue of connections is full refuses at once instead of being
+/// waited for, so a QEMU that has stopped taking them can't hold up whoever asks.
+fn connect_without_waiting(socket: &Path) -> Option<(BufReader<UnixStream>, UnixStream)> {
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType, socket_with};
+    let flags = SocketFlags::CLOEXEC | SocketFlags::NONBLOCK;
+    let fd = socket_with(AddressFamily::UNIX, SocketType::STREAM, flags, None).ok()?;
+    rustix::net::connect(&fd, &SocketAddrUnix::new(socket).ok()?).ok()?;
+    let stream = UnixStream::from(fd);
+    stream.set_nonblocking(false).ok()?;
+    handshake(stream)
+}
+
+fn handshake(stream: UnixStream) -> Option<(BufReader<UnixStream>, UnixStream)> {
     let time = Some(Duration::from_secs(MONITOR_SECONDS));
     stream.set_read_timeout(time).ok()?;
     stream.set_write_timeout(time).ok()?;
@@ -55,6 +70,16 @@ fn connect(socket: &Path) -> Option<(BufReader<UnixStream>, UnixStream)> {
     read_line(&mut reader)?;
     converse(&mut reader, &mut writer, &Command::bare("qmp_capabilities"))?;
     Some((reader, writer))
+}
+
+/// Asks the monitor at `socket`, and says which process listens on it: the one that started
+/// listening, which keeps its pid if it then runs another program, as the jail's launcher does to
+/// become QEMU. A socket nobody listens on any more refuses.
+pub(crate) fn ask_with_listener(socket: &Path, command: &Command) -> Option<(u32, Value)> {
+    let (mut reader, mut writer) = connect_without_waiting(socket)?;
+    let pid = rustix::net::sockopt::socket_peercred(&writer).ok()?.pid;
+    let answer = converse(&mut reader, &mut writer, command)?;
+    Some((pid.as_raw_nonzero().get().unsigned_abs(), answer))
 }
 
 impl Monitor for QmpMonitor {

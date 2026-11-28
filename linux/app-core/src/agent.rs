@@ -209,8 +209,7 @@ pub fn stop_guest_files(context: &Context, machine: &Machine, slot: Option<Slot>
 /// to start one.
 pub fn files_helper(context: &Context, machine: &Machine, slot: Option<Slot>) -> Option<Helper> {
     let token = read_token(context, machine)?;
-    let port = slot.unwrap_or(context.slot).files_port();
-    Some(Helper::new(GuestEnd::new(context, machine, slot, port), &token))
+    Some(Helper::new(GuestEnd::new(context, machine, slot, crate::network::GUEST_FILES_PORT), &token))
 }
 
 /// What the helper answered, or `None` if it didn't. The agent can wrap long lines.
@@ -307,7 +306,8 @@ pub mod stand_in {
     #[derive(Default)]
     pub struct ScriptedAgent {
         pub answers: Mutex<VecDeque<String>>,
-        pub requests: Mutex<Vec<(u16, String, String)>>,
+        /// What was asked: the monitor of the slot it went through, the token and the script.
+        pub requests: Mutex<Vec<(std::path::PathBuf, String, String)>>,
     }
 
     impl ScriptedAgent {
@@ -319,7 +319,7 @@ pub mod stand_in {
 
     impl GuestAgent for ScriptedAgent {
         fn ask(&self, end: &GuestEnd, token: &str, script: &str, _seconds: u64) -> String {
-            self.requests.lock().unwrap().push((end.port, token.to_owned(), script.to_owned()));
+            self.requests.lock().unwrap().push((end.monitor.clone(), token.to_owned(), script.to_owned()));
             self.answers.lock().unwrap().pop_front().unwrap_or_default()
         }
     }
@@ -382,8 +382,8 @@ mod tests {
             }
         });
         let start = Instant::now();
-        let qemu = QemuStandIn::default();
-        let answer = TcpAgent.ask(&qemu.end(port), "token", "up", 1);
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        let answer = TcpAgent.ask(&qemu.end(), "token", "up", 1);
         assert!(start.elapsed() < Duration::from_secs(3), "it took {:?}", start.elapsed());
         assert!(!answer.is_empty());
     }
@@ -394,15 +394,15 @@ mod tests {
             let block = vec![b'x'; 1 << 20];
             while stream.write_all(&block).is_ok() {}
         });
-        let qemu = QemuStandIn::default();
-        assert_eq!(TcpAgent.ask(&qemu.end(port), "token", "up", 20).len(), MOST_ANSWER);
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 20).len(), MOST_ANSWER);
     }
 
     #[test]
     fn a_whole_answer_comes_back() {
         let port = answering_with(|mut stream| stream.write_all(b"finished\r\n").unwrap());
-        let qemu = QemuStandIn::default();
-        assert_eq!(TcpAgent.ask(&qemu.end(port), "token", "up", 5), "finished\r\n");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 5), "finished\r\n");
     }
 
     #[test]
@@ -466,7 +466,8 @@ mod tests {
         let token = make_token(&context, &vm).unwrap();
         assert_eq!(context.ask_guest(&vm, "x", 1, Some(slots::number(2))), "up");
         let requests = agent.requests.lock().unwrap();
-        assert_eq!(requests[0], (18767, token, "x".to_owned()));
+        let monitor = context.run_folder(Some(slots::number(2))).join(crate::monitor::MAIN_SOCKET);
+        assert_eq!(requests[0], (monitor, token, "x".to_owned()));
     }
 
     #[test]
@@ -480,8 +481,8 @@ mod tests {
             stream.write_all(b"answered").unwrap();
             line
         });
-        let qemu = QemuStandIn::default();
-        assert_eq!(TcpAgent.ask(&qemu.end(port), "token", "Get-Date", 5), "answered");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "Get-Date", 5), "answered");
         let line = server.join().unwrap();
         let (token, script) = line.trim().split_once(' ').unwrap();
         assert_eq!((token, base64_decode(script).unwrap()), ("token", b"Get-Date".to_vec()));
@@ -490,8 +491,8 @@ mod tests {
     #[test]
     fn no_listener_is_an_empty_answer() {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let qemu = QemuStandIn::default();
-        assert_eq!(TcpAgent.ask(&qemu.end(port), "token", "up", 1), "");
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_AGENT_PORT, port);
+        assert_eq!(TcpAgent.ask(&qemu.end(), "token", "up", 1), "");
     }
 
     #[test]

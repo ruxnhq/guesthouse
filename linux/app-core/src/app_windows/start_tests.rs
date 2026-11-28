@@ -13,7 +13,6 @@ use std::time::Duration;
 
 fn quick() -> LinkSettings {
     LinkSettings {
-        port: None,
         timing: Timing {
             connect: Duration::from_millis(500),
             hello: Duration::from_millis(300),
@@ -28,10 +27,9 @@ fn quick() -> LinkSettings {
     }
 }
 
-/// A port that nothing listens on, so that no test can reach a helper of a real machine.
-fn spare_port() -> u16 {
-    let spare = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    spare.local_addr().unwrap().port()
+/// This test process as the machine's QEMU, which forwards the helper's port from `port`.
+fn acting(context: &Context, machine: &Machine, port: u16) -> crate::testing::ActingQemu {
+    crate::testing::act_as_qemu(context, machine, None, &[(crate::network::GUEST_APP_WINDOWS_PORT, port)])
 }
 
 fn token_of(context: &Context, machine: &Machine) -> String {
@@ -41,7 +39,7 @@ fn token_of(context: &Context, machine: &Machine) -> String {
 /// A Windows machine with a token, whose agent answers from a list.
 fn rig(scratch: &Scratch, answers: &[&str], on: bool) -> (Arc<Context>, Machine, Arc<ScriptedAgent>) {
     let mut context = scratch_context(scratch);
-    context.app_windows = LinkSettings { port: Some(spare_port()), ..quick() };
+    context.app_windows = quick();
     for (name, text) in [
         ("app-windows.ps1", "the helper"),
         ("app-windows.cs", "the source"),
@@ -67,9 +65,9 @@ fn running(context: &Context, machine: &Machine, with_forward: bool) {
     let monitor = format!("unix:{}/qmp.sock,server=on", context.run_folder(None).display());
     let disk = format!("file={},format=qcow2", machine.disk);
     let nic = if with_forward {
-        format!("user,hostfwd=tcp:127.0.0.1:18765-:8765,{}", forward_word(host_port(context, None)))
+        format!("user,hostfwd=tcp:127.0.0.1:0-:8765,{}", forward_word())
     } else {
-        "user,hostfwd=tcp:127.0.0.1:18765-:8765".to_owned()
+        "user,hostfwd=tcp:127.0.0.1:0-:8765".to_owned()
     };
     fake_process(context, 40, &[&qemu, "-qmp", &monitor, &disk, "-nic", &nic], &[], "");
 }
@@ -99,12 +97,8 @@ fn only_a_windows_machine_gets_a_link() {
 fn a_helper_that_is_running_is_never_started() {
     let scratch = Scratch::new();
     let (context, machine, agent) = rig(&scratch, &[], true);
-    let _qemu = crate::testing::act_as_qemu(&context, &machine, None);
     let helper = FakeHelper::start(&token_of(&context, &machine));
-    let context = Arc::new(Context {
-        app_windows: LinkSettings { port: Some(helper.port), ..quick() },
-        ..(*context).clone()
-    });
+    let _qemu = acting(&context, &machine, helper.port);
     let mut link = connect(&context, &machine, None).unwrap();
     link.wait_ready().unwrap();
     assert!(agent.requests.lock().unwrap().is_empty(), "no start, and no stop");
@@ -127,7 +121,8 @@ fn a_helper_that_is_not_running_is_started_with_its_script_its_source_and_its_st
         base64_encode(b"the source")
     );
     assert_eq!(start, &expected);
-    assert_eq!(requests[0].0, context.agent_port(None), "through the agent of the machine's slot");
+    let monitor = context.run_folder(None).join(crate::monitor::MAIN_SOCKET);
+    assert_eq!(requests[0].0, monitor, "through the agent of the machine's slot");
     link.end_if_started();
     let requests = agent.requests.lock().unwrap().clone();
     assert_eq!(
@@ -200,16 +195,12 @@ fn a_machine_with_no_token_is_refused_in_words() {
 fn a_layout_that_cannot_be_read_is_said_and_not_waited_out() {
     let scratch = Scratch::new();
     let (context, machine, _) = rig(&scratch, &[], true);
-    let _qemu = crate::testing::act_as_qemu(&context, &machine, None);
     let helper = FakeHelper::start(&token_of(&context, &machine));
+    let _qemu = acting(&context, &machine, helper.port);
     // The helper's cells lack the fields the contract names.
     helper.with(|inner| {
         inner.layout_line =
             Some(r#"{"t":"layout","seq":1,"screen":{"w":1,"h":1},"cells":[{"id":"1"}]}"#.into());
-    });
-    let context = Arc::new(Context {
-        app_windows: LinkSettings { port: Some(helper.port), ..context.app_windows },
-        ..(*context).clone()
     });
     let started = std::time::Instant::now();
     let mut link = connect(&context, &machine, None).unwrap();

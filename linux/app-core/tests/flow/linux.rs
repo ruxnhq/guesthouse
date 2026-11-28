@@ -18,6 +18,7 @@ use std::net::TcpListener;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,8 +28,10 @@ const REAL_DAEMON_VARIABLE: &str = "GUESTHOUSE_TEST_DAEMON";
 const MOST_WAIT: Duration = Duration::from_secs(90);
 const POLL: Duration = Duration::from_millis(200);
 const PRETEND_LIFE: Duration = Duration::from_secs(120);
-/// The first forward on QEMU's user network is the agent's.
-const AGENT_FORWARD: &str = "hostfwd=tcp:127.0.0.1:";
+/// The agent's forward on QEMU's user network, from a port it picks.
+const AGENT_FORWARD: &str = "hostfwd=tcp:127.0.0.1:0-:8765";
+/// The port the agent's forward was given, once it has one.
+static AGENT_PORT: AtomicU16 = AtomicU16::new(0);
 /// How the guest's memfds show in `/proc`.
 const GUEST_MEMORY: &str = "/memfd:gpupv-";
 
@@ -40,6 +43,13 @@ fn serve_monitor(mut stream: UnixStream) {
         let answer = match request["execute"].as_str() {
             Some("query-status") => json!({"return": {"status": "running"}}),
             Some("system_powerdown") => process::exit(0),
+            Some("human-monitor-command") if request["arguments"]["command-line"] == "info usernet" => {
+                let port = AGENT_PORT.load(Ordering::SeqCst);
+                let forward = format!(
+                    "  TCP[HOST_FORWARD]   13       127.0.0.1 {port:5}       10.0.2.15  8765     0     0\n"
+                );
+                json!({"return": if port == 0 { String::new() } else { forward }})
+            }
             _ => json!({"return": {}}),
         };
         let _ = writeln!(stream, "{answer}");
@@ -84,8 +94,9 @@ fn agent_answer(script: &str) -> &'static str {
     }
 }
 
-fn serve_agent(port: u16) {
-    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+fn serve_agent() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    AGENT_PORT.store(listener.local_addr().unwrap().port(), Ordering::SeqCst);
     thread::spawn(move || {
         for mut stream in listener.incoming().map_while(Result::ok) {
             let mut line = String::new();
@@ -126,8 +137,7 @@ fn pretend_qemu(arguments: &[String]) {
             open_guest_memory(&pair[1]);
         }
         if (pair[0] == "-nic" || pair[0] == "-netdev") && pair[1].contains(AGENT_FORWARD) {
-            let port = pair[1].split(AGENT_FORWARD).nth(1).unwrap().split('-').next().unwrap();
-            serve_agent(port.parse().unwrap());
+            serve_agent();
         }
     }
     thread::sleep(PRETEND_LIFE);
@@ -267,11 +277,6 @@ fn inner() {
     }
 }
 
-/// A port nothing has now. The real one could be held by a real VM.
-fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
-}
-
 fn copy_program(from: &Path, to: PathBuf) {
     fs::copy(from, to).unwrap();
 }
@@ -319,7 +324,6 @@ fn outer() {
         .env(MEMINFO_VARIABLE, folder.join("meminfo"))
         .env(PCI_VARIABLE, folder.join("pci"))
         .env("GUESTHOUSE_PROGRAM", &program)
-        .env("AGENT_PORT", free_port().to_string())
         .env("QEMU", bin.join("qemu"))
         .status()
         .unwrap();

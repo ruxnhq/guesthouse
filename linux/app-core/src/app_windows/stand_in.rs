@@ -69,7 +69,7 @@ fn answer_all(request: &Value, inner: &Mutex<Inner>) -> Vec<String> {
 impl FakeHelper {
     /// The helper's port as a machine's guest is reached at it.
     pub fn end(&self) -> GuestEnd {
-        self.qemu.end(self.port)
+        self.qemu.end()
     }
 
     pub fn start(token: &str) -> Self {
@@ -93,7 +93,7 @@ impl FakeHelper {
         }));
         let responder: Arc<Mutex<Responder>> = Arc::new(Mutex::new(Box::new(answer_all)));
         let stop = Arc::new(AtomicBool::new(false));
-        let qemu = QemuStandIn::default();
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_APP_WINDOWS_PORT, port);
         let helper =
             Self { port, qemu, inner: inner.clone(), responder: responder.clone(), stop: stop.clone() };
         let token = token.to_owned();

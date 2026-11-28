@@ -4,9 +4,9 @@ use crate::agent::stand_in::ScriptedAgent;
 use crate::app_windows::stand_in::FakeHelper;
 use crate::app_windows::{
     Caption, Cell, Layout, LinkSettings, Point, Rect, Size, State, Timing, answer_line, forward_word,
-    host_port, layout_line, set_on,
+    layout_line, set_on,
 };
-use std::os::unix::net::UnixListener;
+use crate::testing::ActingQemu;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +17,8 @@ pub(super) fn refused(context: &Context, words: &str) -> String {
     }
 }
 
-fn quick(port: u16) -> LinkSettings {
+fn quick() -> LinkSettings {
     LinkSettings {
-        port: Some(port),
         timing: Timing {
             connect: Duration::from_millis(500),
             hello: Duration::from_millis(300),
@@ -71,8 +70,10 @@ pub(super) struct Rig {
     pub agent: Arc<ScriptedAgent>,
     pub helper: FakeHelper,
     pub machine: Machine,
+    /// Where the machine's QEMU forwards the helper's port from.
+    pub port: u16,
     /// The test process as the machine's QEMU, while the machine is up.
-    _qemu: Option<UnixListener>,
+    _qemu: Option<ActingQemu>,
 }
 
 /// A Windows machine that runs as pid 40, whose helper is a pretend one on a port of its own, and whose
@@ -111,22 +112,23 @@ pub(super) fn rig_with(
     make_token(&context, &machine).unwrap();
     let token = std::fs::read_to_string(machine.token_file(&context)).unwrap();
     let helper = FakeHelper::start(token.trim());
-    context.app_windows = quick(if listening { helper.port } else { spare_port() });
+    context.app_windows = quick();
+    let port = if listening { helper.port } else { spare_port() };
     if on && kind == Kind::Windows {
         set_on(&context, &machine, true).unwrap();
     }
-    let qemu = up.then(|| start_process(&context, &machine));
-    Rig { context, agent, helper, machine, _qemu: qemu }
+    let qemu = up.then(|| start_process(&context, &machine, port));
+    Rig { context, agent, helper, machine, port, _qemu: qemu }
 }
 
 /// The machine's QEMU, as the system would show it, and the test process as the QEMU the link
-/// reaches for as long as the listener is kept.
+/// reaches, which forwards the helper's port from `port`, for as long as it is kept.
 #[must_use]
-pub(super) fn start_process(context: &Context, machine: &Machine) -> UnixListener {
+pub(super) fn start_process(context: &Context, machine: &Machine, port: u16) -> ActingQemu {
     let qemu = context.paths.qemu.display().to_string();
     let monitor = format!("unix:{}/qmp.sock,server=on", context.run_folder(None).display());
     let disk = format!("file={},format=qcow2", machine.disk);
-    let nic = format!("user,{}", forward_word(host_port(context, None)));
+    let nic = format!("user,{}", forward_word());
     crate::processes::stand_in::fake_process(
         context,
         40,
@@ -134,7 +136,7 @@ pub(super) fn start_process(context: &Context, machine: &Machine) -> UnixListene
         &[],
         "",
     );
-    crate::testing::act_as_qemu(context, machine, None)
+    crate::testing::act_as_qemu(context, machine, None, &[(crate::network::GUEST_APP_WINDOWS_PORT, port)])
 }
 
 fn two_cells() -> Layout {

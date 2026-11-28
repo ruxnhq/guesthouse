@@ -1,21 +1,22 @@
-//! The way to a port QEMU forwards from this PC's loopback to the guest: the agent's, the files
+//! The way to a port of the guest that QEMU forwards from this PC's loopback: the agent's, the files
 //! helper's and the app windows helper's. Each request starts with the machine's token, so a
 //! connection is only handed out once its far end is known to be the machine's own QEMU.
 //!
 //! QEMU is the process that listens on the monitor socket in the slot's run folder, which only this
-//! user can open, and its words have to open the machine's disk. The connection is QEMU's when the
-//! socket that accepted it is one of that process's open files, as `/proc` shows. With no QEMU,
-//! nothing connects at all.
+//! user can open, and its words have to open the machine's disk. QEMU picks the loopback port of each
+//! of these forwards when it starts, and its monitor says which it picked. The connection is QEMU's
+//! when the socket that accepted it is one of that process's open files, as `/proc` shows. With no
+//! QEMU, nothing connects at all.
 
 use crate::context::Context;
 use crate::machine::Machine;
-use crate::monitor::MAIN_SOCKET;
+use crate::monitor::{Command, MAIN_SOCKET, ask_with_listener};
 use guesthouse_daemon::slot::Slot;
-use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType, connect, socket_with, sockopt};
+use serde_json::json;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,9 +27,10 @@ const LOOK_AGAIN: Duration = Duration::from_millis(5);
 /// One port of one machine's guest, as this PC reaches it.
 #[derive(Debug, Clone)]
 pub struct GuestEnd {
-    pub port: u16,
+    /// The port in the guest.
+    pub guest_port: u16,
     /// QEMU's monitor in the slot's run folder.
-    monitor: PathBuf,
+    pub monitor: PathBuf,
     /// Where processes and sockets are read from: `/proc`, or a test's stand-in.
     processes: PathBuf,
     machine: Machine,
@@ -39,10 +41,10 @@ fn refused(why: &str) -> io::Error {
 }
 
 impl GuestEnd {
-    /// `port` on this PC, for the machine in `slot`, or in this process's slot.
-    pub fn new(context: &Context, machine: &Machine, slot: Option<Slot>, port: u16) -> Self {
+    /// `guest_port` of the machine in `slot`, or in this process's slot.
+    pub fn new(context: &Context, machine: &Machine, slot: Option<Slot>, guest_port: u16) -> Self {
         Self {
-            port,
+            guest_port,
             monitor: context.run_folder(slot).join(MAIN_SOCKET),
             processes: context.processes.clone(),
             machine: machine.clone(),
@@ -51,39 +53,48 @@ impl GuestEnd {
 
     /// The machine's agent.
     pub fn agent(context: &Context, machine: &Machine, slot: Option<Slot>) -> Self {
-        Self::new(context, machine, slot, context.agent_port(slot))
+        Self::new(context, machine, slot, crate::network::GUEST_AGENT_PORT)
     }
 
     /// A connection to the port, once the socket that took it is known to be the machine's QEMU's.
     /// Nothing has been written to it.
     pub fn connect(&self, patience: Duration) -> io::Result<TcpStream> {
-        let qemu = self.qemu()?;
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
+        let (qemu, port) = self.qemu()?;
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let stream = TcpStream::connect_timeout(&address, patience)?;
         let local = stream.local_addr()?.port();
-        let inode = self.taken_by(&stream, local)?;
+        let inode = self.taken_by(&stream, port, local)?;
         if !self.holds(qemu, inode) {
             return Err(refused("the port is not the machine's QEMU's"));
         }
         Ok(stream)
     }
 
-    /// The pid of the slot's QEMU, if it runs this machine.
-    fn qemu(&self) -> io::Result<u32> {
-        let pid = listener_pid(&self.monitor)?;
+    /// The pid of the slot's QEMU, if it runs this machine, and the port on this PC it forwards to the
+    /// guest's port.
+    fn qemu(&self) -> io::Result<(u32, u16)> {
+        let usernet = Command::new("human-monitor-command", json!({"command-line": "info usernet"}));
+        let (pid, answer) = ask_with_listener(&self.monitor, &usernet)
+            .ok_or_else(|| refused("no QEMU answers in the slot"))?;
         let words = fs::read(self.processes.join(pid.to_string()).join("cmdline"))?;
         let runs =
             words.split(|byte| *byte == 0).any(|word| crate::processes::opens_disk(word, &self.machine));
-        if runs { Ok(pid) } else { Err(refused("the slot's QEMU runs another machine")) }
+        if !runs {
+            return Err(refused("the slot's QEMU runs another machine"));
+        }
+        let table = answer["return"].as_str().unwrap_or_default();
+        let port =
+            forwarded_port(table, self.guest_port).ok_or_else(|| refused("QEMU has no such forward"))?;
+        Ok((pid, port))
     }
 
     /// The socket that took this connection, by its inode, once one has. Until the listener takes
     /// it, the kernel holds it with none.
-    fn taken_by(&self, stream: &TcpStream, local: u16) -> io::Result<u64> {
+    fn taken_by(&self, stream: &TcpStream, port: u16, local: u16) -> io::Result<u64> {
         let end = Instant::now() + ACCEPT_PATIENCE;
         loop {
             let table = fs::read_to_string(self.processes.join("net/tcp"))?;
-            if let Some(inode) = far_end(&table, self.port, local).filter(|inode| *inode != 0) {
+            if let Some(inode) = far_end(&table, port, local).filter(|inode| *inode != 0) {
                 return Ok(inode);
             }
             if closed(stream)? {
@@ -106,19 +117,19 @@ impl GuestEnd {
     }
 }
 
-/// Who listens on a unix socket: the process that started listening, which keeps its pid if it
-/// then runs another program, as the jail's launcher does to become QEMU. A socket nobody listens
-/// on any more refuses. The connection is never used, and doesn't wait if the listener is busy.
-fn listener_pid(socket: &Path) -> io::Result<u32> {
-    let fd = socket_with(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
-        None,
-    )?;
-    connect(&fd, &SocketAddrUnix::new(socket)?)?;
-    let pid = sockopt::socket_peercred(&fd)?.pid;
-    Ok(pid.as_raw_nonzero().get().unsigned_abs())
+/// The loopback port QEMU's user network forwards to `guest_port`, from its own table of
+/// connections, where a forward is a line like
+/// `  TCP[HOST_FORWARD]  14       127.0.0.1 40123       10.0.2.15  8765     0     0`.
+fn forwarded_port(table: &str, guest_port: u16) -> Option<u16> {
+    table.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            ["TCP[HOST_FORWARD]", _, "127.0.0.1", port, _, guest, ..] if guest.parse() == Ok(guest_port) => {
+                port.parse().ok().filter(|port| *port != 0)
+            }
+            _ => None,
+        }
+    })
 }
 
 /// Whether the far end has closed the connection, without taking anything it sent.
@@ -154,6 +165,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::process::{Child, Command, Stdio};
+
+    const AGENT: u16 = crate::network::GUEST_AGENT_PORT;
 
     fn machine(context: &Context, id: &str) -> Machine {
         let machine = Machine::new(id, id, &format!("/disks/{id}.qcow2"), "/v");
@@ -216,20 +229,36 @@ mod tests {
     }
 
     #[test]
-    fn a_port_this_process_holds_as_the_slots_qemu_is_reached() {
+    fn the_port_qemu_picked_is_read_from_its_table_of_connections() {
+        // As QEMU's monitor gives it, around libslirp's own table for three forwards from port 0.
+        let table = "Hub -1 (#net125):\n\
+            \x20 Protocol[State]    FD  Source Address  Port   Dest. Address  Port RecvQ SendQ\n\
+            \x20 TCP[HOST_FORWARD]   5       127.0.0.1 45339       10.0.2.15  8769     0     0\n\
+            \x20 TCP[HOST_FORWARD]   4       127.0.0.1 39763       10.0.2.15  8767     0     0\n\
+            \x20 TCP[HOST_FORWARD]   3       127.0.0.1 42837       10.0.2.15  8765     0     0\n\
+            \x20 TCP[ESTABLISHED]   20       10.0.2.15 49800        10.0.2.2   443     0     0\n\
+            \x20 UDP[HOST_FORWARD]   6       127.0.0.1 19065       10.0.2.15  8766     0     0\n";
+        assert_eq!(forwarded_port(table, 8765), Some(42837));
+        assert_eq!(forwarded_port(table, 8767), Some(39763));
+        assert_eq!(forwarded_port(table, 8769), Some(45339));
+        assert_eq!(forwarded_port(table, 8766), None, "a UDP forward is not one");
+        assert_eq!(forwarded_port(table, 443), None);
+    }
+    #[test]
+    fn a_port_of_the_slots_qemu_is_reached() {
         let scratch = Scratch::new();
         let mut context = scratch_context(&scratch);
         context.slot = crate::slots::number(2);
         let vm = machine(&context, "vm");
-        let _qemu = act_as_qemu(&context, &vm, None);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        let _qemu = act_as_qemu(&context, &vm, None, &[(AGENT, port)]);
         let guest = thread::spawn(move || {
             let mut line = String::new();
             listener.accept().unwrap().0.read_to_string(&mut line).unwrap();
             line
         });
-        let mut stream = GuestEnd::new(&context, &vm, None, port).connect(Duration::from_secs(1)).unwrap();
+        let mut stream = GuestEnd::agent(&context, &vm, None).connect(Duration::from_secs(1)).unwrap();
         stream.write_all(b"hello").unwrap();
         drop(stream);
         assert_eq!(guest.join().unwrap(), "hello");
@@ -243,10 +272,10 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(GuestEnd::new(&context, &vm, None, port).connect(Duration::from_secs(1)).is_err());
+        assert!(GuestEnd::agent(&context, &vm, None).connect(Duration::from_secs(1)).is_err());
         // A monitor left by a QEMU that has gone refuses too.
-        drop(act_as_qemu(&context, &vm, None));
-        assert!(GuestEnd::new(&context, &vm, None, port).connect(Duration::from_secs(1)).is_err());
+        drop(act_as_qemu(&context, &vm, None, &[(AGENT, port)]));
+        assert!(GuestEnd::agent(&context, &vm, None).connect(Duration::from_secs(1)).is_err());
         assert!(listener.accept().is_err(), "no connection was made");
     }
 
@@ -255,32 +284,31 @@ mod tests {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let (vm, other) = (machine(&context, "vm"), machine(&context, "other"));
-        let _qemu = act_as_qemu(&context, &other, None);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(GuestEnd::new(&context, &vm, None, port).connect(Duration::from_secs(1)).is_err());
+        let _qemu = act_as_qemu(&context, &other, None, &[(AGENT, port)]);
+        assert!(GuestEnd::agent(&context, &vm, None).connect(Duration::from_secs(1)).is_err());
         assert!(listener.accept().is_err(), "no connection was made");
     }
 
     #[test]
-    fn a_port_another_process_holds_gets_nothing_while_qemu_runs() {
+    fn only_a_socket_of_qemus_own_is_handed_out() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
         let vm = machine(&context, "vm");
-        let _qemu = act_as_qemu(&context, &vm, None);
         let (other, port) = other_listener();
-        let end = GuestEnd::new(&context, &vm, None, port);
+        let _qemu = act_as_qemu(&context, &vm, None, &[(AGENT, port)]);
+        let end = GuestEnd::agent(&context, &vm, None);
         assert!(end.connect(Duration::from_secs(1)).is_err());
         let said = String::from_utf8(other.wait_with_output().unwrap().stdout).unwrap();
         assert!(said.contains("heard 0\n"), "it heard something: {said}");
     }
 
-    /// The agent asked the way the app asks it, through the real connection, on `port`.
-    fn asking_on(scratch: &Scratch, port: u16) -> (Context, Machine) {
+    /// The agent asked the way the app asks it, through the real connection.
+    fn asking(scratch: &Scratch) -> (Context, Machine) {
         let mut context = scratch_context(scratch);
         context.agent = std::sync::Arc::new(crate::agent::TcpAgent);
-        context.paths.own_agent_port = Some(port);
         let vm = machine(&context, "vm");
         crate::agent::make_token(&context, &vm).unwrap();
         (context, vm)
@@ -290,11 +318,12 @@ mod tests {
     fn the_agent_is_not_asked_once_qemu_has_gone() {
         let scratch = Scratch::new();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let (context, vm) = asking_on(&scratch, listener.local_addr().unwrap().port());
+        let port = listener.local_addr().unwrap().port();
+        let (context, vm) = asking(&scratch);
         // A token change waiting to be taken, which an ask that got no answer tries next.
         let waiting = vm.token_file(&context).with_extension("token.next");
         fs::write(&waiting, format!("{}\n", "ab".repeat(16))).unwrap();
-        drop(act_as_qemu(&context, &vm, None));
+        drop(act_as_qemu(&context, &vm, None, &[(AGENT, port)]));
         let heard = thread::spawn(move || {
             listener.set_nonblocking(true).unwrap();
             let mut heard = Vec::new();
@@ -315,13 +344,40 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_port_held_by_another_process_while_qemu_runs_is_not_sent_the_token() {
+    fn the_agent_is_asked_only_through_a_socket_of_qemus_own() {
         let scratch = Scratch::new();
         let (other, port) = other_listener();
-        let (context, vm) = asking_on(&scratch, port);
-        let _qemu = act_as_qemu(&context, &vm, None);
+        let (context, vm) = asking(&scratch);
+        let _qemu = act_as_qemu(&context, &vm, None, &[(AGENT, port)]);
         assert_eq!(context.ask_guest(&vm, "Get-Date", 1, None), "");
         let said = String::from_utf8(other.wait_with_output().unwrap().stdout).unwrap();
         assert!(said.contains("heard 0\n"), "it heard something: {said}");
+    }
+
+    #[test]
+    fn a_monitor_that_takes_no_connection_is_not_waited_on_for_long() {
+        use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType, socket_with};
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let vm = machine(&context, "vm");
+        context.make_run_folder(None).unwrap();
+        let monitor = context.run_folder(None).join(MAIN_SOCKET);
+        let _listener = std::os::unix::net::UnixListener::bind(&monitor).unwrap();
+        // Its queue full of connections it never took, as a QEMU that has stopped answering leaves it.
+        let address = SocketAddrUnix::new(&monitor).unwrap();
+        let mut waiting = Vec::new();
+        loop {
+            let flags = SocketFlags::CLOEXEC | SocketFlags::NONBLOCK;
+            let fd = socket_with(AddressFamily::UNIX, SocketType::STREAM, flags, None).unwrap();
+            if rustix::net::connect(&fd, &address).is_err() {
+                break;
+            }
+            waiting.push(fd);
+        }
+        let (done, finished) = std::sync::mpsc::channel();
+        let end = GuestEnd::agent(&context, &vm, None);
+        thread::spawn(move || done.send(end.connect(Duration::from_secs(1)).is_err()));
+        assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true), "it waited on the monitor");
+        drop(waiting);
     }
 }

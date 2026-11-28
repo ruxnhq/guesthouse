@@ -264,7 +264,6 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     };
     let jail = plan.with_backing_files(jail).unwrap();
     let granted_base = jail.backing_files[0].clone();
-    // A real VM may hold the slot's own port.
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };
     let passt_age = if passt { passt_age_now().unwrap_or_default() } else { PasstAge::default() };
@@ -273,9 +272,8 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         qemu,
         qemu_files: None,
         jail: Some(jail),
-        agent_port: free_port(),
-        files_port: None,
-        app_windows_port: None,
+        files_forward: false,
+        app_windows_forward: false,
         network,
         ..plan
     };
@@ -307,7 +305,8 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .env("PROBE_HOME", env::var_os("HOME").unwrap())
         .env(
             "PROBE_AGENT_PORT",
-            if forwarded { env::var("SSH_PORT").unwrap() } else { plan.agent_port.to_string() },
+            // The agent's forward is on a port the kernel picks.
+            if forwarded { env::var("SSH_PORT").unwrap() } else { "0".to_owned() },
         )
         .env("PROBE_OTHER_PORT", free_port().to_string())
         .status()

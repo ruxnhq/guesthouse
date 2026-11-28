@@ -351,6 +351,10 @@ impl VmHost for LocalHost<'_> {
         }
         let run = kept.as_ref().filter(|_| throwaway);
         let plan = run.map_or_else(|| Ok(plan.clone()), |run| run.applied_to(plan))?;
+        // A kept run's own disks are checked too, jailed or not.
+        if run.is_some() {
+            plan.checked_backing_files()?;
+        }
         let handed = Handed { drives: &drives, throwaway: run };
         let started = if !plan.is_gpu() {
             self.start_plain(&plan, machine, &handed)

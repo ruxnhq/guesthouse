@@ -229,8 +229,11 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);
     let (own, other) = (machine(&scratch, "own"), machine(&scratch, "other"));
+    // Its folder is a link to one elsewhere, as a folder of bases on another drive can be.
+    let real_bases = scratch.path("elsewhere/bases");
+    fs::create_dir_all(&real_bases).unwrap();
+    std::os::unix::fs::symlink(&real_bases, scratch.path("bases")).unwrap();
     let base = scratch.path("bases/base.qcow2");
-    fs::create_dir_all(base.parent().unwrap()).unwrap();
     qemu_img(&["create", "-q", "-f", "qcow2", base.to_str().unwrap(), "1G"]);
     // Named as qemu-img names it from the overlay's own folder, so QEMU goes through `..` to it.
     qemu_img(&["create", "-q", "-f", "qcow2", "-b", "../../bases/base.qcow2", "-F", "qcow2", &own.disk]);
@@ -269,7 +272,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         backing_files: Vec::new(),
     };
     let jail = plan.with_backing_files(jail).unwrap();
-    assert_eq!(jail.backing_files, [base.canonicalize().unwrap()]);
+    assert_eq!(jail.backing_files, std::slice::from_ref(&as_the_header_names_it));
     // A real VM may hold the slot's own port.
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };

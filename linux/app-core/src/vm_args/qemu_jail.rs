@@ -230,7 +230,11 @@ impl VmPlan {
     /// does, and a backing file in the shared folder, where QEMU may write anything.
     pub fn with_backing_files(&self, jail: QemuJail) -> Result<QemuJail> {
         let backing_files = self.checked_backing_files()?;
-        let shared = |file: &&PathBuf| self.shared_folder().is_some_and(|folder| file.starts_with(folder));
+        // As the file system finds each, so neither a `..` nor a link in a name hides where it is.
+        let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let shared = |file: &&PathBuf| {
+            self.shared_folder().is_some_and(|folder| real(file).starts_with(real(Path::new(folder))))
+        };
         if let Some(file) = backing_files.iter().find(shared) {
             return Err(Failure(format!(
                 "The VM did not start, as its disk is built on {}, which is in the shared folder. \

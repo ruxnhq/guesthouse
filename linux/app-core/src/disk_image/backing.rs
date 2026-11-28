@@ -155,9 +155,11 @@ pub fn chain_to_record(disk: &Path, files: &[PathBuf]) -> Result<Vec<BackingFile
     found.into_iter().map(real).collect()
 }
 
-/// The files the machine's disk is built on, nearest first, as `expected` (its settings) names
-/// them. Refuses a disk whose header names any other file, or the same files in other formats, so
-/// QEMU is never started on a file only the header names.
+/// The files the machine's disk is built on, nearest first. Refuses a disk whose header names any
+/// other file than `expected` (its settings) does, or the same files in other formats, so QEMU is
+/// never started on a file only the header names. Each is given as the header spells it, which is
+/// the name QEMU opens it by: in namespaces only that name is there, and a folder on the way may be
+/// a link.
 pub fn checked_chain(disk: &Path, expected: &[BackingFile]) -> Result<Vec<PathBuf>> {
     if expected.is_empty() {
         // Read from the header itself, so a disk that names a file is refused even where qemu-img
@@ -186,7 +188,7 @@ pub fn checked_chain(disk: &Path, expected: &[BackingFile]) -> Result<Vec<PathBu
             chain_text(expected)
         )));
     }
-    Ok(expected.iter().map(|file| PathBuf::from(&file.path)).collect())
+    Ok(found.into_iter().map(|file| PathBuf::from(file.path)).collect())
 }
 
 #[cfg(test)]
@@ -315,8 +317,10 @@ mod tests {
         let scratch = Scratch::new();
         let base = overlay(&scratch, "bases/base.qcow2", None);
         let disk = overlay(&scratch, "machine/disk.qcow2", Some(("../bases/base.qcow2", "qcow2")));
-        // The settings may name it by another path to the same file.
-        assert_eq!(checked_chain(&disk, &[named(&base, "qcow2")]).unwrap(), [base]);
+        // The settings may name it by another path to the same file, and QEMU is given the header's.
+        let given = checked_chain(&disk, &[named(&base, "qcow2")]).unwrap();
+        assert_eq!(given, [scratch.path("machine/../bases/base.qcow2")]);
+        assert_eq!(given[0].canonicalize().unwrap(), base.canonicalize().unwrap());
         let alone = overlay(&scratch, "alone.qcow2", None);
         assert_eq!(checked_chain(&alone, &[]).unwrap(), Vec::<PathBuf>::new());
     }

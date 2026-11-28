@@ -114,11 +114,11 @@ impl GuestVolume {
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(root)?;
         let root_handle = OwnedHandle::from(file);
-        let basic = basic(&root_handle)?;
-        if basic.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let seen = look(&root_handle)?;
+        if seen.link {
             return Err(link_refused(&root.display().to_string()));
         }
-        if basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        if seen.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::NotADirectory,
                 format!("{} is not a folder", root.display()),
@@ -174,10 +174,10 @@ impl GuestVolume {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(self.context(relative, error)),
         };
-        let basic = basic(&handle)?;
-        if basic.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        if look(&handle)?.link {
             return Ok(Some(Entry::Link));
         }
+        let basic = basic(&handle)?;
         if basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
             return Ok(Some(Entry::Folder));
         }
@@ -208,7 +208,7 @@ impl GuestVolume {
             FILE_NON_DIRECTORY_FILE,
         )
         .map_err(|error| self.context(relative, error))?;
-        if basic(&handle)?.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        if look(&handle)?.link {
             return Err(link_refused(&self.shown(relative)));
         }
         let mut bytes = Vec::new();
@@ -281,8 +281,9 @@ impl GuestVolume {
             Err(error) => Err(error),
         }
         .map_err(|error| self.context(relative, error))?;
-        let attributes = basic(&handle)?.FileAttributes;
-        if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let seen = look(&handle)?;
+        let attributes = seen.attributes;
+        if seen.link {
             remove_handle(&handle)?;
             drop(handle);
             handle = create().map_err(|error| self.context(relative, error))?;
@@ -315,7 +316,7 @@ impl GuestVolume {
                 FILE_DIRECTORY_FILE,
             )
             .map_err(|error| with_path(&shown.display().to_string(), error))?;
-            if basic(&handle)?.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            if look(&handle)?.link {
                 return Err(link_refused(&shown.display().to_string()));
             }
             at = At::Opened(handle);
@@ -335,8 +336,9 @@ impl GuestVolume {
         let at = self.walk(&folder, true)?;
         match open_at(at.raw(), name, FILE_READ_ATTRIBUTES, FILE_OPEN, 0) {
             Ok(there) => {
-                let attributes = basic(&there)?.FileAttributes;
-                if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                let seen = look(&there)?;
+                let attributes = seen.attributes;
+                if seen.link {
                     return Err(link_refused(&self.shown(relative)));
                 }
                 if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
@@ -351,7 +353,7 @@ impl GuestVolume {
                     let there =
                         open_at(at.raw(), name, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, FILE_OPEN, 0)
                             .map_err(|error| self.context(relative, error))?;
-                    if basic(&there)?.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                    if look(&there)?.link {
                         return Err(link_refused(&self.shown(relative)));
                     }
                     let cleared = (attributes & !FILE_ATTRIBUTE_READONLY).max(FILE_ATTRIBUTE_NORMAL);
@@ -427,8 +429,9 @@ fn inherit_below(folder: HANDLE, inherited: &Inherited, depth: usize) -> io::Res
             }
             Err(error) => return Err(with_name(&name, error)),
         };
-        let attributes = basic(&handle)?.FileAttributes;
-        if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let seen = look(&handle)?;
+        let attributes = seen.attributes;
+        if seen.link {
             drop(handle);
             remove_at(folder, &name, depth + 1)?;
         } else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
@@ -446,17 +449,20 @@ fn inherit_below(folder: HANDLE, inherited: &Inherited, depth: usize) -> io::Res
 
 /// Removes `name` in the folder `folder`: a file or a link as it is, a folder with what is in it.
 fn remove_at(folder: HANDLE, name: &OsStr, depth: usize) -> io::Result<()> {
-    let access = DELETE | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES;
-    let handle = open_at(folder, name, access, FILE_OPEN, 0).map_err(|error| with_name(name, error))?;
-    let attributes = basic(&handle)?.FileAttributes;
-    let is_folder =
-        attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0;
-    if is_folder {
+    // Only what the folder it is in lets do: a file whose own permissions let nobody in still goes.
+    check_name(name)?;
+    let handle = open_relative(folder, name, DELETE | FILE_READ_ATTRIBUTES, FILE_OPEN, 0, false)
+        .map_err(|error| with_name(name, error))?;
+    let seen = look(&handle)?;
+    if seen.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && !seen.link {
         if depth >= MOST_DEPTH {
             return Err(io::Error::other("its folders go deeper than the host goes"));
         }
-        for (child, _) in listing(handle.as_raw_handle())? {
-            remove_at(handle.as_raw_handle(), &child, depth + 1).map_err(|error| with_name(name, error))?;
+        // The same folder again, through its handle, to list it.
+        let listed =
+            reopen(&handle, FILE_LIST_DIRECTORY | FILE_TRAVERSE).map_err(|error| with_name(name, error))?;
+        for (child, _) in listing(listed.as_raw_handle())? {
+            remove_at(listed.as_raw_handle(), &child, depth + 1).map_err(|error| with_name(name, error))?;
         }
     }
     remove_handle(&handle).map_err(|error| with_name(name, error))
@@ -469,7 +475,11 @@ fn remove_handle(handle: &impl AsRawHandle) -> io::Result<()> {
     let attributes = basic_raw(raw)?.FileAttributes;
     if attributes & FILE_ATTRIBUTE_READONLY != 0 {
         let cleared = (attributes & !FILE_ATTRIBUTE_READONLY).max(FILE_ATTRIBUTE_NORMAL);
-        set_basic_raw(raw, FILE_BASIC_INFORMATION { FileAttributes: cleared, ..zeroed_basic() })?;
+        let writable = reopen_raw(raw, FILE_WRITE_ATTRIBUTES)?;
+        set_basic_raw(
+            writable.as_raw_handle(),
+            FILE_BASIC_INFORMATION { FileAttributes: cleared, ..zeroed_basic() },
+        )?;
     }
     dispose(raw)
 }
@@ -541,6 +551,34 @@ fn open_at(
     options: u32,
 ) -> io::Result<OwnedHandle> {
     check_name(name)?;
+    open_relative(folder, name, access, disposition, options, true)
+}
+
+/// Opens what `handle` has open again, with `access`, through the handle itself.
+fn reopen(handle: &OwnedHandle, access: u32) -> io::Result<OwnedHandle> {
+    reopen_raw(handle.as_raw_handle(), access)
+}
+
+fn reopen_raw(handle: HANDLE, access: u32) -> io::Result<OwnedHandle> {
+    open_relative(handle, OsStr::new(""), access, FILE_OPEN, 0, true)
+}
+
+/// `NtCreateFile` relative to `folder`, never following a link. An empty name is `folder` itself.
+/// A handle that isn't `synchronous` is only for asking and setting what a file is, which needs no
+/// SYNCHRONIZE right: the folder's permissions alone let what is in it be looked at and removed.
+fn open_relative(
+    folder: HANDLE,
+    name: &OsStr,
+    access: u32,
+    disposition: u32,
+    options: u32,
+    synchronous: bool,
+) -> io::Result<OwnedHandle> {
+    let (access, options) = if synchronous {
+        (access | SYNCHRONIZE, options | FILE_SYNCHRONOUS_IO_NONALERT)
+    } else {
+        (access, options)
+    };
     let units: Vec<u16> = name.encode_wide().collect();
     let length = u16::try_from(units.len() * 2)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidFilename, "the name is too long"))?;
@@ -560,14 +598,14 @@ fn open_at(
     nt(unsafe {
         NtCreateFile(
             &mut handle,
-            access | SYNCHRONIZE,
+            access,
             &attributes,
             &mut status,
             null(),
             FILE_ATTRIBUTE_NORMAL,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             disposition,
-            options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            options | FILE_OPEN_REPARSE_POINT,
             null(),
             0,
         )
@@ -657,7 +695,10 @@ fn listing(folder: HANDLE) -> io::Result<Vec<(OsString, Entry)>> {
                 .collect();
             let name = OsString::from_wide(&name);
             if name != "." && name != ".." {
-                let entry = if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                // With the reparse attribute, EaSize holds the reparse tag.
+                let entry = if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                    && redirects_name(info.EaSize)
+                {
                     Entry::Link
                 } else if info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
                     Entry::Folder
@@ -672,6 +713,37 @@ fn listing(folder: HANDLE) -> io::Result<Vec<(OsString, Entry)>> {
             offset += info.NextEntryOffset as usize;
         }
     }
+}
+
+/// A handle's attributes, and whether it is a link: a reparse point whose tag redirects its name,
+/// as a symbolic link, a junction or a mount point does. Other reparse points, such as a compressed
+/// or deduplicated file's, are files and folders like any other.
+struct Look {
+    attributes: u32,
+    link: bool,
+}
+
+/// `FILE_ATTRIBUTE_TAG_INFORMATION`.
+#[repr(C)]
+#[derive(Default)]
+struct AttributeTag {
+    attributes: u32,
+    tag: u32,
+}
+
+/// `FileAttributeTagInformation`.
+const ATTRIBUTE_TAG_INFORMATION: i32 = 35;
+/// The bit of a reparse tag that says it redirects a name: `IsReparseTagNameSurrogate`.
+const NAME_SURROGATE: u32 = 0x2000_0000;
+
+fn redirects_name(tag: u32) -> bool {
+    tag & NAME_SURROGATE != 0
+}
+
+fn look(handle: &impl AsRawHandle) -> io::Result<Look> {
+    let info: AttributeTag = query_raw(handle.as_raw_handle(), ATTRIBUTE_TAG_INFORMATION)?;
+    let link = info.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 && redirects_name(info.tag);
+    Ok(Look { attributes: info.attributes, link })
 }
 
 fn basic(handle: &impl AsRawHandle) -> io::Result<FILE_BASIC_INFORMATION> {

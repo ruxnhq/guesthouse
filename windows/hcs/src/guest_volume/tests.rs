@@ -268,3 +268,83 @@ fn a_folder_given_only_some_lets_only_them_in_and_holds_no_links() {
     assert_eq!(fs::read_to_string(scratch.host.join("kept.txt")).unwrap(), "kept");
     assert!(!dacl_of(&scratch.host).starts_with("D:P"), "what the link named was left as it was");
 }
+
+#[test]
+fn a_compressed_file_is_a_file_and_a_junction_is_still_refused() {
+    let scratch = Scratch::new("compressed");
+    let file = scratch.volume.join("big.dll");
+    fs::write(&file, vec![b'a'; 200_000]).unwrap();
+    let compacted = Command::new("compact").arg("/c").arg("/exe:xpress4k").arg(&file).output().unwrap();
+    assert!(compacted.status.success(), "{}", String::from_utf8_lossy(&compacted.stdout));
+    junction(&scratch.volume.join("linked"), &scratch.host);
+    let volume = scratch.open();
+    assert!(matches!(volume.entry("big.dll").unwrap(), Some(Entry::File { len: 200_000, .. })));
+    assert_eq!(volume.read("big.dll", 300_000).unwrap(), vec![b'a'; 200_000]);
+    volume.write("big.dll", "replaced").unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), "replaced");
+    assert_eq!(volume.entry("linked").unwrap(), Some(Entry::Link));
+    assert!(volume.write(r"linked\x", "x").is_err());
+    assert_eq!(fs::read_dir(&scratch.host).unwrap().count(), 0);
+}
+
+/// Sets a reparse point of a tag no filter handles and that redirects no name on `path`, as a
+/// file system filter's own might be. `None` when this account may not set one.
+fn set_plain_reparse_point(path: &Path) -> Option<()> {
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;
+    // Not Microsoft's, and not a name surrogate.
+    const TAG: u32 = 0x0000_1234;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    // REPARSE_GUID_DATA_BUFFER: tag, data length, reserved, GUID, then 4 bytes of data.
+    let mut buffer = Vec::new();
+    buffer.extend(TAG.to_le_bytes());
+    buffer.extend(4u16.to_le_bytes());
+    buffer.extend(0u16.to_le_bytes());
+    buffer.extend([0x47u8; 16]);
+    buffer.extend([1u8, 2, 3, 4]);
+    let mut returned = 0u32;
+    // SAFETY: the buffer is as long as the length given.
+    let set = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            buffer.len() as u32,
+            null_mut(),
+            0,
+            &mut returned,
+            null_mut(),
+        )
+    };
+    (set != 0).then_some(())
+}
+
+#[test]
+fn a_reparse_point_that_redirects_no_name_is_a_plain_file_or_folder() {
+    let scratch = Scratch::new("plain-reparse");
+    let folder = scratch.volume.join("placeholder");
+    fs::create_dir_all(&folder).unwrap();
+    let file = scratch.volume.join("tagged.bin");
+    fs::write(&file, "data").unwrap();
+    if set_plain_reparse_point(&folder).is_none() || set_plain_reparse_point(&file).is_none() {
+        panic!("this account can't set a reparse point: {}", io::Error::last_os_error());
+    }
+    let volume = scratch.open();
+    assert_eq!(volume.entry("placeholder").unwrap(), Some(Entry::Folder));
+    assert!(matches!(volume.entry("tagged.bin").unwrap(), Some(Entry::File { len: 4, .. })));
+    assert_eq!(volume.read("tagged.bin", 100).unwrap(), b"data");
+    let listed = volume.read_dir("").unwrap();
+    assert!(
+        listed.iter().any(|(name, entry)| name == "placeholder" && *entry == Entry::Folder),
+        "{listed:?}"
+    );
+    assert!(listed.iter().any(|(name, entry)| name == "tagged.bin" && matches!(entry, Entry::File { .. })));
+    volume.write("tagged.bin", "replaced").unwrap();
+    assert_eq!(volume.read("tagged.bin", 100).unwrap(), b"replaced");
+    volume.remove_tree("placeholder").unwrap();
+    assert_eq!(volume.entry("placeholder").unwrap(), None);
+}

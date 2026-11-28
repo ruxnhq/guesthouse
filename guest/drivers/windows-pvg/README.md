@@ -46,7 +46,7 @@ See [BUILDING.md](BUILDING.md). In short: it builds on a Mac, with llvm-mingw fo
 
 ## How it's installed
 
-The Mac app does it. At the end of a Windows install it puts the driver package on a small disk for the guest and runs `install.ps1` there, which trusts the package's test certificate, turns test signing on, installs the driver with `pnputil` and restarts. The package is what `release/package.sh` lays out: the signed driver files, the public certificate, `install.ps1` and a manifest with each file's SHA-256. It never carries a private key.
+The Mac app does it. At the end of a Windows install it puts the driver package on a small disk for the guest and runs `install.ps1` there, which trusts the package's test certificate, turns test signing on, installs the driver with `pnputil` and restarts. The package is what `release/package.sh` lays out: the signed driver files, the public certificate, `install.ps1` and a manifest with each file's SHA-256, which `windows-pvg.yml` signs with the release key as it publishes it; the app takes a package only with that signature (RELEASING.md, "The release key"). It never carries a private key.
 
 ## Licence
 

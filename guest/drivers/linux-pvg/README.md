@@ -48,7 +48,9 @@ The app fetches the package by its manifest from `files.ruxn.com/p/guesthouse-li
 | `pvg-mesa_V_arm64.deb` | Our Mesa in `/opt/pvg-mesa`, used on the pvg device only. Ubuntu's Mesa stays and serves everything else |
 | `guesthouse-desktop_V_all.deb` | weston on the pvg device at boot, at the scale and with the keyboard layout the app gives |
 | `guesthouse-gnome_V_all.deb`, `guesthouse-plasma_V_all.deb` | Ubuntu's GNOME or KDE Plasma in weston's place, when the install asked for one |
-| `guesthouse-linux-driver-latest.json` | `{"version": V, "files": [{"name": "guesthouse-linux-driver-V-FILE", "as": FILE, "sha256": HEX}]}` |
+| `guesthouse-linux-driver-latest.json` | `{"version": V, "files": [{"name": "guesthouse-linux-driver-V-FILE", "as": FILE, "sha256": HEX}], "signature": HEX}` |
+
+The app takes the package only when the manifest carries the release key's signature of its fields (RELEASING.md, "The release key"), which `linux-package.yml` adds as it publishes it, and checks every file against that SHA-256 before it puts it on the disk. `install.sh` comes on the same disk, so its own check against the manifest is of the disk, not of where the package came from.
 
 `install.sh` runs as root, with the network. On the serial port it says exactly `guesthouse: driver installed`, or `guesthouse: driver failed CODE`, where CODE is `root`, `system`, `files`, `network`, `headers`, `packages`, `module` or `account` (its header says what each means). Its log is `/var/log/guesthouse/driver-install.log`.
 

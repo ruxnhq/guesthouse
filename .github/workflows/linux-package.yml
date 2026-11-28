@@ -5,7 +5,9 @@
 #
 # On a push to main, or by hand, it also publishes it on files.ruxn.com/p/guesthouse-linux-driver/,
 # a project of its own on the file site, where the Mac app fetches guesthouse-linux-driver-latest.json
-# and the files it names. It has no secret: the Worker takes the job's OIDC token
+# and the files it names. The manifest is signed with the release key (the GUESTHOUSE_RELEASE_KEY
+# secret, given to that one step; RELEASING.md, "The release key"), without which the Mac app takes no
+# package. The file site needs no secret: the Worker takes the job's OIDC token
 # (scripts/files-publish.sh). A version is published once. When the manifest that's up already names
 # this version, nothing is sent, so a change that should reach the guests also raises
 # guest/drivers/linux-pvg/package/version.txt.
@@ -83,15 +85,16 @@ jobs:
             [ "$want" = "$(pvg_sha256 "package/$f")" ]
           done
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Publish the files, then the manifest
+      - name: Make the manifest from what's up
+        id: manifest
         run: |
           set -eu
           . guest/drivers/linux-pvg/package/lib.sh
-          project=guesthouse-linux-driver
-          site=https://files.ruxn.com/p/$project
+          site=https://files.ruxn.com/p/guesthouse-linux-driver
           up=$(curl -fsSL "$site/$pvg_manifest_name" 2>/dev/null | jq -r .version 2>/dev/null || true)
           if [ "$up" = "$VERSION" ]; then
             echo "Version $VERSION is published already. Raise version.txt to publish a new one."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # A file of this version that's up already (from a run that stopped before the manifest)
@@ -103,6 +106,27 @@ jobs:
             fi
           done
           pvg_write_manifest package "$VERSION"
+      - name: Build the manifest signer
+        if: steps.manifest.outputs.skip != 'true'
+        run: cargo build --locked --release -p guesthouse-update-check --example release_key
+      - name: Sign the manifest with the release key
+        if: steps.manifest.outputs.skip != 'true'
+        env:
+          GUESTHOUSE_RELEASE_KEY: ${{ secrets.GUESTHOUSE_RELEASE_KEY }}
+        run: |
+          set -eu
+          . guest/drivers/linux-pvg/package/lib.sh
+          if [ -z "$GUESTHOUSE_RELEASE_KEY" ]; then
+            echo "::error::GUESTHOUSE_RELEASE_KEY holds no key, and the Mac app takes no manifest without the release key's signature."
+            exit 1
+          fi
+          target/release/examples/release_key sign-driver "package/$pvg_manifest_name"
+      - name: Publish the files, then the manifest
+        if: steps.manifest.outputs.skip != 'true'
+        run: |
+          set -eu
+          . guest/drivers/linux-pvg/package/lib.sh
+          project=guesthouse-linux-driver
           pvg_publish_folder package "$VERSION" publish
           files=
           for f in $(pvg_package_files "$VERSION"); do

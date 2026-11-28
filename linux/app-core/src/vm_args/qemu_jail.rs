@@ -36,6 +36,22 @@ const PASST: &str = "passt";
 const DNS_PORT: u16 = 53;
 /// Any free port, which sending a datagram binds first.
 const EPHEMERAL_PORT: u16 = 0;
+/// Where the kernel picks the port of a socket bound to none: the user network's loopback pair for the
+/// shared folder's program lands there.
+const LOCAL_PORTS_FILE: &str = "/proc/sys/net/ipv4/ip_local_port_range";
+/// The kernel's own range, for a PC that doesn't say.
+const KERNEL_LOCAL_PORTS: (u16, u16) = (32768, 60999);
+
+/// The ports of a `ip_local_port_range` file's text.
+fn local_ports(text: Option<&str>) -> Vec<u16> {
+    let read = text.and_then(|text| {
+        let mut numbers = text.split_whitespace().map(|word| word.parse::<u16>().ok());
+        let (first, last) = (numbers.next()??, numbers.next()??);
+        (first <= last).then_some((first, last))
+    });
+    let (first, last) = read.unwrap_or(KERNEL_LOCAL_PORTS);
+    (first..=last).collect()
+}
 /// QEMU's own filter, on top. Starting programs stays allowed, for the shared folder's.
 /// Its privileges group stays out: it ends QEMU's user network's child at `setsid`, before the
 /// shared folder's program runs, and no new privileges, which the launcher sets, already covers it.
@@ -131,7 +147,11 @@ impl VmPlan {
         let udp_send = if udp_forwards.is_empty() { Ports::Only(vec![DNS_PORT]) } else { Ports::Any };
         let mut udp_bind = vec![EPHEMERAL_PORT];
         udp_bind.extend(udp_forwards);
-        let tcp_connect = if self.shared_folder().is_some() { Ports::Any } else { Ports::none() };
+        let tcp_connect = if self.shared_folder().is_some() {
+            Ports::Only(local_ports(std::fs::read_to_string(LOCAL_PORTS_FILE).ok().as_deref()))
+        } else {
+            Ports::none()
+        };
         Network { tcp_bind, tcp_connect, udp_bind: Ports::Only(udp_bind), udp_send }
     }
 

@@ -66,7 +66,7 @@ impl Ports {
         match self {
             Self::Any => ANY_PORT.to_owned(),
             Self::Only(ports) if ports.is_empty() => NO_PORT.to_owned(),
-            Self::Only(ports) => ports.iter().map(u16::to_string).collect::<Vec<_>>().join(","),
+            Self::Only(ports) => runs(ports).join(","),
         }
     }
 
@@ -74,9 +74,40 @@ impl Ports {
         match word {
             ANY_PORT => Some(Self::Any),
             NO_PORT => Some(Self::none()),
-            list => list.split(',').map(|port| port.parse().ok()).collect::<Option<_>>().map(Self::Only),
+            list => {
+                let mut ports = Vec::new();
+                for item in list.split(',') {
+                    match item.split_once('-') {
+                        Some((first, last)) => {
+                            let (first, last): (u16, u16) = (first.parse().ok()?, last.parse().ok()?);
+                            if first >= last {
+                                return None;
+                            }
+                            ports.extend(first..=last);
+                        }
+                        None => ports.push(item.parse().ok()?),
+                    }
+                }
+                Some(Self::Only(ports))
+            }
         }
     }
+}
+
+/// Ports in their order, with each run of ones that follow each other as `FIRST-LAST`, so a range of
+/// thousands stays a short word.
+fn runs(ports: &[u16]) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut at = 0;
+    while at < ports.len() {
+        let mut end = at;
+        while end + 1 < ports.len() && ports[end].checked_add(1) == Some(ports[end + 1]) {
+            end += 1;
+        }
+        words.push(if end > at { format!("{}-{}", ports[at], ports[end]) } else { ports[at].to_string() });
+        at = end + 1;
+    }
+    words
 }
 
 const ANY_PORT: &str = "any";
@@ -176,6 +207,24 @@ mod tests {
             assert!(read.take(&pair[0], &pair[1]).unwrap(), "{pair:?}");
         }
         assert_eq!(read, plan);
+    }
+
+    #[test]
+    fn a_range_of_ports_is_one_short_word_and_comes_back_whole() {
+        let mut plan = Plan::default();
+        let mut ports = vec![18767, 0, 1];
+        ports.extend(32768..=60999);
+        ports.push(80);
+        plan.network.tcp_connect = Ports::Only(ports);
+        let words = plan.words();
+        let at = words.iter().position(|word| word == "--tcp-connect").unwrap();
+        assert_eq!(words[at + 1], "18767,0-1,32768-60999,80");
+        let mut read = Plan::default();
+        for pair in words.chunks(2) {
+            read.take(&pair[0], &pair[1]).unwrap();
+        }
+        assert_eq!(read, plan);
+        assert!(read.take("--tcp-connect", "9-3").is_err());
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub trait MachineControl {
     fn start(&mut self, id: &str) -> Result<(), String>;
     /// Where the machine stands (`running`, `stopped`, `failed`, ...) and why, if it failed.
     fn machine_state(&mut self, id: &str) -> (String, Option<String>);
-    /// Everything the guest has said on its serial port so far.
+    /// What the guest has said on its serial port: all of it, or at least the last few MiB.
     fn serial(&mut self, id: &str) -> String;
     /// Presses the key `qcode` names (`spc`) in the guest, as a person at its keyboard would.
     fn press_key(&mut self, id: &str, qcode: &str) -> Result<(), String>;

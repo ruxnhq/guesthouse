@@ -27,10 +27,7 @@ updates:
       actions-minor-patch:
         update-types: [minor, patch]
   - package-ecosystem: docker
-    directories:
-      - /packaging
-      - /packaging/images
-      - /guest/android
+    directory: /packaging
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
@@ -39,9 +36,16 @@ updates:
     ignore:
       # Packaging stays on the oldest Ubuntu a release runs on (GLIBC_CEILING in packaging/build-in-images.sh).
       - dependency-name: ubuntu
-        directories:
-          - /packaging
         update-types: [version-update:semver-major]
+  - package-ecosystem: docker
+    directories:
+      - /packaging/images
+      - /guest/android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
   - package-ecosystem: npm
     directory: /site
     schedule:

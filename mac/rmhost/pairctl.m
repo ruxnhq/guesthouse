@@ -13,7 +13,8 @@
  * Lines printed, in this fixed form, for whoever runs rmhost to read:
  *   rmhost: pairing open until UNIX_SECONDS     (0 for -p, which has no time limit)
  *   rmhost: pairing pending JSON                (a device waits; JSON is the core's own)
- *   rmhost: paired FINGERPRINT NAME             (NAME is the rest of the line)
+ *   rmhost: paired FINGERPRINT NAME             (NAME is the rest of the line, with control
+ *                                               characters shown as '?')
  *   rmhost: another device is waiting now       (pair accept or decline named another one)
  *   rmhost: pairing closed: paired|declined|timeout|asked|other
  *
@@ -160,6 +161,20 @@ static void say(NSString *line)
     fflush(stdout);
 }
 
+/* A name as it can go in one printed line: every control character, line ends included, is '?'. */
+static NSString *printable(NSString *name)
+{
+    NSMutableString *line = [NSMutableString stringWithCapacity:name.length];
+    NSCharacterSet *controls = NSCharacterSet.controlCharacterSet;
+    NSCharacterSet *ends = NSCharacterSet.newlineCharacterSet;
+    for (NSUInteger at = 0; at < name.length; at++) {
+        unichar c = [name characterAtIndex:at];
+        bool plain = ![controls characterIsMember:c] && ![ends characterIsMember:c];
+        [line appendString:plain ? [NSString stringWithCharacters:&c length:1] : @"?"];
+    }
+    return line;
+}
+
 static void begin(time_t deadline)
 {
     if (!ctl.open) {
@@ -184,8 +199,8 @@ static void finish(const char *why)
     bool paired = false;
     for (NSDictionary *device in new_devices()) {
         devicectl_new_device(device[@"fingerprint"]);
-        say([NSString stringWithFormat:@"rmhost: paired %@ %@", device[@"fingerprint"],
-                                       device[@"name"] ?: @""]);
+        say([NSString stringWithFormat:@"rmhost: paired %@ %@", printable(device[@"fingerprint"] ?: @""),
+                                       printable(device[@"name"] ?: @"")]);
         paired = true;
     }
     /* Closing pairing declines a device that is still waiting. */

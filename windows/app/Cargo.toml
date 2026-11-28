@@ -43,12 +43,14 @@ guesthouse-relay.workspace = true
 # waits on the pipe, and the console, which is Windows' Remote Desktop control in a window of our
 # own (OLE and variants for the control, the library loader for RdpBase and ATL, the pipe's wait,
 # and the window), the registry, where Windows keeps what opens when the person signs in, a job
-# that ends an update's download with the app, and the restart that finishes turning on Hyper-V.
+# that ends an update's download with the app, the restart that finishes turning on Hyper-V, and the
+# app's own account, for the elevated helper that makes a machine that needs an owner the user's.
 # The same crate and version as `hcs`.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_DataExchange",

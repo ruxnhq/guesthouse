@@ -5,6 +5,7 @@ use guesthouse_control::{Machine, State};
 use windows_reactor::*;
 
 use super::app_settings::gear;
+use super::machine::NEEDS_AN_OWNER;
 use super::parts::*;
 use crate::app::{Main, Message};
 
@@ -98,6 +99,11 @@ pub fn page(main: &Main, context: &ViewContext<Main>) -> View {
         .into()
 }
 
+/// Where a machine stands, as its card says: its state, or that it needs an owner.
+fn standing(machine: &Machine) -> &'static str {
+    if machine.needs_owner { NEEDS_AN_OWNER } else { machine.state.name() }
+}
+
 /// A machine's card: a picture where its screen would be, and its name beside where it stands. The
 /// whole card is the button that goes into its page, named as the list was: its name, system and
 /// state.
@@ -153,14 +159,14 @@ fn machine_card(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> 
                     .text_wrapping(TextWrapping::NoWrap)
                     .text_trimming(TextTrimming::CharacterEllipsis),
             )),
-            caption(state.name()).grid_column(2).vertical_alignment(VerticalAlignment::Center),
+            caption(standing(machine)).grid_column(2).vertical_alignment(VerticalAlignment::Center),
         ));
     let mut button = Button::new()
         .content(StackPanel::new().spacing(12.0).children((picture, foot)))
         .style(ButtonStyle::Subtle)
         .horizontal_alignment(HorizontalAlignment::Stretch)
         .horizontal_content_alignment(HorizontalAlignment::Stretch)
-        .automation_name(format!("{}, {}, {}", machine.name, system_words(machine.system), state.name()))
+        .automation_name(format!("{}, {}, {}", machine.name, system_words(machine.system), standing(machine)))
         .on_click(context.message(Message::Open(machine.name.clone())));
     // Back from a machine's page lands on its card.
     if main.selected.as_deref() == Some(machine.name.as_str())

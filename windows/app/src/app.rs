@@ -604,6 +604,11 @@ pub struct Main {
     pub hyper_v_ask: bool,
     /// Whether the app's request to turn it on is going on now.
     pub hyper_v_asking: bool,
+    /// The machine the helper that makes it the user's was started for, until it ends.
+    pub assigning: Option<String>,
+    /// Whether the selected machine's log waits for it to have an owner, as one that needs one
+    /// has none to show.
+    watch_waits_for_owner: bool,
     /// Whether the person is being asked to confirm restarting Windows, to finish it.
     pub restart_ask: bool,
     /// Whether Home's line about the restart has been closed, until the app next opens.
@@ -811,6 +816,11 @@ pub enum Message {
     HyperVNote,
     /// How turning it on ended: `None` when it worked.
     HyperVDone(Option<String>),
+    /// Make the shown machine, which needs an owner, the user's, which Windows asks an
+    /// administrator to allow.
+    MakeMine,
+    /// How that ended, for the machine named.
+    MadeMine(String, Result<(), String>),
     /// Restart Windows, which asks first.
     RestartWindows,
     /// The answer to the question about restarting.
@@ -911,6 +921,36 @@ impl Main {
         }
         self.hyper_v_asking = true;
         bridge::enable_hyper_v(self.window.clone());
+    }
+
+    /// Starts the helper that makes the shown machine, which needs an owner, the user's, on a
+    /// thread of its own, as it waits for Windows' prompt. A preview never does.
+    fn make_mine(&mut self) {
+        let Some(name) =
+            self.machine().filter(|machine| machine.needs_owner).map(|machine| machine.name.clone())
+        else {
+            return;
+        };
+        if self.assigning.is_some() {
+            return;
+        }
+        if !self.live {
+            self.tell("A preview doesn't give machines an owner.", false);
+            return;
+        }
+        self.assigning = Some(name.clone());
+        let window = self.window.clone();
+        let spawned = std::thread::Builder::new().name("assign".into()).spawn(move || {
+            let ended = match crate::assign::own_account() {
+                Some(owner) => crate::assign::ask_elevated(&name, &owner),
+                None => Err("The app couldn't read which account it runs as.".to_owned()),
+            };
+            window.tell(Message::MadeMine(name, ended));
+        });
+        if let Err(error) = spawned {
+            self.assigning = None;
+            self.tell(format!("The app couldn't start the helper: {error}"), true);
+        }
     }
 
     /// Restarts Windows, once the person has said yes twice. A preview never does.
@@ -1223,7 +1263,9 @@ impl Main {
     fn follow_remote_view(&mut self) {
         let wanted = self
             .machine()
-            .filter(|machine| self.page == Page::Machine && machine.system == System::Windows)
+            .filter(|machine| {
+                self.page == Page::Machine && machine.system == System::Windows && !machine.needs_owner
+            })
             .map(|machine| machine.name.clone());
         if self.viewing.as_ref().map(|viewing| &viewing.machine) != wanted.as_ref() {
             self.viewing = wanted.as_deref().map(Viewing::new);
@@ -1343,7 +1385,9 @@ impl Main {
         self.follow_draft();
         self.snapshot_label.clear();
         self.snapshot_ask = None;
-        if let Some(name) = self.selected.clone().filter(|_| self.live) {
+        // One that needs an owner has no log to show until it has one.
+        self.watch_waits_for_owner = self.machine().is_some_and(|machine| machine.needs_owner);
+        if let Some(name) = self.selected.clone().filter(|_| self.live && !self.watch_waits_for_owner) {
             self.watch_id += 1;
             self.watch = Some(bridge::watch(self.watch_id, name, self.window.clone()));
         }
@@ -1376,6 +1420,9 @@ impl Main {
                 }
             }
             Some(_) if self.rewatch && was_away => self.select(self.selected.clone()),
+            Some(_) if self.watch_waits_for_owner && self.machine().is_some_and(|m| !m.needs_owner) => {
+                self.select(self.selected.clone())
+            }
             Some(_) | None => {}
         }
         self.follow_draft();
@@ -1854,6 +1901,8 @@ impl Component for Main {
             bridge_ask: false,
             hyper_v_ask: false,
             hyper_v_asking: false,
+            assigning: None,
+            watch_waits_for_owner: false,
             restart_ask: false,
             restart_line_closed: false,
             palette: None,
@@ -2272,6 +2321,14 @@ impl Component for Main {
                 self.hyper_v_asking = false;
                 let (words, bad) = crate::hyper_v::ended_words(reason.as_deref());
                 self.tell(words, bad);
+            }
+            Message::MakeMine => self.make_mine(),
+            Message::MadeMine(name, ended) => {
+                self.assigning = None;
+                match ended {
+                    Ok(()) => self.tell(format!("{name} is yours now."), false),
+                    Err(words) => self.tell(words, true),
+                }
             }
             Message::RestartWindows => self.restart_ask = true,
             Message::RestartAnswered(result) => {

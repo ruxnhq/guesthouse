@@ -55,6 +55,41 @@ pub fn page(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> View
     Grid::new().rows([GridLength::Auto, GridLength::STAR, GridLength::Auto]).children(parts).into()
 }
 
+/// What a machine that needs an owner says, on its card and its page.
+pub const NEEDS_AN_OWNER: &str = "Needs an owner";
+
+/// The page of a machine that needs an owner: what that means, and Make it mine, which Windows asks
+/// an administrator of this PC to allow.
+pub fn needs_owner(main: &Main, machine: &Machine, context: &ViewContext<Main>) -> View {
+    let asking = main.assigning.as_deref() == Some(machine.name.as_str());
+    let mut parts: Vec<View> = vec![
+        icon(glyph::PERSON, 48.0).foreground(ThemeBrush::TertiaryText).into(),
+        subtitle(&format!("{} needs an owner", machine.name)).text_alignment(TextAlignment::Center).into(),
+        centred(
+            "Each machine is the user's who made it. This one was made before Guesthouse kept that, and \
+             nothing says whose it is. Until it has an owner nobody can start it, change it or see more \
+             of it here.",
+        ),
+        centred(
+            "Make it mine gives it to you. Windows asks an administrator of this PC to allow that, as \
+             another user may have made it.",
+        ),
+        button("Make it mine", context.message(Message::MakeMine), true)
+            .is_enabled(!asking)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .margin(Thickness::new(0.0, 8.0, 0.0, 0.0))
+            .into(),
+    ];
+    if asking {
+        parts.push(
+            side_by_side((ring(16.0), caption("Waiting for Windows' prompt to be answered.")))
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .into(),
+        );
+    }
+    one_thing(parts)
+}
+
 // ---- The title bar's part ----
 
 /// The machine's name, with the dot of where it stands, which opens a menu of every machine to

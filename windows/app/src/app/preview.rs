@@ -28,7 +28,8 @@
 //! Home), `net-firmware`, `net-unknown` and `net-older` (a service from before it said), and
 //! `home-restart` is Home waiting for the restart. The command palette is open in `palette` (on a
 //! running machine's page), `palette-query` (with `st` typed), `palette-home` and `palette-away`
-//! (the service not answering). A preview counts as installed, reads and writes none of the
+//! (the service not answering). `owner` is the page of a machine that needs an owner, and
+//! `owner-home` Home with its card. A preview counts as installed, reads and writes none of the
 //! person's settings, and never reaches the file drop, downloads or runs anything: its updater is
 //! `update::Fake`, whose look finds what its state did, whose download and check go well at once,
 //! and whose installer ends having done nothing. Nothing is sent to the service, whatever is
@@ -191,6 +192,17 @@ pub fn stage(main: &mut Main) {
         "report-away" => {
             main.seen = Err(Unreached::NoService.words().to_owned());
             main.page = Page::Report;
+        }
+        "owner" | "owner-home" => {
+            if let Ok(status) = &mut main.seen
+                && let Some(machine) = status.machines.iter_mut().find(|machine| machine.name == "ubuntu")
+            {
+                machine.needs_owner = true;
+            }
+            show(main, "ubuntu", State::Off);
+            if state == "owner-home" {
+                main.page = Page::Home;
+            }
         }
         "delete" => {
             show(main, "ubuntu", State::Off);

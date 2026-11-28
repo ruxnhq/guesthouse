@@ -48,6 +48,7 @@ pub mod glyph {
     pub const TERMINAL: &str = "\u{E756}";
     pub const SETTINGS: &str = "\u{E713}";
     pub const SEARCH: &str = "\u{E721}";
+    pub const PERSON: &str = "\u{E77B}";
 }
 
 pub fn logo() -> EncodedImage {

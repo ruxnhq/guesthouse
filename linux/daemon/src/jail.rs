@@ -150,13 +150,16 @@ impl Needs {
         driver_folder: &Path,
         card: Option<&guesthouse_backend::PciAddress>,
     ) -> Self {
+        let card_address = card;
         let card = card.map(ToString::to_string);
         let snapshot = guesthouse_sensors::snapshot_path_for(card.as_deref());
         let processes = guesthouse_sensors::card_processes::table_path_for(card.as_deref());
+        use guesthouse_backend_nvidia::rm::listing::{place_for, read_listing};
+        let minor = place_for(&read_listing(), card_address).ok().map(|place| place.minor);
         Self {
             run_folder: slot.run_folder(project),
             shared_files: vec![snapshot, processes],
-            devices: host_gpu_devices(),
+            devices: nvidia_card_nodes(Path::new(DEVICES), minor),
             driver_folder: Some(driver_folder.to_owned()),
             read_files: Vec::new(),
         }
@@ -169,6 +172,19 @@ impl Needs {
         fs::create_dir_all(&self.run_folder)?;
         self.shared_files.iter().try_for_each(|file| make_if_missing(file))
     }
+}
+
+/// The driver's nodes that aren't any one card's: its control file and UVM's.
+const NVIDIA_SHARED_NODES: [&str; 2] = ["nvidiactl", "nvidia-uvm"];
+
+/// The NVIDIA nodes one daemon opens, under `devices`, of those there are: the driver's two shared ones
+/// and its own card's, found by the same listing the backend opens it by. The driver makes no device
+/// for a card whose file the process can't open, so the other cards stay out of its reach.
+pub fn nvidia_card_nodes(devices: &Path, minor: Option<u32>) -> Vec<PathBuf> {
+    let mut nodes: Vec<PathBuf> = NVIDIA_SHARED_NODES.iter().map(|name| devices.join(name)).collect();
+    nodes.extend(minor.map(|minor| devices.join(format!("{NVIDIA_PREFIX}{minor}"))));
+    nodes.retain(|node| node.exists());
+    nodes
 }
 
 /// The GPU's device files on this PC.
@@ -261,6 +277,40 @@ mod tests {
             found.iter().map(|path| path.strip_prefix(&folder).unwrap().display().to_string()).collect();
         assert_eq!(names, ["nvidia-uvm", "nvidia0", "nvidiactl", "dri/renderD128"]);
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn an_nvidia_daemon_reaches_its_own_card_and_the_shared_nodes_only() {
+        let folder = scratch("nvidia-nodes");
+        for name in ["nvidia0", "nvidia1", "nvidiactl", "nvidia-uvm", "nvidia-modeset"] {
+            fs::write(folder.join(name), "").unwrap();
+        }
+        let names = |minor| {
+            let found = nvidia_card_nodes(&folder, minor);
+            found
+                .iter()
+                .map(|path| path.strip_prefix(&folder).unwrap().display().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(Some(1)), ["nvidiactl", "nvidia-uvm", "nvidia1"]);
+        assert_eq!(names(None), ["nvidiactl", "nvidia-uvm"], "no card known, none granted");
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[cfg(feature = "nvidia")]
+    #[test]
+    fn an_nvidia_daemons_jail_has_no_render_node_and_no_other_card() {
+        let card = guesthouse_backend::PciAddress::parse("0000:01:00.0").unwrap();
+        let slot = crate::slot::Slot::parse(Some("1")).unwrap();
+        let needs = Needs::of_card(slot, Path::new("/project"), Path::new("/store/driver"), Some(&card));
+        let listing = guesthouse_backend_nvidia::rm::listing::read_listing();
+        let own = guesthouse_backend_nvidia::rm::listing::listed_at(&listing, &card).map(|card| card.minor);
+        for device in &needs.devices {
+            let name = device.file_name().unwrap().to_string_lossy();
+            assert!(!device.starts_with("/dev/dri"), "{}", device.display());
+            let minor = name.strip_prefix("nvidia").and_then(|rest| rest.parse::<u32>().ok());
+            assert!(minor.is_none() || minor == own, "{}", device.display());
+        }
     }
 
     #[cfg(feature = "amd")]

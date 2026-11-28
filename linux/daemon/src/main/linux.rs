@@ -1,4 +1,6 @@
 use guesthouse_daemon::logger;
+#[cfg(any(feature = "nvidia", feature = "intel"))]
+use guesthouse_daemon::publisher::Maker;
 use guesthouse_daemon::slot::Slot;
 use guesthouse_daemon_shell::fail;
 use std::env;
@@ -8,6 +10,13 @@ use std::process::ExitCode;
 pub fn main() -> ExitCode {
     let verbose = env::var_os("GUESTHOUSE_VERBOSE").is_some();
     logger::start(verbose);
+    let words: Vec<String> = env::args().skip(1).collect();
+    if words.first().map(String::as_str) == Some(guesthouse_daemon::publisher::WORD) {
+        return match guesthouse_daemon::publisher::run(&words[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => fail("", error),
+        };
+    }
     let slot = match Slot::from_environment() {
         Ok(slot) => slot,
         Err(error) => return fail("", error),
@@ -115,7 +124,6 @@ fn serve_amd(
         &setup.driver_folder,
         node,
         memory_device,
-        None,
     );
     let run_folder = slot.run_folder(&project);
     serve_on_render_node::<AmdBackend>(slot, project, &setup, needs, |backend| {
@@ -164,16 +172,9 @@ fn serve_intel(
                 "No Intel graphics card on the xe driver was found at the address this guest was given.",
             )?;
             log::info!("Intel card at {}", node.device_file.display());
+            start_publisher(Maker::Intel, setup.card_address.as_ref());
             // Intel's backend makes no dma-buf of the guest's memory, so it is given no device for one.
-            let snapshot = guesthouse_sensors::snapshot_path_for(address.as_deref());
-            Needs::of_render_node(
-                slot,
-                &project,
-                &setup.driver_folder,
-                node.device_file,
-                None,
-                Some(snapshot),
-            )
+            Needs::of_render_node(slot, &project, &setup.driver_folder, node.device_file, None)
         }
     };
     use guesthouse_backend_intel::stage::{DESKTOP_VARIABLE, Desktop};
@@ -258,6 +259,7 @@ fn serve_nvidia(
     let memory = SharedMemory::from_environment(slot, guest_ram(ram.as_deref()))?;
     let needs = Needs::of_card(slot, &project, &setup.driver_folder, setup.card_address.as_ref());
     needs.prepare()?;
+    start_publisher(Maker::Nvidia, setup.card_address.as_ref());
     let locked = lock_files(&needs)?;
     let mut backend: NvidiaBackend<LinuxRm> = start_backend(&setup)?;
     if let Some(micros) =
@@ -279,6 +281,15 @@ fn serve_nvidia(
     lock_calls(locked)?;
     server.run()?;
     Ok(())
+}
+
+/// Starts the card's sensors publisher, before the jail. Readings are a bonus, so a failure here
+/// only means going without.
+#[cfg(any(feature = "nvidia", feature = "intel"))]
+fn start_publisher(maker: Maker, card: Option<&guesthouse_backend::PciAddress>) {
+    if let Err(error) = guesthouse_daemon::publisher::start(maker, card) {
+        log::info!("no host sensors: the sensors publisher didn't start: {error}");
+    }
 }
 
 /// How long a ring channel of a context with several queues holds the GPU, unless

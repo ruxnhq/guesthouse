@@ -12,7 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const ONLY_THE_OWNER: u32 = 0o600;
 const WORD: usize = size_of::<u64>();
@@ -21,7 +21,6 @@ const FIELDS: usize = 1;
 /// How often a reader looks again if a write was under way. Writes take well under a microsecond.
 const READ_TRIES: usize = 3;
 
-/// `COUNT` numbers after the counter. See the module documentation.
 /// Makes the folder, for the owner alone, and refuses one that is anyone else's or open to others.
 pub fn make_private_folder(folder: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
@@ -37,6 +36,39 @@ pub fn make_private_folder(folder: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// What a writer's turn is kept on: a file of its own beside the shared one.
+const TURN_SUFFIX: &str = ".writer";
+
+/// The file a writer's turn for `path` is kept on.
+pub fn turn_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(TURN_SUFFIX);
+    PathBuf::from(name)
+}
+
+/// Waits until no other process has the writer's turn for the file at `path`, and returns what holds
+/// it: this process is the one writer while it keeps that. The turn is a lock on a file of its own
+/// beside `path`, which a reader is never given, so only a writer can hold it.
+pub fn wait_for_writers_turn(path: &Path) -> io::Result<File> {
+    if let Some(folder) = path.parent().filter(|folder| *folder == crate::shared_folder()) {
+        make_private_folder(folder)?;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    let file = options.mode(ONLY_THE_OWNER).custom_flags(libc::O_NOFOLLOW).open(turn_path(path))?;
+    let details = file.metadata()?;
+    // SAFETY: this asks for a number and can't fail.
+    if details.uid() != unsafe { libc::getuid() } || details.mode() & 0o077 != 0 {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "someone else's shared file"));
+    }
+    // SAFETY: a plain call on a file this owns.
+    match unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } {
+        0 => Ok(file),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
+/// `COUNT` numbers after the counter. See the module documentation.
 pub struct SharedWords<const COUNT: usize> {
     /// Each open of the file has a lock of its own, which is what lets processes take turns.
     file: File,
@@ -45,14 +77,16 @@ pub struct SharedWords<const COUNT: usize> {
 impl<const COUNT: usize> SharedWords<COUNT> {
     const SIZE: usize = (FIELDS + COUNT) * WORD;
 
-    /// Opens the file, making it if needed. Anyone else's file at this path is refused.
+    /// The writer's open, which makes the file if needed and writes it in place, so a reader's open
+    /// of it goes on reading what is published. Anyone else's file at this path is refused.
     pub fn open(path: &Path) -> io::Result<Self> {
         Self::open_with(path, true)
     }
 
-    /// Opens a file the writer has made, for a reader that must not make one. A file of any other
-    /// size is some other layout's, and is refused.
-    pub fn open_existing(path: &Path) -> io::Result<Self> {
+    /// Opens a file for reading only, never making it. The file may still be empty, as one made
+    /// ready for a reader is until the writer's first publish, and then reads as nothing. A file of
+    /// any other size is some other layout's, and is refused.
+    pub fn open_to_read(path: &Path) -> io::Result<Self> {
         Self::open_with(path, false)
     }
 
@@ -62,7 +96,7 @@ impl<const COUNT: usize> SharedWords<COUNT> {
             make_private_folder(folder)?;
         }
         let mut options = OpenOptions::new();
-        options.read(true).write(true).create(make).truncate(false);
+        options.read(true).write(make).create(make).truncate(false);
         let file = options.mode(ONLY_THE_OWNER).custom_flags(libc::O_NOFOLLOW).open(path)?;
         let details = file.metadata()?;
         // SAFETY: this asks for a number and can't fail.
@@ -73,26 +107,10 @@ impl<const COUNT: usize> SharedWords<COUNT> {
             if details.len() != Self::SIZE as u64 {
                 file.set_len(Self::SIZE as u64)?;
             }
-        } else if details.len() != Self::SIZE as u64 {
+        } else if details.len() != 0 && details.len() != Self::SIZE as u64 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "a shared file of another layout"));
         }
         Ok(Self { file })
-    }
-
-    /// Another handle on the same file, with a lock of its own, as it is a new open of the file.
-    pub fn try_clone(&self) -> io::Result<Self> {
-        let own_path = format!("/proc/self/fd/{}", self.file.as_raw_fd());
-        let file = OpenOptions::new().read(true).write(true).open(own_path)?;
-        Ok(Self { file })
-    }
-
-    /// Waits until no other process holds the lock. It lasts until this process exits.
-    pub fn wait_for_lock(&self) -> io::Result<()> {
-        // SAFETY: a plain call on a file this owns.
-        match unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_EX) } {
-            0 => Ok(()),
-            _ => Err(io::Error::last_os_error()),
-        }
     }
 
     /// The counter, or `None` if the file is too short to hold it.
@@ -107,7 +125,7 @@ impl<const COUNT: usize> SharedWords<COUNT> {
         let _ = self.file.write_all_at(&value.to_ne_bytes(), 0);
     }
 
-    /// Only one process writes: the holder of the lock, or the file's only writer.
+    /// Only one process writes: the one holding the writer's turn, see [`wait_for_writers_turn`].
     pub fn publish(&self, words: [u64; COUNT]) {
         // A writer that died part way leaves the counter odd, and this just carries on from there. A
         // file cut short has no counter, and starts again from nothing.
@@ -145,11 +163,6 @@ impl<const COUNT: usize> SharedWords<COUNT> {
     pub(crate) fn cut_a_write_short(&self) {
         self.store_counter(self.counter().unwrap_or(0) + 1);
     }
-
-    #[cfg(test)]
-    pub(crate) fn file(&self) -> &File {
-        &self.file
-    }
 }
 
 #[cfg(test)]
@@ -179,9 +192,45 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_can_open_an_empty_file_and_reads_the_first_publish() {
+        let path = temporary("empty");
+        fs::write(&path, b"").unwrap();
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        let reader = SharedWords::<2>::open_to_read(&path).unwrap();
+        assert_eq!(reader.read(), None);
+        SharedWords::<2>::open(&path).unwrap().publish([4, 5]);
+        assert_eq!(reader.read(), Some([4, 5]));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_readers_open_cannot_write() {
+        let path = temporary("read-only");
+        SharedWords::<2>::open(&path).unwrap().publish([1, 2]);
+        let reader = SharedWords::<2>::open_to_read(&path).unwrap();
+        assert!(reader.file.write_all_at(&[0xff; 8], 8).is_err());
+        reader.publish([6, 6]);
+        assert_eq!(reader.read(), Some([1, 2]));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn only_one_writer_has_the_turn_until_it_lets_go() {
+        let path = temporary("turn");
+        let first = wait_for_writers_turn(&path).unwrap();
+        let second = fs::File::open(turn_path(&path)).unwrap();
+        // SAFETY: a plain call on a file this owns.
+        let taken = unsafe { libc::flock(second.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(taken, -1, "the turn is held");
+        drop(first);
+        drop(wait_for_writers_turn(&path).unwrap());
+        fs::remove_file(turn_path(&path)).unwrap();
+    }
+
+    #[test]
     fn a_reader_that_must_not_make_the_file_finds_none() {
         let path = temporary("missing");
-        assert!(SharedWords::<2>::open_existing(&path).is_err());
+        assert!(SharedWords::<2>::open_to_read(&path).is_err());
         assert!(!path.exists());
     }
 
@@ -189,7 +238,7 @@ mod tests {
     fn a_reader_sees_the_writers_numbers_in_its_own_open() {
         let path = temporary("both");
         let writer = SharedWords::<2>::open(&path).unwrap();
-        let reader = SharedWords::<2>::open_existing(&path).unwrap();
+        let reader = SharedWords::<2>::open_to_read(&path).unwrap();
         writer.publish([7, 9]);
         assert_eq!(reader.read(), Some([7, 9]));
         fs::remove_file(path).unwrap();
@@ -199,7 +248,7 @@ mod tests {
     fn a_file_of_another_layout_is_refused() {
         let path = temporary("other");
         SharedWords::<3>::open(&path).unwrap();
-        assert!(SharedWords::<2>::open_existing(&path).is_err());
+        assert!(SharedWords::<2>::open_to_read(&path).is_err());
         fs::remove_file(path).unwrap();
     }
 
@@ -207,7 +256,7 @@ mod tests {
     fn a_file_cut_short_under_a_reader_reads_as_nothing() {
         let path = temporary("cut-under");
         let writer = SharedWords::<2>::open(&path).unwrap();
-        let reader = SharedWords::<2>::open_existing(&path).unwrap();
+        let reader = SharedWords::<2>::open_to_read(&path).unwrap();
         writer.publish([7, 9]);
         assert_eq!(reader.read(), Some([7, 9]));
         // Another process's open of the file, which cuts it to nothing.
@@ -226,7 +275,7 @@ mod tests {
         writer.publish([1, 2]);
         fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
         writer.publish([3, 4]);
-        assert_eq!(SharedWords::<2>::open_existing(&path).unwrap().read(), Some([3, 4]));
+        assert_eq!(SharedWords::<2>::open_to_read(&path).unwrap().read(), Some([3, 4]));
         fs::remove_file(path).unwrap();
     }
 }

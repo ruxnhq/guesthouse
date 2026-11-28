@@ -1,11 +1,10 @@
-//! `card_processes GPU-UUID [--jailed] [ROUNDS]`: reads each process's part of an NVIDIA card a few
-//! times, a second apart, through the same library calls and table the daemon's sensor thread uses,
+//! `card_processes ADDRESS [--jailed] [ROUNDS]`: reads each process's part of an NVIDIA card a few
+//! times, a second apart, through the same library calls and table the card's sensors publisher uses,
 //! and prints the table as the app would read it. It only reads the card, and writes no shared file.
 //!
 //! With `--jailed` it first puts itself in the daemon's jail, Landlock and the call filter both, with
 //! a scratch folder in place of a run folder, so a call the jail refuses shows as a line on stderr
-//! and as a table with nothing read. The card's identity is what
-//! `nvidia-smi --query-gpu=uuid --format=csv,noheader` says.
+//! and as a table with nothing read. The card's address is its PCI address, as `0000:01:00.0`.
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const BYTES_PER_MIB: u64 = 1 << 20;
 
     let words: Vec<String> = std::env::args().skip(1).collect();
-    let uuid = words.iter().find(|word| word.starts_with("GPU-")).ok_or("name the card as GPU-...")?;
+    let card = words.iter().find(|word| word.contains(':')).ok_or("name the card by its address")?;
     let jailed = words.iter().any(|word| word == "--jailed");
     let rounds: u32 = words.iter().find_map(|word| word.parse().ok()).unwrap_or(3);
     if jailed {
@@ -34,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         lock_calls(locked)?;
         println!("jailed as the daemon is, in {}", scratch.display());
     }
-    let mut source = process_source(uuid).ok_or("the management library can't be loaded for that card")?;
+    let mut source = process_source(card).ok_or("the management library can't be loaded for that card")?;
     for round in 0..rounds {
         if round > 0 {
             std::thread::sleep(Duration::from_secs(1));

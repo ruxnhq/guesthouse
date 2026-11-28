@@ -40,7 +40,7 @@ pub mod ioctl;
 mod lab;
 pub mod protocol;
 pub mod recording;
-mod sensors;
+pub mod sensors;
 pub mod stage;
 pub mod sysfs;
 mod traffic;
@@ -690,11 +690,6 @@ impl Backend for IntelBackend {
                 let mut backend = Self::from_card(card)?;
                 let open = || xe::device::XeCard::open(&node.device_file).map(|card| Box::new(card) as _);
                 backend.start_work_on_card(asked, open, Some(&node.sysfs));
-                if let Err(error) =
-                    sensors::start(&node.sysfs, &node.device_file, setup.card_address.as_ref())
-                {
-                    log::info!("{PREFIX} no host sensors: {error}");
-                }
                 backend
             }
         };

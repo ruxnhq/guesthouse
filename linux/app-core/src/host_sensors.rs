@@ -1,5 +1,6 @@
-//! The host card's readings, as the daemon's sensor thread publishes them. The viewer shows the
-//! same figures a guest is told, and nothing in the app has to load the vendor's library.
+//! The host card's readings, as the card's sensors publisher writes them. The viewer shows the same
+//! figures a guest is told, and nothing in the app has to load the vendor's library. The app only
+//! reads them.
 
 use crate::context::Context;
 use crate::gpu_maker::GpuMaker;
@@ -27,7 +28,7 @@ impl HostSensors {
     /// Opens the shared file at `path`, which [`sensors_file`] names. `None` means nothing can be
     /// read, which the overlay says as much.
     pub fn open_at(path: &Path) -> Option<Box<dyn CardReader>> {
-        let shared = SharedSnapshot::open(path).ok()?;
+        let shared = SharedSnapshot::open_to_read(path).ok()?;
         let pci = pci_from_snapshot_path(path);
         Some(Box::new(Self { shared, pci, prev_fdinfo: None }))
     }
@@ -40,7 +41,7 @@ fn pci_from_snapshot_path(path: &Path) -> Option<String> {
     candidate.contains(':').then(|| candidate.to_owned())
 }
 
-/// Where the daemon of this machine publishes its card's readings. They go by the address of the
+/// Where this machine's card's readings are published. They go by the address of the
 /// NVIDIA card it opens: the one the machine was given, or else setup's, as the daemon reads it.
 pub fn sensors_file(context: &Context, machine: &Machine) -> PathBuf {
     let given = machine

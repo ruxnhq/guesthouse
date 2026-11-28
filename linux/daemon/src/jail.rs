@@ -28,8 +28,7 @@ const NVIDIA_PREFIX: &str = "nvidia";
 const NVIDIA_LEFT_OUT: [&str; 3] = ["nvidia-modeset", "nvidia-caps", "nvidia-nvswitchctl"];
 const OWNER_ONLY: u32 = 0o600;
 
-/// Besides the system's programs and libraries, which the management library is loaded from when
-/// this daemon's turn to read the card comes, and which hold `nvidia-smi`, which reads the card's
+/// Besides the system's programs and libraries, which hold `nvidia-smi`, which reads the card's
 /// rated clocks at the start. `/proc` and `/sys` are read for the driver's version and the card's
 /// place, and reading `/proc` gives nothing away, as Landlock doesn't let a jailed process look into
 /// another. A program it runs gets `/dev/null` for its input.
@@ -44,7 +43,8 @@ const SYSTEM: [(Grant, &str); 4] = [
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Needs {
     pub run_folder: PathBuf,
-    /// Files it reads and writes but doesn't make, as the sensors' snapshot.
+    /// Files another process writes and this one only reads, as the card's sensors snapshot, which
+    /// the card's sensors publisher writes. They are made, empty, before the jail if they aren't there.
     pub shared_files: Vec<PathBuf>,
     /// The GPU's device files, which the stand-in has no use for.
     pub devices: Vec<PathBuf>,
@@ -65,7 +65,7 @@ impl Needs {
             plan.grant(Grant::Device, device);
         }
         for file in &self.shared_files {
-            plan.grant(Grant::Write, file);
+            plan.grant(Grant::Read, file);
         }
         if let Some(folder) = &self.driver_folder {
             plan.grant(Grant::Read, folder);
@@ -110,11 +110,10 @@ impl Needs {
         driver_folder: &Path,
         render_node: PathBuf,
         memory_device: Option<PathBuf>,
-        snapshot: Option<PathBuf>,
     ) -> Self {
         Self {
             run_folder: slot.run_folder(project),
-            shared_files: snapshot.into_iter().collect(),
+            shared_files: Vec::new(),
             devices: std::iter::once(render_node).chain(memory_device).collect(),
             driver_folder: Some(driver_folder.to_owned()),
             read_files: Vec::new(),
@@ -141,9 +140,9 @@ impl Needs {
 
 #[cfg(feature = "nvidia")]
 impl Needs {
-    /// What the real daemon of this slot needs, for the NVIDIA card at `card`. Its readings go in
-    /// that card's files: the snapshot, and the table of each process's part of the card, both
-    /// owner-only files in shared memory that only the daemon holding the card's lock writes.
+    /// What the real daemon of this slot needs, for the NVIDIA card at `card`. It reads that card's
+    /// snapshot, an owner-only file that only the card's sensors publisher writes, and nothing else
+    /// of the shared readings.
     pub fn of_card(
         slot: crate::slot::Slot,
         project: &Path,
@@ -153,12 +152,11 @@ impl Needs {
         let card_address = card;
         let card = card.map(ToString::to_string);
         let snapshot = guesthouse_sensors::snapshot_path_for(card.as_deref());
-        let processes = guesthouse_sensors::card_processes::table_path_for(card.as_deref());
         use guesthouse_backend_nvidia::rm::listing::{place_for, read_listing};
         let minor = place_for(&read_listing(), card_address).ok().map(|place| place.minor);
         Self {
             run_folder: slot.run_folder(project),
-            shared_files: vec![snapshot, processes],
+            shared_files: vec![snapshot],
             devices: nvidia_card_nodes(Path::new(DEVICES), minor),
             driver_folder: Some(driver_folder.to_owned()),
             read_files: Vec::new(),
@@ -170,10 +168,7 @@ impl Needs {
     /// The jail names each file, so each must be there before it: see [`make_if_missing`].
     pub fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.run_folder)?;
-        for folder in self.shared_files.iter().filter_map(|file| file.parent()) {
-            guesthouse_sensors::words::make_private_folder(folder)?;
-        }
-        self.shared_files.iter().try_for_each(|file| make_if_missing(file))
+        crate::publisher::make_ready(&self.shared_files)
     }
 }
 
@@ -328,7 +323,6 @@ mod tests {
                 Path::new("/store/driver"),
                 node,
                 memory_device.map(PathBuf::from),
-                None,
             );
             let granted = needs.plan().paths.into_iter().filter(|(grant, _)| *grant == Grant::Device);
             granted.map(|(_, path)| path.display().to_string()).collect::<Vec<_>>()
@@ -354,7 +348,7 @@ mod tests {
 
     #[cfg(feature = "nvidia")]
     #[test]
-    fn an_nvidia_daemon_writes_its_cards_two_shared_files_and_no_other() {
+    fn an_nvidia_daemon_only_reads_its_cards_snapshot_of_the_shared_readings() {
         let card = guesthouse_backend::PciAddress::parse("0000:01:00.0").unwrap();
         let slot = crate::slot::Slot::parse(Some("1")).unwrap();
         let needs = Needs::of_card(slot, Path::new("/project"), Path::new("/store/driver"), Some(&card));
@@ -365,10 +359,7 @@ mod tests {
         let user = user.rsplit('-').nth(1).unwrap().to_owned();
         assert_eq!(
             shared,
-            [
-                (Grant::Write, format!("{}/gpupv-sensors-{user}-2-0000:01:00.0", folder.display())),
-                (Grant::Write, format!("{}/gpupv-processes-{user}-1-0000:01:00.0", folder.display())),
-            ]
+            [(Grant::Read, format!("{}/gpupv-sensors-{user}-2-0000:01:00.0", folder.display()))]
         );
     }
 
@@ -385,8 +376,8 @@ mod tests {
         let owned: Vec<_> = plan.paths.iter().filter(|(grant, _)| *grant == Grant::Own).collect();
         assert_eq!(owned, [&(Grant::Own, PathBuf::from("/run/user/1000/guesthouse/run-2"))]);
         assert!(
-            plan.paths.contains(&(Grant::Write, "/dev/shm/gpupv-sensors-1000-2".into())),
-            "the file, not /dev/shm"
+            plan.paths.contains(&(Grant::Read, "/dev/shm/gpupv-sensors-1000-2".into())),
+            "the file, not /dev/shm, and only to read"
         );
         assert!(!plan.paths.iter().any(|(_, path)| path == Path::new("/dev/shm")));
         assert!(plan.paths.contains(&(Grant::Read, "/store/driver".into())));

@@ -73,6 +73,48 @@ mod linux {
         assert_eq!(output.status.code(), Some(1));
     }
 
+    /// A card's sensors publisher stays while the daemon that started it holds its input open, and
+    /// ends once that closes, as when the daemon ends. It needs no slot.
+    #[test]
+    fn a_sensors_publisher_ends_with_its_daemon() {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let mut publisher = Command::new(super::DAEMON)
+            .args(["--publish-sensors", "intel", "0000:ff:1f.7"])
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut said = String::new();
+        let mut stderr = publisher.stderr.take().unwrap();
+        let mut byte = [0u8; 1];
+        while !said.ends_with('\n') && stderr.read(&mut byte).unwrap() == 1 {
+            said.push(char::from(byte[0]));
+        }
+        assert!(said.contains("no host sensors"), "{said}");
+        assert!(publisher.try_wait().unwrap().is_none(), "it waits for its daemon");
+        drop(publisher.stdin.take());
+        let end = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = publisher.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < end, "it went on after its daemon");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(status.success());
+    }
+
+    #[test]
+    fn a_sensors_publisher_for_a_maker_without_readings_is_refused() {
+        let output = run(&["--publish-sensors", "amd"], &[]);
+        assert_eq!(stderr(&output), "not a card maker with readings\n");
+        assert_eq!(output.status.code(), Some(1));
+    }
+
     #[cfg(not(any(feature = "stand-in", feature = "nvidia", feature = "amd", feature = "intel")))]
     mod no_backend {
         use super::{OsStr, run, slot, stderr};

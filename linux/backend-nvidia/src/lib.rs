@@ -180,7 +180,6 @@ pub struct NvidiaBackend<R> {
     last_memory: Option<MemoryId>,
     /// The host's live readings, if it has any.
     sensors: Option<Box<dyn SnapshotReader>>,
-    card_uuid: [u8; 16],
 }
 
 impl<R: Rm> NvidiaBackend<R> {
@@ -251,7 +250,6 @@ impl<R: Rm> NvidiaBackend<R> {
             u64::from(u32::from_le_bytes(bytes)) * 1000
         };
         let (graphics_hertz, memory_hertz) = (clock(layout.rated_clocks), clock(layout.rated_clocks + 4));
-        let card_uuid = record[layout.uuid..layout.uuid + 16].try_into().expect("sixteen bytes");
         let inputs = Inputs {
             guid_seed,
             graphics_hertz,
@@ -295,7 +293,6 @@ impl<R: Rm> NvidiaBackend<R> {
             sked_pages: sked_page::SkedPages::default(),
             last_memory: None,
             sensors: None,
-            card_uuid,
         })
     }
 
@@ -381,7 +378,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         log::info!("opened the card at {}, device instance {}", place_text(&place), device.instance);
         let mut backend = Self::start(device, host_profile, guest_profile, setup, &host, &infs)?;
         // Readings are a bonus, so a failure here only means going without.
-        match sensors::start(&backend.card_uuid, setup.card_address.as_ref()) {
+        match sensors::open_readings(setup.card_address.as_ref()) {
             Ok(snapshot) => backend.set_sensors(Box::new(snapshot)),
             Err(error) => log::info!("no host sensors: {error}"),
         }

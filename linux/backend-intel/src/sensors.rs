@@ -1,10 +1,12 @@
-//! Live readings from the host's Intel card (`xe` sysfs, hwmon, and memory queries), published
-//! to `guesthouse-sensors` for the performance overlay. Whole-host engine load is read by the
-//! unjailed app from `/proc/*/fdinfo`, since the daemon's jail restricts `/proc` to itself.
+//! Live readings from the host's Intel card (`xe` sysfs, hwmon, and memory queries), published to
+//! `guesthouse-sensors` for the performance overlay by the card's sensors publisher, a process of its
+//! own that serves no guest and runs in no jail. Whole-host engine load is read by the app from
+//! `/proc/*/fdinfo`.
 
-use crate::watch::PREFIX;
+use crate::ioctl::intel_render_node;
 use crate::xe_query::{self, MemoryRegion};
 use guesthouse_backend::PciAddress;
+use guesthouse_sensors::words::wait_for_writers_turn;
 use guesthouse_sensors::{SharedSnapshot, Snapshot, milliseconds_since_epoch, snapshot_path_for};
 use std::fs::{self, File};
 use std::io;
@@ -14,24 +16,20 @@ use std::time::{Duration, Instant};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Opens the shared snapshot file for `card` before the jail goes on and spawns the sampler
-/// thread. If `SharedSnapshot::open` fails, the overlay simply shows `not available`.
-pub fn start(sysfs: &Path, device_file: &Path, card: Option<&PciAddress>) -> io::Result<()> {
-    let path = snapshot_path_for(card.map(PciAddress::to_string).as_deref());
-    let snapshot = SharedSnapshot::open(&path)?;
-    let sysfs = sysfs.to_path_buf();
-    let device_file = device_file.to_path_buf();
-    thread::Builder::new()
-        .name("intel-sensors".into())
-        .spawn(move || read_forever(snapshot, &sysfs, &device_file))?;
+/// The publisher for the Intel card at `card`, or with none the one setup chose: waits for the
+/// writer's turn, then reads the card and publishes for as long as this process runs. Returns only
+/// if the card can't be found.
+pub fn publish(card: Option<&PciAddress>) -> io::Result<()> {
+    let address = card.map(PciAddress::to_string);
+    let node = intel_render_node(address.as_deref())
+        .ok_or_else(|| io::Error::other("no Intel card on the xe driver at that address"))?;
+    let path = snapshot_path_for(address.as_deref());
+    let _turn = wait_for_writers_turn(&path)?;
+    read_forever(&SharedSnapshot::open(&path)?, &node.sysfs, &node.device_file);
     Ok(())
 }
 
-fn read_forever(snapshot: SharedSnapshot, sysfs: &Path, device_file: &Path) {
-    if let Err(error) = snapshot.wait_for_lock() {
-        log::warn!("{PREFIX} no host sensors: {error}");
-        return;
-    }
+fn read_forever(snapshot: &SharedSnapshot, sysfs: &Path, device_file: &Path) {
     let drm = File::open(device_file).ok();
     let energy_path = find_card_energy(sysfs);
     let act_freq_path = find_gt_freq(sysfs, "act_freq");

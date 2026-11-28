@@ -59,9 +59,9 @@ impl HostDrive {
         format!("{model}, {}", self.size_text())
     }
 
-    /// The one step that needs root. uaccess gives the drive to whoever is logged in. It's matched by the
-    /// serial number, as `sdb` and its like change between boots, and only for the disk: the partitions
-    /// in it carry the serial too.
+    /// The one step that needs root. The rule gives the drive to this user alone, whoever else logs in
+    /// at the PC. It's matched by the serial number, as `sdb` and its like change between boots, and
+    /// only for the disk: the partitions in it carry the serial too.
     pub fn access_command(&self) -> Result<String> {
         let value = &self.serial;
         let plain = |text: &String| {
@@ -72,7 +72,8 @@ impl HostDrive {
             return Err(Failure(format!("{} has no number that tells it apart for a rule.", self.id)));
         }
         let rule = format!(
-            "SUBSYSTEM==\"block\", ENV{{DEVTYPE}}==\"disk\", ENV{{ID_SERIAL}}==\"{value}\", TAG+=\"uaccess\""
+            "SUBSYSTEM==\"block\", ENV{{DEVTYPE}}==\"disk\", ENV{{ID_SERIAL}}==\"{value}\", {}",
+            crate::usb::owner_only()
         );
         Ok(format!(
             "echo '{rule}' | sudo tee /etc/udev/rules.d/70-guesthouse-drive-{value}.rules\n\
@@ -597,10 +598,10 @@ mod tests {
         scratch.write("udev/b8:1", "E:ID_SERIAL=Samsung_SSD_860_S3Z\nE:ID_PART_ENTRY_UUID=0f1e-22\n");
         let rule = host_drives(&context)[0].access_command().unwrap();
         assert!(
-            rule.contains(
-                "ENV{DEVTYPE}==\"disk\", ENV{ID_SERIAL}==\"Samsung_SSD_860_S3Z\", TAG+=\"uaccess\""
-            )
+            rule.contains("ENV{DEVTYPE}==\"disk\", ENV{ID_SERIAL}==\"Samsung_SSD_860_S3Z\", OWNER=\""),
+            "{rule}"
         );
+        assert!(rule.contains("MODE=\"0600\"") && !rule.contains("uaccess"), "this user alone: {rule}");
         assert!(rule.contains("--property-match=ID_SERIAL=Samsung_SSD_860_S3Z"), "{rule}");
         assert!(rule.contains("70-guesthouse-drive-Samsung_SSD_860_S3Z.rules"), "{rule}");
     }

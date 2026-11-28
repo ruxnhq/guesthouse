@@ -106,8 +106,9 @@ impl Usb {
         let shared = &self.0.shared;
         if !device.can_open(&shared.window.context()) {
             let body = format!(
-                "This user cannot open {}. Run this once in a terminal, then attach it again. It lets whoever \
-                 is logged in on this PC use this kind of device.",
+                "This user cannot open {}. Run this once in a terminal, then attach it again. It gives \
+                 every device of this kind to your user alone, until the rule is taken out, which uninstall.sh \
+                 offers.",
                 device.name
             );
             show_root_step(shared, &body, Some(&device.access_command()));

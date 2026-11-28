@@ -15,7 +15,7 @@ fn manifest_with(files: &[(&str, &str)]) -> String {
         .iter()
         .map(|(name, sum)| format!(r#"{{"name":"p-{name}","as":"{name}","sha256":"{sum}"}}"#))
         .collect();
-    format!(r#"{{"version":"1","files":[{}]}}"#, entries.join(","))
+    format!(r#"{{"version":"0.1.0","files":[{}]}}"#, entries.join(","))
 }
 
 const SUM: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -39,9 +39,54 @@ fn a_name_that_leaves_its_folder_or_a_private_key_is_refused() {
     let mut files: Vec<(&str, &str)> = REQUIRED.iter().map(|n| (*n, SUM)).collect();
     files.push(("../escape", SUM));
     assert!(Manifest::parse(&manifest_with(&files)).unwrap_err().contains("not a file name"));
+    for name in ["..", "a b", "a?b", "a#b", "a%2fb", "a:b", "a\\u0000b", "é"] {
+        let mut files: Vec<(&str, &str)> = REQUIRED.iter().map(|n| (*n, SUM)).collect();
+        files.push((name, SUM));
+        assert!(Manifest::parse(&manifest_with(&files)).unwrap_err().contains("not a file name"), "{name:?}");
+    }
     let mut files: Vec<(&str, &str)> = REQUIRED.iter().map(|n| (*n, SUM)).collect();
     files.push(("ruxn-test.pfx", SUM));
     assert!(Manifest::parse(&manifest_with(&files)).unwrap_err().contains("private key"));
+}
+
+#[test]
+fn a_version_that_is_not_three_numbers_is_refused() {
+    let whole = manifest_with(&REQUIRED.iter().map(|n| (*n, SUM)).collect::<Vec<_>>());
+    for version in [
+        "../../outside",
+        "/somewhere/else",
+        "0.1.0/../../..",
+        "..",
+        "1",
+        "0.1.0-rc1",
+        " 0.1.0",
+        "0.1.0\\n",
+        "",
+    ] {
+        let text = whole.replace(r#""version":"0.1.0""#, &format!(r#""version":"{version}""#));
+        let refused = Manifest::parse(&text).unwrap_err();
+        assert!(refused.contains("not three numbers"), "{version:?}: {refused}");
+        assert!(Manifest::parse_for(&LINUX, &text).is_err(), "{version:?}");
+    }
+}
+
+#[test]
+fn a_package_whose_version_leaves_its_folder_writes_nothing() {
+    let dir = scratch("version");
+    let published = dir.join("site");
+    fs::create_dir_all(&published).unwrap();
+    let mut files = Vec::new();
+    for name in REQUIRED {
+        fs::write(published.join(format!("p-{name}")), name).unwrap();
+        let sum = fetch::sha256_of(&published.join(format!("p-{name}"))).unwrap();
+        files.push(format!(r#"{{"name":"p-{name}","as":"{name}","sha256":"{sum}"}}"#));
+    }
+    let manifest = format!(r#"{{"version":"../../outside","files":[{}]}}"#, files.join(","));
+    fs::write(published.join(MANIFEST_NAME), manifest).unwrap();
+    let downloads = dir.join("support").join("Downloads");
+    assert!(fetch_package(&mut Published(published), &downloads).is_err());
+    assert!(!dir.join("support").join("outside").exists(), "nothing is written beside the downloads");
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]

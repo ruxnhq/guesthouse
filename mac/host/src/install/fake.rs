@@ -22,7 +22,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The version the stand-in driver package says it is.
-pub const FAKE_DRIVER_VERSION: &str = "0.0.0-fake";
+pub const FAKE_DRIVER_VERSION: &str = "0.0.0";
 
 /// What the stand-in serves for a driver file's published name.
 fn driver_bytes(name: &str) -> Vec<u8> {
@@ -100,7 +100,7 @@ pub struct FakeSite {
 }
 
 /// The Linux package's version the stand-in site publishes.
-pub const FAKE_LINUX_VERSION: &str = "0.0.1-fake";
+pub const FAKE_LINUX_VERSION: &str = "0.0.1";
 
 fn linux_name(package_name: &str) -> String {
     format!("guesthouse-linux-driver-{FAKE_LINUX_VERSION}-{package_name}")

@@ -122,7 +122,8 @@ pub struct Entry {
 
 impl Manifest {
     /// Reads a manifest and checks it names every file the package needs, once each, with
-    /// names that stay in their folder, checksums that are SHA-256 and no private key.
+    /// names that stay in their folder, checksums that are SHA-256 and no private key, under a
+    /// version that is three numbers, as the version is the name of the folder it is kept in.
     pub fn parse(text: &str) -> Result<Manifest, String> {
         Manifest::parse_for(&WINDOWS, text)
     }
@@ -131,9 +132,17 @@ impl Manifest {
     pub fn parse_for(package: &Package, text: &str) -> Result<Manifest, String> {
         let manifest: Manifest =
             serde_json::from_str(text).map_err(|e| format!("The driver's manifest is not readable: {e}"))?;
+        if !guesthouse_update_check::is_version(&manifest.version)
+            || manifest.version.trim() != manifest.version
+        {
+            return Err(format!(
+                "The driver's manifest says its version is {:?}, which is not three numbers.",
+                manifest.version
+            ));
+        }
         for entry in &manifest.files {
             for name in [&entry.name, &entry.package_name] {
-                if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+                if !is_file_name(name) {
                     return Err(format!("The driver's manifest names {name:?}, which is not a file name."));
                 }
             }
@@ -152,6 +161,16 @@ impl Manifest {
         refuse_private_keys(manifest.files.iter().map(|e| e.package_name.as_str()))?;
         Ok(manifest)
     }
+}
+
+/// Whether `name` is a plain file name, kept in its folder and in the file site's address as it is:
+/// letters, digits and `.`, `_`, `-`, `+`, `~`, not starting with a dot, and not too long for a Mac's
+/// disk.
+fn is_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+~".contains(&b))
 }
 
 fn refuse_private_keys<'a>(names: impl Iterator<Item = &'a str>) -> Result<(), String> {

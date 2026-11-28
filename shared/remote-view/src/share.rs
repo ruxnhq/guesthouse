@@ -38,6 +38,13 @@ fn confirm_seconds() -> u64 {
     CONFIRM_SECONDS
 }
 
+/// The most a waiting device's seconds can be: an hour. A longer time is taken as an hour.
+pub const MOST_CONFIRM_SECONDS: u64 = 3600;
+
+fn clamped_seconds<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<u64, D::Error> {
+    u64::deserialize(reader).map(|seconds| seconds.min(MOST_CONFIRM_SECONDS))
+}
+
 /// A new device that waits for an answer, as remoteman's `status.pending` has it. Its `Debug` never
 /// prints the name or the code, which never go to a log.
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -47,7 +54,7 @@ pub struct Pending {
     /// Six digits, "123 456", which the device shows too, for comparing.
     pub code: String,
     /// How long there is still to answer, when this was said.
-    #[serde(default = "confirm_seconds")]
+    #[serde(default = "confirm_seconds", deserialize_with = "clamped_seconds")]
     pub seconds: u64,
 }
 

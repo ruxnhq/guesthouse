@@ -286,7 +286,8 @@ impl Device {
         let mut refused = Vec::new();
         loop {
             let faulted = self.first_ring_faulted();
-            let step = self.guard.next_step(&self.memory, target, faulted, &mut refused);
+            let at = self.framework().read(registers.read);
+            let step = self.guard.next_step(&self.memory, target, at, faulted, &mut refused);
             for refusal in refused.drain(..) {
                 self.refused(refusal);
             }

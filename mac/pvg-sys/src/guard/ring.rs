@@ -84,18 +84,29 @@ impl Guard {
     ///
     /// The new commands are first copied to the host's own pages, where the device reads them,
     /// and it is the copy that is judged. `faulted` is whether a refused command holds the first
-    /// ring now.
+    /// ring now, and `read` is the device's read position, from its register.
     /// Commands the guard won't pass are made into refused ones in the copy and noted in
     /// `refused`. The guest's ring is not written.
     pub fn next_step(
         &mut self,
         memory: &GuestMemory,
         target: u32,
+        read: u32,
         faulted: bool,
         refused: &mut Vec<Refusal>,
     ) -> Step {
         let header = self.profile.ring.header_bytes;
         let start = self.ring.passed;
+        // The device reads the copy from its read position up to what it was told. The copy
+        // only goes into the room after that, so what was judged is what the device reads.
+        if !Self::fits_after_read(read, start, target, self.ring.room()) {
+            let what = What::Command { position: start, number: 0 };
+            return Step {
+                upto: start,
+                effect: None,
+                stopped: Some(Refusal { what, why: Why::PositionTooFar }),
+            };
+        }
         let ours = self.shadow.memory();
         let mut words = Words {
             ring: ours,
@@ -160,6 +171,14 @@ impl Guard {
         };
         self.ring.passed = step.upto;
         step
+    }
+
+    /// Whether the stretch from `passed` to `target` lies within a ring's room of the device's
+    /// read position `read`, which is at or before `passed`. All three are counters that wrap at
+    /// 2^32.
+    fn fits_after_read(read: u32, passed: u32, target: u32, room: u32) -> bool {
+        let unread = passed.wrapping_sub(read);
+        unread <= room && target.wrapping_sub(passed) <= room - unread
     }
 
     /// The numbers of the first ring's commands from `position` on, up to `until` and at most
@@ -920,6 +939,12 @@ impl Guard {
         let ahead = target.wrapping_sub(passed);
         if ahead > child.bytes {
             return no(if ahead > u32::MAX / 2 { Why::PositionWentBack } else { Why::PositionTooFar });
+        }
+        // As in the first ring, the copy only goes into the room after the device's read
+        // position, which the device keeps in its descriptor in the host's root page.
+        let read = self.shadow.memory().word(ours + child.read_at);
+        if !read.is_some_and(|read| Self::fits_after_read(read, passed, target, child.bytes)) {
+            return no(Why::PositionTooFar);
         }
 
         // The copy, a page's piece at a time: the guest's pages lie anywhere, the host's in a row.

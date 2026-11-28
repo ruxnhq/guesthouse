@@ -62,6 +62,11 @@ struct Play {
     faulted: bool,
     /// Whether the device refuses the next command it is passed alone.
     fails: bool,
+    /// Where the device has stopped reading the first ring, or `None` while it reads all it is
+    /// told, as it does unless a refused command holds it.
+    read: Option<u32>,
+    /// The same for child rings, by id.
+    child_read: Vec<(u32, u32)>,
 }
 
 impl Play {
@@ -80,6 +85,8 @@ impl Play {
             refused: Vec::new(),
             faulted: false,
             fails: false,
+            read: None,
+            child_read: Vec::new(),
         }
     }
 
@@ -155,7 +162,8 @@ impl Play {
             other => panic!("a kick was judged {other:?}"),
         }
         loop {
-            let step = self.guard.next_step(&self.memory, target, self.faulted, &mut self.refused);
+            let read = self.read.unwrap_or(self.guard.ring.passed);
+            let step = self.guard.next_step(&self.memory, target, read, self.faulted, &mut self.refused);
             self.passed.push(step.upto);
             if let Some(effect) = step.effect.clone() {
                 // The device's word for a user task in its root page, written as the device does.
@@ -259,6 +267,15 @@ impl Play {
             self.put(CHILD_RING + page * PAGE_BYTES + at % PAGE_BYTES, &[word]);
         }
         self.put(ROOT_PAGE + 0x400 + u64::from(id - 1) * 20, &[position + words.len() as u32 * 4]);
+        self.wake_written(id)
+    }
+
+    /// Wakes a child ring whose descriptor the guest has written. The device's read position in
+    /// the host's descriptor is where it stopped, or all the guard passed.
+    fn wake_written(&mut self, id: u32) -> Result<(), Why> {
+        let stopped = self.child_read.iter().find(|&&(ring, _)| ring == id).map(|&(_, at)| at);
+        let read = stopped.or_else(|| self.guard.children.get(&id).map(|child| child.passed)).unwrap_or(0);
+        self.shadow.memory().set_word(self.child_descriptor(id) + 4, read);
         let wake = self.profile.registers.wake;
         match self.write(wake, id).map_err(|refusal| refusal.why)? {
             Pass::Wake => {}
@@ -1308,6 +1325,76 @@ fn what_the_guest_writes_after_the_kick_is_not_what_the_device_reads() {
 }
 
 #[test]
+fn the_first_ring_s_copy_reaches_no_further_than_a_ring_past_the_device_s_read_position() {
+    let mut play = Play::with_ring();
+    let nothing = play.profile.commands.nothing.number;
+    // A refused command at the start, where the device stops, and ten after it.
+    play.queue(99, &[]);
+    for _ in 0..10 {
+        play.queue(nothing, &[]);
+    }
+    play.kick().expect("the kick is passed");
+    play.why();
+    play.read = Some(0);
+    let passed = play.written;
+    assert_eq!(play.ring_word(12), nothing);
+
+    // A position a whole ring past what was passed would have the copy go over what the device
+    // was told of and has not read.
+    play.put(RING + u64::from(COMMANDS_AT + 12), &[61, 12, 0]);
+    play.put(RING + u64::from(COMMANDS_AT + passed), &[nothing, 0, 0]);
+    play.written = passed + ROOM;
+    let steps = play.kick().expect("the kick is passed");
+    let stopped = steps.last().and_then(|step| step.stopped).map(|refusal| refusal.why);
+    assert_eq!(stopped, Some(Why::PositionTooFar));
+    assert_eq!(steps.last().map(|step| step.upto), Some(passed));
+    assert_eq!(play.ring_word(12), nothing, "what the device has yet to read is what was judged");
+
+    // Up to a ring past the device's read position is the guest's to fill.
+    play.written = passed;
+    let left = (ROOM - passed - HEADER) / 4;
+    play.queue(nothing, &vec![0; left as usize]);
+    assert_eq!(play.written, ROOM);
+    let steps = play.kick().expect("the kick is passed");
+    assert_eq!(steps.last().map(|step| (step.upto, step.stopped)), Some((ROOM, None)));
+    assert_eq!(play.ring_word(0), play.profile.commands.refused);
+    assert_eq!(play.ring_word(12), nothing);
+}
+
+#[test]
+fn a_child_ring_s_copy_reaches_no_further_than_a_ring_past_the_device_s_read_position() {
+    let mut play = Play::with_ring();
+    play.define_ring(1);
+    let nothing = play.profile.commands.nothing.number;
+    let mut words = vec![99, 12, 0];
+    for _ in 0..10 {
+        words.extend([nothing, 12, 0]);
+    }
+    assert_eq!(play.wake(1, 0, &words), Ok(()));
+    play.why();
+    play.child_read.push((1, 0));
+    let passed = words.len() as u32 * 4;
+    assert_eq!(play.child_word(1, 12), nothing);
+
+    // The guest's words over what the device has not read, and a position a whole ring on.
+    let theirs =
+        |at: u32| CHILD_RING + [0u64, 2, 1, 5][(at / 0x1000) as usize] * PAGE_BYTES + u64::from(at % 0x1000);
+    play.put(theirs(12), &[61, 12, 0]);
+    play.put(theirs(passed), &[nothing, 0, 0]);
+    play.put(ROOT_PAGE + 0x400, &[passed + 0x1_0000]);
+    assert_eq!(play.wake_written(1), Err(Why::PositionTooFar));
+    assert_eq!(play.child_word(1, 12), nothing, "what the device has yet to read is what was judged");
+    assert_eq!(play.shadow.memory().word(play.child_descriptor(1)), Some(passed));
+
+    // Once the device has read on, the room it read is the guest's again.
+    play.child_read.clear();
+    play.put(theirs(passed), &[nothing, 12, 0]);
+    play.put(ROOT_PAGE + 0x400, &[passed + 12]);
+    assert_eq!(play.wake_written(1), Ok(()));
+    assert_eq!(play.refused, []);
+}
+
+#[test]
 fn a_display_gets_a_page_of_the_host_s_and_the_guest_s_gets_what_the_device_writes() {
     let mut play = Play::with_ring();
     let display = play.profile.display.clone();
@@ -1468,10 +1555,7 @@ fn a_child_ring_s_position_is_read_once_and_only_goes_on() {
     // Back, and further on than the ring has room for.
     assert_eq!(play.wake(1, 0, &[nothing, 12, 0]), Err(Why::PositionWentBack));
     play.put(ROOT_PAGE + 0x400, &[24 + 0x1_0004]);
-    let wake = play.profile.registers.wake;
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    let wide = play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why);
-    assert_eq!(wide, Err(Why::PositionTooFar));
+    assert_eq!(play.wake_written(1), Err(Why::PositionTooFar));
     assert_eq!(play.shadow.memory().word(descriptor), Some(24), "the device's position stands");
     // A length that is no command's: the device is told of what lies before it.
     assert_eq!(play.wake(1, 24, &[nothing, 12, 0, nothing, 7, 0]), Ok(()));
@@ -1822,9 +1906,7 @@ fn a_child_ring_s_positions_wrap_at_2_to_the_32() {
         play.put(CHILD_RING + page * PAGE_BYTES + at % PAGE_BYTES, &[word]);
     }
     play.put(ROOT_PAGE + 0x400, &[start.wrapping_add(24)]);
-    let wake = play.profile.registers.wake;
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    assert_eq!(play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why), Ok(()));
+    assert_eq!(play.wake_written(1), Ok(()));
     assert_eq!(play.refused, []);
     assert_eq!(play.child_word(1, 0x1_0000 - 12), nothing);
     assert_eq!(play.child_word(1, 0), 1);
@@ -1832,9 +1914,5 @@ fn a_child_ring_s_positions_wrap_at_2_to_the_32() {
     assert_eq!(play.shadow.memory().word(play.child_descriptor(1)), Some(12));
     // And back across it is back.
     play.put(ROOT_PAGE + 0x400, &[u32::MAX - 3]);
-    assert_eq!(play.write(wake, 1), Ok(Pass::Wake));
-    assert_eq!(
-        play.guard.wake(&play.memory, 1, &mut play.refused).map_err(|refusal| refusal.why),
-        Err(Why::PositionWentBack)
-    );
+    assert_eq!(play.wake_written(1), Err(Why::PositionWentBack));
 }

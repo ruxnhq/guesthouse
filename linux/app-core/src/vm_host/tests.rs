@@ -596,12 +596,24 @@ fn a_qemu_without_the_host_loopback_setting_is_asked_and_never_started() {
         marker.display()
     );
     context.paths.qemu = scratch.program("not-qemu", &qemu);
-    let host = LocalHost::new(&context);
-    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
-    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
-    let error = host.start(&plan, &machine).unwrap_err();
-    assert!(error.0.contains("the QEMU that comes with Guesthouse"), "{error}");
-    assert!(!marker.exists(), "the machine's QEMU was started");
+    // Asked before every start: one jailed on a PC with Landlock, and one allowed without a jail.
+    for jailed in [true, false] {
+        if jailed {
+            context.jail_offer = a_kernel_with_landlock;
+        } else {
+            context.jail_offer = |_| crate::jailing::Offer::nothing();
+        }
+        let host = LocalHost::new(&context);
+        let machine = Machine {
+            kind: Kind::Plain,
+            start_without_jail: !jailed,
+            ..Machine::new("vm", "VM", "/d", "/v")
+        };
+        let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+        let error = host.start(&plan, &machine).unwrap_err();
+        assert!(error.0.contains("the QEMU that comes with Guesthouse"), "jailed {jailed}: {error}");
+        assert!(!marker.exists(), "the machine's QEMU was started");
+    }
 }
 
 #[test]

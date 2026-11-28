@@ -24,7 +24,7 @@ packaging/proxmox/guesthouse-pve.sh check
 
 It runs as root and only reads. It says what the host has and lacks for a VM with the GPU, and then what to put right, in that order: Proxmox's enterprise repository left on without a subscription, a card that `vfio-pci` has or that its driver is kept off, Landlock with the `lsm=` line for the host's boot loader, the `pve-qemu-kvm` and what keeps it, a newer one from Proxmox, the user's groups, lingering and Guesthouse's GPU files, the packages for making a Windows guest and swtpm's AppArmor rules, and each VM's `args:`, `memory:` and file in `/etc/guesthouse/proxmox` against each other, as the hookscript checks them. For a VM on a bridge it notes that Remote Desktop is shut from the LAN, below. `guesthouse-check`'s own lines come after the user's. It ends with 1 if something stops a VM or the making of its guest. `--report` prints the same without the names of users, the host and VMs, and without users' paths, for an issue.
 
-It has run on the host here, where it found nothing to put right, and on made-up hosts in `tests/proxmox/run.sh`.
+It has run on the host here, where it found nothing to put right, and on made-up hosts in `tests/proxmox/run.sh` and `tests/proxmox/setup-vm.sh`.
 
 ## Why its own pve-qemu-kvm
 

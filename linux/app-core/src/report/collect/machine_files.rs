@@ -18,8 +18,24 @@ use std::time::SystemTime;
 
 const MACHINE_FILE: &str = "machine.json";
 /// Fields that are the user's own and say nothing about a bug: names they chose, the guest account,
-/// the network card's address, the host's drives by serial number, and a folder of theirs.
-const PRIVATE_FIELDS: [&str; 5] = ["name", "user", "mac", "drives", "share"];
+/// the network card's address, the host's drives by serial number, folders and files of theirs, and
+/// the network they put the machine on.
+const PRIVATE_FIELDS: [&str; 14] = [
+    "name",
+    "user",
+    "mac",
+    "drives",
+    "share",
+    "disk",
+    "disk_folder",
+    "iso",
+    "opencore",
+    "android_data",
+    "forwards",
+    "bridge",
+    "only_through",
+    "dns",
+];
 const LEFT_OUT: &str = "(left out)";
 
 /// The machine with this name or id.
@@ -125,6 +141,20 @@ mod tests {
         assert_eq!(cleaned["drives"], "(left out): 2 of them");
         assert_eq!(cleaned["share"], "", "an empty field still says it isn't set");
         assert_eq!(cleaned["cores"], 8);
-        assert_eq!(cleaned["disk"], "/d");
+        assert_eq!(cleaned["disk"], LEFT_OUT);
+    }
+
+    #[test]
+    fn the_places_and_the_network_the_user_chose_are_left_out() {
+        let text = r#"{"disk": "/mnt/Work Drive/vm.qcow2", "disk_folder": "/mnt/Work Drive", "iso": "/home/a/win.iso",
+                       "bridge": "br0", "only_through": "wg-home", "dns": ["192.168.1.53"], "forwards": [],
+                       "opencore": "", "cores": 4}"#;
+        let cleaned: Value = serde_json::from_str(&without_private_fields(text)).unwrap();
+        for field in ["disk", "disk_folder", "iso", "bridge", "only_through"] {
+            assert_eq!(cleaned[field], LEFT_OUT, "{field}");
+        }
+        assert_eq!(cleaned["dns"], "(left out): 1 of them");
+        assert_eq!(cleaned["opencore"], "", "an empty field still says it isn't set");
+        assert_eq!(cleaned["cores"], 4);
     }
 }

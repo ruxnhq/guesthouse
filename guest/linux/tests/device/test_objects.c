@@ -178,11 +178,86 @@ static void test_page_budget(void)
     objects_give_pages(o, 10, 100 * MIB);
 }
 
+static void add_pinned(Objects *o, uint32_t client, uint32_t parent, uint32_t object, uint32_t file, uint32_t pin)
+{
+    ObjectClaim claim = { MEMORY_NONE, 0 };
+    ObjectInfo info = { .client = client, .parent = parent, .object = object, .file = file, .pin = pin };
+
+    assert(objects_claim(o, &claim));
+    objects_add(o, &claim, 0, &info);
+}
+
+/* Pinned guest pages are let go only when nothing on the host reaches them any more. */
+static void test_pins(void)
+{
+    ObjectLimits limits = { .max_objects = 64, .max_bytes = { 0, 100 * MIB, 100 * MIB } };
+    Objects *o = objects_new(&limits, gone, &gone_calls);
+    uint32_t pin;
+
+    add(o, 1, 1, 1, MEMORY_NONE, 0, 1);
+    add(o, 2, 2, 2, MEMORY_NONE, 0, 2);
+    assert(objects_pin_held(o, 0) && objects_pin_held(o, 1000)); /* none, and one not made yet */
+
+    /* A duplicate in another client keeps the pages after the allocation goes. */
+    pin = objects_new_pin(o);
+    add_pinned(o, 1, 1, 10, 1, pin);
+    assert(objects_pin_of(o, 1, 10) == pin);
+    add_pinned(o, 2, 2, 20, 2, objects_pin_of(o, 1, 10));
+    objects_remove(o, 1, 10);
+    assert(objects_pin_held(o, pin));
+    assert(objects_pins_let_go(o) == 0);
+    objects_remove(o, 2, 2); /* the duplicate goes with its client */
+    assert(!objects_pin_held(o, pin) && objects_pins_let_go(o) == 1);
+
+    /* A CPU or UVM mapping holds the pages until its file closes. */
+    pin = objects_new_pin(o);
+    add_pinned(o, 1, 1, 11, 1, pin);
+    objects_pin_hold_file(o, pin, 5);
+    objects_remove(o, 1, 11);
+    assert(objects_pin_held(o, pin));
+    objects_file_closed(o, 6);
+    assert(objects_pin_held(o, pin));
+    objects_file_closed(o, 5);
+    assert(!objects_pin_held(o, pin));
+
+    /* An export holds them in its file, and an import from that file is an object of its own. */
+    pin = objects_new_pin(o);
+    add_pinned(o, 1, 1, 12, 1, pin);
+    objects_pin_export(o, pin, 9);
+    assert(objects_pin_exported(o, 9) == pin && objects_pin_exported(o, 8) == 0);
+    add(o, 3, 3, 3, MEMORY_NONE, 0, 3);
+    add_pinned(o, 3, 3, 30, 3, objects_pin_exported(o, 9));
+    objects_remove(o, 1, 12);
+    objects_file_closed(o, 9);
+    assert(objects_pin_exported(o, 9) == 0 && objects_pin_held(o, pin));
+    objects_remove(o, 3, 30);
+    assert(!objects_pin_held(o, pin));
+
+    /* What the device can't follow keeps them for good, and a pin let go is never taken up again. */
+    pin = objects_new_pin(o);
+    add_pinned(o, 1, 1, 13, 1, pin);
+    objects_pin_stick(o, pin);
+    objects_remove(o, 1, 13);
+    objects_file_closed(o, 1);
+    assert(objects_pin_held(o, pin));
+    {
+        uint32_t gone_pin = objects_new_pin(o);
+
+        add(o, 4, 4, 4, MEMORY_NONE, 0, 4);
+        add_pinned(o, 4, 4, 40, 4, gone_pin);
+        objects_remove(o, 4, 40);
+        assert(!objects_pin_held(o, gone_pin));
+        add_pinned(o, 4, 4, 41, 4, gone_pin);
+        assert(objects_pin_of(o, 4, 41) == 0 && !objects_pin_held(o, gone_pin));
+    }
+}
+
 int main(void)
 {
     test_objects();
     test_local_objects();
     test_page_budget();
+    test_pins();
     puts("ok");
     return 0;
 }

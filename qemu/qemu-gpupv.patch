@@ -11049,3 +11049,640 @@ index ccdf892..4bc00f0 100644
 2.56.1
 
 
+From e3fcc145814a80a6f727a3ed64cc8b8a53589b50 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:51:56 -0800
+Subject: [PATCH] hw/misc/nvfwd: room for 4096 sensor objects, up to 256 a file
+
+A file holds up to 256 sensor objects, far past what a driver makes, and the
+table holds 4096, so no one file can take every place.
+---
+ hw/misc/nvfwd/sensors.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/misc/nvfwd/sensors.c b/hw/misc/nvfwd/sensors.c
+index 4bc00f0..63119b3 100644
+--- a/hw/misc/nvfwd/sensors.c
++++ b/hw/misc/nvfwd/sensors.c
+@@ -61,8 +61,8 @@
+ /* The driver hands back a token for the mapping. Nothing in the guest reads it as an address. */
+ #define MAP_TOKEN 0x1000
+ 
+-#define MAX_OBJECTS 64
+-#define MAX_OBJECTS_PER_FILE 16 /* a driver makes one or two: no file takes every slot */
++#define MAX_OBJECTS 4096
++#define MAX_OBJECTS_PER_FILE 256 /* far past what a driver makes, so no file takes every slot */
+ #define MAX_MAPPING_FILES 4096
+ #define MAX_REFUSALS_LOGGED 64
+ 
+-- 
+2.56.1
+
+
+From d4d73ac6b4f0beb976ee8689464470b5049dcbe1 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:59:46 -0800
+Subject: [PATCH] hw/misc/nvfwd: say when a guest may unpin the pages of an OS
+ descriptor
+
+An OS descriptor allocation answers with a pin id. The pin is held while any
+object reaches its pages (the allocation, its duplicates, its imports), while
+a file that exported it, maps it on the CPU or maps it in UVM stays open, and
+for good once the viewer has imported it. A new call, NVFWD_OP_PIN_HELD, tells
+the guest whether a pin is still held and how many have been let go, so the
+guest asks again only after a change.
+---
+ hw/misc/nvfwd/accounting.c  |  13 +++-
+ hw/misc/nvfwd/accounting.h  |   3 +-
+ hw/misc/nvfwd/forward.c     |  89 +++++++++++++++++++++
+ hw/misc/nvfwd/nvfwd.c       |  11 +++
+ hw/misc/nvfwd/nvfwd_proto.h |   2 +-
+ hw/misc/nvfwd/objects.c     | 150 ++++++++++++++++++++++++++++++++++++
+ hw/misc/nvfwd/objects.h     |  20 +++++
+ hw/misc/nvfwd/rm_layout.h   |   3 +
+ hw/misc/nvfwd/show.c        |   7 +-
+ 9 files changed, 292 insertions(+), 6 deletions(-)
+
+diff --git a/hw/misc/nvfwd/accounting.c b/hw/misc/nvfwd/accounting.c
+index d3d0fee..f2faaa6 100644
+--- a/hw/misc/nvfwd/accounting.c
++++ b/hw/misc/nvfwd/accounting.c
+@@ -160,7 +160,8 @@ int account_status_at(uint32_t nr, uint32_t size)
+ }
+ 
+ /* What the driver reports it made. Handles it chose are in the same fields, filled in by now. */
+-static void describe(const AccountCall *call, MemoryKind hold_kind, ObjectInfo *info, uint64_t *bytes)
++static void describe(Objects *o, const AccountCall *call, MemoryKind hold_kind, ObjectInfo *info,
++                     uint64_t *bytes)
+ {
+     const uint8_t *arg = call->arg;
+ 
+@@ -187,11 +188,16 @@ static void describe(const AccountCall *call, MemoryKind hold_kind, ObjectInfo *
+         info->host_range = call->host_range;
+         info->host_bytes = call->host_bytes;
+         info->host_runs = call->host_runs;
++        if (call->host_range) {
++            info->pin = objects_new_pin(o); /* the guest pages stay pinned while this is held */
++        }
+         break;
+     case ESC_RM_DUP_OBJECT:
+         info->client = read32(arg + RM_DUP_CLIENT);
+         info->parent = read32(arg + RM_DUP_PARENT);
+         info->object = read32(arg + RM_DUP_OBJECT);
++        /* a duplicate holds what its source holds */
++        info->pin = objects_pin_of(o, read32(arg + RM_DUP_SOURCE_CLIENT), read32(arg + RM_DUP_SOURCE_OBJECT));
+         break;
+     case ESC_RM_ALLOC_CONTEXT_DMA2:
+         info->client = read32(arg + RM_DMA_ROOT);
+@@ -209,7 +215,7 @@ static void describe(const AccountCall *call, MemoryKind hold_kind, ObjectInfo *
+     }
+ }
+ 
+-bool account_after(Objects *o, const AccountCall *call, AccountHold *hold)
++bool account_after(Objects *o, AccountCall *call, AccountHold *hold)
+ {
+     int status_at = account_status_at(call->nr, call->size);
+     bool worked = !call->failed && status_at >= 0 &&
+@@ -227,8 +233,9 @@ bool account_after(Objects *o, const AccountCall *call, AccountHold *hold)
+         ObjectInfo info = { 0 };
+         uint64_t bytes = hold->claim.bytes;
+ 
+-        describe(call, hold->claim.kind, &info, &bytes);
++        describe(o, call, hold->claim.kind, &info, &bytes);
+         objects_add(o, &hold->claim, bytes, &info);
++        call->pin = info.pin;
+         return true;
+     }
+     objects_drop_claim(o, &hold->claim);
+diff --git a/hw/misc/nvfwd/accounting.h b/hw/misc/nvfwd/accounting.h
+index b9dccac..44105c1 100644
+--- a/hw/misc/nvfwd/accounting.h
++++ b/hw/misc/nvfwd/accounting.h
+@@ -20,6 +20,7 @@ typedef struct AccountCall {
+     void *host_range; /* guest pages mapped for this call, if any */
+     uint64_t host_bytes;
+     uint32_t host_runs; /* the mappings they took, from objects_take_pages() */
++    uint32_t pin;       /* set by account_after(): the pin of guest pages the call made, or 0 */
+     bool failed; /* the ioctl itself failed, so the driver wrote no status */
+ } AccountCall;
+ 
+@@ -32,7 +33,7 @@ typedef struct AccountHold {
+ uint32_t account_before(Objects *o, const AccountCall *call, AccountHold *hold);
+ 
+ /* After the driver has answered. Gives back the hold and returns false if the call made nothing. */
+-bool account_after(Objects *o, const AccountCall *call, AccountHold *hold);
++bool account_after(Objects *o, AccountCall *call, AccountHold *hold);
+ 
+ /* Where a status goes in these arguments, or -1 for calls that do not make or free anything. */
+ int account_status_at(uint32_t nr, uint32_t size);
+diff --git a/hw/misc/nvfwd/forward.c b/hw/misc/nvfwd/forward.c
+index 02e18f0..d47cb75 100644
+--- a/hw/misc/nvfwd/forward.c
++++ b/hw/misc/nvfwd/forward.c
+@@ -357,6 +357,91 @@ static void note_map_access(NvfwdState *s, const struct nvfwd_req *r, const uint
+     }
+ }
+ 
++#define CTRL_EXPORT_OBJECT_TO_FD 0x3d05
++#define CTRL_IMPORT_OBJECT_FROM_FD 0x3d06
++#define EXPORT_OBJECT 12 /* hObject in NV0000_CTRL_OS_UNIX_EXPORT_OBJECT_TO_FD_PARAMS */
++#define EXPORT_BYTES 24
++#define IMPORT_PARENT 12 /* hParent and hObject in ..._IMPORT_OBJECT_FROM_FD_PARAMS */
++#define IMPORT_OBJECT 16
++#define IMPORT_BYTES 20
++#define UVM_MAP_EXTERNAL_ALLOCATION 0x21
++#define UVM_EXTERNAL_CLIENT 9252 /* hClient, hMemory, rmStatus in UVM_MAP_EXTERNAL_ALLOCATION_PARAMS */
++#define UVM_EXTERNAL_MEMORY 9256
++#define UVM_EXTERNAL_STATUS 9260
++
++/* The guest file a call names through its fd field, or the call's own. */
++static uint32_t named_file(const struct nvfwd_req *r)
++{
++    uint32_t file = r->fdid;
++
++    for (uint32_t i = 0; i < r->nfix; i++) {
++        if (r->fix[i].kind == NVFWD_FIX_FD) {
++            file = r->fix[i].target;
++        }
++    }
++    return file;
++}
++
++/*
++ * After a call that worked: the ways guest pages under a pin stay reachable from the host beyond
++ * the object itself. Each holds the pin until the guest file it lives in closes; see objects.h.
++ */
++static void note_pin_holds(NvfwdState *s, const struct nvfwd_req *r, uint32_t nr, const uint8_t *arg,
++                           uint32_t size, bool uvm)
++{
++    const uint8_t *data = arg; /* for UVM, the whole call */
++    uint32_t client, object, status, cmd, params_size, pin;
++    uint64_t params;
++
++    if (uvm) {
++        if (r->cmd == UVM_MAP_EXTERNAL_ALLOCATION && r->len >= UVM_EXTERNAL_STATUS + 4) {
++            memcpy(&client, data + UVM_EXTERNAL_CLIENT, 4);
++            memcpy(&object, data + UVM_EXTERNAL_MEMORY, 4);
++            memcpy(&status, data + UVM_EXTERNAL_STATUS, 4);
++            pin = status == STATUS_OK ? objects_pin_of(s->objects, client, object) : 0;
++            objects_pin_hold_file(s->objects, pin, r->fdid);
++        }
++        return;
++    }
++    if (nr == ESC_RM_MAP_MEMORY && size >= RM_MAP_BYTES) {
++        memcpy(&client, arg + RM_MAP_CLIENT, 4);
++        memcpy(&object, arg + RM_MAP_HMEMORY, 4);
++        memcpy(&status, arg + RM_MAP_STATUS, 4);
++        if (status == STATUS_OK) {
++            objects_pin_hold_file(s->objects, objects_pin_of(s->objects, client, object), named_file(r));
++        }
++        return;
++    }
++    if (nr != ESC_RM_CONTROL || size < RM_CONTROL_BYTES) {
++        return;
++    }
++    memcpy(&client, arg + RM_CONTROL_CLIENT, 4);
++    memcpy(&cmd, arg + RM_CONTROL_CMD, 4);
++    memcpy(&params, arg + RM_CONTROL_PARAMS, 8);
++    memcpy(&params_size, arg + RM_CONTROL_PARAMS_SIZE, 4);
++    memcpy(&status, arg + RM_CONTROL_STATUS, 4);
++    if (status != STATUS_OK || !params) {
++        return;
++    }
++    /* By now the pointer is ours, and fits the size it claims. */
++    if (cmd == CTRL_EXPORT_OBJECT_TO_FD && params_size >= EXPORT_BYTES) {
++        memcpy(&object, (const uint8_t *)(uintptr_t)params + EXPORT_OBJECT, 4);
++        objects_pin_export(s->objects, objects_pin_of(s->objects, client, object), named_file(r));
++    } else if (cmd == CTRL_IMPORT_OBJECT_FROM_FD && params_size >= IMPORT_BYTES &&
++               (pin = objects_pin_exported(s->objects, named_file(r)))) {
++        ObjectClaim claim = { MEMORY_NONE, 0 };
++        ObjectInfo info = { .client = client, .file = r->fdid, .pin = pin };
++
++        memcpy(&info.parent, (const uint8_t *)(uintptr_t)params + IMPORT_PARENT, 4);
++        memcpy(&info.object, (const uint8_t *)(uintptr_t)params + IMPORT_OBJECT, 4);
++        if (objects_claim(s->objects, &claim)) {
++            objects_add(s->objects, &claim, 0, &info);
++        } else {
++            objects_pin_stick(s->objects, pin); /* an import the books can't hold keeps the pages */
++        }
++    }
++}
++
+ /* A call naming a GPU or a device other than the guest's one card: see card.h. */
+ static void refuse_other_card(NvfwdState *s, struct nvfwd_req *r, uint32_t nr, uint8_t *arg, uint32_t size)
+ {
+@@ -532,11 +617,15 @@ static void forward_ioctl(NvfwdState *s, Bounce *b, uint32_t *held, uint32_t *nh
+     if (!uvm && nr == ESC_RM_MAP_MEMORY && rc == 0) {
+         note_map_access(s, r, arg);
+     }
++    if (rc == 0) {
++        note_pin_holds(s, r, nr, uvm ? data : arg, size, uvm);
++    }
+     if (account.arg) {
+         account.failed = rc < 0;
+         if (!account_after(s->objects, &account, &hold)) {
+             undo_runs(s->objects, &account); /* the object that would have owned these pages does not exist */
+         }
++        r->a3 = account.pin; /* the guest keeps the pages pinned until this pin is let go */
+     }
+     if (s->trace) {
+         uint32_t a[10] = { 0 };
+diff --git a/hw/misc/nvfwd/nvfwd.c b/hw/misc/nvfwd/nvfwd.c
+index 3ad6536..96aa48b 100644
+--- a/hw/misc/nvfwd/nvfwd.c
++++ b/hw/misc/nvfwd/nvfwd.c
+@@ -21,6 +21,13 @@
+ #define DEFAULT_MAX_SYSMEM (8 * GiB)
+ #define DEFAULT_MAX_UVM (32 * GiB)
+ 
++
++/* 1 while the guest must keep the pages of this pin pinned, 0 once nothing on the host reaches them. */
++static int pin_held(NvfwdState *s, uint64_t pin)
++{
++    return pin > UINT32_MAX || objects_pin_held(s->objects, (uint32_t)pin);
++}
++
+ static void handle(NvfwdState *s, uint32_t slot)
+ {
+     uint8_t *base = s->slot_mem + (uint64_t)slot * NVFWD_SLOT_SIZE;
+@@ -88,6 +95,10 @@ static void handle(NvfwdState *s, uint32_t slot)
+     case NVFWD_OP_REFUSED: /* only written here, never read back, so the guest's copy is no matter */
+         r->ret = refused_list(s, (char *)base + NVFWD_HDR_SIZE, NVFWD_REFUSED_MAX * NVFWD_REFUSED_LINE);
+         break;
++    case NVFWD_OP_PIN_HELD: /* a0: a pin an OS descriptor allocation answered with; a3: how many have gone */
++        r->ret = pin_held(s, r->a0);
++        r->a3 = objects_pins_let_go(s->objects);
++        break;
+     case NVFWD_OP_POLL: {
+         struct pollfd p = { .fd = host_fd(s, r->fdid), .events = r->a0 };
+         int rc = poll(&p, 1, 0);
+diff --git a/hw/misc/nvfwd/nvfwd_proto.h b/hw/misc/nvfwd/nvfwd_proto.h
+index 8f06fe0..8153cf5 100644
+--- a/hw/misc/nvfwd/nvfwd_proto.h
++++ b/hw/misc/nvfwd/nvfwd_proto.h
+@@ -16,7 +16,7 @@
+ 
+ enum { NVFWD_OP_OPEN = 1, NVFWD_OP_CLOSE, NVFWD_OP_IOCTL, NVFWD_OP_MMAP, NVFWD_OP_MUNMAP, NVFWD_OP_POLL,
+        NVFWD_OP_SHOW_BUFFER, NVFWD_OP_SHOW_NEXT, NVFWD_OP_SHOW_FRAME, NVFWD_OP_SHOW_SURFACE, NVFWD_OP_SHOW_READING, NVFWD_OP_SHOW_RATE,
+-       NVFWD_OP_REFUSED };
++       NVFWD_OP_REFUSED, NVFWD_OP_PIN_HELD };
+ /* What REFUSED answers: up to this many lines, one per kind of call the device turned down since it started. */
+ #define NVFWD_REFUSED_MAX 64u
+ #define NVFWD_REFUSED_LINE 48u
+diff --git a/hw/misc/nvfwd/objects.c b/hw/misc/nvfwd/objects.c
+index 777ca83..c8f1af8 100644
+--- a/hw/misc/nvfwd/objects.c
++++ b/hw/misc/nvfwd/objects.c
+@@ -22,8 +22,18 @@ struct Objects {
+     uint64_t used[MEMORY_KINDS];
+     uint64_t page_bytes; /* guest pages mapped, see objects_take_pages() */
+     uint32_t page_runs;
++    GHashTable *pins;    /* pin id to Pin, while anything holds it */
++    GHashTable *exports; /* guest file to the pin of the object exported into it */
++    uint32_t next_pin;
++    uint64_t pins_let_go;
+ };
+ 
++typedef struct Pin {
++    uint32_t objects; /* entries holding it */
++    GArray *files;    /* guest files holding it, one place per hold */
++    bool sticky;
++} Pin;
++
+ static uint64_t key_of(uint32_t client, uint32_t object)
+ {
+     return (uint64_t)client << 32 | object;
+@@ -42,6 +52,9 @@ Objects *objects_new(const ObjectLimits *limits, ObjectGoneFn *gone, void *opaqu
+ 
+     g_mutex_init(&o->lock);
+     o->entries = g_hash_table_new(g_int64_hash, g_int64_equal);
++    o->pins = g_hash_table_new(g_direct_hash, g_direct_equal);
++    o->exports = g_hash_table_new(g_direct_hash, g_direct_equal);
++    o->next_pin = 1;
+     o->limits = *limits;
+     o->gone = gone;
+     o->opaque = opaque;
+@@ -129,6 +142,24 @@ static void unlink_child(Entry *e)
+     e->parent = e->prev = e->next = NULL;
+ }
+ 
++static Pin *pin_find(Objects *o, uint32_t pin)
++{
++    return pin ? g_hash_table_lookup(o->pins, GUINT_TO_POINTER(pin)) : NULL;
++}
++
++/* With the lock held: lets the pin go once nothing holds it. */
++static void pin_settle(Objects *o, uint32_t id)
++{
++    Pin *p = pin_find(o, id);
++
++    if (p && !p->objects && !p->files->len && !p->sticky) {
++        g_hash_table_remove(o->pins, GUINT_TO_POINTER(id));
++        g_array_free(p->files, TRUE);
++        g_free(p);
++        o->pins_let_go++;
++    }
++}
++
+ static void forget(Objects *o, Entry *e)
+ {
+     while (e->first_child) {
+@@ -136,6 +167,10 @@ static void forget(Objects *o, Entry *e)
+     }
+     unlink_child(e);
+     g_hash_table_remove(o->entries, &e->key);
++    if (pin_find(o, e->info.pin)) {
++        pin_find(o, e->info.pin)->objects--;
++        pin_settle(o, e->info.pin);
++    }
+     o->count--;
+     o->used[e->kind] -= e->bytes;
+     if (e->info.host_range) {
+@@ -154,6 +189,11 @@ static void insert(Objects *o, Entry *e)
+     o->count++;
+     o->used[e->kind] += e->bytes;
+     g_hash_table_insert(o->entries, &e->key, e);
++    if (pin_find(o, info->pin)) {
++        pin_find(o, info->pin)->objects++;
++    } else {
++        e->info.pin = 0; /* a pin already let go is not taken up again */
++    }
+     /* An object the parent of which was never seen still goes with its client. */
+     parent = find(o, info->client, info->parent);
+     if (!parent) {
+@@ -235,10 +275,120 @@ void objects_file_closed(Objects *o, uint32_t file)
+     for (guint i = 0; i < clients->len; i++) {
+         forget(o, g_ptr_array_index(clients, i));
+     }
++    {
++        GHashTableIter pins;
++        gpointer id;
++        Pin *p;
++        GArray *settle = g_array_new(FALSE, FALSE, sizeof(uint32_t));
++
++        g_hash_table_remove(o->exports, GUINT_TO_POINTER(file));
++        g_hash_table_iter_init(&pins, o->pins);
++        while (g_hash_table_iter_next(&pins, &id, (void **)&p)) {
++            for (guint i = p->files->len; i-- > 0;) {
++                if (g_array_index(p->files, uint32_t, i) == file) {
++                    g_array_remove_index_fast(p->files, i);
++                }
++            }
++            g_array_append_val(settle, (uint32_t){ GPOINTER_TO_UINT(id) });
++        }
++        for (guint i = 0; i < settle->len; i++) {
++            pin_settle(o, g_array_index(settle, uint32_t, i));
++        }
++        g_array_free(settle, TRUE);
++    }
+     g_mutex_unlock(&o->lock);
+     g_ptr_array_free(clients, TRUE);
+ }
+ 
++uint32_t objects_new_pin(Objects *o)
++{
++    Pin *p = g_new0(Pin, 1);
++    uint32_t id;
++
++    p->files = g_array_new(FALSE, FALSE, sizeof(uint32_t));
++    g_mutex_lock(&o->lock);
++    id = o->next_pin++;
++    g_hash_table_insert(o->pins, GUINT_TO_POINTER(id), p);
++    g_mutex_unlock(&o->lock);
++    return id;
++}
++
++uint32_t objects_pin_of(Objects *o, uint32_t client, uint32_t object)
++{
++    Entry *e;
++    uint32_t pin;
++
++    g_mutex_lock(&o->lock);
++    e = find(o, client, object);
++    pin = e ? e->info.pin : 0;
++    g_mutex_unlock(&o->lock);
++    return pin;
++}
++
++void objects_pin_hold_file(Objects *o, uint32_t pin, uint32_t file)
++{
++    Pin *p;
++
++    g_mutex_lock(&o->lock);
++    p = pin_find(o, pin);
++    if (p) {
++        g_array_append_val(p->files, file);
++    }
++    g_mutex_unlock(&o->lock);
++}
++
++void objects_pin_stick(Objects *o, uint32_t pin)
++{
++    Pin *p;
++
++    g_mutex_lock(&o->lock);
++    p = pin_find(o, pin);
++    if (p) {
++        p->sticky = true;
++    }
++    g_mutex_unlock(&o->lock);
++}
++
++bool objects_pin_held(Objects *o, uint32_t pin)
++{
++    bool held;
++
++    g_mutex_lock(&o->lock);
++    held = !pin || pin >= o->next_pin || pin_find(o, pin);
++    g_mutex_unlock(&o->lock);
++    return held;
++}
++
++uint64_t objects_pins_let_go(Objects *o)
++{
++    uint64_t count;
++
++    g_mutex_lock(&o->lock);
++    count = o->pins_let_go;
++    g_mutex_unlock(&o->lock);
++    return count;
++}
++
++void objects_pin_export(Objects *o, uint32_t pin, uint32_t file)
++{
++    g_mutex_lock(&o->lock);
++    if (pin_find(o, pin)) {
++        g_array_append_val(pin_find(o, pin)->files, file);
++        g_hash_table_insert(o->exports, GUINT_TO_POINTER(file), GUINT_TO_POINTER(pin));
++    }
++    g_mutex_unlock(&o->lock);
++}
++
++uint32_t objects_pin_exported(Objects *o, uint32_t file)
++{
++    uint32_t pin;
++
++    g_mutex_lock(&o->lock);
++    pin = GPOINTER_TO_UINT(g_hash_table_lookup(o->exports, GUINT_TO_POINTER(file)));
++    g_mutex_unlock(&o->lock);
++    return pin;
++}
++
+ bool objects_has_client(Objects *o, uint32_t client)
+ {
+     bool found;
+diff --git a/hw/misc/nvfwd/objects.h b/hw/misc/nvfwd/objects.h
+index 4400dbd..506c015 100644
+--- a/hw/misc/nvfwd/objects.h
++++ b/hw/misc/nvfwd/objects.h
+@@ -37,6 +37,7 @@ typedef struct ObjectInfo {
+     void *host_range; /* guest pages mapped for the driver, unmapped when the object goes */
+     uint64_t host_bytes;
+     uint32_t host_runs; /* the mappings they took, held from objects_take_pages() */
++    uint32_t pin;       /* the guest pages behind this object, or 0: see objects_new_pin() */
+ } ObjectInfo;
+ 
+ typedef struct Objects Objects;
+@@ -74,6 +75,25 @@ void objects_file_closed(Objects *o, uint32_t file);
+ bool objects_has_client(Objects *o, uint32_t client);
+ bool objects_is_local(Objects *o, uint32_t client, uint32_t object);
+ bool objects_has(Objects *o, uint32_t client, uint32_t object);
++
++/*
++ * Guest pages pinned in the guest for an OS descriptor allocation. The guest may let them go only
++ * when nothing on the host can still reach them: no object holding them (the allocation, its
++ * duplicates and imports), no file holding them (an export, a CPU mapping, a UVM mapping, which
++ * hold until that guest file closes), and nothing the device can't follow (sticky: held for good).
++ * Ids are never used twice, so an id this side no longer knows has been let go.
++ */
++uint32_t objects_new_pin(Objects *o);
++uint32_t objects_pin_of(Objects *o, uint32_t client, uint32_t object);
++void objects_pin_hold_file(Objects *o, uint32_t pin, uint32_t file);
++void objects_pin_stick(Objects *o, uint32_t pin);
++bool objects_pin_held(Objects *o, uint32_t pin);
++/* How many pins have been let go so far: a guest asks again only when this changes. */
++uint64_t objects_pins_let_go(Objects *o);
++
++/* The pin an export into this file carries, or 0; set by objects_pin_export(). */
++void objects_pin_export(Objects *o, uint32_t pin, uint32_t file);
++uint32_t objects_pin_exported(Objects *o, uint32_t file);
+ uint32_t objects_count(Objects *o);
+ uint64_t objects_bytes(Objects *o, MemoryKind kind);
+ 
+diff --git a/hw/misc/nvfwd/rm_layout.h b/hw/misc/nvfwd/rm_layout.h
+index 112a3ab..ca21401 100644
+--- a/hw/misc/nvfwd/rm_layout.h
++++ b/hw/misc/nvfwd/rm_layout.h
+@@ -32,6 +32,8 @@
+ #define RM_MEMORY_STATUS 40
+ #define RM_MEMORY_FD 48
+ #define RM_MAP_BYTES 56u
++#define RM_MAP_CLIENT 0
++#define RM_MAP_HMEMORY 8
+ #define RM_MAP_STATUS 40
+ #define RM_MAP_FLAGS 44
+ #define RM_MAP_FD 48
+@@ -88,6 +90,7 @@
+ #define RM_DUP_PARENT 4
+ #define RM_DUP_OBJECT 8
+ #define RM_DUP_SOURCE_CLIENT 12
++#define RM_DUP_SOURCE_OBJECT 16
+ #define RM_DUP_STATUS 24
+ #define RM_DMA_BYTES 56u
+ #define RM_DMA_ROOT 0
+diff --git a/hw/misc/nvfwd/show.c b/hw/misc/nvfwd/show.c
+index 9055704..58749c6 100644
+--- a/hw/misc/nvfwd/show.c
++++ b/hw/misc/nvfwd/show.c
+@@ -176,7 +176,11 @@ void do_show_buffer(NvfwdState *s, struct nvfwd_req *r)
+         r->ret = -EINVAL;
+         return;
+     }
+-    int dmabuf = import_dmabuf(s, fd, size);
++    int dmabuf;
++
++    /* The viewer's import holds the exported object for as long as it likes: its pages stay pinned. */
++    objects_pin_stick(s->objects, objects_pin_exported(s->objects, r->fdid));
++    dmabuf = import_dmabuf(s, fd, size);
+     if (dmabuf < 0) {
+         r->ret = -EIO;
+         return;
+@@ -226,6 +230,7 @@ void do_show_surface(NvfwdState *s, struct nvfwd_req *r)
+         r->ret = -EINVAL;
+         return;
+     }
++    objects_pin_stick(s->objects, objects_pin_exported(s->objects, r->fdid));
+     dmabuf = import_dmabuf_laid_out(s, fd, size, layout, gobs_y, pitch_blocks, generic);
+     if (dmabuf < 0) {
+         r->ret = -EIO;
+-- 
+2.56.1
+
+
+From 4541544ea9fa2ceea3ad578fd64abdc7bd80db11 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 10:01:49 -0800
+Subject: [PATCH] hw/hyperv: send a time sample only while the VM runs and the
+ clock was read
+
+A paused VM gets no samples, and a sample whose reference time could not be
+read is not sent, as the guest would take it for one as old as its uptime.
+---
+ hw/hyperv/hv-timesync.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/hw/hyperv/hv-timesync.c b/hw/hyperv/hv-timesync.c
+index d258fcc..ace5d38 100644
+--- a/hw/hyperv/hv-timesync.c
++++ b/hw/hyperv/hv-timesync.c
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#include "system/runstate.h"
+ #include "qemu/error-report.h"
+ #include "qemu/module.h"
+ #include "qemu/timer.h"
+@@ -170,14 +171,15 @@ static void offer_versions(HvTimeSync *sync)
+  * clock it gives here. The guest takes off how old a sample is by this, so the
+  * time it sets doesn't depend on how long the message took to reach it.
+  */
+-static uint64_t reference_time(void)
++static bool reference_time(uint64_t *ticks)
+ {
+     struct kvm_clock_data clock = { 0 };
+ 
+     if (kvm_vm_ioctl(kvm_state, KVM_GET_CLOCK, &clock) < 0) {
+-        return 0;
++        return false;
+     }
+-    return clock.clock / NS_PER_TICK;
++    *ticks = clock.clock / NS_PER_TICK;
++    return true;
+ }
+ 
+ static void send_time(HvTimeSync *sync, uint8_t flags)
+@@ -189,7 +191,7 @@ static void send_time(HvTimeSync *sync, uint8_t flags)
+             OldTimeSample old_sample;
+         };
+     } message = { 0 };
+-    uint64_t reference = reference_time();
++    uint64_t reference = 0;
+     uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_HOST) / NS_PER_TICK +
+                    WINDOWS_EPOCH_TICKS;
+     bool has_reference =
+@@ -197,6 +199,10 @@ static void send_time(HvTimeSync *sync, uint8_t flags)
+     uint16_t size = has_reference ? sizeof(message.sample)
+                                   : sizeof(message.old_sample);
+ 
++    /* A sample with no reference time would look as old as the guest's uptime: none is sent. */
++    if (!runstate_is_running() || (has_reference && !reference_time(&reference))) {
++        return;
++    }
+     fill_header(sync, &message.header, MESSAGE_TIMESYNC, size);
+     if (has_reference) {
+         message.sample.parent_time = now;
+-- 
+2.56.1
+
+

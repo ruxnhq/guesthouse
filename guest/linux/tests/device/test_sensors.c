@@ -267,10 +267,10 @@ static void handles_are_not_shared_and_a_file_holds_few(FILE *log)
     assert(alloc_handle(s, OBJECT, false) == STATUS_OK);
     assert(alloc_handle(s, OBJECT, false) == 0x19);     /* the same handle again */
     assert(alloc_handle(s, OBJECT + 1, true) == 0x19);  /* a handle the device holds for a real object */
-    for (uint32_t i = 1; i < 16; i++) {
+    for (uint32_t i = 1; i < 256; i++) {
         assert(alloc_handle(s, OBJECT + 1 + i, false) == STATUS_OK);
     }
-    assert(alloc_handle(s, OBJECT + 100, false) == 0x1a);
+    assert(alloc_handle(s, OBJECT + 1000, false) == 0x1a);
     sensors_file_closed(s, FILE_ID);
     assert(alloc_handle(s, OBJECT, false) == STATUS_OK);
 }

@@ -10,6 +10,7 @@
 //! The tests that need Windows itself, as a file in use or the registry, run only on Windows.
 #![cfg(test)]
 
+mod agent;
 mod ctl_channel;
 mod nv_files;
 mod nv_store;

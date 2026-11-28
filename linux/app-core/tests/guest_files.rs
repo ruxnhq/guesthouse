@@ -177,12 +177,15 @@ fn a_stopped_helper_leaves_no_powershell_and_one_that_cannot_listen_leaves() {
         assert!(text.contains("try { $client = $listener.AcceptTcpClient() } catch { exit 1 }"), "{helper}");
     }
     let windows = fs::read_to_string(guest_file("app-windows.cs")).unwrap();
+    assert!(windows.contains("try { listener.Start(); } catch { Environment.Exit(1); }"));
     assert!(
-        windows.contains(
-            "try { listener.Start(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); }"
-        )
+        windows
+            .contains("try { client = listener.AcceptTcpClient(); } catch { Environment.Exit(1); return; }")
     );
-    assert!(windows.contains("try { client = listener.AcceptTcpClient(); } catch (Exception ex) { LogError(ex); Environment.Exit(1); return; }"));
+    // It writes nothing in the guest's folder, which is SYSTEM's and the administrators'.
+    for write in ["File.WriteAllText", "File.AppendAllText", "File.Create(", "StreamWriter(Dir"] {
+        assert!(!windows.contains(write), "{write}");
+    }
     for name in ["clipboard", "files", "window-size", "app-windows"] {
         let start = fs::read_to_string(guest_file(&format!("{name}-start.ps1"))).unwrap();
         assert!(start.contains(&format!("-File C:\\gpupv\\{name}.ps1")), "the stop finds it by this: {name}");

@@ -444,3 +444,24 @@ fn the_values_of_a_cell_keep_their_names() {
     assert_eq!(serde_json::to_string(&State::Minimized).unwrap(), "\"minimized\"");
     assert_eq!(serde_json::to_string(&Display::default()).unwrap(), r#"{"scale":0,"steps":[],"need":null}"#);
 }
+
+#[test]
+fn a_layout_holds_no_more_cells_than_the_limit() {
+    let first = layout_of(
+        &helper_messages()
+            .iter()
+            .find(|m| matches!(m, GuestMessage::Layout(l) if !l.cells.is_empty()))
+            .unwrap()
+            .clone(),
+    );
+    let template = first.cells[0].clone();
+    let cells =
+        (0..MOST_CELLS + 50).map(|n| Cell { id: n.to_string(), ..template.clone() }).collect::<Vec<_>>();
+    let mut model = Model::default();
+    let applied = model.layout(&Layout { seq: 1, screen: first.screen, cells });
+    assert_eq!(model.cells().len(), MOST_CELLS);
+    assert_eq!(
+        applied.changes.iter().filter(|change| matches!(change, Change::Added(_))).count(),
+        MOST_CELLS
+    );
+}

@@ -48,6 +48,9 @@ pub const SAME_COMMANDS_PER_STEP: usize = 2;
 /// crossed them. No run of readings today's pairing can be fed gets here without sending the same
 /// commands a third time first, so this is a guard for a pairing that changes.
 pub const ROUNDS_PER_STEP: usize = 16;
+/// How long one step goes on sending rounds, in milliseconds. A round that began inside it is
+/// finished; the next one is not begun.
+pub const STEP_MOST_MS: Millis = 90_000;
 
 /// The guest gave no answer to a command, or not all of one, in the host's words: the command may
 /// or may not have run.
@@ -74,6 +77,18 @@ pub const STILL_UNSURE: &str =
 fn not_taken(commands: &[Words]) -> String {
     let sent = commands.iter().map(|words| words.join(" ")).collect::<Vec<_>>().join(", ");
     format!("The guest did not take {sent}. It is asked again at the next reading.")
+}
+
+/// Whether a step that began at `began` (the first time it looked) and has sent rounds is over its
+/// time at `at`.
+fn past_its_time(began: &mut Option<Millis>, sent_rounds: bool, at: Millis) -> bool {
+    let first = *began.get_or_insert(at);
+    sent_rounds && at.saturating_sub(first) > STEP_MOST_MS
+}
+
+fn took_too_long() -> String {
+    "The guest's host kept this step going for longer than a step may take. It is read again at the next one."
+        .to_string()
 }
 
 fn too_many_rounds() -> String {
@@ -240,6 +255,7 @@ impl Driver<'_> {
         let mut events = if read_first { vec![event, StepEvent::Read] } else { vec![event] };
         let mut refused = None;
         let mut sent: Vec<Vec<Words>> = Vec::new();
+        let mut began = None;
         while let Some(event) = events.pop() {
             let reading;
             let step = match &event {
@@ -247,11 +263,23 @@ impl Driver<'_> {
                     refused = Some(STILL_UNSURE.to_string());
                     break;
                 }
-                StepEvent::Plain(event) => pairing.step((self.now)(), *event),
+                StepEvent::Plain(event) => {
+                    let at = (self.now)();
+                    if past_its_time(&mut began, !sent.is_empty(), at) {
+                        refused = refused.or(Some(self.give_up()));
+                        break;
+                    }
+                    pairing.step(at, *event)
+                }
                 StepEvent::Read => {
                     reading = self.read();
                     let Some(status) = &reading else { continue };
-                    pairing.step((self.now)(), Event::Reading(status))
+                    let at = (self.now)();
+                    if past_its_time(&mut began, !sent.is_empty(), at) {
+                        refused = refused.or(Some(self.give_up()));
+                        break;
+                    }
+                    pairing.step(at, Event::Reading(status))
                 }
             };
             refused = refused.or(step.refused);
@@ -288,6 +316,12 @@ impl Driver<'_> {
         }
         self.sessions.with(self.machine, |session| session.pairing = Some(pairing));
         refused
+    }
+
+    fn give_up(&self) -> String {
+        let why = took_too_long();
+        self.guest.log(&why);
+        why
     }
 
     /// Sends a round's commands in order, each once the one before has been answered. Gives why

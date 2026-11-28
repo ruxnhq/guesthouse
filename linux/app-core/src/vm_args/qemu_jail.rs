@@ -253,7 +253,7 @@ impl VmPlan {
             words: self.passt_words(),
             only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
                 interface: through.interface.clone(),
-                cut_file: self.run_folder.join(launch::CUT_FILE),
+                cut_file: crate::paths::notes_beside(&self.run_folder).join(launch::CUT_FILE),
             }),
         })
     }

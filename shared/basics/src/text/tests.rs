@@ -50,3 +50,13 @@ fn base64_reading_takes_what_it_always_took() {
     assert_eq!(base64_decode("Zm=9v"), None, "padding inside is not");
     assert_eq!(base64_decode("Zm9v-_"), None, "nor is the URL alphabet");
 }
+
+#[test]
+fn hidden_characters_are_shown_as_codes_and_a_long_text_is_cut() {
+    assert_eq!(shown("a\x1b]0;x\x07b\u{202e}c", false), "a<1b>]0;x<07>b<202e>c");
+    assert_eq!(shown("one\ntwo\r\tz", true), "one\ntwo<0d>\tz");
+    assert_eq!(shown("one\ntwo", false), "one<0a>two");
+    assert_eq!(shown_short("abcdef", 3), "abc...");
+    assert_eq!(shown_short("abc", 3), "abc");
+    assert!(is_hidden('\u{200b}') && !is_hidden('e'));
+}

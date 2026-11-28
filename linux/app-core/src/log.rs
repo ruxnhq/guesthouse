@@ -23,8 +23,35 @@ pub fn open_for_appending(context: &Context) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
+/// The size at which the log is set aside as `guesthouse.log.old` (the one before is replaced) and a
+/// new one is begun, so the log's folder never holds more than twice this.
+pub const MOST_LOG_FILE_BYTES: u64 = 8 << 20;
+
+/// The most one entry holds, in characters. A longer one is cut.
+pub const MOST_ENTRY_CHARS: usize = 1 << 14;
+
+fn set_aside_when_large(context: &Context) {
+    let path = context.paths.log_file();
+    if fs::metadata(&path).is_ok_and(|found| found.len() > MOST_LOG_FILE_BYTES) {
+        let mut old = path.clone().into_os_string();
+        old.push(".old");
+        let _ = fs::rename(&path, old);
+    }
+}
+
+/// Adds one entry. Characters that move a terminal's cursor or hide text are written as codes, and
+/// an entry past [`MOST_ENTRY_CHARS`] is cut.
 pub fn write_log(context: &Context, text: &str) -> io::Result<()> {
-    writeln!(open_for_appending(context)?, "{} {}", clock_text(), text.trim_end())
+    set_aside_when_large(context);
+    let text = text.trim_end();
+    let cut = text.char_indices().nth(MOST_ENTRY_CHARS).map_or(text, |(end, _)| &text[..end]);
+    let more = if cut.len() < text.len() { "..." } else { "" };
+    writeln!(
+        open_for_appending(context)?,
+        "{} {}{more}",
+        clock_text(),
+        guesthouse_basics::text::shown(cut, true)
+    )
 }
 
 /// Writes any panic to the log too, with where it happened and how it got there, as the terminal
@@ -70,6 +97,32 @@ mod tests {
         let log = read_log(&context);
         assert!(log.contains("panic: ") && log.contains("the planted panic"), "{log}");
         assert!(log.contains("log.rs"), "it says where");
+    }
+
+    #[test]
+    fn an_entry_is_cut_and_shows_its_hidden_characters_as_codes() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        write_log(&context, "plain\x1b]0;title\x07 words").unwrap();
+        write_log(&context, &"y".repeat(MOST_ENTRY_CHARS * 4)).unwrap();
+        let text = read_log(&context);
+        assert!(text.contains("plain<1b>]0;title<07> words"), "{text}");
+        assert!(!text.contains('\x1b'));
+        assert!(text.len() < MOST_ENTRY_CHARS + 200, "{}", text.len());
+    }
+
+    #[test]
+    fn a_log_past_its_size_is_set_aside_and_a_new_one_begun() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        write_log(&context, "first").unwrap();
+        let filler = "x".repeat(MOST_LOG_FILE_BYTES as usize);
+        write!(open_for_appending(&context).unwrap(), "{filler}").unwrap();
+        write_log(&context, "second").unwrap();
+        let text = read_log(&context);
+        assert!(text.ends_with("second\n") && text.len() < 100, "{}", text.len());
+        let old = fs::read_to_string(format!("{}.old", context.paths.log_file().display())).unwrap();
+        assert!(old.starts_with(|c: char| c.is_ascii_digit()) && old.contains("first"));
     }
 
     #[test]

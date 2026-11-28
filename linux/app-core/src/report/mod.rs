@@ -50,7 +50,7 @@ pub fn write_in_reports_folder(
     words: &Words,
 ) -> crate::Result<Bundle> {
     let folder = reports_folder(context);
-    fs::create_dir_all(&folder)?;
+    crate::context::make_private_folder(&folder)?;
     let scrubber = scrubber_for(context, collection.machine.as_deref());
     let bundle = write_bundle(collection, words, &scrubber, &folder)?;
     let mut kept: Vec<PathBuf> = fs::read_dir(&folder)?.flatten().map(|entry| entry.path()).collect();
@@ -80,7 +80,11 @@ pub fn before_sending(collection: &Collection, kind: ProblemKind) -> Option<Stri
 pub fn scrubber_for(context: &Context, about: Option<&str>) -> Scrubber {
     let ids: Vec<String> =
         sorted_names(&context.paths.machines).into_iter().filter(|name| valid_id(name)).collect();
-    Scrubber::for_this_pc(&context.paths.home).with_machines(about, &ids)
+    let scrubber = Scrubber::for_this_pc(&context.paths.home).with_machines(about, &ids);
+    match about.and_then(|id| crate::machine::load(context, id).ok()) {
+        Some(machine) => scrubber.with_guest_account(&machine.user),
+        None => scrubber,
+    }
 }
 
 /// The link to a new issue for a sent report, with the app's own log, scrubbed, for its excerpt.

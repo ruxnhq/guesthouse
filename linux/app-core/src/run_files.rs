@@ -15,15 +15,14 @@ use std::time::SystemTime;
 
 /// What the host's side of a run leaves: the daemon's output and QEMU's, QEMU's own log, the TPM's,
 /// the Linux GPU device's calls, and the small notes the app and the daemon leave for the machine's
-/// row (written in jailing.rs, daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs
-/// and actions/desktop.rs).
-pub const HOST_LOGS: [&str; 10] = [
+/// row (written in daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs and
+/// actions/desktop.rs). The jail's note is the app's own, in its notes folder: see `jailing.rs`.
+pub const HOST_LOGS: [&str; 9] = [
     daemon::OUTPUT_FILE,
     vm_args::OUTPUT_FILE,
     "qemu.log",
     "swtpm.log",
     "calls.log",
-    "jail-note",
     "display-ring",
     "gpu-stopped",
     "gpu-off-reason",
@@ -42,9 +41,17 @@ pub const KEPT_SUFFIX: &str = ".1";
 
 /// The machine a note names and when it was written, which is when that run started.
 pub fn noted_run(folder: &Path, note: &str) -> Option<(String, SystemTime)> {
-    let path = folder.join(note);
+    let path = crate::paths::notes_beside(folder).join(note);
     let id = fs::read_to_string(&path).ok()?.trim().to_owned();
     (!id.is_empty()).then_some(id).zip(modified(&path))
+}
+
+/// Writes a machine note beside `folder` as a run leaves it, for a test.
+#[cfg(test)]
+pub fn plant_note(folder: &Path, note: &str, text: &str) {
+    let notes = crate::paths::notes_beside(folder);
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(notes.join(note), text).unwrap();
 }
 
 /// When this machine's current run in the folder started, if the folder's run is this machine's.

@@ -11827,3 +11827,80 @@ index d258fcc..ace5d38 100644
 2.56.1
 
 
+From 564024335d85cbd4fbe93f3964ca42c1fcfccfc5 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 12:14:10 -0800
+Subject: [PATCH] hw/hyperv: give back the ring room of a time sample that was
+ not sent
+
+A send that fails after its room was reserved left that room held, so each
+later send had less. The room now goes back when the send fails.
+---
+ hw/hyperv/hv-timesync.c   |  9 +++++++--
+ hw/hyperv/vmbus.c         | 11 +++++++++++
+ include/hw/hyperv/vmbus.h |  7 +++++++
+ 3 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/hw/hyperv/hv-timesync.c b/hw/hyperv/hv-timesync.c
+index ace5d38..c3cf1e3 100644
+--- a/hw/hyperv/hv-timesync.c
++++ b/hw/hyperv/hv-timesync.c
+@@ -139,8 +139,13 @@ static bool send_message(HvTimeSync *sync, void *message, uint32_t size)
+     if (!chan || vmbus_channel_reserve(chan, 0, size) < 0) {
+         return false;
+     }
+-    return vmbus_channel_send(chan, VMBUS_PACKET_DATA_INBAND, NULL, 0,
+-                              message, size, false, 0) >= 0;
++    if (vmbus_channel_send(chan, VMBUS_PACKET_DATA_INBAND, NULL, 0,
++                           message, size, false, 0) < 0) {
++        /* The send did not take the room it was given: the next one may. */
++        vmbus_channel_unreserve(chan, 0, size);
++        return false;
++    }
++    return true;
+ }
+ 
+ static void offer_versions(HvTimeSync *sync)
+diff --git a/hw/hyperv/vmbus.c b/hw/hyperv/vmbus.c
+index 9f16891..2a38c1b 100644
+--- a/hw/hyperv/vmbus.c
++++ b/hw/hyperv/vmbus.c
+@@ -952,6 +952,17 @@ out:
+     return needed ? -ENOSPC : 0;
+ }
+ 
++void vmbus_channel_unreserve(VMBusChannel *chan,
++                             uint32_t desclen, uint32_t msglen)
++{
++    VMBusSendRingBuf *ringbuf = &chan->send_ringbuf;
++    vmbus_packet_hdr hdr;
++    uint32_t len = vmbus_pkt_hdr_set_offsets(&hdr, desclen, msglen);
++
++    assert(len <= ringbuf->reserved);
++    ringbuf->reserved -= len;
++}
++
+ ssize_t vmbus_channel_send(VMBusChannel *chan, uint16_t pkt_type,
+                            void *desc, uint32_t desclen,
+                            void *msg, uint32_t msglen,
+diff --git a/include/hw/hyperv/vmbus.h b/include/hw/hyperv/vmbus.h
+index 4e3ec98..a2a7d7f 100644
+--- a/include/hw/hyperv/vmbus.h
++++ b/include/hw/hyperv/vmbus.h
+@@ -125,6 +125,13 @@ void vmbus_channel_notify_host(VMBusChannel *chan);
+ int vmbus_channel_reserve(VMBusChannel *chan,
+                           uint32_t desclen, uint32_t msglen);
+ 
++/*
++ * Give back the space reserved for a packet that will not be sent: the same
++ * desclen and msglen as the reservation was made with.
++ */
++void vmbus_channel_unreserve(VMBusChannel *chan,
++                             uint32_t desclen, uint32_t msglen);
++
+ /*
+  * Send a packet to the guest.  The space for the packet MUST be reserved
+  * first.
+-- 
+2.56.1
+

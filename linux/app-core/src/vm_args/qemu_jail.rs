@@ -76,10 +76,29 @@ const IN_THE_BASE: [&str; 3] = ["/usr", "/proc", "/sys"];
 /// found on. NixOS has them in its system's programs, which are among the folders a jail grants.
 const PATH: &str = "/usr/bin:/usr/sbin:/run/current-system/sw/bin";
 
-/// The folder above the one QEMU is in: a QEMU in its build folder finds its firmware and libraries
-/// through links to there, and for the system's it's `/usr`.
-fn qemu_tree(qemu: &Path) -> PathBuf {
-    qemu.parent().and_then(Path::parent).unwrap_or(qemu).to_owned()
+/// Where QEMU's own files are beside the folder above its own, which it loads firmware, libraries
+/// and helpers from: a build folder's next to it, or an install's in its prefix.
+const QEMU_FILES: [(Grant, &str); 5] = [
+    (Grant::Read, "pc-bios"),
+    (Grant::Read, "share/qemu"),
+    (Grant::Run, "lib"),
+    (Grant::Run, "lib64"),
+    (Grant::Run, "libexec"),
+];
+
+/// What QEMU may read and run of its own: its folder, and its files beside the folder above. A
+/// folder that holds any of `private`, as the home folder or a machine's, is never granted: QEMU's
+/// own folder is then QEMU alone.
+fn qemu_folders(qemu: &Path, private: &[PathBuf]) -> Vec<(Grant, PathBuf)> {
+    let holds_private = |folder: &Path| private.iter().any(|path| path.starts_with(folder));
+    let folder = qemu.parent().unwrap_or(qemu);
+    let own = if holds_private(folder) { qemu } else { folder };
+    let mut folders = vec![(Grant::Run, own.to_owned())];
+    if let Some(tree) = folder.parent() {
+        let beside = QEMU_FILES.iter().map(|(grant, name)| (*grant, tree.join(name)));
+        folders.extend(beside.filter(|(_, path)| !holds_private(path)));
+    }
+    folders
 }
 
 impl VmPlan {
@@ -139,6 +158,15 @@ impl VmPlan {
         Network { tcp_bind, tcp_connect, udp_bind: Ports::Only(udp_bind), udp_send }
     }
 
+    /// What a grant for QEMU's own files may never take in: the home folder, the machine's own
+    /// files and the run folder.
+    fn private_places(&self) -> Vec<PathBuf> {
+        let mut places: Vec<PathBuf> = std::env::var_os("HOME").map(PathBuf::from).into_iter().collect();
+        places.extend([&self.disk, &self.vars].iter().filter(|path| !path.is_empty()).map(PathBuf::from));
+        places.push(self.run_folder.clone());
+        places
+    }
+
     fn firmware_code(&self) -> &Path {
         if let Some(boot) = self.macos_boot() {
             return &boot.firmware_code;
@@ -162,7 +190,9 @@ impl VmPlan {
         for (grant, path) in SYSTEM {
             plan.grant(grant, path);
         }
-        plan.grant(Grant::Run, qemu_tree(&self.qemu));
+        for (grant, path) in qemu_folders(&self.qemu, &self.private_places()) {
+            plan.grant(grant, path);
+        }
         if let Some(folder) = &self.qemu_files {
             plan.grant(Grant::Read, folder);
         }

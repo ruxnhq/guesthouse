@@ -585,3 +585,43 @@ fn qemu_can_write_nothing_in_the_notes_folder() {
         assert!(Path::new(&command[passt + 3]).starts_with(&notes));
     }
 }
+
+/// QEMU in a folder of the user's own, as `~/.local/bin` or `~/bin`, gets that folder and its own
+/// files beside it, and never a folder that holds the machines.
+#[test]
+fn a_qemu_in_a_users_own_folder_gets_that_folder_and_not_the_one_above() {
+    for (qemu, broad) in [
+        ("/home/u/.local/bin/qemu-system-x86_64", "/home/u/.local"),
+        ("/home/u/bin/qemu-system-x86_64", "/home/u"),
+    ] {
+        let machine = Machine::new(
+            "win",
+            "Win",
+            "/home/u/.local/share/guesthouse/machines/win/disk.qcow2",
+            "/home/u/.local/share/guesthouse/machines/win/vars.fd",
+        );
+        let (_scratch, plan) = jailed(machine, false);
+        let plan = VmPlan { qemu: qemu.into(), ..plan };
+        let rules = plan.qemu_jail_plan(plan.jail.as_ref().unwrap());
+        let folder = Path::new(qemu).parent().unwrap();
+        assert!(rules.paths.contains(&(Grant::Run, folder.to_owned())), "{qemu}");
+        for (grant, path) in &rules.paths {
+            assert!(path != Path::new(broad), "{grant:?} {}", path.display());
+            let above_the_disk = Path::new(&plan.disk).starts_with(path) && path != Path::new(&plan.disk);
+            assert!(!above_the_disk, "{grant:?} {}", path.display());
+        }
+    }
+}
+
+#[test]
+fn a_qemu_beside_the_machines_gets_only_itself() {
+    let folders =
+        qemu_folders(Path::new("/data/qemu-system-x86_64"), &["/data/machines/win/disk.qcow2".into()]);
+    assert_eq!(folders[0], (Grant::Run, PathBuf::from("/data/qemu-system-x86_64")));
+    assert!(folders.iter().all(|(_, path)| !Path::new("/data/machines").starts_with(path)), "{folders:?}");
+    let build = qemu_folders(Path::new("/p/qemu/build/qemu-system-x86_64"), &[]);
+    assert!(
+        build.contains(&(Grant::Run, "/p/qemu/build".into()))
+            && build.contains(&(Grant::Read, "/p/qemu/pc-bios".into()))
+    );
+}

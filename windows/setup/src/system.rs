@@ -711,6 +711,65 @@ pub fn delete_after_exit(dir: &Path) {
     let _ = delete_at_restart(dir);
 }
 
+/// Whether `file` is a plain file of the user this process runs as: owned by them, with no other name (hard link) and no reparse point. What they own they may change
+/// anyway, so an elevated process that writes only to such a file writes nothing they couldn't.
+pub fn plain_and_owned(file: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HLOCAL;
+    use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows::Win32::Security::{EqualSid, OWNER_SECURITY_INFORMATION, PSID, TOKEN_USER, TokenUser};
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        GetFileInformationByHandle,
+    };
+    let handle = HANDLE(file.as_raw_handle());
+    // SAFETY: the structure is the size Windows writes; the security descriptor and the token
+    // are freed and closed; the buffer outlives the SIDs read from it.
+    unsafe {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        GetFileInformationByHandle(handle, &mut info).map_err(io::Error::other)?;
+        if info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) != 0 {
+            return Err(io::Error::other("not a plain file"));
+        }
+        if info.nNumberOfLinks != 1 {
+            return Err(io::Error::other(format!("the file has {} names", info.nNumberOfLinks)));
+        }
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(io::Error::other)?;
+        let mut user = vec![0u64; 64];
+        let mut len = 0u32;
+        let read = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(user.as_mut_ptr() as *mut _),
+            (user.len() * 8) as u32,
+            &mut len,
+        );
+        let _ = CloseHandle(token);
+        read.map_err(io::Error::other)?;
+        let me = (*(user.as_ptr() as *const TOKEN_USER)).User.Sid;
+        let mut owner = PSID::default();
+        let mut sd = PSECURITY_DESCRIPTOR::default();
+        let code = GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            Some(&mut owner),
+            None,
+            None,
+            None,
+            Some(&mut sd),
+        );
+        win32(code, "the file's owner")?;
+        let same = EqualSid(owner, me).is_ok();
+        let _ = LocalFree(Some(HLOCAL(sd.0)));
+        if !same {
+            return Err(io::Error::other("the file is someone else's"));
+        }
+    }
+    Ok(())
+}
+
 /// A shortcut (`.lnk`) to `target`.
 pub fn make_shortcut(link: &Path, target: &Path, description: &str) -> io::Result<()> {
     // SAFETY: COM on this thread for the call, undone after.

@@ -147,7 +147,7 @@ fn main() {
     if !args.ui {
         system::safe_dll_search();
     }
-    log::init(args.log.clone());
+    log::init(args.log.clone(), system::is_elevated());
     // With no console, a panic would otherwise leave nothing behind.
     std::panic::set_hook(Box::new(|info| log::say(&format!("panic: {info}"))));
 

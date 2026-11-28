@@ -522,11 +522,9 @@ fn start_copy(
         return StagingStart::Finished(Status::UNSUCCESSFUL);
     };
     work.note_cpu_instead(&error);
-    let copied_rows = work.copy_rows(space, &rows);
-    StagingStart::Finished(copied(copied_rows.and_then(|()| match turn {
-        Some(area) => work.turn_colours(space, &area),
-        None => Ok(()),
-    })))
+    // A large copy goes in steps, which the copy's polls take: see `work::cpu_copy`.
+    work.start_cpu_copy(space, Some(rows), turn)
+        .map_or(StagingStart::Running, |ended| StagingStart::Finished(copied(ended)))
 }
 
 /// A copy's result as the guest is told it, with the reason in the log.
@@ -1076,7 +1074,7 @@ impl Backend for IntelBackend {
         start_copy(work, host, copy.own_space, blit, Rows::of_slot(copy, COPY_PIXEL_BYTES), None)
     }
 
-    /// Only a copy by the copy engine is ever under way; the CPU's are finished when they start.
+    /// A copy by the copy engine, or a large one by the CPU, which takes a step at each poll.
     fn poll_staging_copy(&mut self, _host: &mut dyn HostServices, now: Instant) -> Option<Status> {
         let Some(work) = &mut self.work else { return Some(Status::SUCCESS) };
         match work.poll_blit(now)? {

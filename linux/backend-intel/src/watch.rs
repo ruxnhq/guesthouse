@@ -4,7 +4,7 @@
 //! vendor exchange gets a line at info level, each starting with [`PREFIX`] and a word for the kind,
 //! so the log can be searched. A busy guest repeats the same kinds of exchange thousands of times,
 //! so [`Seen`] lets the first few of each kind through at info, and the rest go to debug, where
-//! `GUESTHOUSE_VERBOSE` shows them. With it, every buffer is dumped too, up to [`DUMP_BYTES`].
+//! `GUESTHOUSE_VERBOSE` shows them. Buffers the guest sent are dumped only with [`DUMP_VARIABLE`] set.
 //!
 //! The message path must not allocate, so the views here write straight into the log line, and
 //! [`Seen`] takes all the room it will ever have when it is made.
@@ -134,10 +134,45 @@ impl fmt::Display for Undecoded<'_> {
     }
 }
 
-/// Logs a buffer at debug, whole up to [`DUMP_BYTES`], on one line under a label, with its length.
-/// Nothing is done unless debug lines are on, as with `GUESTHOUSE_VERBOSE`.
+/// The switch that lets buffers the guest sent into the log. `GUESTHOUSE_VERBOSE` does not turn it
+/// on, and the app never sets it: it is for a developer reading one run by hand.
+pub const DUMP_VARIABLE: &str = "GUESTHOUSE_INTEL_DUMP_BUFFERS";
+
+/// Whether buffers of the guest's may be written to the log: [`DUMP_VARIABLE`] is set, read once.
+pub fn dumps_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os(DUMP_VARIABLE).is_some())
+}
+
+/// A guest's text as one quoted-safe piece of a log line: control characters, quotes and
+/// backslashes are written as escapes, so the text stays within its own line and its own quotes.
+pub struct Plain<'a>(pub &'a str);
+
+impl fmt::Display for Plain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for c in self.0.chars() {
+            if c.is_control() || c == '"' || c == '\\' {
+                write!(f, "{}", c.escape_default())?;
+            } else {
+                write!(f, "{c}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The line [`dump`] logs for a buffer when `on`, whole up to [`DUMP_BYTES`], with its length.
+fn dump_line(on: bool, label: fmt::Arguments<'_>, bytes: &[u8]) -> Option<String> {
+    on.then(|| {
+        format!("{PREFIX} dump {label} length={} bytes={}", bytes.len(), Hex { bytes, most: DUMP_BYTES })
+    })
+}
+
+/// Logs a buffer at debug, on one line under a label, only where [`DUMP_VARIABLE`] allows it.
 pub fn dump(label: fmt::Arguments<'_>, bytes: &[u8]) {
-    log::debug!("{PREFIX} dump {label} length={} bytes={}", bytes.len(), Hex { bytes, most: DUMP_BYTES });
+    if let Some(line) = dump_line(dumps_on(), label, bytes) {
+        log::debug!("{line}");
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +195,20 @@ mod tests {
         }
         assert!(!seen.worth_telling(KINDS_KEPT));
         assert!(seen.worth_telling(0usize), "a kind already kept still counts its repeats");
+    }
+
+    #[test]
+    fn a_dump_is_written_only_when_allowed() {
+        assert_eq!(dump_line(false, format_args!("x"), &[1, 2]), None);
+        assert_eq!(dump_line(true, format_args!("x"), &[1, 2]).unwrap(), "intel dump x length=2 bytes=0102");
+    }
+
+    #[test]
+    fn guest_text_cannot_leave_its_line_or_quotes() {
+        assert_eq!(
+            Plain("a\nintel x=\"y\"\\\u{1b}[0m é").to_string(),
+            "a\\nintel x=\\\"y\\\"\\\\\\u{1b}[0m é"
+        );
     }
 
     #[test]

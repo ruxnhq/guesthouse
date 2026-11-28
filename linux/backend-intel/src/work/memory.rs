@@ -18,10 +18,11 @@ impl CardWork {
     /// Makes video memory: a buffer on the card, counted against the guest's cap.
     pub fn allocate(&mut self, size: u64, usage: BufferUse) -> Result<(MemoryId, u64), BackendError> {
         let request = self.placements.buffer(size, usage);
-        if self.held.checked_add(request.size).is_none_or(|held| held > self.cap) {
+        let held = self.held.saturating_add(self.overhead());
+        if held.checked_add(request.size).is_none_or(|held| held > self.cap) {
             return Err(BackendError::new(format!(
                 "{:#x} more bytes of video memory would pass the guest's cap of {:#x}, with {:#x} held",
-                request.size, self.cap, self.held
+                request.size, self.cap, held
             )));
         }
         let handle = self.xe.create_buffer(&request).map_err(|error| {

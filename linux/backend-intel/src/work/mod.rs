@@ -10,10 +10,14 @@
 
 mod bans;
 pub mod blits;
+#[cfg(test)]
+mod bound_tests;
 pub mod cap;
 pub mod choices;
 pub mod copies;
+mod cpu_copy;
 pub mod engines;
+mod limits;
 pub mod marks;
 mod memory;
 mod moves;

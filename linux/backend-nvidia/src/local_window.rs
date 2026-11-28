@@ -3,10 +3,11 @@
 //! A compute launch that uses local memory needs a pool on its channel, and the pool is reached
 //! through this window. Some queues set both themselves. Others, such as an OpenCL queue, set
 //! neither and fail their first launch that needs local memory. The window is the same for every
-//! queue of a guest, so the first one any queue sets is kept, and the pools given here use it.
+//! queue of an address space, so the first one any queue of a space sets is kept for that space, and
+//! the pools given here use it.
 
 use crate::pushbuffer::Header;
-use guesthouse_backend::SpaceId;
+use guesthouse_backend::{SpaceId, Work};
 use std::collections::HashMap;
 
 /// The compute class is the second object on a graphics channel, so it is subchannel 1.
@@ -28,40 +29,53 @@ const MODE_IMMEDIATE: u32 = 4;
 const MODE_INCREASE_ONCE: u32 = 5;
 const METHOD_STEP: u32 = 4;
 
-/// The window, once a queue has set it, and what each queue has said so far.
+/// The window of each address space, once a queue in it has set it, and what each queue has said
+/// so far.
 #[derive(Debug, Default)]
 pub(crate) struct LocalWindow {
-    window: Option<u64>,
-    queues: HashMap<u32, LocalMemorySeen>,
+    windows: HashMap<SpaceId, u64>,
+    queues: HashMap<u32, (SpaceId, LocalMemorySeen)>,
 }
 
 impl LocalWindow {
-    pub(crate) fn window(&self) -> Option<u64> {
-        self.window
+    pub(crate) fn window(&self, space: SpaceId) -> Option<u64> {
+        self.windows.get(&space).copied()
     }
 
-    /// Reads one buffer of a queue's commands. Once the window is known, nothing more is read.
-    pub(crate) fn read(&mut self, queue: u32, words: &[u32]) {
-        if self.window.is_some() {
+    /// Reads one buffer of a queue's commands. Once its space's window is known, nothing more is read.
+    pub(crate) fn read(&mut self, space: SpaceId, queue: u32, words: &[u32]) {
+        if self.windows.contains_key(&space) {
             return;
         }
-        let seen = self.queues.entry(queue).or_default();
+        let (_, seen) = self.queues.entry(queue).or_insert((space, LocalMemorySeen::default()));
         seen.read(words);
         if let Some(window) = seen.window {
             log::info!("queue {queue:#x} set the shader local window to {window:#x}");
-            self.window = Some(window);
-            // Only the queues with their own pool are of any use from here.
-            self.queues.retain(|_, seen| seen.sets_own_pool);
+            self.windows.insert(space, window);
+            // Only the queues of this space with their own pool are of any use from here.
+            self.queues.retain(|_, (known, seen)| *known != space || seen.sets_own_pool);
         }
     }
 
     /// Whether the queue was seen pointing its channel at its own pool before the window was known.
     pub(crate) fn sets_own_pool(&self, queue: u32) -> bool {
-        self.queues.get(&queue).is_some_and(|seen| seen.sets_own_pool)
+        self.queues.get(&queue).is_some_and(|(_, seen)| seen.sets_own_pool)
     }
 
     pub(crate) fn forget(&mut self, queue: u32) {
         self.queues.remove(&queue);
+    }
+
+    /// An address space has gone.
+    pub(crate) fn forget_space(&mut self, space: SpaceId) {
+        self.windows.remove(&space);
+        self.queues.retain(|_, (known, _)| *known != space);
+    }
+
+    /// The guest has restarted, so what it set before means nothing.
+    pub(crate) fn clear(&mut self) {
+        self.windows.clear();
+        self.queues.clear();
     }
 }
 
@@ -203,6 +217,14 @@ impl PoolMirror {
     }
 }
 
+/// The kinds of context whose driver sets a pool on one channel for all of them: OpenCL and CUDA.
+/// Others aren't read, so games pay nothing for it.
+const POOL_SHARING_HINTS: [u32; 2] = [3, 5];
+
+pub(crate) fn mirrors_pool(work: &Work<'_>) -> bool {
+    POOL_SHARING_HINTS.contains(&work.client_hint)
+}
+
 /// Each method a header writes, with its value, as far as the words after it reach.
 fn method_writes(header: Header, data: &[u32]) -> Vec<(u32, u32)> {
     if header.mode == MODE_IMMEDIATE {
@@ -224,6 +246,7 @@ mod tests {
     use crate::pushbuffer::increasing;
 
     const WINDOW: u64 = 0x1234_5600_0000;
+    const SPACE: SpaceId = SpaceId(1);
 
     fn header(mode: u32, subchannel: u32, method: u32, count: u32) -> u32 {
         mode << 29 | count << 16 | subchannel << 13 | method >> 2
@@ -287,21 +310,47 @@ mod tests {
         assert_eq!(seen(&[increasing(1, SET_LOCAL_MEMORY_WINDOW, 2), 0x1234]).window, None);
     }
 
+    fn window_words(window: u64) -> [u32; 3] {
+        [increasing(1, SET_LOCAL_MEMORY_WINDOW, 2), (window >> 32) as u32, window as u32]
+    }
+
     #[test]
     fn the_first_window_set_is_kept_and_nothing_is_read_after() {
         let mut local = LocalWindow::default();
-        local.read(3, &[increasing(1, SET_LOCAL_MEMORY_ADDRESS, 2), 1, 0]);
-        local.read(4, &[increasing(1, 0x2E4, 1), 1]);
-        assert_eq!(local.window(), None);
-        local.read(5, &[increasing(1, SET_LOCAL_MEMORY_WINDOW, 2), (WINDOW >> 32) as u32, WINDOW as u32]);
-        assert_eq!(local.window(), Some(WINDOW));
-        local.read(6, &[increasing(1, SET_LOCAL_MEMORY_WINDOW, 2), 1, 0]);
-        local.read(6, &[increasing(1, SET_LOCAL_MEMORY_ADDRESS, 2), 1, 0]);
-        assert_eq!(local.window(), Some(WINDOW));
+        local.read(SPACE, 3, &[increasing(1, SET_LOCAL_MEMORY_ADDRESS, 2), 1, 0]);
+        local.read(SPACE, 4, &[increasing(1, 0x2E4, 1), 1]);
+        assert_eq!(local.window(SPACE), None);
+        local.read(SPACE, 5, &window_words(WINDOW));
+        assert_eq!(local.window(SPACE), Some(WINDOW));
+        local.read(SPACE, 6, &[increasing(1, SET_LOCAL_MEMORY_WINDOW, 2), 1, 0]);
+        local.read(SPACE, 6, &[increasing(1, SET_LOCAL_MEMORY_ADDRESS, 2), 1, 0]);
+        assert_eq!(local.window(SPACE), Some(WINDOW));
         assert!(local.sets_own_pool(3));
         assert!(!local.sets_own_pool(4) && !local.sets_own_pool(6));
         local.forget(3);
         assert!(!local.sets_own_pool(3));
+    }
+
+    #[test]
+    fn a_window_belongs_to_the_space_whose_queue_set_it() {
+        let mut local = LocalWindow::default();
+        local.read(SPACE, 3, &window_words(WINDOW));
+        assert_eq!(local.window(SpaceId(2)), None);
+        local.read(SpaceId(2), 4, &window_words(WINDOW + 0x1000_0000));
+        assert_eq!(local.window(SPACE), Some(WINDOW));
+        assert_eq!(local.window(SpaceId(2)), Some(WINDOW + 0x1000_0000));
+    }
+
+    #[test]
+    fn a_space_going_takes_its_window_and_a_restart_takes_them_all() {
+        let mut local = LocalWindow::default();
+        local.read(SPACE, 3, &window_words(WINDOW));
+        local.read(SpaceId(2), 4, &window_words(WINDOW));
+        local.forget_space(SPACE);
+        assert_eq!(local.window(SPACE), None);
+        assert_eq!(local.window(SpaceId(2)), Some(WINDOW));
+        local.clear();
+        assert_eq!(local.window(SpaceId(2)), None);
     }
 
     #[test]
@@ -312,7 +361,6 @@ mod tests {
         assert_eq!(seen.window, None);
     }
 
-    const SPACE: SpaceId = SpaceId(1);
     const CUDA: (SpaceId, u32) = (SPACE, 5);
 
     fn pool_words(address: u64, per_unit: u64, units: u32) -> Vec<u32> {

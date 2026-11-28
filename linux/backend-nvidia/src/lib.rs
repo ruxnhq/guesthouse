@@ -471,6 +471,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     fn destroy_address_space(&mut self, space: SpaceId) {
         self.pool_mirror.forget_space(space);
         self.ring_moves.forget_space(space);
+        self.local_window.forget_space(space);
         self.sked_pages.forget_space(space);
         if let Some(space) = self.spaces.remove(&space)
             && let Err(error) = self.device.destroy_address_space(&space)
@@ -578,6 +579,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn guest_restarted(&mut self) {
         self.device.guest_clock.restart();
+        self.local_window.clear();
     }
 
     fn adapter_opened(&mut self, guest_adapter_id: u64) {

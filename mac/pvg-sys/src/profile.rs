@@ -291,6 +291,9 @@ pub struct MapperShape {
     /// A command in the mapper's ring: its number, a mapping's id, and a word for how it went.
     /// This one has the mapper make a host surface of the pages the id's description names.
     pub map: u32,
+    /// This one has the mapper let the id's surface go. Map and this are the only commands the
+    /// guard passes.
+    pub unmap: u32,
     /// A number the mapper answers with "unsupported" and nothing else, which is what the guard
     /// makes of a map command it won't pass.
     pub unsupported: u32,
@@ -430,6 +433,7 @@ const BUILD_26B131: Profile = Profile {
         slots_unit: 1024,
         most_slots: 64 * 1024,
         map: 1,
+        unmap: 2,
         unsupported: 0,
         most_id: 8191,
         ids_per_page: 32,

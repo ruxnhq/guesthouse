@@ -176,12 +176,17 @@ impl Guard {
         memory.read(guest_slot, &mut slot);
         host.write(host_slot, &slot);
         self.mirror_now().mapper_sent(count, self.mapper.slots, guest_slot, host_slot);
-        // Only making a surface takes a description. The mapper refuses what it doesn't know, and
-        // letting a mapping go names nothing but its id.
-        if word_of(&slot, NUMBER as usize) != shape.map {
+        // Only making a surface takes a description, and letting a mapping go names nothing but
+        // its id. Any other number is made into the one the mapper answers "unsupported" to.
+        let (number, id) = (word_of(&slot, NUMBER as usize), word_of(&slot, ID as usize));
+        if number == shape.unmap {
             return;
         }
-        let id = word_of(&slot, ID as usize);
+        if number != shape.map {
+            host.set_word(host_slot + NUMBER, shape.unsupported);
+            refused.push(Refusal { what: What::MapperCommand { count, id }, why: Why::UnknownCommand });
+            return;
+        }
         if !self.copy_surface(memory, id) {
             host.set_word(host_slot + NUMBER, shape.unsupported);
             refused.push(Refusal { what: What::MapperCommand { count, id }, why: Why::SurfaceDescription });

@@ -847,10 +847,16 @@ fn only_a_plain_picture_in_the_guest_s_own_pages_is_mapped() {
     play.describe(1920, 1080);
     assert_eq!(play.mapper_command(0, map, 1), map, "a driver's surface is passed as it is");
     assert_eq!(play.why(), None);
-    // Letting a mapping go, and a command the mapper doesn't know, are the mapper's to answer.
-    assert_eq!(play.mapper_command(1, 2, 1), 2);
-    assert_eq!(play.mapper_command(2, 7, 1), 7);
+    // Letting a mapping go is passed as it is. Any other number is one the mapper answers
+    // "unsupported" to.
+    assert_eq!(play.mapper_command(1, play.profile.mapper.unmap, 1), play.profile.mapper.unmap);
     assert_eq!(play.why(), None);
+    assert_eq!(play.mapper_command(2, 7, 1), unsupported);
+    assert_eq!(play.why(), Some(Why::UnknownCommand));
+    for number in [3, 0x100, u32::MAX] {
+        assert_eq!(play.mapper_command(2, number, 1), unsupported, "{number:#x}");
+        assert_eq!(play.why(), Some(Why::UnknownCommand));
+    }
 
     // One word of the description changed at a time, each to something a picture doesn't have.
     let changes: [(u64, u32); 12] = [

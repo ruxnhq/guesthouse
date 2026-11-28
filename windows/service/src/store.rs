@@ -9,6 +9,7 @@
 //! place that fails the check, or isn't there, is a problem the machine is listed with.
 
 use guesthouse_control::{Card, Forward, NetworkMode, Share, valid_name};
+use guesthouse_remote_view_core::revoked;
 use guesthouse_remote_view_core::switch::SWITCH_FILE;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -27,8 +28,9 @@ const INSTALLER: &str = "installer.iso";
 pub const EVENTS: &str = "events.log";
 pub const EVENTS_BEFORE: &str = "events.1.log";
 /// What stays in a machine's own folder when its disks are somewhere else: the service's own files,
-/// its remote view's switch among them, which are never moved or counted as disks.
-pub const OWN_FILES: [&str; 5] = [SETTINGS, LOCATION, EVENTS, EVENTS_BEFORE, SWITCH_FILE];
+/// its remote view's switch and its list of removed devices among them, which are never moved or
+/// counted as disks.
+pub const OWN_FILES: [&str; 6] = [SETTINGS, LOCATION, EVENTS, EVENTS_BEFORE, SWITCH_FILE, revoked::FILE];
 
 /// Something kept for as long as it's held, such as a folder opened so it can't be moved.
 pub type Held = Box<dyn Any + Send>;
@@ -77,7 +79,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_gb: Option<u64>,
     /// The account, as a SID, of the user whose machine it is: the one who made it. A machine from
-    /// before this has none until a user takes it (see `requests::owners`).
+    /// before this has none until it's given one (see `requests::owners`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
 }

@@ -11,12 +11,15 @@
 //! things, `palette.rs` what Ctrl+K offers and finds, `remote_view.rs` what the Remote View group shows and asks, `shell.rs` how
 //! the window gets about, `preferences.rs` the app's own settings, `update.rs` whether a newer
 //! Guesthouse is out, `hyper_v.rs` what's said of Windows' Hyper-V feature, which bridging needs,
-//! and `system.rs` the rest of what's asked of Windows.
+//! `assign.rs` making a machine that needs an owner the user's, and `system.rs` the rest of what's
+//! asked of Windows.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
 mod app;
+#[cfg(any(windows, test))]
+mod assign;
 #[cfg(windows)]
 mod bridge;
 #[cfg(windows)]
@@ -56,6 +59,11 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
+    // Started again, elevated, only to give a machine its owner: see assign.rs.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some(assign::HELPER) {
+        std::process::exit(assign::helper(&args) as i32);
+    }
     // With no console, a panic would otherwise leave nothing behind.
     std::panic::set_hook(Box::new(|info| {
         let path = system::panic_file();

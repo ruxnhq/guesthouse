@@ -604,6 +604,11 @@ pub struct Main {
     pub hyper_v_ask: bool,
     /// Whether the app's request to turn it on is going on now.
     pub hyper_v_asking: bool,
+    /// The machine the helper that makes it the user's was started for, until it ends.
+    pub assigning: Option<String>,
+    /// Whether the selected machine's log waits for it to have an owner, as one that needs one
+    /// has none to show.
+    watch_waits_for_owner: bool,
     /// Whether the person is being asked to confirm restarting Windows, to finish it.
     pub restart_ask: bool,
     /// Whether Home's line about the restart has been closed, until the app next opens.
@@ -637,6 +642,12 @@ pub const DELETE_KEY: &str = "delete";
 
 /// The key of New machine in the machine switcher. It has a space, which no machine's name can.
 pub const NEW_TAG: &str = " new";
+
+/// The machines a report may be about: not one that needs an owner, whose files the service keeps
+/// for whoever it's given to.
+pub fn reportable(machines: &[Machine]) -> impl Iterator<Item = &Machine> {
+    machines.iter().filter(|machine| !machine.needs_owner)
+}
 
 /// The key of Report a problem in a machine's More menu.
 pub const REPORT_TAG: &str = " report";
@@ -811,6 +822,11 @@ pub enum Message {
     HyperVNote,
     /// How turning it on ended: `None` when it worked.
     HyperVDone(Option<String>),
+    /// Make the shown machine, which needs an owner, the user's, which Windows asks an
+    /// administrator to allow.
+    MakeMine,
+    /// How that ended, for the machine named.
+    MadeMine(String, Result<(), String>),
     /// Restart Windows, which asks first.
     RestartWindows,
     /// The answer to the question about restarting.
@@ -911,6 +927,36 @@ impl Main {
         }
         self.hyper_v_asking = true;
         bridge::enable_hyper_v(self.window.clone());
+    }
+
+    /// Starts the helper that makes the shown machine, which needs an owner, the user's, on a
+    /// thread of its own, as it waits for Windows' prompt. A preview never does.
+    fn make_mine(&mut self) {
+        let Some(name) =
+            self.machine().filter(|machine| machine.needs_owner).map(|machine| machine.name.clone())
+        else {
+            return;
+        };
+        if self.assigning.is_some() {
+            return;
+        }
+        if !self.live {
+            self.tell("A preview doesn't give machines an owner.", false);
+            return;
+        }
+        self.assigning = Some(name.clone());
+        let window = self.window.clone();
+        let spawned = std::thread::Builder::new().name("assign".into()).spawn(move || {
+            let ended = match crate::assign::own_account() {
+                Some(owner) => crate::assign::ask_elevated(&name, &owner),
+                None => Err("The app couldn't read which account it runs as.".to_owned()),
+            };
+            window.tell(Message::MadeMine(name, ended));
+        });
+        if let Err(error) = spawned {
+            self.assigning = None;
+            self.tell(format!("The app couldn't start the helper: {error}"), true);
+        }
     }
 
     /// Restarts Windows, once the person has said yes twice. A preview never does.
@@ -1045,7 +1091,9 @@ impl Main {
         {
             self.report.machine = self.selected.clone().filter(|name| {
                 self.page == Page::Machine
-                    && self.status().is_some_and(|status| status.machines.iter().any(|m| &m.name == name))
+                    && self
+                        .status()
+                        .is_some_and(|status| reportable(&status.machines).any(|m| &m.name == name))
             });
         }
         self.go(Page::Report);
@@ -1223,7 +1271,9 @@ impl Main {
     fn follow_remote_view(&mut self) {
         let wanted = self
             .machine()
-            .filter(|machine| self.page == Page::Machine && machine.system == System::Windows)
+            .filter(|machine| {
+                self.page == Page::Machine && machine.system == System::Windows && !machine.needs_owner
+            })
             .map(|machine| machine.name.clone());
         if self.viewing.as_ref().map(|viewing| &viewing.machine) != wanted.as_ref() {
             self.viewing = wanted.as_deref().map(Viewing::new);
@@ -1343,7 +1393,9 @@ impl Main {
         self.follow_draft();
         self.snapshot_label.clear();
         self.snapshot_ask = None;
-        if let Some(name) = self.selected.clone().filter(|_| self.live) {
+        // One that needs an owner has no log to show until it has one.
+        self.watch_waits_for_owner = self.machine().is_some_and(|machine| machine.needs_owner);
+        if let Some(name) = self.selected.clone().filter(|_| self.live && !self.watch_waits_for_owner) {
             self.watch_id += 1;
             self.watch = Some(bridge::watch(self.watch_id, name, self.window.clone()));
         }
@@ -1376,6 +1428,9 @@ impl Main {
                 }
             }
             Some(_) if self.rewatch && was_away => self.select(self.selected.clone()),
+            Some(_) if self.watch_waits_for_owner && self.machine().is_some_and(|m| !m.needs_owner) => {
+                self.select(self.selected.clone())
+            }
             Some(_) | None => {}
         }
         self.follow_draft();
@@ -1854,6 +1909,8 @@ impl Component for Main {
             bridge_ask: false,
             hyper_v_ask: false,
             hyper_v_asking: false,
+            assigning: None,
+            watch_waits_for_owner: false,
             restart_ask: false,
             restart_line_closed: false,
             palette: None,
@@ -1957,7 +2014,7 @@ impl Component for Main {
             Message::ReportMachine(index) => {
                 let names: Vec<String> = self
                     .status()
-                    .map(|status| status.machines.iter().map(|machine| machine.name.clone()).collect())
+                    .map(|status| reportable(&status.machines).map(|machine| machine.name.clone()).collect())
                     .unwrap_or_default();
                 self.report.machine =
                     index.and_then(|index| index.checked_sub(1)).and_then(|n| names.get(n).cloned());
@@ -2273,6 +2330,22 @@ impl Component for Main {
                 let (words, bad) = crate::hyper_v::ended_words(reason.as_deref());
                 self.tell(words, bad);
             }
+            Message::MakeMine => self.make_mine(),
+            Message::MadeMine(name, ended) => {
+                self.assigning = None;
+                match ended {
+                    Ok(()) => {
+                        // Shown as given at once, before the next status says so.
+                        if let Ok(status) = &mut self.seen
+                            && let Some(machine) = status.machines.iter_mut().find(|m| m.name == name)
+                        {
+                            machine.needs_owner = false;
+                        }
+                        self.tell(format!("{name} is yours now."), false)
+                    }
+                    Err(words) => self.tell(words, true),
+                }
+            }
             Message::RestartWindows => self.restart_ask = true,
             Message::RestartAnswered(result) => {
                 if std::mem::take(&mut self.restart_ask) && result == ContentDialogResult::Primary {
@@ -2335,196 +2408,4 @@ impl Component for Main {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn machine() -> Machine {
-        Machine {
-            name: "win".to_owned(),
-            system: System::Windows,
-            state: State::Off,
-            set_up: true,
-            memory_mb: 8192,
-            processors: 4,
-            card: Some("NVIDIA GeForce RTX 5090".to_owned()),
-            chosen_card: Card::Default,
-            nvapi_wrapper: true,
-            tpm: true,
-            network: true,
-            shares: Vec::new(),
-            network_mode: NetworkMode::Shared,
-            forwards: Vec::new(),
-            nested_virtualization: false,
-            ssh_port: None,
-            size_gb: Some(128),
-            folder: PathBuf::new(),
-            problem: None,
-            snapshots: Vec::new(),
-            working: None,
-            address: None,
-            remote_view: false,
-            remote_port: None,
-            console_pipe: None,
-        }
-    }
-
-    fn cards() -> Vec<CardInfo> {
-        vec![
-            CardInfo { name: "NVIDIA GeForce RTX 5090".to_owned(), memory_mb: Some(32607), default: true },
-            CardInfo { name: "AMD Radeon RX 7900 XTX".to_owned(), memory_mb: Some(24560), default: false },
-        ]
-    }
-
-    #[test]
-    fn a_fresh_draft_is_unchanged_and_asks_for_what_the_machine_has() {
-        let machine = machine();
-        let draft = Draft::of(&machine);
-        assert!(!draft.changed(&machine));
-        assert_eq!(draft.settings(), Some(settings_of(&machine)));
-    }
-
-    #[test]
-    fn a_draft_with_a_number_missing_asks_for_nothing_and_counts_as_changed() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        draft.processors = None;
-        assert_eq!(draft.settings(), None);
-        assert!(draft.changed(&machine));
-        draft.processors = Some(0.0);
-        assert_eq!(draft.settings(), None);
-    }
-
-    #[test]
-    fn shared_folders_are_edited_as_rows_and_asked_for_once_each_has_a_path() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        draft.shares.push(ShareRow::default());
-        assert!(draft.changed(&machine));
-        assert!(draft.shares_problem().unwrap().contains("a path"));
-        assert_eq!(draft.problem(), draft.shares_problem());
-        draft.shares[0].folder = r#""D:\files""#.to_owned();
-        draft.shares.push(ShareRow { folder: r"E:\more".to_owned(), read_only: true });
-        assert_eq!(draft.problem(), None);
-        let shares = draft.settings().unwrap().shares;
-        assert_eq!(
-            shares,
-            [
-                Share { folder: PathBuf::from(r"D:\files"), read_only: false },
-                Share { folder: PathBuf::from(r"E:\more"), read_only: true },
-            ]
-        );
-        draft.shares[1].folder = r"d:\FILES\".to_owned();
-        assert!(draft.shares_problem().unwrap().contains("twice"));
-        draft.shares.clear();
-        assert!(!draft.changed(&machine));
-    }
-
-    #[test]
-    fn forwards_are_edited_as_rows_and_asked_for_once_each_holds_two_ports() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        draft.forwards.push(ForwardRow::NEW);
-        assert!(draft.changed(&machine));
-        assert_eq!(draft.settings(), None, "a row with no ports isn't a forward yet");
-        assert!(draft.forwards_problem().unwrap().contains("both ports"));
-        draft.forwards[0].host = Some(8080.0);
-        draft.forwards[0].guest = Some(80.0);
-        assert_eq!(draft.forwards_problem(), None);
-        assert_eq!(draft.settings().unwrap().forwards, [Forward { host_port: 8080, guest_port: 80 }]);
-        // A port that isn't one is a row that isn't finished.
-        draft.forwards[0].guest = Some(70000.0);
-        assert_eq!(draft.settings(), None);
-        draft.forwards[0].guest = Some(80.0);
-        draft.forwards.push(ForwardRow { host: Some(8080.0), guest: Some(81.0) });
-        assert!(draft.forwards_problem().unwrap().contains("twice"));
-        draft.forwards.pop();
-        // Back to what the machine has, it's unchanged again.
-        draft.forwards.clear();
-        assert!(!draft.changed(&machine));
-    }
-
-    #[test]
-    fn a_machine_bridged_is_a_change_from_shared_and_asks_for_the_adapter_by_name() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        draft.network_mode = NetworkMode::Bridged { adapter: "Ethernet".to_owned() };
-        assert!(draft.changed(&machine));
-        assert_eq!(
-            draft.settings().unwrap().network_mode,
-            NetworkMode::Bridged { adapter: "Ethernet".to_owned() }
-        );
-    }
-
-    #[test]
-    fn an_ubuntu_guest_is_reached_by_its_port_and_by_its_address_when_it_has_one() {
-        let mut machine = Machine { system: System::Linux, ..machine() };
-        assert!(ssh_lines(&machine, "me").is_empty());
-        machine.ssh_port = Some(2203);
-        assert_eq!(
-            ssh_lines(&machine, "me"),
-            [("SSH, no network needed", "ssh -p 2203 me@127.0.0.1".to_owned())]
-        );
-        machine.address = Some("172.24.80.12".to_owned());
-        let lines = ssh_lines(&machine, "me");
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1].1, "ssh me@172.24.80.12");
-        machine.address = Some("not an address".to_owned());
-        assert_eq!(ssh_lines(&machine, "me").len(), 1);
-    }
-
-    #[test]
-    fn nested_virtualization_starts_off_and_turning_it_on_is_a_change() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        assert!(!draft.settings().unwrap().nested_virtualization);
-        draft.nested_virtualization = true;
-        assert!(draft.changed(&machine));
-        assert!(draft.settings().unwrap().nested_virtualization);
-    }
-
-    #[test]
-    fn turning_dlss_off_is_a_change() {
-        let machine = machine();
-        let mut draft = Draft::of(&machine);
-        draft.nvapi_wrapper = false;
-        assert!(draft.changed(&machine));
-        assert!(!draft.settings().unwrap().nvapi_wrapper);
-    }
-
-    #[test]
-    fn dlss_is_offered_for_a_windows_guest_with_an_nvidia_card_only() {
-        let cards = cards();
-        let named = |name: &str| Card::Named(name.to_owned());
-        assert!(offers_dlss(System::Windows, &Card::Default, &cards));
-        assert!(offers_dlss(System::Windows, &named("NVIDIA GeForce RTX 5090"), &cards));
-        assert!(!offers_dlss(System::Windows, &named("AMD Radeon RX 7900 XTX"), &cards));
-        assert!(!offers_dlss(System::Windows, &Card::None, &cards));
-        assert!(!offers_dlss(System::Linux, &Card::Default, &cards));
-        // With no card the default, the default is no one's.
-        assert!(!offers_dlss(System::Windows, &Card::Default, &cards[1..]));
-    }
-
-    #[test]
-    fn a_user_either_system_takes_is_sent_and_one_neither_takes_isnt() {
-        let form = |user: &str| Form {
-            name: "win".into(),
-            image: "win.iso".into(),
-            user: user.into(),
-            ..Form::default()
-        };
-        assert_eq!(form("").machine().unwrap().user, "", "empty is the default");
-        assert_eq!(form(" Ann B.Lee ").machine().unwrap().user, "Ann B.Lee");
-        assert_eq!(form("_build").machine().unwrap().user, "_build");
-        assert!(form("a@b").machine().is_none());
-    }
-
-    #[test]
-    fn a_location_is_asked_for_only_when_one_is_typed() {
-        let mut form = Form { name: "win".into(), image: "win.iso".into(), ..Form::default() };
-        assert_eq!(form.machine().unwrap().folder, None, "empty is the service's own folder");
-        form.location = "  \"D:\\vms\"  ".into();
-        assert_eq!(form.machine().unwrap().folder, Some(PathBuf::from("D:\\vms")));
-        form.location = "   ".into();
-        assert_eq!(form.machine().unwrap().folder, None);
-    }
-}
+mod tests;

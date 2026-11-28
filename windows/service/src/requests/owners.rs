@@ -5,24 +5,26 @@
 //!
 //! A machine made before owners were kept has none, and one rule gives it one. As the service
 //! starts, the owner of the machine's own folder, then of its disk, is its owner if that's a user's
-//! account, not the system's, the Administrators group's or another of Windows' own. A machine
-//! whose files name no user waits: an administrator's account asking as itself, unelevated as the
-//! app runs, takes every machine still waiting, saved before it's answered, and so does the one
-//! user of a PC that keeps a profile for one user's account alone. Nobody else sees one. An elevated administrator sees them all without taking any.
-//! An administrator can give a machine to another user by changing `owner` in its `machine.json`.
+//! account, not the system's, the Administrators group's or another of Windows' own. On a PC that
+//! keeps a profile for one user's account alone, that user takes every machine still waiting at
+//! their first request, saved before it's answered. Otherwise a machine waits for an owner: every
+//! user at the console sees it as one that needs an owner, by its name, system, state and hardware
+//! only, and nothing can be done to it until an administrator, asking elevated, gives it to a user with
+//! `Assign`. The app asks that from a helper Windows asks the person to allow, for the app's own
+//! user. No account takes a waiting machine by asking. An elevated administrator sees and acts on
+//! every machine. An administrator can also give a machine to another user by changing `owner` in
+//! its `machine.json`.
 
-use super::{Service, Work};
+use super::{Service, Work, no_machine};
 use crate::machines::{Entry, Machines};
-use guesthouse_control::Request;
+use guesthouse_control::{Answer, Request};
 
-/// Who asked: their account, as a SID, whether they may do anything to any machine, as the system
-/// and an elevated administrator may, and whether their account is an administrator's at all, as
-/// one whose app runs unelevated is.
+/// Who asked: their account, as a SID, and whether they may do anything to any machine, as the
+/// system and an elevated administrator may.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asker {
     pub user: String,
     pub administrator: bool,
-    pub administrators_account: bool,
 }
 
 impl Asker {
@@ -30,6 +32,17 @@ impl Asker {
     pub fn may_use(&self, entry: &Entry) -> bool {
         self.administrator || entry.settings.owner.as_deref() == Some(self.user.as_str())
     }
+
+    /// Whether they see `entry`'s machine in a status: theirs, or one that needs an owner.
+    pub fn may_see(&self, entry: &Entry) -> bool {
+        self.may_use(entry) || entry.settings.owner.is_none()
+    }
+}
+
+/// What a machine that needs an owner answers to anything but `Assign`, for anyone but an elevated
+/// administrator.
+pub fn needs_an_owner(name: &str) -> String {
+    format!("{name} needs an owner first. Make it yours, which an administrator of this PC allows.")
 }
 
 /// Whether `sid` is a user's account: a local, domain or Microsoft Entra one, not one of Windows'
@@ -81,20 +94,21 @@ pub fn named(request: &Request) -> Option<&str> {
         | Request::PairAccept { name }
         | Request::PairDecline { name }
         | Request::DeviceAllow { name, .. }
-        | Request::DeviceRevoke { name, .. } => Some(name),
+        | Request::DeviceRevoke { name, .. }
+        | Request::Assign { name, .. } => Some(name),
         Request::ReportFiles { machine } => machine.as_deref(),
         Request::Status | Request::Create { .. } | Request::EnableHyperV => None,
     }
 }
 
 impl<W: Work> Service<W> {
-    /// Gives `asker` every machine that has no owner, if they ask as themselves and their account
-    /// is an administrator's or this PC's one user's, saving each before anything else is done.
+    /// Gives `asker` every machine that has no owner, if they're the one user this PC keeps a
+    /// profile for, saving each before anything else is done.
     pub(super) fn take_unowned(&self, asker: &Asker) {
-        if asker.administrator || !self.machines.lock().values().any(|entry| entry.settings.owner.is_none()) {
+        if !self.machines.lock().values().any(|entry| entry.settings.owner.is_none()) {
             return;
         }
-        if !asker.administrators_account && !self.the_one_user(&asker.user) {
+        if !self.the_one_user(&asker.user) {
             return;
         }
         let mut entries = self.machines.lock();
@@ -104,7 +118,7 @@ impl<W: Work> Service<W> {
             match self.machines.store.save(name, &settings) {
                 Ok(()) => {
                     entry.settings = settings;
-                    self.work.log(&format!("{name} is {}'s from now on.", asker.user));
+                    self.work.log(&format!("{name} is {}'s from now on, this PC's one user.", asker.user));
                 }
                 Err(error) => self.work.log(&format!("{name}'s owner couldn't be saved: {error}")),
             }
@@ -118,18 +132,52 @@ impl<W: Work> Service<W> {
         users == [user]
     }
 
-    /// Whether the machine asked for as `asked` is one `asker` may use. One they may not is as if it
-    /// weren't there.
-    pub(super) fn theirs(&self, asked: &str, asker: &Asker) -> bool {
+    /// What to answer `asker` instead, if the machine asked for as `asked` isn't one they may use:
+    /// another user's is as if it weren't there, and one that needs an owner says so.
+    pub(super) fn not_theirs(&self, asked: &str, asker: &Asker) -> Option<Answer> {
         let entries = self.machines.lock();
-        entries
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(asked))
-            .is_none_or(|(_, entry)| asker.may_use(entry))
+        let (name, entry) = entries.iter().find(|(name, _)| name.eq_ignore_ascii_case(asked))?;
+        match &entry.settings.owner {
+            _ if asker.may_use(entry) => None,
+            None => Some(Answer::Refused { reason: needs_an_owner(name) }),
+            Some(_) => Some(no_machine(asked)),
+        }
     }
 
     /// Whether `name` is a machine `asker` may see.
     pub(super) fn visible(&self, name: &str, asker: &Asker) -> bool {
         self.machines.lock().get(name).is_some_and(|entry| asker.may_use(entry))
+    }
+
+    /// Gives `asked`, a machine that needs an owner, to `owner`, an account this PC keeps a profile
+    /// for. Only an elevated administrator may.
+    pub(super) fn assign(&self, asked: &str, owner: &str, asker: &Asker) -> Answer {
+        let refused = |reason: String| {
+            self.work
+                .log(&format!("{} asked for {asked} to be {owner}'s, and was told: {reason}", asker.user));
+            Answer::Refused { reason }
+        };
+        if !asker.administrator {
+            return refused("Only an administrator of this PC can give a machine its owner.".into());
+        }
+        if !a_users(owner) || !self.work.profiles().iter().any(|profile| profile == owner) {
+            return refused(format!("{owner} isn't a user of this PC."));
+        }
+        let mut entries = self.machines.lock();
+        let Some((name, entry)) = entries.iter_mut().find(|(name, _)| name.eq_ignore_ascii_case(asked))
+        else {
+            return no_machine(asked);
+        };
+        if entry.settings.owner.is_some() {
+            return refused(format!("{name} has an owner already."));
+        }
+        let mut settings = entry.settings.clone();
+        settings.owner = Some(owner.to_owned());
+        if let Err(error) = self.machines.store.save(name, &settings) {
+            return refused(format!("{name}'s owner couldn't be saved: {error}"));
+        }
+        entry.settings = settings;
+        self.work.log(&format!("{name} is {owner}'s from now on, as {} allowed.", asker.user));
+        Answer::Ok
     }
 }

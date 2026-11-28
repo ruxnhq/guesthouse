@@ -15,15 +15,21 @@
 //! past the machine's run. A pairing found open when the keeper starts, or a device found waiting,
 //! is closed or met as the driver's `started` does.
 //!
+//! The devices the user removed are kept in the machine's own folder (`revoked`), as a snapshot
+//! gone back to brings back the guest's list from before. Once the guest first answers in each run,
+//! it's told again to stop trusting each of them, and the machine's view waits for that.
+//!
 //! There is no `drop` here: remoteman's `drop` cuts whichever device leads, which may be
 //! Guesthouse's own window, and the serial channel doesn't carry it.
 
 use super::remote_view::policy;
 use super::{Service, Work, no_machine};
 use guesthouse_control::Answer;
+use guesthouse_host_windows::guest_ctl::GuestCtl;
 use guesthouse_remote_view_core::ctl::Words;
 use guesthouse_remote_view_core::pairing::{Event, Pairing};
 use guesthouse_remote_view_core::policy::Policy;
+use guesthouse_remote_view_core::revoked;
 use guesthouse_remote_view_core::session::StepEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,6 +75,55 @@ impl<W: Work> Service<W> {
         self.remote_view(&name)
     }
 
+    /// Lets in the device waiting to pair, which is no longer one that was removed.
+    pub(super) fn accept(self: &Arc<Self>, asked: &str) -> Answer {
+        let name = self.machines.find(asked);
+        let waiting = name.as_ref().and_then(|name| {
+            self.sessions.with(name, |session| {
+                session.reading.as_ref()?.pending.as_ref().map(|pending| pending.fingerprint.clone())
+            })
+        });
+        let answer = self.pairing_event(asked, Event::Accept);
+        if let (Answer::Share { .. }, Some(name), Some(fingerprint)) = (&answer, name, waiting)
+            && let Err(error) = revoked::forget(&self.machines.store.folder(&name), &fingerprint)
+        {
+            self.work.log(&format!(
+                "{name}: a device paired again couldn't be taken off its removed list: {error}"
+            ));
+        }
+        answer
+    }
+
+    /// Stops trusting a device, and keeps it on the machine's list of removed devices, which each
+    /// start tells the guest again.
+    pub(super) fn revoke_device(self: &Arc<Self>, asked: &str, fingerprint: &str) -> Answer {
+        let answer = self.device(asked, |policy| policy.device_revoke(fingerprint));
+        if let (Answer::Share { .. }, Some(name)) = (&answer, self.machines.find(asked))
+            && let Err(error) = revoked::add(&self.machines.store.folder(&name), fingerprint)
+        {
+            self.work.log(&format!("{name}: a removed device couldn't be kept on its list: {error}"));
+        }
+        answer
+    }
+
+    /// Tells the running guest again to stop trusting each device removed from it, and lets its view
+    /// open once each was answered. Whether it was: one the guest didn't answer is told again later.
+    fn tell_removed(&self, name: &str, ctl: &GuestCtl) -> bool {
+        let policy = policy(&self.machines.store.disk(name));
+        let mut answered = true;
+        for fingerprint in revoked::removed(&self.machines.store.folder(name)) {
+            let Ok(words) = policy.device_revoke(&fingerprint) else { continue };
+            if let Err(reason) = self.drive(name, ctl, |driver| driver.device(&words)) {
+                self.work.log(&format!("{name}: a removed device wasn't revoked again: {reason}"));
+            }
+            answered &= !self.sessions.with(name, |session| session.unsure);
+        }
+        if answered && let Some(entry) = self.machines.lock().get_mut(name) {
+            entry.removed_told = true;
+        }
+        answered
+    }
+
     /// Sends one command about a paired device, made by `words` with the machine's policy, which
     /// refuses Guesthouse's own viewer.
     pub(super) fn device(
@@ -101,6 +156,8 @@ impl<W: Work> Service<W> {
     /// a reading the app had just taken.
     pub(super) fn keep_pairing(&self, name: &str, over: &AtomicBool) {
         let mut last: Option<Instant> = None;
+        let mut told = false;
+        let mut last_told: Option<Instant> = None;
         while !over.load(Ordering::SeqCst) {
             thread::sleep(LOOK);
             let (on, ctl) = match self.machines.lock().get(name) {
@@ -109,6 +166,10 @@ impl<W: Work> Service<W> {
             };
             let Some(ctl) = ctl.filter(|_| on) else { continue };
             let answered = self.sessions.with(name, |session| session.reading.is_some());
+            if answered && !told && last_told.is_none_or(|at| at.elapsed() >= FIRST_READING_EVERY) {
+                last_told = Some(Instant::now());
+                told = self.tell_removed(name, &ctl);
+            }
             let poll =
                 self.sessions.with(name, |session| session.pairing.as_ref().and_then(Pairing::poll_ms));
             let every = match poll {

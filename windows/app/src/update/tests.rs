@@ -425,6 +425,7 @@ fn machine(name: &str, state: State) -> Machine {
         remote_view: false,
         remote_port: None,
         console_pipe: None,
+        needs_owner: false,
     }
 }
 

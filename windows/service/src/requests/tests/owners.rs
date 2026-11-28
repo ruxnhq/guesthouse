@@ -6,8 +6,8 @@ use guesthouse_control::Forward;
 
 const ADMINISTRATORS: &str = "S-1-5-32-544";
 
-/// A standard user. `USER`'s account is an administrator's, whose app runs unelevated, as on a
-/// PC with one user.
+/// A standard user, and an administrator's account asking elevated. `USER` is an administrator's
+/// account too, whose app asks as itself, unelevated.
 const SOMEONE_ELSE: &str = "S-1-5-21-1-2-3-1002";
 const AN_ADMINISTRATOR: &str = "S-1-5-21-1-2-3-500";
 
@@ -45,7 +45,7 @@ impl Connection for As {
 
 fn ask_as(service: &Arc<Service<Pretend>>, user: &str, administrator: bool, request: Request) -> Vec<Answer> {
     let (answers, received) = channel();
-    let asker = Asker { user: user.into(), administrator, administrators_account: user != SOMEONE_ELSE };
+    let asker = Asker { user: user.into(), administrator };
     service.answer(request, &mut As { asker, answers });
     received.try_iter().collect()
 }
@@ -81,6 +81,7 @@ fn every_request_naming(name: &str, settings: MachineSettings) -> Vec<Request> {
         Request::PairDecline { name: name.clone() },
         Request::DeviceAllow { name: name.clone(), fingerprint: "ab".into(), what: "input".into(), on: true },
         Request::DeviceRevoke { name: name.clone(), fingerprint: "ab".into() },
+        Request::Assign { name: name.clone(), owner: SOMEONE_ELSE.into() },
         Request::Delete { name },
     ]
 }
@@ -128,7 +129,10 @@ fn an_administrator_sees_and_acts_on_every_machine_and_takes_none() {
 fn old_machine(setup: &Setup, work: impl FnOnce(&Store) -> Pretend) -> (Store, Arc<Service<Pretend>>) {
     let store = setup.service.machines().store.clone();
     store.make("old").unwrap();
-    store.save("old", &Settings::basic(8192, 1, Card::Default)).unwrap();
+    let forwards = vec![Forward { host_port: 8080, guest_port: 80 }];
+    let settings =
+        Settings { address: Some("172.29.1.2".into()), forwards, ..Settings::basic(8192, 1, Card::Default) };
+    store.save("old", &settings).unwrap();
     let service = Service::new(store.clone(), work(&store));
     (store, service)
 }
@@ -146,30 +150,123 @@ fn a_machine_from_before_owners_is_the_user_its_files_belong_to() {
     assert_eq!(names_listed(&service, SOMEONE_ELSE, false), ["old"]);
 }
 
-#[test]
-fn a_machine_whose_files_name_no_user_waits_for_an_administrators_account() {
-    let setup = setup("owners-old", Pretend::default());
-    let (store, service) = old_machine(&setup, |store| Pretend {
+/// The machines `user` is shown, each as `(name, needs_owner, folder shown)`.
+fn listed(service: &Arc<Service<Pretend>>, user: &str, administrator: bool) -> Vec<(String, bool, bool)> {
+    match ask_as(service, user, administrator, Request::Status).as_slice() {
+        [Answer::Status { machines, .. }] => machines
+            .iter()
+            .map(|machine| {
+                (machine.name.clone(), machine.needs_owner, !machine.folder.as_os_str().is_empty())
+            })
+            .collect(),
+        other => panic!("not a status: {other:?}"),
+    }
+}
+
+/// A PC with two users' profiles: the standard user's and the administrator's account's.
+fn two_users() -> Vec<String> {
+    [windows_own(), vec![SOMEONE_ELSE.to_owned(), USER.to_owned()]].concat()
+}
+
+/// A machine from before owners whose files name no user, on a PC that keeps `profiles`.
+fn waiting(setup: &Setup, profiles: Vec<String>) -> (Store, Arc<Service<Pretend>>) {
+    old_machine(setup, |store| Pretend {
         owners: vec![(store.folder("old"), "S-1-5-18".into()), (store.disk("old"), ADMINISTRATORS.into())],
+        profiles,
         ..Pretend::default()
-    });
-    // A standard user neither sees it nor takes it.
-    assert!(names_listed(&service, SOMEONE_ELSE, false).is_empty());
-    let account = Request::Account { name: "old".into() };
-    assert_eq!(
-        ask_as(&service, SOMEONE_ELSE, false, account),
-        [Answer::Refused { reason: "There is no machine called old.".into() }]
-    );
-    // An elevated administrator sees it without taking it.
-    assert_eq!(names_listed(&service, AN_ADMINISTRATOR, true), ["old"]);
+    })
+}
+
+#[test]
+fn a_machine_whose_files_name_no_user_needs_an_owner_and_no_account_takes_it_by_asking() {
+    let setup = setup("owners-old", Pretend::default());
+    let (store, service) = waiting(&setup, two_users());
+    let needs = [("old".to_owned(), true, false)];
+    // Every user at the console sees it waiting, and only what it is, the administrator's account
+    // asking as itself, as its app does, among them.
+    assert_eq!(listed(&service, SOMEONE_ELSE, false), needs);
+    assert_eq!(listed(&service, USER, false), needs);
+    // Nothing else is done to it for them, and nobody took it by asking.
+    for request in every_request_naming("old", hardware(4096, Card::Default)) {
+        let said = format!("{request:?}");
+        let refused = Answer::Refused { reason: super::super::owners::needs_an_owner("old") };
+        assert_eq!(
+            ask_as(&service, SOMEONE_ELSE, false, request.clone()),
+            std::slice::from_ref(&refused),
+            "{said}"
+        );
+        assert_eq!(ask_as(&service, USER, false, request), [refused], "{said}");
+    }
+    let kept = &store.load()[0].1;
+    assert_eq!((kept.owner.as_deref(), kept.memory_mb), (None, 8192));
+    // An elevated administrator sees all of it, as waiting, and takes it no more than anyone.
+    assert_eq!(listed(&service, AN_ADMINISTRATOR, true), [("old".to_owned(), true, true)]);
+    let one = |user: &str, administrator: bool| match ask_as(&service, user, administrator, Request::Status)
+        .as_slice()
+    {
+        [Answer::Status { machines, .. }] => machines[0].clone(),
+        other => panic!("not a status: {other:?}"),
+    };
+    let all = one(AN_ADMINISTRATOR, true);
+    assert!(all.address.is_some() && !all.forwards.is_empty(), "{all:?}");
+    let only = Machine {
+        shares: Vec::new(),
+        network_mode: NetworkMode::Shared,
+        forwards: Vec::new(),
+        ssh_port: None,
+        folder: PathBuf::new(),
+        problem: None,
+        snapshots: Vec::new(),
+        working: None,
+        address: None,
+        remote_view: false,
+        remote_port: None,
+        console_pipe: None,
+        ..all.clone()
+    };
+    assert_eq!(one(SOMEONE_ELSE, false), only, "what it is and what it's given, and nothing more");
     assert_eq!(store.load()[0].1.owner, None);
-    // The administrator's account asking as itself, as the app does on a PC with one user, takes it,
-    // and that's kept before it's answered and through the service starting again.
-    assert_eq!(names_listed(&service, USER, false), ["old"]);
+    let again = Service::new(store.clone(), Pretend { profiles: two_users(), ..Pretend::default() });
+    assert_eq!(listed(&again, USER, false), needs);
+    assert_eq!(store.load()[0].1.owner, None);
+}
+
+#[test]
+fn an_administrator_allowing_it_gives_a_waiting_machine_to_the_user_who_asked() {
+    let first = setup("owners-assign", Pretend::default());
+    let (store, service) = waiting(&first, two_users());
+    let assign = |owner: &str| Request::Assign { name: "OLD".into(), owner: owner.into() };
+    // Asked unelevated, by anyone, it stays waiting.
+    for user in [SOMEONE_ELSE, USER] {
+        assert_eq!(
+            ask_as(&service, user, false, assign(user)),
+            [Answer::Refused { reason: super::super::owners::needs_an_owner("old") }]
+        );
+    }
+    // Only to a user of this PC.
+    for owner in ["S-1-5-18", ADMINISTRATORS, "S-1-5-21-1-2-3-1009", ""] {
+        assert_eq!(
+            ask_as(&service, AN_ADMINISTRATOR, true, assign(owner)),
+            [Answer::Refused { reason: format!("{owner} isn't a user of this PC.") }]
+        );
+    }
+    assert_eq!(store.load()[0].1.owner, None);
+    // The helper the standard user's app starts runs as the administrator who allowed it, and the
+    // machine is the standard user's.
+    assert_eq!(ask_as(&service, AN_ADMINISTRATOR, true, assign(SOMEONE_ELSE)), [Answer::Ok]);
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(SOMEONE_ELSE));
+    assert_eq!(listed(&service, SOMEONE_ELSE, false), [("old".to_owned(), false, true)]);
+    assert!(listed(&service, USER, false).is_empty());
+    assert_eq!(
+        ask_as(&service, AN_ADMINISTRATOR, true, assign(USER)),
+        [Answer::Refused { reason: "old has an owner already.".into() }]
+    );
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(SOMEONE_ELSE));
+    // An administrator gives one to their own account the same way.
+    let second = setup("owners-assign-own", Pretend::default());
+    let (store, service) = waiting(&second, two_users());
+    assert_eq!(ask_as(&service, USER, true, assign(USER)), [Answer::Ok]);
     assert_eq!(store.load()[0].1.owner.as_deref(), Some(USER));
-    let again = Service::new(store, Pretend::default());
-    assert_eq!(names_listed(&again, USER, false), ["old"]);
-    assert!(names_listed(&again, SOMEONE_ELSE, false).is_empty());
 }
 
 #[test]
@@ -238,9 +335,15 @@ fn a_pcs_one_user_takes_a_waiting_machine_and_with_two_users_it_waits() {
     assert_eq!(names_listed(&service, SOMEONE_ELSE, false), ["old"], "a standard user, the PC's one");
     assert_eq!(store.load()[0].1.owner.as_deref(), Some(SOMEONE_ELSE));
 
+    // The one user is an administrator, whose app asks as itself: theirs at once, with no prompt.
+    let admin = setup("owners-one-admin", Pretend::default());
+    let (store, service) = waiting(&admin, [windows_own(), vec![USER.to_owned()]].concat());
+    assert_eq!(listed(&service, USER, false), [("old".to_owned(), false, true)]);
+    assert_eq!(store.load()[0].1.owner.as_deref(), Some(USER));
+
     let two = setup("owners-two-users", Pretend::default());
     let profiles = [windows_own(), vec![SOMEONE_ELSE.to_owned(), "S-1-5-21-1-2-3-1003".to_owned()]].concat();
     let (store, service) = old_machine(&two, |_| Pretend { profiles, ..Pretend::default() });
-    assert!(names_listed(&service, SOMEONE_ELSE, false).is_empty(), "one of two standard users");
+    assert_eq!(listed(&service, SOMEONE_ELSE, false), [("old".to_owned(), true, false)], "one of two users");
     assert_eq!(store.load()[0].1.owner, None);
 }

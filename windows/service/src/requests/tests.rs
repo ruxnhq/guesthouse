@@ -1,7 +1,7 @@
 use super::*;
+use guesthouse_control::{Machine, SnapshotInfo, System};
 use guesthouse_host_windows::guest_ctl::LineWriter;
 use guesthouse_remote_view_core::ctl_wire::{answer_lines, read_request};
-use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 
 /// Work that makes a disk as a file, and runs a machine until it's asked to stop.
@@ -345,7 +345,7 @@ impl Connection for Window {
     }
 
     fn asker(&self) -> Asker {
-        Asker { user: USER.into(), administrator: false, administrators_account: true }
+        Asker { user: USER.into(), administrator: false }
     }
 }
 

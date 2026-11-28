@@ -68,6 +68,7 @@ pub fn view(main: &Main, context: &mut ViewContext<Main>) -> View {
         (Err(words), _) => away(words, context),
         (Ok(_), Page::Home) => home::page(main, context),
         (Ok(_), Page::Machine) => match main.machine() {
+            Some(machine) if machine.needs_owner => machine::needs_owner(main, machine, context),
             Some(machine) => machine::page(main, machine, context),
             None => home::page(main, context),
         },
@@ -169,6 +170,8 @@ fn title_bar(main: &Main, context: &ViewContext<Main>) -> TitleBar {
         .on_back_requested(context.message(Message::Back));
     let machine = main.machine().filter(|_| main.page == Page::Machine && main.seen.is_ok());
     let (left, right): (Option<View>, Option<View>) = match machine {
+        // One that needs an owner has nothing to be done to it but that, which its page has.
+        Some(machine) if machine.needs_owner => (Some(machine::switcher(main, machine, context)), None),
         Some(machine) => {
             (Some(machine::switcher(main, machine, context)), Some(machine::actions(main, machine, context)))
         }

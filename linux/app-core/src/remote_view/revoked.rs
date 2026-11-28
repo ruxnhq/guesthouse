@@ -4,55 +4,15 @@
 //! guest is told again to stop trusting each device on this list, and a machine that was just imported
 //! has every device it came with revoked once.
 
-use guesthouse_remote_view_core::ctl::check_fingerprint;
+#[cfg(test)]
+use guesthouse_remote_view_core::revoked::FILE;
+pub use guesthouse_remote_view_core::revoked::{add, forget, removed};
 use std::fs;
 use std::path::Path;
 
-const FILE: &str = "remote-view-revoked.json";
 /// Present in the folder of a machine that came from an import, until its first start has revoked what
 /// its guest trusted.
 const FRESH: &str = "remote-view-fresh";
-/// The most fingerprints kept: a list of one machine's devices is short.
-const MOST: usize = 256;
-
-/// The fingerprints removed, in the order they were.
-pub fn removed(folder: &Path) -> Vec<String> {
-    let text = fs::read_to_string(folder.join(FILE)).unwrap_or_default();
-    let listed: Vec<String> = serde_json::from_str(&text).unwrap_or_default();
-    listed.into_iter().filter(|fingerprint| check_fingerprint(fingerprint).is_ok()).take(MOST).collect()
-}
-
-fn write(folder: &Path, list: &[String]) -> std::io::Result<()> {
-    let file = folder.join(FILE);
-    if list.is_empty() {
-        return match fs::remove_file(file) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-            _ => Ok(()),
-        };
-    }
-    let text = serde_json::to_string_pretty(list).unwrap_or_default();
-    fs::write(file, text + "\n")
-}
-
-/// Notes that this device was removed.
-pub fn add(folder: &Path, fingerprint: &str) -> std::io::Result<()> {
-    let Ok(fingerprint) = check_fingerprint(fingerprint) else { return Ok(()) };
-    let mut list = removed(folder);
-    if !list.contains(&fingerprint) {
-        list.push(fingerprint);
-        list.drain(..list.len().saturating_sub(MOST));
-    }
-    write(folder, &list)
-}
-
-/// Notes that this device is trusted again, as it was paired again here.
-pub fn forget(folder: &Path, fingerprint: &str) -> std::io::Result<()> {
-    let Ok(fingerprint) = check_fingerprint(fingerprint) else { return Ok(()) };
-    let mut list = removed(folder);
-    let before = list.len();
-    list.retain(|listed| *listed != fingerprint);
-    if list.len() == before { Ok(()) } else { write(folder, &list) }
-}
 
 /// Marks a machine that was just imported.
 pub fn mark_imported(folder: &Path) -> std::io::Result<()> {

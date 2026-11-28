@@ -25,6 +25,7 @@ pub mod events;
 pub mod install;
 pub mod pairing;
 pub mod policy;
+pub mod revoked;
 pub mod session;
 pub mod share;
 pub mod status;

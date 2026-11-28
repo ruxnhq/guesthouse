@@ -52,6 +52,9 @@ pub struct Entry {
     /// Whether the guest's remoteman answered when it was last asked this run, and how many devices
     /// it trusted then and how many of them are Guesthouse's own viewer, so a change is told once.
     pub view_answered: Option<Option<(usize, usize)>>,
+    /// Whether this run's guest has been told again to stop trusting each device removed from it,
+    /// which its view waits for.
+    pub removed_told: bool,
     history: VecDeque<Event>,
     watchers: Vec<SyncSender<Event>>,
 }
@@ -70,6 +73,7 @@ impl Entry {
             boot_addresses: Vec::new(),
             view: ViewStanding::default(),
             view_answered: None,
+            removed_told: false,
             history: VecDeque::new(),
             watchers: Vec::new(),
         }

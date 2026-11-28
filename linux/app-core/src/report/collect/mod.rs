@@ -99,6 +99,15 @@ impl Collection {
         }
     }
 
+    /// A file of a run folder, if it's there: only a plain file, and no link is followed.
+    fn add_run_file(&mut self, name: &str, path: &Path) {
+        match crate::run_files::open_run_file(path).and_then(read_bounded_from) {
+            Ok(text) => self.add(name, text),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => self.miss(name, &format!("it could not be read: {error}"), None),
+        }
+    }
+
     /// A file that's only there in some runs, so it being missing says nothing.
     fn add_file_if_there(&mut self, name: &str, path: &Path) {
         if path.exists() {
@@ -140,7 +149,10 @@ pub fn collect(context: &Context, request: &Request) -> Collection {
 
 /// A file as text, or its start and its end if it's bigger than `MOST_READ_BYTES`.
 fn read_bounded(path: &Path) -> io::Result<String> {
-    let mut file = File::open(path)?;
+    read_bounded_from(File::open(path)?)
+}
+
+fn read_bounded_from(mut file: File) -> io::Result<String> {
     let size = file.metadata()?.len();
     if size <= MOST_READ_BYTES {
         let mut data = Vec::new();

@@ -155,13 +155,36 @@ const PROCESS: [c_long; 33] = [
 /// It reaches nothing new: what it serves on was made before the filter.
 const NETWORK: [c_long; 4] = [SYS_socket, SYS_connect, SYS_bind, SYS_listen];
 
+/// Having a descriptor signal a process when it's ready, which can name any process of the user's.
+/// The numbers are the kernel's, from its `fcntl.h` and `sockios.h`, as the `libc` crate lacks some.
+const SIGNAL_OWNER_COMMANDS: [c_int; 3] = [F_SETOWN, 15, 10];
+const SIGNAL_OWNER_REQUESTS: [c_ulong; 2] = [0x8901, 0x8902];
+
+/// What's refused of calls that are let otherwise: signals sent for a descriptor, and a datagram pair,
+/// whose end can send to any socket by its path.
+fn refusals() -> Vec<Rule> {
+    let mut rules: Vec<Rule> = SIGNAL_OWNER_REQUESTS
+        .iter()
+        .map(|request| Rule::when(SYS_ioctl, Condition::Equals(1, *request as u32), Action::Fail(EPERM)))
+        .collect();
+    rules.extend(
+        SIGNAL_OWNER_COMMANDS
+            .iter()
+            .map(|command| Rule::when(SYS_fcntl, Condition::Equals(1, *command as u32), Action::Fail(EPERM))),
+    );
+    let datagram = Condition::Masked(1, 0xf, SOCK_DGRAM as u32);
+    rules.push(Rule::when(SYS_socketpair, datagram, Action::Fail(EPERM)));
+    rules
+}
+
 /// Naming threads, the timer slack the loop sets, and reading its own settings.
 const PRCTL_OPTIONS: [c_int; 6] =
     [PR_SET_NAME, PR_GET_NAME, PR_SET_TIMERSLACK, PR_GET_TIMERSLACK, PR_SET_VMA, PR_GET_DUMPABLE];
 
 /// The filter for a daemon whose process id is `own_pid`, which is the one process it may signal.
 pub fn daemon(own_pid: i32) -> Filter {
-    let mut rules: Vec<Rule> = all(&HOT, Action::Allow).collect();
+    let mut rules = refusals();
+    rules.extend(all(&HOT, Action::Allow));
     for calls in [&MEMORY[..], &FILES, &SOCKETS, &WAITING, &PROCESS] {
         rules.extend(all(calls, Action::Allow));
     }

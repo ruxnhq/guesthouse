@@ -68,11 +68,24 @@ pub fn is_fresh(snapshot: &Snapshot, now: u64) -> bool {
         && now.saturating_sub(snapshot.taken_at) <= OLDEST_USABLE.as_millis() as u64
 }
 
+/// The folder of this user's shared readings, in the user's runtime folder, which no other user can
+/// open, so no one else can make a file there first. The app, the daemon and the backends all find
+/// their files here.
+pub fn shared_folder() -> PathBuf {
+    // SAFETY: this asks for a number and can't fail.
+    let user = unsafe { libc::getuid() };
+    let runtime = std::env::var_os(RUNTIME_VARIABLE).filter(|folder| !folder.is_empty());
+    runtime.map_or_else(|| PathBuf::from(format!("/run/user/{user}")), PathBuf::from).join(SHARED_FOLDER)
+}
+
+const RUNTIME_VARIABLE: &str = "XDG_RUNTIME_DIR";
+const SHARED_FOLDER: &str = "guesthouse-sensors";
+
 /// The file for this user's readings, in this layout.
 pub fn snapshot_path() -> PathBuf {
     // SAFETY: this asks for a number and can't fail.
     let user = unsafe { libc::getuid() };
-    PathBuf::from(format!("/dev/shm/gpupv-sensors-{user}-{LAYOUT}"))
+    shared_folder().join(format!("gpupv-sensors-{user}-{LAYOUT}"))
 }
 
 /// The file for the readings of the card at `card`, an address as `0000:01:00.0`, which the guests on
@@ -89,6 +102,14 @@ pub fn snapshot_path_for(card: Option<&str>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_files_are_in_the_users_runtime_folder() {
+        let folder = snapshot_path().parent().unwrap().to_owned();
+        assert_eq!(folder, shared_folder());
+        assert!(!folder.starts_with("/dev/shm"), "{}", folder.display());
+        assert_eq!(card_processes::table_path_for(Some("0000:01:00.0")).parent().unwrap(), folder);
+    }
 
     #[test]
     fn the_layout_is_in_the_files_name() {

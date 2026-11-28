@@ -45,6 +45,7 @@ fn why(code: Option<i32>) -> String {
                     left alone."
             .into(),
         Some(6) => "this card or its driver can't lock the memory clock, so it's left alone.".into(),
+        Some(7) => "this user can't open the card's device file, so its clocks are left alone.".into(),
         Some(code) => format!("the helper ended with {code}, so the card's clocks are left alone."),
         None => "the helper was stopped by a signal, so the card's clocks are left alone.".into(),
     }

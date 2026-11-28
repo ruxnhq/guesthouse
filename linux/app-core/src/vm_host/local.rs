@@ -87,8 +87,9 @@ struct Handed<'a> {
     throwaway: Option<&'a ThrowawayRun>,
 }
 
-/// What `pkill -f` is given to find the swtpm that serves this socket: its path with every character
-/// that means something in a pattern taken literally.
+/// What `pkill -f` is given to find the swtpm that serves this socket, whether it was named by its
+/// path or not: the socket's path with every character that means something in a pattern taken
+/// literally.
 pub(super) fn swtpm_pattern(socket: &Path) -> String {
     let path: String = socket
         .display()
@@ -96,7 +97,7 @@ pub(super) fn swtpm_pattern(socket: &Path) -> String {
         .chars()
         .flat_map(|c| if "\\.[]()*+?{}|^$".contains(c) { vec!['\\', c] } else { vec![c] })
         .collect();
-    format!("^swtpm socket .*path={path}")
+    format!("^[^ ]*swtpm socket .*path={path}")
 }
 
 impl LocalHost<'_> {
@@ -142,7 +143,7 @@ impl LocalHost<'_> {
     }
 
     fn spawn_tpm(&self, plan: &VmPlan) -> Result<()> {
-        let (Some(arguments), Some(state)) = (plan.swtpm_arguments(), plan.tpm.as_ref()) else {
+        let (Some(command), Some(state)) = (plan.swtpm_command(), plan.tpm.as_ref()) else {
             return Ok(());
         };
         // A TPM ends when QEMU lets go of it, unless a QEMU never came.
@@ -152,7 +153,8 @@ impl LocalHost<'_> {
         let _ = fs::remove_file(&socket);
         crate::snapshots::finish_tpm_swap(state);
         fs::create_dir_all(state)?;
-        let done = Command::new("swtpm").args(arguments).status()?;
+        let (program, arguments) = command.split_first().ok_or_else(|| Failure::new("Nothing to run."))?;
+        let done = Command::new(program).args(arguments).stdin(Stdio::null()).status()?;
         if !done.success() {
             let rules = missing_rules(self.context);
             if rules.is_empty() {
@@ -202,8 +204,17 @@ impl LocalHost<'_> {
         Ok(spawned)
     }
 
-    /// QEMU with no daemon and no shared memory. Returns once its monitor answers.
+    /// QEMU with no daemon and no shared memory. Returns once its monitor answers. Its jail is chosen
+    /// here, unless the start that made the plan chose already, as a start with sound does.
     fn start_plain(&self, plan: &VmPlan, machine: &Machine, handed: &Handed) -> Result<()> {
+        let chosen = plan.jail.is_some() || !plan.jail_note.is_empty();
+        let plan = &if chosen {
+            plan.clone()
+        } else {
+            let choice = jailing::choose(self.context, machine, plan, &(self.context.jail_offer)(plan))?;
+            let jail = choice.qemu.map(|jail| plan.with_backing_files(jail)).transpose()?;
+            VmPlan { jail, jail_note: choice.note, ..plan.clone() }
+        };
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
         self.keep_last_run();
         self.note_machine(machine)?;

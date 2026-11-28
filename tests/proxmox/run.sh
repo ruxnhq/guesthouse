@@ -109,7 +109,7 @@ EOF
 # A VM as setup-vm.sh leaves it: VMID, slot, GiB.
 make_windows_vm() {
     cat >"$R/etc/pve/qemu-server/$1.conf" <<EOF
-args: -device vmbus-bridge,mmio-base=0x10000000000,mmio-size=0x1000000000 -device hv-timesync -chardev socket,id=gpg,path=/run/user/1000/guesthouse/run-$2/global.sock,reconnect-ms=500 -object memory-backend-file,id=gpio,size=64G,mem-path=/dev/shm/gpupv-window.$1,share=on -device gpupv-global,chardev=gpg,instanceid=711dad3a-73ce-468b-90a9-ede6906841b2,iomem=gpio,iomem-base=0x10000000000 -chardev socket,id=gpv,path=/run/user/1000/guesthouse/run-$2/vgpu.sock,reconnect-ms=500 -device gpupv-vgpu,chardev=gpv,instanceid=7a1e2f30-4c55-4d6e-9f10-0123456789ab -object memory-backend-file,id=ram0,size=$3G,mem-path=/dev/shm/gpupv-ram.$1,share=on -machine memory-backend=ram0 -device gpupv-render,channel=7a1e2f30-4c55-4d6e-9f10-0123456789ab,hostcaps=1,bus=pcie.0,addr=0x6
+args: -device vmbus-bridge,mmio-base=0x10000000000,mmio-size=0x1000000000 -device hv-timesync -chardev socket,id=gpg,path=/run/user/1000/guesthouse/run-$2/global.sock,reconnect-ms=500 -object memory-backend-file,id=gpio,size=64G,mem-path=/dev/shm/gpupv-window.$1,share=on -device gpupv-global,chardev=gpg,instanceid=711dad3a-73ce-468b-90a9-ede6906841b2,iomem=gpio,iomem-base=0x10000000000,owner=1000 -chardev socket,id=gpv,path=/run/user/1000/guesthouse/run-$2/vgpu.sock,reconnect-ms=500 -device gpupv-vgpu,chardev=gpv,instanceid=7a1e2f30-4c55-4d6e-9f10-0123456789ab,owner=1000 -object memory-backend-file,id=ram0,size=$3G,mem-path=/dev/shm/gpupv-ram.$1,share=on -machine memory-backend=ram0 -device gpupv-render,channel=7a1e2f30-4c55-4d6e-9f10-0123456789ab,hostcaps=1,bus=pcie.0,addr=0x6
 balloon: 0
 bios: ovmf
 cpu: host,flags=-nested-virt

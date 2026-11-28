@@ -6,7 +6,7 @@
 use crate::context::Context;
 use crate::report::trim::trim;
 use crate::run_files::{
-    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run,
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run, open_run_file,
 };
 use crate::vm_host::MACHINE_NOTE;
 use std::fs;
@@ -19,6 +19,8 @@ const NEW_SUFFIX: &str = ".new";
 pub const STARTED_FILE: &str = "started";
 /// The most of each log a copy keeps, from its start and its end.
 const MOST_KEPT_BYTES: usize = 4 << 20;
+/// The most of each log that is read to make the copy from: the trim looks at lines in the middle too.
+const MOST_READ_BYTES: u64 = 8 * MOST_KEPT_BYTES as u64;
 
 /// Where a machine's kept logs are.
 pub fn kept_folder(context: &Context, id: &str) -> PathBuf {
@@ -49,12 +51,29 @@ pub fn keep_run(context: &Context, run_folder: &Path) -> io::Result<()> {
     let _ = fs::remove_dir_all(&new);
     fs::create_dir_all(&new)?;
     for (name, path) in files {
-        let text = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+        let bytes = read_ends(open_run_file(&path)?, MOST_READ_BYTES)?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
         fs::write(new.join(name), trim(&text, MOST_KEPT_BYTES))?;
     }
     fs::write(new.join(STARTED_FILE), local_time(since))?;
     let _ = fs::remove_dir_all(&folder);
     fs::rename(&new, &folder)
+}
+
+/// The file, or of a longer one its first and last halves of `most` bytes, which is all a copy can keep
+/// of it once trimmed.
+fn read_ends(mut file: fs::File, most: u64) -> io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let size = file.metadata()?.len();
+    let mut bytes = Vec::new();
+    if size <= most {
+        file.take(most).read_to_end(&mut bytes)?;
+        return Ok(bytes);
+    }
+    (&mut file).take(most / 2).read_to_end(&mut bytes)?;
+    file.seek(SeekFrom::Start(size - most / 2))?;
+    file.take(most / 2).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// When the kept run started, if there is one.
@@ -93,6 +112,33 @@ mod tests {
         keep_run(&context, &run).unwrap();
         assert!(!kept.join("daemon.out").exists(), "the copy before is replaced whole");
         assert_eq!(fs::read_to_string(kept.join("qemu.log")).unwrap(), "second run");
+    }
+
+    #[test]
+    fn a_link_in_the_run_folder_is_not_followed() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let run = scratch.path("run");
+        fs::create_dir_all(&run).unwrap();
+        let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
+        fs::write(run.join("daemon.out"), "the run's").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, run.join("qemu.log")).unwrap();
+        keep_run(&context, &run).unwrap();
+        let kept = kept_folder(&context, "w11");
+        assert_eq!(fs::read_to_string(kept.join("daemon.out")).unwrap(), "the run's");
+        assert!(!kept.join("qemu.log").exists(), "a link is not a log");
+    }
+
+    #[test]
+    fn a_huge_log_is_read_only_at_its_ends() {
+        let scratch = Scratch::new();
+        let path = scratch.write("big.log", "");
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_len(4 * MOST_READ_BYTES).unwrap();
+        drop(file);
+        let read = read_ends(fs::File::open(&path).unwrap(), MOST_READ_BYTES).unwrap();
+        assert_eq!(read.len() as u64, MOST_READ_BYTES);
     }
 
     #[test]

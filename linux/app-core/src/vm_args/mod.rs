@@ -19,6 +19,7 @@ mod qemu_jail;
 mod serial;
 mod standalone;
 mod throwaway;
+mod tpm_jail;
 mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};

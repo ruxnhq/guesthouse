@@ -41,6 +41,8 @@ const UNIX_LISTEN: &str = "--unix-listen";
 const UNIX_CONNECT: &str = "--unix-connect";
 const NO_NEW_UNIX_SOCKETS: &str = "--no-new-unix-sockets";
 const READS_OWN_MEMORY: &str = "--reads-own-memory";
+const PINGS: &str = "--pings";
+const TPM: &str = "--tpm";
 
 /// A unix socket the launcher opens for the program, so the program needs to make none itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +84,10 @@ pub struct Launch {
     pub no_new_unix_sockets: bool,
     /// Let the program read its own memory with `process_vm_readv`, which a macOS guest's device needs.
     pub reads_own_memory: bool,
+    /// Let the program make the kernel's ping sockets, for a QEMU whose user network is the guest's NAT.
+    pub pings: bool,
+    /// The program is the virtual TPM, which gets [`filters::tpm`] in place of QEMU's filter.
+    pub tpm: bool,
     pub program: Vec<OsString>,
 }
 
@@ -128,6 +134,12 @@ impl Launch {
         if self.reads_own_memory {
             words.push(READS_OWN_MEMORY.to_owned());
         }
+        if self.pings {
+            words.push(PINGS.to_owned());
+        }
+        if self.tpm {
+            words.push(TPM.to_owned());
+        }
         words.push(END_OF_PLAN.to_owned());
         words
     }
@@ -140,6 +152,8 @@ impl Launch {
             unix_sockets: Vec::new(),
             no_new_unix_sockets: false,
             reads_own_memory: false,
+            pings: false,
+            tpm: false,
             program: Vec::new(),
         };
         let mut words = arguments.into_iter();
@@ -181,6 +195,8 @@ impl Launch {
                 }
                 NO_NEW_UNIX_SOCKETS => launch.no_new_unix_sockets = true,
                 READS_OWN_MEMORY => launch.reads_own_memory = true,
+                PINGS => launch.pings = true,
+                TPM => launch.tpm = true,
                 UNIX_LISTEN | UNIX_CONNECT => {
                     let (path, fd) = (next(&name)?, next(&name)?);
                     let fd =
@@ -244,7 +260,11 @@ impl Launch {
 
     fn jail(&self, plan: &Plan) -> io::Result<()> {
         let applied = landlock::apply(plan)?;
-        let filter = filters::qemu(self.no_new_unix_sockets, self.reads_own_memory);
+        let filter = if self.tpm {
+            filters::tpm()
+        } else {
+            filters::qemu(self.no_new_unix_sockets, self.reads_own_memory, self.pings)
+        };
         seccomp::install(&filter, Threads::This)?;
         let missing = applied.missing();
         let leaves_out = if missing.is_empty() {
@@ -283,6 +303,8 @@ mod tests {
             unix_sockets: vec![UnixSocket { path: "/r/qmp.sock".into(), fd: 20, listen: true }],
             no_new_unix_sockets: true,
             reads_own_memory: true,
+            pings: true,
+            tpm: true,
             program: ["/usr/bin/qemu-system-x86_64", "-name", "gpupv", "--"].map(OsString::from).to_vec(),
         }
     }

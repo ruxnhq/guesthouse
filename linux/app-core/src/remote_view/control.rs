@@ -22,6 +22,8 @@ const LONGEST_REPLY: usize = 256 * 1024;
 const LINE_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_MODE: u32 = 0o600;
 
+/// In the notes folder beside the run folder, which no jail reaches, so only the app and its own
+/// programs can open it.
 pub fn socket_path(run_folder: &Path) -> PathBuf {
     crate::paths::notes_beside(run_folder).join(SOCKET)
 }

@@ -92,6 +92,10 @@ test_a_script_as_guesthouse_prints_it_gives_this_vms_words() {
     grep -qx -e '-device gpupv-render,channel=7a1e2f30-4c55-4d6e-9f10-0123456789ab,hostcaps=1,bus=pcie.0,addr=0x6' "$T/out" ||
         { expect "the render device has no address"; return 1; }
     grep -qx 'daemon_env=GUESTHOUSE_AMD_CARD=0000:c4:00.0' "$T/out" || { expect "the daemon's environment is wrong"; return 1; }
+    grep -qx -e '-device gpupv-vgpu,chardev=gpv,instanceid=7a1e2f30-4c55-4d6e-9f10-0123456789ab,owner=1000' "$T/out" ||
+        { expect "the vGPU channel doesn't name its owner"; return 1; }
+    grep -qx -e '-device gpupv-global,chardev=gpg,instanceid=711dad3a-73ce-468b-90a9-ede6906841b2,iomem=gpio,iomem-base=0x10000000000,owner=1000' "$T/out" ||
+        { expect "the global channel doesn't name its owner"; return 1; }
 }
 
 # Each of the three values with something in it that is no part of a path, which would end a pattern of sed's
@@ -143,6 +147,18 @@ EOS
     [ "$status" -eq 0 ] || { expect "exit $status, not 0"; return 1; }
     [ -n "$session" ] && [ "$session" != "$mine" ] || { expect "it ran in this session, $mine"; return 1; }
     [ "$input" = 0 ] || { expect "it had input to read"; return 1; }
+}
+
+test_a_checkout_others_can_change_is_refused() {
+    mkdir -p "$T/checkout"
+    : >"$T/checkout/hookscript.sh"
+    status=0
+    "$SHELL_UNDER_TEST" -c '. "$1"; root_owned "$2"' sh "$T/functions.sh" "$T/checkout/hookscript.sh" >"$T/out" 2>&1 ||
+        status=$?
+    [ "$status" -ne 0 ] || { expect "a file of $(id -un)'s counted as root's"; return 1; }
+    status=0
+    "$SHELL_UNDER_TEST" -c '. "$1"; root_owned /usr/bin' sh "$T/functions.sh" >"$T/out" 2>&1 || status=$?
+    [ "$status" -eq 0 ] || { expect "/usr/bin wasn't root's"; return 1; }
 }
 
 for name in $(declare -F | awk '{ print $3 }' | grep '^test_'); do

@@ -983,6 +983,50 @@ fn an_early_picture_has_to_fit_its_block() {
     assert_eq!(play.early(early.mode, 480 << 16 | 640), Err(Why::EarlyIsOff));
 }
 
+#[test]
+fn an_early_block_never_gets_shorter_than_the_picture_shown_from_it() {
+    let mut play = Play::new();
+    let early = play.profile.registers.early.clone();
+    let (big, small) = (800 << 16 | 1280, 480 << 16 | 640);
+    let (big_bytes, small_bytes) = (0x3E_8000, 0x12_C000);
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    play.early(early.bytes, big_bytes).expect("1280 by 800");
+    assert_eq!(play.early(early.mode, big), Ok(Pass::AsItIs));
+    // The block as long as a smaller picture, with the larger still shown.
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    assert_eq!(play.early(early.bytes, PAGE_BYTES as u32), Err(Why::EarlyBlock));
+    // On again while on keeps the picture, as the device may.
+    play.early(early.on, 1).expect("on");
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    // Another page holds the block as long as it was.
+    let last_page = page(MEMORY_AT + MEMORY_BYTES) - 1;
+    assert_eq!(play.early(early.page, last_page), Err(Why::EarlyBlock));
+    assert_eq!(play.early(early.page, page(EARLY_BLOCK + PAGE_BYTES)), Ok(Pass::AsItIs));
+
+    // A driver's change to the smaller picture, in its order: on, page, bytes, depth, mode. The
+    // shorter block waits for the smaller picture, and the picture changes all the same.
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    assert_eq!(play.early(early.bytes, small_bytes), Err(Why::EarlyBlock));
+    play.early(early.depth, 32).expect("the depth");
+    assert_eq!(play.early(early.mode, small), Ok(Pass::AsItIs));
+    assert_eq!(play.early(early.bytes, small_bytes), Ok(Pass::AsItIs));
+    // And back to the larger one.
+    play.early(early.on, 1).expect("on");
+    play.early(early.page, page(EARLY_BLOCK)).expect("the page");
+    assert_eq!(play.early(early.bytes, big_bytes), Ok(Pass::AsItIs));
+    play.early(early.depth, 32).expect("the depth");
+    assert_eq!(play.early(early.mode, big), Ok(Pass::AsItIs));
+
+    // Off forgets the picture. Writes while off are not kept either.
+    play.early(early.on, 0).expect("off");
+    assert_eq!(play.early(early.page, page(EARLY_BLOCK)), Err(Why::EarlyIsOff));
+    play.early(early.on, 1).expect("on");
+    assert_eq!(play.early(early.mode, small), Err(Why::EarlyMode));
+    assert_eq!(play.early(early.bytes, PAGE_BYTES as u32), Ok(Pass::AsItIs));
+}
+
 // A program's work: user tasks and the commands that name them.
 
 #[test]

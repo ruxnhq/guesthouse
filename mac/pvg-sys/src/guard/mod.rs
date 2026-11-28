@@ -383,6 +383,9 @@ struct Early {
     on: bool,
     page: u32,
     bytes: u32,
+    /// The bytes the last picture passed takes, or 0 before one. The device reads that much from
+    /// the block for every frame, so the block never gets shorter than it.
+    picture_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -581,15 +584,29 @@ impl Guard {
             |page: u32, bytes: u32| memory.holds(page_address(page), u64::from(bytes).max(PAGE_BYTES));
         if offset == registers.on {
             return Some(match value {
-                // Off, the bank keeps nothing.
-                0 | 1 => {
-                    *early = Early { on: value == 1, ..Early::default() };
+                // Off, the bank keeps nothing. On again while on, it may keep what it had, and so
+                // does the guard.
+                0 => {
+                    *early = Early::default();
+                    Ok(())
+                }
+                1 => {
+                    early.on = true;
                     Ok(())
                 }
                 _ => Err(Why::UnknownRegister),
             });
         }
-        let judged = if offset == registers.mode_index {
+        if ![registers.mode_index, registers.page, registers.bytes, registers.depth, registers.mode]
+            .contains(&offset)
+        {
+            return None;
+        }
+        // Off, a write is not passed and nothing is kept of it.
+        if !early.on {
+            return Some(Err(Why::EarlyIsOff));
+        }
+        Some(if offset == registers.mode_index {
             // Past the list's end the device says so in what it reads next.
             Ok(())
         } else if offset == registers.page {
@@ -601,7 +618,9 @@ impl Guard {
             }
         } else if offset == registers.bytes {
             let whole_pages = value != 0 && u64::from(value).is_multiple_of(PAGE_BYTES);
-            if whole_pages && (early.page == 0 || block_is_the_guests(early.page, value)) {
+            let holds_the_picture = early.picture_bytes <= u64::from(value);
+            if whole_pages && holds_the_picture && (early.page == 0 || block_is_the_guests(early.page, value))
+            {
                 early.bytes = value;
                 Ok(())
             } else {
@@ -617,11 +636,15 @@ impl Guard {
                 && sides.contains(&height)
                 && early.page != 0
                 && needed <= u64::from(early.bytes);
-            if fits { Ok(()) } else { Err(Why::EarlyMode) }
+            if fits {
+                early.picture_bytes = needed;
+                Ok(())
+            } else {
+                Err(Why::EarlyMode)
+            }
         } else {
-            return None;
-        };
-        Some(if early.on { judged } else { Err(Why::EarlyIsOff) })
+            Err(Why::UnknownRegister)
+        })
     }
 
     fn ring_can_start(&self, memory: &GuestMemory) -> Result<(), Why> {

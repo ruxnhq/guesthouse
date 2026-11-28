@@ -15,9 +15,15 @@ install_packages() {
     apt-get install -y --no-install-recommends $(grep -v '^#' "$here/files/packages-no-recommends.txt")
 }
 
+# The device rules, and the one that gives the viewer's input port to the desktop user alone.
+install_rules() {
+    install -m 644 "$here/files/70-nvfwd.rules" "$1"
+    printf 'SUBSYSTEM=="virtio-ports", ATTR{name}=="nvfwd.input", OWNER="%s", MODE="0600"\n' "$desk_user" >> "$1"
+}
+
 install_settings() {
     install -m 644 "$here/files/modprobe-nvfwd.conf" /etc/modprobe.d/nvfwd.conf
-    install -m 644 "$here/files/70-nvfwd.rules" /etc/udev/rules.d/70-nvfwd.rules
+    install_rules /etc/udev/rules.d/70-nvfwd.rules
     install -D -m 644 "$here/files/logind-nvfwd.conf" /etc/systemd/logind.conf.d/90-nvfwd.conf
     install -D -m 644 "$here/files/grub-nvfwd.cfg" /etc/default/grub.d/90-nvfwd.cfg
     update-grub
@@ -55,7 +61,7 @@ enable_services() {
 # files as a first boot installs, with no packages, no Firefox and no restart.
 refresh() {
     install -m 644 "$here/files/modprobe-nvfwd.conf" "$root/etc/modprobe.d/nvfwd.conf"
-    install -m 644 "$here/files/70-nvfwd.rules" "$root/etc/udev/rules.d/70-nvfwd.rules"
+    install_rules "$root/etc/udev/rules.d/70-nvfwd.rules"
     install -D -m 644 "$here/files/logind-nvfwd.conf" "$root/etc/systemd/logind.conf.d/90-nvfwd.conf"
     if ! cmp -s "$here/files/grub-nvfwd.cfg" "$root/etc/default/grub.d/90-nvfwd.cfg"; then
         install -D -m 644 "$here/files/grub-nvfwd.cfg" "$root/etc/default/grub.d/90-nvfwd.cfg"

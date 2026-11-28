@@ -77,6 +77,15 @@ class UbuntuRefresh(unittest.TestCase):
         self.assertFalse(os.path.exists(self.guest.path("var/lib/nvfwd/guest-files.previous")))
         self.assertTrue(self.guest.read("var/lib/nvfwd/guest-files").strip())
 
+    def test_the_viewers_input_port_is_the_desktop_users_alone(self):
+        os.makedirs(self.guest.path("etc/nvfwd"), exist_ok=True)
+        write(self.guest.path("etc/nvfwd/account.conf"), "user=alice\n")
+        result = self.guest.run("--if-changed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        port = [line for line in self.guest.read("etc/udev/rules.d/70-nvfwd.rules").splitlines()
+                if "nvfwd.input" in line and not line.startswith("#")]
+        self.assertEqual(port, ['SUBSYSTEM=="virtio-ports", ATTR{name}=="nvfwd.input", OWNER="alice", MODE="0600"'])
+
     def test_a_new_build_script_builds_again(self):
         write(self.guest.path(BUILT_FOR), "old\n")
         write(os.path.join(self.guest.installed, "build-parts.sh"), OLD_MARK)

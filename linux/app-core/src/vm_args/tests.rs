@@ -251,6 +251,28 @@ fn an_interface_with_ipv6_binds_both_families_to_it() {
 }
 
 #[test]
+fn a_held_guest_asks_its_ipv6_dns_of_the_machines_resolver_and_gets_no_search_domains() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let network = NetworkPlan { resolver: Some("10.64.0.1".into()), ..held_to("wg0", true) };
+    let words = VmPlan { network, ..plan }.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--search", "none"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns", "fd00:3::3"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns-forward", "fd00:3::3"]), "{words:?}");
+    assert!(words.windows(2).any(|two| two == ["--dns-host", "::ffff:10.64.0.1"]), "{words:?}");
+    let probe = only_through_probe_words();
+    assert!(probe.windows(2).any(|two| two == ["--search", "none"]), "{probe:?}");
+    assert!(probe.windows(2).any(|two| two == ["--dns-forward", "fd00:3::3"]), "{probe:?}");
+}
+
+#[test]
+fn a_held_guest_without_ipv6_gets_no_search_domains_either() {
+    let (_scratch, plan) = plan(&windows(), Boot::Gpu);
+    let words = VmPlan { network: held_to("tun0", false), ..plan }.passt_words();
+    assert!(words.windows(2).any(|two| two == ["--search", "none"]), "{words:?}");
+    assert!(!words.contains(&"fd00:3::3".to_owned()), "{words:?}");
+}
+
+#[test]
 fn an_interface_without_ipv6_makes_the_guest_ipv4_only() {
     let (_scratch, plan) = plan(&windows(), Boot::Gpu);
     let plan = VmPlan { network: held_to("tun0", false), ..plan };

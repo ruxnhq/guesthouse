@@ -372,4 +372,6 @@ fn host_resolver() -> Option<String> {
 }
 
 #[cfg(test)]
+mod passt_run_tests;
+#[cfg(test)]
 mod tests;

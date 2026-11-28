@@ -27,6 +27,12 @@ const PASST_OUT_IF6: &str = "--outbound-if6";
 /// For an interface with no IPv6 address, where binding IPv6 to it makes passt refuse to start and
 /// leaving it unbound would let IPv6 out the normal link.
 const PASST_IPV4_ONLY: &str = "--ipv4-only";
+/// A held machine's guest gets no search domains: passt would otherwise give it the host's own from
+/// `/etc/resolv.conf`, which name the network the PC is on rather than the interface's.
+const PASST_SEARCH: [&str; 2] = ["--search", "none"];
+/// The guest's IPv6 DNS server on a held machine, which passt answers by asking the machine's own
+/// resolver. Given no IPv6 server, passt would give the guest the host's from `/etc/resolv.conf`.
+const PASST_DNS6: &str = "fd00:3::3";
 /// Where the jail's launcher notes passt's pid and start time, in the run folder, so it can be found
 /// like QEMU.
 pub const PASST_PID_FILE: &str = "passt.pid";
@@ -103,6 +109,24 @@ pub fn passt_probe_words(age: PasstAge) -> Vec<String> {
 pub fn only_through_probe_words() -> Vec<String> {
     let mut words = passt_probe_words(PasstAge::Current);
     words.extend([PASST_OUT_IF4.to_owned(), "lo".to_owned()]);
+    words.extend(PASST_SEARCH.map(str::to_owned));
+    words.extend(ipv6_dns_words(Some(PROBE_DNS_HOST)));
+    words
+}
+
+/// The words that give a held guest its IPv6 DNS server: an address of passt's that it forwards to
+/// `resolver`. An IPv4 resolver is named as IPv6 maps it, and passt then asks it over IPv4.
+fn ipv6_dns_words(resolver: Option<&str>) -> Vec<String> {
+    let mut words: Vec<String> =
+        ["--dns", PASST_DNS6, "--dns-forward", PASST_DNS6].map(str::to_owned).to_vec();
+    let host =
+        resolver.and_then(|text| text.trim().parse::<std::net::IpAddr>().ok()).map(|address| match address {
+            std::net::IpAddr::V4(four) => four.to_ipv6_mapped(),
+            std::net::IpAddr::V6(six) => six,
+        });
+    if let Some(host) = host {
+        words.extend(["--dns-host".to_owned(), host.to_string()]);
+    }
     words
 }
 
@@ -124,8 +148,10 @@ impl VmPlan {
         let Some(through) = &self.network.only_through else { return Vec::new() };
         let interface = through.interface.clone();
         let mut words = vec![PASST_OUT_IF4.to_owned(), interface.clone()];
+        words.extend(PASST_SEARCH.map(str::to_owned));
         if through.ipv6 {
             words.extend([PASST_OUT_IF6.to_owned(), interface]);
+            words.extend(ipv6_dns_words(self.network.resolver.as_deref()));
         } else {
             words.push(PASST_IPV4_ONLY.to_owned());
         }

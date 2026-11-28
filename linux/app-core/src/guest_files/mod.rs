@@ -16,10 +16,11 @@ mod tests;
 pub use fetching::{Entry, fetch};
 pub use sending::{DroppedFile, dropped_files, send};
 
+use crate::guest_end::GuestEnd;
 use crate::text::{base64_decode, base64_encode};
 use guesthouse_basics::capped_line::read_capped_line;
 use std::io::{self, BufReader, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -90,7 +91,7 @@ pub enum Until {
 /// The way to one guest's helper.
 #[derive(Clone)]
 pub struct Helper {
-    port: u16,
+    end: GuestEnd,
     token: String,
 }
 
@@ -99,13 +100,12 @@ fn refused(answer: &str) -> io::Error {
 }
 
 impl Helper {
-    pub fn new(port: u16, token: &str) -> Self {
-        Self { port, token: token.to_owned() }
+    pub fn new(end: GuestEnd, token: &str) -> Self {
+        Self { end, token: token.to_owned() }
     }
 
     fn ask(&self, request: &str, patience: Duration) -> io::Result<TcpStream> {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
-        let mut stream = TcpStream::connect_timeout(&address, CONNECT)?;
+        let mut stream = self.end.connect(CONNECT)?;
         stream.set_read_timeout(Some(patience))?;
         stream.set_write_timeout(Some(PATIENCE))?;
         writeln!(stream, "{} {request}", self.token)?;

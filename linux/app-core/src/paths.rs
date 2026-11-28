@@ -21,7 +21,6 @@ const SHARED_MEMORY_VARIABLE: &str = "GUESTHOUSE_SHARED_MEMORY";
 /// Keeps a second copy of the app clear of the first, whose VM it must not disturb.
 const RUN_VARIABLE: &str = "RUN_DIR";
 const QEMU_VARIABLE: &str = "QEMU";
-const AGENT_PORT_VARIABLE: &str = "AGENT_PORT";
 
 const APP_FOLDER: &str = "guesthouse";
 const STORE_POINTER: &str = "store";
@@ -134,7 +133,6 @@ pub struct Paths {
     pub qemu: PathBuf,
     /// A run folder given by hand, which marks this as a second instance. See [`Paths::second_instance`].
     pub own_run: Option<PathBuf>,
-    pub own_agent_port: Option<u16>,
     pub firmware: Firmware,
 }
 
@@ -190,7 +188,6 @@ impl Paths {
                 .folder(SHARED_MEMORY_VARIABLE)
                 .unwrap_or_else(|| PathBuf::from(SHARED_MEMORY)),
             own_run: variables.folder(RUN_VARIABLE),
-            own_agent_port: variables.get(AGENT_PORT_VARIABLE).and_then(|text| text.parse().ok()),
             firmware: Firmware::default(),
         }
     }
@@ -219,10 +216,6 @@ impl Paths {
     /// The app's own notes for a slot: see [`notes_beside`].
     pub fn notes_folder(&self, slot: Slot) -> PathBuf {
         notes_beside(&self.run_folder(slot))
-    }
-
-    pub fn agent_port(&self, slot: Slot) -> u16 {
-        self.own_agent_port.unwrap_or_else(|| slot.agent_port())
     }
 
     /// A file in shared memory, like `ram`, `iomem` or `display`.
@@ -535,11 +528,9 @@ mod tests {
     fn a_run_folder_given_by_hand_makes_a_second_instance() {
         let plain = Paths::new(&Variables::of(&[("HOME", "/h")]), None);
         assert!(!plain.second_instance());
-        let second =
-            Paths::new(&Variables::of(&[("HOME", "/h"), ("RUN_DIR", "/r"), ("AGENT_PORT", "9")]), None);
+        let second = Paths::new(&Variables::of(&[("HOME", "/h"), ("RUN_DIR", "/r")]), None);
         assert!(second.second_instance());
         assert_eq!(second.run_folder(slot("3")), Path::new("/r"));
-        assert_eq!(second.agent_port(slot("3")), 9);
     }
 
     #[test]

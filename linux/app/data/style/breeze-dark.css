@@ -1,0 +1,36 @@
+/* Breeze's dark colours, under the names libadwaita reads its own from. KDE's own scheme, read from
+   kdeglobals, goes over these when it is as dark or as light as the app. */
+@define-color window_bg_color #202326;
+@define-color window_fg_color #fcfcfc;
+@define-color view_bg_color #141618;
+@define-color view_fg_color #fcfcfc;
+@define-color headerbar_bg_color #2a2e32;
+@define-color headerbar_fg_color #fcfcfc;
+@define-color headerbar_border_color rgba(252, 252, 252, 0.1);
+@define-color headerbar_backdrop_color #202326;
+@define-color headerbar_shade_color rgba(252, 252, 252, 0.1);
+@define-color sidebar_bg_color #202326;
+@define-color sidebar_fg_color #fcfcfc;
+@define-color sidebar_backdrop_color #202326;
+@define-color card_bg_color #141618;
+@define-color card_fg_color #fcfcfc;
+@define-color card_shade_color rgba(252, 252, 252, 0.1);
+@define-color dialog_bg_color #202326;
+@define-color dialog_fg_color #fcfcfc;
+@define-color popover_bg_color #292c30;
+@define-color popover_fg_color #fcfcfc;
+@define-color popover_shade_color rgba(252, 252, 252, 0.1);
+@define-color shade_color rgba(0, 0, 0, 0.5);
+@define-color accent_color #3daee9;
+@define-color accent_bg_color #3daee9;
+@define-color accent_fg_color #ffffff;
+@define-color destructive_color #ed1515;
+@define-color destructive_bg_color #da4453;
+@define-color destructive_fg_color #ffffff;
+@define-color success_color #27ae60;
+@define-color warning_color #f67400;
+@define-color error_color #ed1515;
+@define-color hairline rgba(252, 252, 252, 0.1);
+@define-color field_bg_color #292c30;
+@define-color primary_bg_color #3daee9;
+@define-color primary_fg_color #ffffff;

@@ -14,7 +14,7 @@ use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 /// files by. A file signed by none of them is not taken. A new key is added here in a release before
 /// the first one it signs. The private half is kept apart from the repo, in the `GUESTHOUSE_RELEASE_KEY`
 /// secret; `cargo run -p guesthouse-update-check --example release_key -- new-key KEY-FILE` makes one.
-pub const RELEASE_KEYS: &[&str] = &[];
+pub const RELEASE_KEYS: &[&str] = &["40d4a5ba5bb38f09c58a4f40ba91d97e564160c29ca656c446034e9ed27559b9"];
 
 /// The length of a key's private half (its seed) and of its public half, in bytes.
 pub const KEY_BYTES: usize = 32;

@@ -11,9 +11,10 @@ use super::message::{Answer, parse_guest_line};
 use super::message::{
     GuestMessage, LineProblem, MOST_APPS_LINE_BYTES, MOST_LINE_BYTES, Request, side_token_line, token_line,
 };
+use crate::guest_end::GuestEnd;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
+use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -95,8 +96,6 @@ impl Default for Timing {
 /// What a process needs to reach helpers, as one value that a test can fill.
 #[derive(Debug, Clone, Copy)]
 pub struct LinkSettings {
-    /// A port on this PC to use for every machine, in place of the slot's own.
-    pub port: Option<u16>,
     pub timing: Timing,
     /// How long a command waits for the helper to come up, which includes starting it in the guest.
     pub patience: Duration,
@@ -104,13 +103,13 @@ pub struct LinkSettings {
 
 impl Default for LinkSettings {
     fn default() -> Self {
-        Self { port: None, timing: Timing::default(), patience: Duration::from_secs(60) }
+        Self { timing: Timing::default(), patience: Duration::from_secs(60) }
     }
 }
 
 pub struct LinkConfig {
     /// On this PC, where the machine's forward is.
-    pub port: u16,
+    pub end: GuestEnd,
     pub token: String,
     /// A side connection, which does not take the helper's driving connection from the viewer.
     pub side: bool,
@@ -410,9 +409,8 @@ impl Link {
     }
 
     fn connect(&mut self) {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.config.port));
         let timing = self.config.timing;
-        let opened = TcpStream::connect_timeout(&address, timing.connect).and_then(|stream| {
+        let opened = self.config.end.connect(timing.connect).and_then(|stream| {
             stream.set_write_timeout(Some(timing.write))?;
             stream.set_nodelay(true)?;
             let mut writer = stream.try_clone()?;

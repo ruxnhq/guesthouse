@@ -16,6 +16,8 @@ path = "src/main.rs"
 default = ["hdr"]
 # HDR needs GTK 4.16 for a frame's colour. A build without it runs on GTK 4.14 and shows SDR only.
 hdr = ["gtk/v4_16"]
+# Made-up machines in each state, for looking at the library without a VM: see src/preview.rs.
+preview = []
 
 [dependencies]
 guesthouse-app-core.workspace = true

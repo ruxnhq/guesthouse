@@ -6,6 +6,8 @@
 use super::message::{
     Layout, PROTOCOL_VERSION, SIDE_WORD, Size, answer_line, desktop_line, hello_line, layout_line,
 };
+use crate::guest_end::GuestEnd;
+use crate::testing::QemuStandIn;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
@@ -47,6 +49,8 @@ pub struct Inner {
 
 pub struct FakeHelper {
     pub port: u16,
+    /// This test process stands in for the machine's QEMU, which the link checks it reaches.
+    qemu: QemuStandIn,
     inner: Arc<Mutex<Inner>>,
     responder: Arc<Mutex<Responder>>,
     stop: Arc<AtomicBool>,
@@ -63,6 +67,11 @@ fn answer_all(request: &Value, inner: &Mutex<Inner>) -> Vec<String> {
 }
 
 impl FakeHelper {
+    /// The helper's port as a machine's guest is reached at it.
+    pub fn end(&self) -> GuestEnd {
+        self.qemu.end()
+    }
+
     pub fn start(token: &str) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -84,7 +93,9 @@ impl FakeHelper {
         }));
         let responder: Arc<Mutex<Responder>> = Arc::new(Mutex::new(Box::new(answer_all)));
         let stop = Arc::new(AtomicBool::new(false));
-        let helper = Self { port, inner: inner.clone(), responder: responder.clone(), stop: stop.clone() };
+        let qemu = QemuStandIn::forwarding(crate::network::GUEST_APP_WINDOWS_PORT, port);
+        let helper =
+            Self { port, qemu, inner: inner.clone(), responder: responder.clone(), stop: stop.clone() };
         let token = token.to_owned();
         thread::spawn(move || {
             for stream in listener.incoming() {

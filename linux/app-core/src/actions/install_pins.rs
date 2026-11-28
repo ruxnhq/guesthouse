@@ -37,7 +37,7 @@ impl TimedGuest {
 }
 
 impl GuestAgent for TimedGuest {
-    fn ask(&self, _port: u16, _token: &str, script: &str, seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, _token: &str, script: &str, seconds: u64) -> String {
         let mut asked = self.asked.lock().unwrap();
         asked.push((script.to_owned(), seconds, self.clock.now()));
         let count = asked.len() as u32;
@@ -253,9 +253,9 @@ fn the_check_says_the_end_of_what_windows_said() {
 fn each_script_is_given_its_seconds() {
     struct Seconds(Mutex<Vec<(String, u64)>>);
     impl GuestAgent for Seconds {
-        fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
             self.0.lock().unwrap().push((script.lines().next().unwrap_or("").to_owned(), seconds));
-            InstalledGuest.ask(port, token, script, seconds)
+            InstalledGuest.ask(end, token, script, seconds)
         }
     }
     let scratch = Scratch::new();
@@ -283,11 +283,11 @@ fn an_install_says_these_steps_in_this_order() {
     context.clock = clock.clone();
     struct StopTime(Arc<FakeClock>, Mutex<Option<Duration>>);
     impl GuestAgent for StopTime {
-        fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
             if script == "Stop-Computer -Force" {
                 *self.1.lock().unwrap() = Some(self.0.now());
             }
-            InstalledGuest.ask(port, token, script, seconds)
+            InstalledGuest.ask(end, token, script, seconds)
         }
     }
     let guest = Arc::new(StopTime(clock.clone(), Mutex::default()));
@@ -382,11 +382,11 @@ fn every_refusal_before_an_install() {
 fn a_desktop_that_never_comes_up_ends_the_install() {
     struct NoDesktop;
     impl GuestAgent for NoDesktop {
-        fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+        fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
             if script == DESKTOP_SCRIPT {
                 "0".to_owned()
             } else {
-                InstalledGuest.ask(port, token, script, seconds)
+                InstalledGuest.ask(end, token, script, seconds)
             }
         }
     }

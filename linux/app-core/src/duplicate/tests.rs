@@ -342,7 +342,7 @@ struct Guest {
 }
 
 impl crate::agent::GuestAgent for Guest {
-    fn ask(&self, _port: u16, token: &str, script: &str, _seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, token: &str, script: &str, _seconds: u64) -> String {
         let mut held = self.token.lock().unwrap();
         if *held != token {
             return String::new();
@@ -365,13 +365,21 @@ fn a_copys_first_start_moves_its_guest_to_a_token_of_its_own_in_one_change() {
     let source = create(&context, &new_plain(&scratch, "Base", "")).unwrap();
     scratch.write(&format!("{}/guest.token", source.folder(&context).display()), "old\n");
     let copy = copy_called(&context, &source, "Base Copy").unwrap();
-    crate::token_change::finish_token_change(&context, &copy, 1);
+    crate::token_change::finish_token_change(
+        &context,
+        &copy,
+        &crate::guest_end::GuestEnd::agent(&context, &copy, None),
+    );
     let changes = guest.changes.lock().unwrap().clone();
     let [only] = &changes[..] else { panic!("one change, not {changes:?}") };
     assert_eq!(fs::read_to_string(copy.token_file(&context)).unwrap().trim(), only);
     let source_next = fs::read_to_string(next_token_file(&context, &source)).unwrap();
     assert_ne!(source_next.trim(), only, "not the token the original moves to");
-    crate::token_change::finish_token_change(&context, &copy, 1);
+    crate::token_change::finish_token_change(
+        &context,
+        &copy,
+        &crate::guest_end::GuestEnd::agent(&context, &copy, None),
+    );
     assert_eq!(guest.changes.lock().unwrap().len(), 1, "the next start has nothing to change");
     let log = fs::read_to_string(context.paths.log_file()).unwrap_or_default();
     assert_eq!(log.matches("its guest's agent has a new token").count(), 1, "{log}");

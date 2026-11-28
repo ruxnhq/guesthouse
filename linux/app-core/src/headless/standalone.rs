@@ -173,12 +173,12 @@ pub(super) fn command(context: &Context, machine: &Machine, out: &mut dyn Write)
         writeln!(out, "# It runs the bridge helper for this machine's network, which has to be allowed to.")?;
     }
     if machine.has_gpu() {
-        let (port, token) = (plan.agent_port, machine.token_file(context));
+        let token = machine.token_file(context);
         writeln!(
             out,
-            "# Windows' agent answers on 127.0.0.1:{port} to a request with the token in {}.",
-            token.display()
+            "# Windows' agent answers on a loopback port QEMU picks, which `info usernet` on its monitor"
         )?;
+        writeln!(out, "# shows, to a request with the token in {}.", token.display())?;
         writeln!(out, "# Only Guesthouse's app makes requests of it.")?;
     }
     if !plan.drives.is_empty() {

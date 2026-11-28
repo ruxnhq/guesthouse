@@ -479,4 +479,21 @@ struct ProblemFromCoreTests {
         #expect(patience.replacedOne() == false)
         #expect(patience.replacedOne() == true)
     }
+
+    @Test func aQuietDiskIsAHintUnderTheBarAndNotAnError() {
+        let json: [String: Any] = [
+            "machine": "w", "guest": "windows", "state": "running", "current": "install_system",
+            "steps": [["step": "install_system", "status": "running", "progress": ["fraction": 0.2]]],
+            "quiet_minutes": 7,
+        ]
+        let status = InstallStatus(json: json)
+        #expect(status?.quietMinutes == 7)
+        #expect(status?.failure == nil)
+        #expect(InstallText.quietHint(minutes: 7).contains("has not been written to for 7 minutes"))
+        #expect(InstallText.quietHint(minutes: 1).contains("for a minute"))
+        #expect(status?.printLine().contains("7 minutes") == true)
+        var without = json
+        without["quiet_minutes"] = nil
+        #expect(InstallStatus(json: without)?.quietMinutes == nil)
+    }
 }

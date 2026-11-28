@@ -25,7 +25,7 @@ pub fn write_note(run_folder: &Path, why: Option<&str>) -> io::Result<()> {
 
 /// Why the desktop is in software, if the daemon said.
 pub fn read_note(run_folder: &Path) -> Option<String> {
-    Some(fs::read_to_string(run_folder.join(NOTE_FILE)).ok()?.trim().to_owned())
+    Some(crate::note_file::read_capped(&run_folder.join(NOTE_FILE))?.trim().to_owned())
 }
 
 #[cfg(test)]

@@ -98,12 +98,18 @@ fn machine_from(
     }
     let opencore = match carried.opencore.as_str() {
         "" => String::new(),
+        named if !accepted::is_extra_image(carried, named) => {
+            return Err(Failure::new("The export names an OpenCore image that this machine can't have."));
+        }
         named => crate::carry::safe_path(named).map(|path| in_folder(&path.to_string_lossy())).ok_or_else(
             || Failure::new("The export names its OpenCore image in a way that can't be made safely."),
         )?,
     };
     let android_data = match carried.android_data.as_str() {
         "" => String::new(),
+        named if !accepted::is_extra_image(carried, named) => {
+            return Err(Failure::new("The export names an Android data disk that this machine can't have."));
+        }
         named => crate::carry::safe_path(named).map(|path| in_folder(&path.to_string_lossy())).ok_or_else(
             || Failure::new("The export names its Android data disk in a way that can't be made safely."),
         )?,
@@ -372,6 +378,7 @@ fn make(
         notes.push(left_out_note(left_out));
     }
     guest_facts(&folder, machine.kind)?;
+    crate::remote_view::revoked::mark_imported(&folder)?;
     if machine.throwaway {
         crate::throwaway::keep_notes(&folder)?;
     }

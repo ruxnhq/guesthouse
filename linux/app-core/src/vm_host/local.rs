@@ -23,6 +23,7 @@ use crate::throwaway::ThrowawayRun;
 use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, Sound, VmPlan};
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 use std::fs::{self, File};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -55,8 +56,9 @@ const STALE_FILES: [&str; 5] =
 /// a file older than the note is from an earlier run, maybe another machine's.
 pub const MACHINE_NOTE: &str = "run-machine";
 /// The last run's logs are the only evidence of whatever made someone restart. The note goes along,
-/// so the kept logs still say whose they are.
-const LOGS_TO_KEEP: [&str; 4] = [daemon::OUTPUT_FILE, "serial.log", "qemu.log", MACHINE_NOTE];
+/// so the kept logs still say whose they are. It is the app's own, in its notes folder, as the run
+/// folder is the jailed programs' to write in.
+const LOGS_TO_KEEP: [&str; 3] = [daemon::OUTPUT_FILE, "serial.log", "qemu.log"];
 const TPM_SOCKET: &str = "tpm.sock";
 /// A new VM hasn't booted yet, whatever an earlier one noted.
 const BOOTS_FILE: &str = "guesthouse-boots";
@@ -83,7 +85,30 @@ struct Handed<'a> {
     throwaway: Option<&'a ThrowawayRun>,
 }
 
+/// What `pkill -f` is given to find the swtpm that serves this socket: its path with every character
+/// that means something in a pattern taken literally.
+pub(super) fn swtpm_pattern(socket: &Path) -> String {
+    let path: String = socket
+        .display()
+        .to_string()
+        .chars()
+        .flat_map(|c| if "\\.[]()*+?{}|^$".contains(c) { vec!['\\', c] } else { vec![c] })
+        .collect();
+    format!("^swtpm socket .*path={path}")
+}
+
 impl LocalHost<'_> {
+    /// Notes the machine of the run that starts now, after setting aside the one before.
+    fn note_machine(&self, machine: &Machine) -> Result<()> {
+        let folder = self.context.notes_folder(None);
+        crate::context::make_private_folder(&folder)?;
+        let note = folder.join(MACHINE_NOTE);
+        if note.is_file() {
+            fs::rename(&note, folder.join(format!("{MACHINE_NOTE}.1")))?;
+        }
+        Ok(fs::write(note, &machine.id)?)
+    }
+
     fn run_file(&self, name: &str) -> std::path::PathBuf {
         self.context.run_folder(None).join(name)
     }
@@ -120,9 +145,10 @@ impl LocalHost<'_> {
         };
         // A TPM ends when QEMU lets go of it, unless a QEMU never came.
         let socket = self.run_file(TPM_SOCKET);
-        let pattern = format!("^swtpm socket .*path={}", socket.display());
+        let pattern = swtpm_pattern(&socket);
         let _ = Command::new("pkill").args(["-f", &pattern]).status();
         let _ = fs::remove_file(&socket);
+        crate::snapshots::finish_tpm_swap(state);
         fs::create_dir_all(state)?;
         let done = Command::new("swtpm").args(arguments).status()?;
         if !done.success() {
@@ -168,7 +194,7 @@ impl LocalHost<'_> {
     fn start_plain(&self, plan: &VmPlan, machine: &Machine, handed: &Handed) -> Result<()> {
         let _ = fs::remove_file(self.run_file(BOOTS_FILE));
         self.keep_last_run();
-        fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
+        self.note_machine(machine)?;
         // Whatever an earlier machine in this slot had to say about its jail isn't this one's, and
         // its passt, if one is somehow still there, goes before this one's is noted.
         jailing::write_note(&plan.run_folder, &plan.jail_note)?;
@@ -240,7 +266,7 @@ impl LocalHost<'_> {
             }
         }
         // The note goes first, as a report takes a file as this run's only if it changed after it.
-        fs::write(self.run_file(MACHINE_NOTE), &machine.id)?;
+        self.note_machine(machine)?;
         File::create(self.run_file("serial.log"))?;
         Ok(())
     }

@@ -1,6 +1,8 @@
 //! What `prepare` knows of a machine that `boot` needs too, kept in a small file beside its disk:
 //! which system it runs, and for a Linux guest, its installer and whether it has installed.
 
+#![allow(clippy::disallowed_methods)] // the host's own files, not a guest's disk
+
 use crate::machine::Guest;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -43,7 +45,32 @@ impl Record {
     pub fn save(&self, disk: &Path) -> Result<(), String> {
         let path = Record::path(disk);
         let text = serde_json::to_string_pretty(self).expect("a record always serialises");
-        fs::write(&path, text + "\n").map_err(|error| format!("{}: {error}", path.display()))
+        // Written whole beside the record and then put in its place, so a reader finds the old one or
+        // the new one, and a record is never half written.
+        let mut new = path.clone().into_os_string();
+        new.push(".new");
+        let new = PathBuf::from(new);
+        let put = |error: std::io::Error| format!("{}: {error}", path.display());
+        fs::write(&new, text + "\n").map_err(put)?;
+        fs::rename(&new, &path).map_err(|error| {
+            let _ = fs::remove_file(&new);
+            put(error)
+        })
+    }
+
+    /// Keeps `fingerprint` as the guest's screen, once in a boot and only if the record doesn't
+    /// have it. `kept` says whether this boot has made its one change already. True when the record
+    /// was written.
+    pub fn keep_screen(disk: &Path, fingerprint: String, kept: &mut bool) -> Result<bool, String> {
+        if std::mem::replace(kept, true) {
+            return Ok(false);
+        }
+        let record = Record::load(disk)?;
+        if record.screen.as_deref() == Some(fingerprint.as_str()) {
+            return Ok(false);
+        }
+        Record { screen: Some(fingerprint), ..record }.save(disk)?;
+        Ok(true)
     }
 }
 
@@ -73,6 +100,45 @@ mod tests {
         record.save(&disk).unwrap();
         assert_eq!(Record::load(&disk).unwrap(), record);
         assert!(fs::read_to_string(Record::path(&disk)).unwrap().contains("\"guest\": \"linux\""));
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_puts_a_whole_file_in_place_of_the_old_one() {
+        use std::os::unix::fs::MetadataExt;
+        let folder = std::env::temp_dir().join(format!("gh-record-whole-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let disk = folder.join("w.vhdx");
+        Record::default().save(&disk).unwrap();
+        let first = fs::metadata(Record::path(&disk)).unwrap().ino();
+        Record { installed: true, ..Record::default() }.save(&disk).unwrap();
+        assert_ne!(
+            fs::metadata(Record::path(&disk)).unwrap().ino(),
+            first,
+            "the old file is never written over"
+        );
+        assert!(Record::load(&disk).unwrap().installed);
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 1, "no half-made file is left");
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_boot_keeps_the_screens_fingerprint_once_and_only_when_it_is_new() {
+        let folder = std::env::temp_dir().join(format!("gh-record-screen-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let disk = folder.join("s.vhdx");
+        Record { installed: true, ..Record::default() }.save(&disk).unwrap();
+        let (one, two) = ("ab".repeat(32), "cd".repeat(32));
+        let mut kept = false;
+        assert_eq!(Record::keep_screen(&disk, one.clone(), &mut kept), Ok(true));
+        assert_eq!(Record::keep_screen(&disk, two.clone(), &mut kept), Ok(false), "once in a boot");
+        assert_eq!(Record::load(&disk).unwrap().screen, Some(one.clone()));
+        assert!(Record::load(&disk).unwrap().installed, "what else the record holds stays");
+        let mut next_boot = false;
+        assert_eq!(Record::keep_screen(&disk, one, &mut next_boot), Ok(false), "the same one needs no write");
+        assert_eq!(Record::keep_screen(&disk, two.clone(), &mut false), Ok(true));
+        assert_eq!(Record::load(&disk).unwrap().screen, Some(two));
         let _ = fs::remove_dir_all(folder);
     }
 

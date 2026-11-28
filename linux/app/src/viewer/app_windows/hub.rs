@@ -7,6 +7,7 @@ use super::plan::{
     ScaleFollow, SizeFollow, Step, focus_request, owned_windows, owner_window, scale_to_follow, steps,
 };
 use super::secure::SecureWindow;
+use super::super_tap::SuperTap;
 use super::view::{View, add_style};
 use crate::viewer::screen::Screen;
 use crate::viewer::slot_hold::HeldFrame;
@@ -46,6 +47,8 @@ pub struct Hub {
     mismatch_said: Slot<bool>,
     /// The guest's input desktop is the normal one, where the cells mean what they say.
     input_allowed: Slot<bool>,
+    /// A Super press held back until the next key says whether it's the desktop's tap.
+    super_tap: RefCell<SuperTap>,
     /// What the views were last told of Windows' scale.
     guest: RefCell<Guest>,
     scale_follow: RefCell<ScaleFollow>,
@@ -92,6 +95,7 @@ impl Hub {
             hold: RefCell::new(Some(application.hold())),
             mismatch_said: Slot::new(false),
             input_allowed: Slot::new(true),
+            super_tap: RefCell::default(),
             guest: RefCell::default(),
             scale_follow: RefCell::default(),
             size_follow: RefCell::default(),
@@ -286,6 +290,7 @@ impl Hub {
     /// Lets go in the guest of every key and button held down through the host, as the window they
     /// went through lost the keyboard.
     pub fn release_held(&self) {
+        self.super_tap.borrow_mut().forget();
         self.screen.release_everything();
     }
 
@@ -294,6 +299,7 @@ impl Hub {
         if self.focus_sent.borrow().as_deref() == Some(id) {
             *self.focus_sent.borrow_mut() = None;
         }
+        self.super_tap.borrow_mut().forget();
         self.screen.release_everything();
     }
 
@@ -308,14 +314,24 @@ impl Hub {
         if !self.input_allowed.get() && down {
             return;
         }
+        if down {
+            let before = self.super_tap.borrow_mut().button();
+            for (keycode, down) in before {
+                self.screen.send_key(keycode, down);
+            }
+        }
         self.screen.send_button(name, down);
     }
 
+    /// A key of a host window. A lone Super tap stays the desktop's: see [`SuperTap`].
     pub fn send_key(&self, keycode: u32, down: bool) {
         if !self.input_allowed.get() && down {
             return;
         }
-        self.screen.send_key(keycode, down);
+        let keys = self.super_tap.borrow_mut().key(keycode, down);
+        for (keycode, down) in keys {
+            self.screen.send_key(keycode, down);
+        }
     }
 
     /// The pointer, buttons and keys of the window that shows the secure desktop: the only window the
@@ -560,6 +576,7 @@ impl Hub {
         if self.focus_sent.borrow().as_deref() == Some(id) {
             *self.focus_sent.borrow_mut() = None;
         }
+        self.super_tap.borrow_mut().forget();
         self.screen.release_everything();
     }
 
@@ -589,6 +606,10 @@ impl Hub {
             secure.close();
         }
         self.close_all();
+        // The entries that named its windows in the task bar are not needed once they are gone.
+        if let Ok(machine) = guesthouse_app_core::machine::load(&self.context, &self.machine) {
+            guesthouse_app_core::app_windows::launcher::remove_hidden(&self.context, &machine);
+        }
         self.newest.borrow_mut().take();
         self.screen.end_headless();
         self.link.borrow_mut().take();

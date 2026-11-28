@@ -236,8 +236,11 @@ impl Viewing {
         }
         let key = waiting_key(&info);
         if self.waiting_until.as_ref().map(|(seen, _)| seen) != key.as_ref() {
-            self.waiting_until =
-                key.zip(info.pending.as_ref().map(|pending| now_ms + pending.seconds * 1000));
+            self.waiting_until = key.zip(
+                info.pending
+                    .as_ref()
+                    .map(|pending| now_ms.saturating_add(pending.seconds.saturating_mul(1000))),
+            );
         }
         self.info = Some(info);
         if address.is_some() {

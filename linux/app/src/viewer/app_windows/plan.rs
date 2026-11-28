@@ -684,7 +684,7 @@ mod tests {
             inner.layout.cells = vec![window("w", rect(0, 0, 200, 100)), popup("p", "w", rect(5, 5, 50, 50))];
         });
         let mut client = Client::start(LinkConfig {
-            port: helper.port,
+            end: helper.end(),
             token: "tok".into(),
             side: false,
             starter: None,

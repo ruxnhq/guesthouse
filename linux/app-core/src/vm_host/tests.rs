@@ -553,3 +553,10 @@ fn a_passt_note_in_the_run_folder_is_never_signalled() {
     let _ = other.wait();
     assert!(left_alone, "the process was signalled");
 }
+
+#[test]
+fn the_pattern_for_a_tpms_socket_takes_its_path_literally() {
+    use super::local::swtpm_pattern;
+    let pattern = swtpm_pattern(Path::new("/run/user/1000/a.b+c(d)/tpm.sock"));
+    assert_eq!(pattern, r"^swtpm socket .*path=/run/user/1000/a\.b\+c\(d\)/tpm\.sock");
+}

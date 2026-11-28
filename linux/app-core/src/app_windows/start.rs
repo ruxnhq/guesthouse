@@ -3,12 +3,13 @@
 //! request is made and no helper starts.
 
 use super::client::{Client, Update};
-use super::forward::{forward_word, host_port, running_machine_has_forward};
+use super::forward::{forward_word, running_machine_has_forward};
 use super::link::{HelperStarter, LinkConfig, Status};
 use super::switch::{is_on, off_text};
 use crate::agent::{helper_start_with, read_token, stop_helper};
 use crate::context::Context;
 use crate::failure::{Failure, Result};
+use crate::guest_end::GuestEnd;
 use crate::machine::{Kind, Machine};
 use guesthouse_daemon::slot::Slot;
 use std::sync::Arc;
@@ -84,7 +85,7 @@ impl AgentStarter {
         if running_machine_has_forward(context, machine, self.slot) == Some(false) {
             return Err(format!(
                 "{name} was started without the way in that app windows needs ({}). Restart it.",
-                forward_word(host_port(context, self.slot))
+                forward_word()
             ));
         }
         let files = context.paths.guest_files();
@@ -164,7 +165,7 @@ fn connect_as(
         .ok_or_else(|| Failure(format!("{name} has no token, so there is no agent to start the helper.")))?;
     let starter = Arc::new(AgentStarter::new(context.clone(), machine.clone(), slot));
     let config = LinkConfig {
-        port: host_port(context, slot),
+        end: GuestEnd::new(context, machine, slot, crate::network::GUEST_APP_WINDOWS_PORT),
         token,
         side,
         starter: Some(starter.clone()),

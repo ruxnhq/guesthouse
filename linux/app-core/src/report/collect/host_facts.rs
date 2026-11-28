@@ -19,6 +19,44 @@ use std::path::Path;
 const OS_RELEASE_FILES: [&str; 2] = ["/etc/os-release", "/usr/lib/os-release"];
 const KERNEL_FILE: &str = "/proc/sys/kernel/osrelease";
 const BOOT_OPTIONS_FILE: &str = "/proc/cmdline";
+/// The boot options that bear on a GPU guest, by their start. The rest (which disk to boot, where the
+/// swap is, keys and names) are the user's own and are left out.
+const BOOT_OPTION_STARTS: [&str; 22] = [
+    "quiet",
+    "splash",
+    "nomodeset",
+    "iommu",
+    "intel_iommu",
+    "amd_iommu",
+    "iommu.",
+    "pci",
+    "vfio",
+    "kvm",
+    "nvidia",
+    "amdgpu",
+    "i915",
+    "xe.",
+    "modprobe.blacklist",
+    "video",
+    "mitigations",
+    "hugepages",
+    "default_hugepagesz",
+    "transparent_hugepage",
+    "pcie_",
+    "initcall_blacklist",
+];
+
+/// `options` with only the ones that bear on a GPU guest, and how many others were left out.
+fn boot_options(options: &str) -> String {
+    let (kept, left): (Vec<&str>, Vec<&str>) = options
+        .split_whitespace()
+        .partition(|option| BOOT_OPTION_STARTS.iter().any(|start| option.starts_with(start)));
+    match left.len() {
+        0 => kept.join(" "),
+        count => format!("{} (and {count} others left out)", kept.join(" ")).trim_start().to_owned(),
+    }
+}
+
 const CPU_FILE: &str = "/proc/cpuinfo";
 const MODULES_FILE: &str = "/proc/modules";
 const NVIDIA_TAINT_FILE: &str = "/sys/module/nvidia/taint";
@@ -54,7 +92,7 @@ pub fn collect(context: &Context, request: &Request, found: &mut Collection) {
     let kernel = first_line(KERNEL_FILE).unwrap_or_else(|| "not known".to_owned());
     facts.add("Distribution", &distro);
     facts.add("Kernel", &kernel);
-    facts.add("Boot options", first_line(BOOT_OPTIONS_FILE).unwrap_or_default());
+    facts.add("Boot options", boot_options(&first_line(BOOT_OPTIONS_FILE).unwrap_or_default()));
     facts.add("CPU", cpu_description());
     facts.add("Memory", format!("{} GiB", total_ram(context).div_ceil(GIB)));
     found.summary.set(summary::DISTRO, &distro);
@@ -213,6 +251,19 @@ fn session() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_boot_options_kept_are_the_ones_that_bear_on_a_gpu_guest() {
+        let line = "BOOT_IMAGE=/vmlinuz-6.1 root=UUID=1234 resume=/dev/mapper/quillon-swap quiet intel_iommu=on \
+                    iommu=pt vfio-pci.ids=10de:2684 cryptdevice=PARTLABEL=quillon:root";
+        assert_eq!(
+            boot_options(line),
+            "quiet intel_iommu=on iommu=pt vfio-pci.ids=10de:2684 (and 4 others left out)"
+        );
+        assert_eq!(boot_options("quiet splash"), "quiet splash");
+        assert_eq!(boot_options("root=/dev/sda1"), "(and 1 others left out)");
+        assert_eq!(boot_options(""), "");
+    }
+
     use super::*;
     use crate::machine::Kind;
 

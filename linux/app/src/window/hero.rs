@@ -14,9 +14,13 @@ const SPACING: i32 = 16;
 const CHIP_SPACING: i32 = 8;
 /// Tall enough to read as the page's main thing with nothing but a name in it.
 const LEAST_HEIGHT: i32 = 340;
+/// The same beside a sidebar, so it fits a window half the screen wide.
+const COMPACT_PADDING: i32 = 20;
+const COMPACT_LEAST_HEIGHT: i32 = 236;
 
 struct Parts {
     root: gtk::Overlay,
+    body: gtk::Box,
     picture: gtk::Picture,
     spinner: gtk::Spinner,
     dot: gtk::Box,
@@ -133,12 +137,15 @@ impl Hero {
             .height_request(LEAST_HEIGHT)
             .build();
         root.add_css_class("hero");
+        // Nothing to show until a machine is chosen.
+        root.set_visible(false);
         root.add_overlay(&scrim);
         root.add_overlay(&body);
         // The words decide the height. The picture only fills what they take.
         root.set_measure_overlay(&body, true);
         let parts = Parts {
             root,
+            body,
             picture,
             spinner,
             dot,
@@ -175,6 +182,25 @@ impl Hero {
                 action(&card);
             }
         });
+    }
+
+    /// Smaller, for beside a sidebar of machines.
+    pub fn set_compact(&self, compact: bool) {
+        let (padding, height) =
+            if compact { (COMPACT_PADDING, COMPACT_LEAST_HEIGHT) } else { (PADDING, LEAST_HEIGHT) };
+        let body = &self.0.body;
+        body.set_margin_top(padding);
+        body.set_margin_bottom(padding);
+        body.set_margin_start(padding);
+        body.set_margin_end(padding);
+        self.0.root.set_height_request(height);
+        // Beside a sidebar the hero is all the page has, so its picture takes the height there is.
+        self.0.root.set_vexpand(compact);
+        if compact {
+            self.0.root.add_css_class("tall");
+        } else {
+            self.0.root.remove_css_class("tall");
+        }
     }
 
     pub fn widget(&self) -> &gtk::Overlay {
@@ -255,6 +281,7 @@ impl Hero {
         } else {
             parts.dot.remove_css_class("off");
         }
+        shown.weight.mark(&parts.dot);
         self.set_facts(&shown.headline, shown.state);
         parts.notes.set_label(&shown.notes.join("\n"));
         parts.notes.set_visible(!shown.notes.is_empty());

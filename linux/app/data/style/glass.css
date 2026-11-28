@@ -1,0 +1,7 @@
+/* The compositor blurs behind the window: the frame and the sidebar let it through. What is read
+   on, the content and the cards, stays solid. */
+@define-color window_bg_color alpha(@tide_frame_color, 0.55);
+@define-color headerbar_bg_color alpha(@tide_frame_color, 0.55);
+@define-color headerbar_backdrop_color alpha(@tide_frame_color, 0.55);
+@define-color sidebar_bg_color alpha(@tide_sidebar_color, 0.38);
+@define-color sidebar_backdrop_color alpha(@tide_sidebar_color, 0.3);

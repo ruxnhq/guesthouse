@@ -66,7 +66,7 @@ pub fn fetch(
         if entry.is_folder {
             fs::create_dir_all(&place)?;
         } else {
-            helper.get(&entry.name, &mut File::create_new(&place)?)?;
+            helper.get(&entry.name, entry.size, &mut File::create_new(&place)?, stop)?;
         }
         if entry.is_dragged_itself() {
             dragged.push(place);

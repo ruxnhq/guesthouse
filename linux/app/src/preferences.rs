@@ -4,7 +4,7 @@
 use crate::login;
 use crate::notify;
 use crate::rows::{choice_row, explain};
-use crate::theme;
+use crate::theme::{self, Look};
 use crate::viewer::{self, CAPTURE_KEYS};
 use crate::window::{TRAY, Window};
 use adw::prelude::*;
@@ -14,10 +14,9 @@ use serde_json::{Value, json};
 /// The colour schemes to choose from, and what the preference holds for each. The first follows the
 /// desktop, and is what anything else in the preference means too.
 const SCHEMES: [(&str, &str); 3] = [("Follow Desktop", ""), ("Light", "light"), ("Dark", "dark")];
-/// Whose theme draws the app: the desktop's GTK theme, or its own.
-const THEMES: [&str; 2] = ["Same as Other Apps", "Guesthouse"];
-const THEME_INFO: &str = "The desktop's theme makes Guesthouse look like your other apps. Guesthouse's own \
-                          theme looks the same on every desktop, and can take the desktop's accent colour.";
+const LOOK_INFO: &str = "Automatic picks by the desktop: Tide on a tiling window manager such as Hyprland or \
+                         Sway, KDE on Plasma, and System, your desktop's own theme, everywhere else. Tide is \
+                         compact, and drops its bar when the window is tiled.";
 /// The second is the desktop's own, where it has one.
 const ACCENTS: [&str; 2] = ["Blue", "Desktop's Accent"];
 const ACCENT_INFO: &str = "The desktop's accent colour is read when the app starts, and again when this is \
@@ -39,7 +38,7 @@ pub fn show(window: &Window) {
         remembering.remember(json!({ theme::SCHEME: value }));
         theme::follow(&read_prefs(&remembering.context()));
     });
-    let desktops = prefs.get(theme::ACCENT).and_then(Value::as_str) == Some(theme::DESKTOP_ACCENT);
+    let desktops = theme::wants_desktop_accent(&prefs);
     let accent = choice_row("Accent Colour", &ACCENTS);
     explain(&accent, ACCENT_INFO);
     accent.set_selected(u32::from(desktops));
@@ -49,18 +48,15 @@ pub fn show(window: &Window) {
         remembering.remember(json!({ theme::ACCENT: value }));
         theme::follow(&read_prefs(&remembering.context()));
     });
-    let desktops_look = theme::desktops_look(&prefs);
-    let whose = choice_row("Theme", &THEMES);
-    explain(&whose, THEME_INFO);
-    whose.set_selected(u32::from(!desktops_look));
-    // The accent is the theme's when the theme is the desktop's, so it's only there for the app's own.
-    accent.set_visible(!desktops_look);
-    let (remembering, accent_row) = (window.clone(), accent.clone());
+    let looks: Vec<&str> = Look::ALL.iter().map(|look| look.name()).collect();
+    let whose = choice_row("Look", &looks);
+    explain(&whose, LOOK_INFO);
+    let saved_look = Look::from_prefs(&prefs);
+    whose.set_selected(Look::ALL.iter().position(|look| *look == saved_look).unwrap_or(0) as u32);
+    let remembering = window.clone();
     whose.connect_selected_notify(move |row| {
-        let desktops = row.selected() == 0;
-        let value = if desktops { theme::DESKTOP_LOOK } else { theme::OWN_LOOK };
-        remembering.remember(json!({ theme::LOOK_OF: value }));
-        accent_row.set_visible(!desktops);
+        let look = Look::ALL.get(row.selected() as usize).copied().unwrap_or(Look::Automatic);
+        remembering.remember(json!({ theme::LOOK_OF: look.value() }));
         theme::follow(&read_prefs(&remembering.context()));
     });
     let look = adw::PreferencesGroup::builder().title("Appearance").build();

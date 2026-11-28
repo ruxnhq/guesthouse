@@ -1,0 +1,10 @@
+/* Tide's own colours, dark. The frame and sidebar are solid here; where the compositor blurs,
+   glass.css lets them through. The states: teal for running, amber for needing you, ruby for
+   failed, each bright enough to read on the dark. */
+@define-color tide_frame_color #090a0d;
+@define-color tide_sidebar_color #0c0e13;
+@define-color tide_teal #5ad1c0;
+@define-color tide_amber #ffb454;
+@define-color tide_amber_text #ffd9a8;
+@define-color tide_ruby #ff6f86;
+@define-color tide_ruby_text #ffb7c2;

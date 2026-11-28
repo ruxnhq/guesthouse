@@ -406,3 +406,158 @@ fn try_again_at_the_driver_step_fetches_the_package_again() {
     assert!(control.stick_files.iter().any(|name| name == driver::LINUX_SCRIPT), "{:?}", control.stick_files);
     let _ = fs::remove_dir_all(world.root);
 }
+
+/// The firmware's lines for a Windows disc, as the serial port of the contributor's machine had them.
+const FIRMWARE_STARTS: &str = "BdsDxe: starting Boot0002 \"UEFI QEMU QEMU USB HARDDRIVE 1-0000:00:01.0-3\"";
+const PROMPT: &str = "Press any key to boot from CD or DVD......";
+
+/// A Windows install's steps on the stand-in guest, for what happens before the installer runs.
+fn windows_steps<'a>(world: &World, network: &'a mut Network, control: &'a mut Control) -> RealSteps<'a> {
+    RealSteps { setup: world.setup(Guest::Windows, true), transport: network, control }
+}
+
+#[test]
+fn the_key_is_pressed_while_the_boot_prompt_stands_and_stops_after() {
+    let world = World::new("prompt");
+    let mut control = Control::default();
+    control.says = vec![(2_000, FIRMWARE_STARTS.into()), (3_000, PROMPT.into())];
+    let mut network = Network;
+    windows_steps(&world, &mut network, &mut control).pass_boot_prompt().unwrap();
+    let times: Vec<u64> = control.pressed.iter().map(|(at, _)| *at).collect();
+    assert!(control.pressed.iter().all(|(_, key)| key == "spc"));
+    // Nothing before the prompt showed, a key every half second after, and none once it had
+    // stood for its countdown.
+    assert_eq!(times.first(), Some(&3_000));
+    assert!(times.windows(2).all(|pair| pair[1] - pair[0] == 500));
+    assert!(*times.last().unwrap() < 3_000 + 8_000);
+    assert_eq!(times.len(), 16);
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn a_second_prompt_after_a_time_out_is_answered_too_and_the_installer_ends_it() {
+    let world = World::new("second");
+    let mut control = Control::default();
+    control.says = vec![
+        (1_000, PROMPT.into()),
+        (2_000, "Error: Image at 00045CDF000 start failed: Time out".into()),
+        (4_000, PROMPT.into()),
+        (9_000, "guesthouse: system installed".into()),
+    ];
+    let mut network = Network;
+    windows_steps(&world, &mut network, &mut control).pass_boot_prompt().unwrap();
+    let times: Vec<u64> = control.pressed.iter().map(|(at, _)| *at).collect();
+    // The first prompt is answered until it times out, the second from when it shows, and the
+    // guest's own words end the pressing.
+    assert!(times.iter().any(|at| *at < 2_000) && times.iter().any(|at| *at >= 4_000));
+    assert!(times.iter().all(|at| !(2_000..4_000).contains(at)), "none while it is timed out: {times:?}");
+    assert!(times.iter().all(|at| *at < 9_000));
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn no_key_is_pressed_when_no_prompt_shows_and_the_wait_is_bounded() {
+    let world = World::new("noprompt");
+    let mut control = Control::default();
+    control.says = vec![(1_000, FIRMWARE_STARTS.into())];
+    let mut network = Network;
+    windows_steps(&world, &mut network, &mut control).pass_boot_prompt().unwrap();
+    assert!(control.pressed.is_empty());
+    assert!(control.now <= 91_000, "it gave up when the firmware gave no prompt: {}", control.now);
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn a_firmware_with_nothing_to_boot_is_said_at_once_and_not_waited_out() {
+    let world = World::new("nothing");
+    let mut control = Control::default();
+    control.says =
+        vec![(1_000, PROMPT.into()), (9_000, "BdsDxe: No bootable option or device was found.".into())];
+    let mut network = Network;
+    let error = windows_steps(&world, &mut network, &mut control).pass_boot_prompt().unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("no_boot"));
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn a_disk_that_wrote_nothing_for_minutes_is_said_and_one_that_writes_is_not() {
+    let world = World::new("quiet");
+    let mut control = Control::default();
+    control.written = vec![(0, 1_000), (60_000, 5_000)];
+    let mut network = Network;
+    let mut steps = windows_steps(&world, &mut network, &mut control);
+    let mut last = None;
+    // Written at the start and a minute in: not quiet yet, however the bytes read.
+    assert_eq!(steps.quiet_minutes(&mut last), None);
+    steps.control.sleep_ms(120_000);
+    assert_eq!(steps.quiet_minutes(&mut last), None, "written a minute in, one minute ago");
+    steps.control.sleep_ms(6 * 60_000);
+    assert_eq!(
+        steps.quiet_minutes(&mut last),
+        Some(6),
+        "the same bytes for six minutes since it was last seen to change"
+    );
+    // It writes again: the hint is gone.
+    steps.control.sleep_ms(1_000);
+    drop(steps);
+    control.written.push((control.now, 9_000));
+    let mut steps = windows_steps(&world, &mut network, &mut control);
+    assert_eq!(steps.quiet_minutes(&mut last), None);
+    // A machine that cannot say says nothing.
+    drop(steps);
+    control.written.clear();
+    let mut steps = windows_steps(&world, &mut network, &mut control);
+    assert_eq!(steps.quiet_minutes(&mut None), None);
+    let _ = fs::remove_dir_all(world.root);
+}
+
+#[test]
+fn both_guests_get_the_option_rom_found_in_the_bundle_layout() {
+    use crate::install::steps::firmware_dirs_of;
+    for guest in [Guest::Windows, Guest::Ubuntu] {
+        let world = World::new(if guest == Guest::Windows { "rom-win" } else { "rom-linux" });
+        // The layout of the app: the QEMU in Contents/Helpers, its data in Contents/Resources/qemu.
+        let app = world.root.join("Guesthouse.app/Contents");
+        fs::create_dir_all(app.join("Helpers")).unwrap();
+        fs::create_dir_all(app.join("Resources/qemu")).unwrap();
+        for (name, text) in
+            [("edk2-aarch64-code.fd", "code"), ("edk2-aarch64-vars.fd", "vars"), ("pvgfb.rom", "rom")]
+        {
+            fs::write(app.join("Resources/qemu").join(name), text).unwrap();
+        }
+        let mut setup = world.setup(guest, true);
+        setup.firmware_dirs = firmware_dirs_of(&app.join("Helpers/qemu-system-aarch64"));
+        let mut control = Control::default();
+        let mut network = Network;
+        let mut steps = RealSteps { setup, transport: &mut network, control: &mut control };
+        steps.make_disk().unwrap();
+        let folder = world.machines.join("m");
+        assert_eq!(fs::read(folder.join("pvgfb.rom")).unwrap(), b"rom");
+        assert_eq!(machine_file(&world)["option_rom"], "pvgfb.rom");
+        assert_eq!(fs::read(folder.join("code.fd")).unwrap(), b"code");
+        let _ = fs::remove_dir_all(world.root);
+    }
+}
+
+#[test]
+fn a_driver_folder_counts_only_for_the_guest_whose_files_it_holds() {
+    let world = World::new("folders");
+    let mut network = Network;
+    let mut control = Control::default();
+    // The folder of a Windows package, as the setting names it.
+    let windows = world.setup(Guest::Windows, true);
+    let steps = RealSteps { setup: windows, transport: &mut network, control: &mut control };
+    assert!(steps.lab_folder(driver::SCRIPT).is_some());
+    assert!(steps.lab_folder(driver::LINUX_SCRIPT).is_none(), "Windows' files are not a Linux package");
+    // A Linux package in it: the Windows install does not take it, and falls to the published one.
+    let linux_folder = world.root.join("linux-package");
+    fs::create_dir_all(&linux_folder).unwrap();
+    fs::write(linux_folder.join(driver::LINUX_SCRIPT), "#!/bin/sh\n").unwrap();
+    let mut setup = world.setup(Guest::Windows, false);
+    setup.driver_dir = Some(linux_folder);
+    let mut control = Control::default();
+    let steps = RealSteps { setup, transport: &mut network, control: &mut control };
+    assert!(steps.lab_folder(driver::SCRIPT).is_none(), "a Linux package is not a Windows install's");
+    assert!(steps.lab_folder(driver::LINUX_SCRIPT).is_some());
+    let _ = fs::remove_dir_all(world.root);
+}

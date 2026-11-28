@@ -5,8 +5,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 38] = [
+const SENT_TO_THE_GUEST: [&str; 39] = [
     "SetupComplete.cmd",
+    "agent-update.ps1",
     "agent.ps1",
     "app-windows-start.ps1",
     "app-windows.cs",
@@ -248,9 +249,9 @@ fn only_the_host_reaches_the_agent() {
     let setup = fs::read_to_string(guest_file("setup.ps1")).unwrap();
     assert!(setup.contains("-RemoteAddress 10.0.2.2"));
     let agent = fs::read_to_string(guest_file("agent.ps1")).unwrap();
-    assert!(agent.contains("$hostAddress = '10.0.2.2'"));
+    assert!(agent.contains("[string]$HostAddress = '10.0.2.2'"));
     assert!(agent.contains("RemoteEndPoint"));
-    assert!(agent.contains("ReadTimeout"));
+    assert!(agent.contains("$lineMilliseconds = 10000"));
 }
 
 #[test]

@@ -6,12 +6,18 @@ mod go_back;
 mod hero;
 mod keys;
 mod library_page;
+mod library_sidebar;
+mod look;
 mod machine_card;
+#[cfg(feature = "preview")]
+mod preview_machines;
 mod refresh;
 mod screen_hdr;
+mod screen_id;
 mod share_panel;
 mod start_over;
 mod updates;
+pub(crate) mod weight;
 
 pub use machine_card::{MachineCard, MachineHandle};
 
@@ -30,10 +36,10 @@ use guesthouse_app_core::context::Context;
 use guesthouse_app_core::gpu_support::{NO_GPU_PART, gpu_ready, what_machines_are};
 use guesthouse_app_core::library::{delete, import_existing, remove_entry};
 use guesthouse_app_core::log::write_log;
-use guesthouse_app_core::machine::{Machine, load_all};
+use guesthouse_app_core::machine::{Machine, load, load_all};
 use guesthouse_app_core::settings::{Fields, read_prefs, write_prefs};
 use guesthouse_app_core::setup::setup_done;
-use guesthouse_app_core::tasks::{launch, slot_of};
+use guesthouse_app_core::tasks::{Status, launch, slot_of};
 use guesthouse_daemon::slot::Slot;
 use library_page::LibraryPage;
 use refresh::RefreshState;
@@ -68,6 +74,9 @@ struct Inner {
     vm_running: Cell<bool>,
     host_key_down: Cell<bool>,
     refresh: RefCell<RefreshState>,
+    /// Counts the app's own saves and reads of machine files, so a look begun before one isn't taken
+    /// over what it did.
+    machine_writes: Cell<u64>,
     screen_watch: OnceCell<Option<Rc<screen_hdr::ScreenWatch>>>,
     /// A newer release, once a check has found one.
     newer: RefCell<Option<String>>,
@@ -76,6 +85,8 @@ struct Inner {
     tray: RefCell<Option<Tray>>,
     /// What keeps the app running with its window hidden.
     hold: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
+    /// Machines that show these statuses whatever a look finds: the preview's made-up ones.
+    held: RefCell<BTreeMap<String, Status>>,
 }
 
 /// A handle to the window, which any page can hold.
@@ -89,6 +100,8 @@ fn saved_size(prefs: &Fields, name: &str, smallest: i32, default: i32) -> i32 {
 impl Window {
     pub fn new(application: &adw::Application, context: Arc<Context>) -> Self {
         let prefs = read_prefs(&context);
+        #[cfg(feature = "preview")]
+        let prefs = crate::preview::with_asked(prefs);
         let window = adw::ApplicationWindow::builder()
             .application(application)
             .title("Guesthouse")
@@ -117,12 +130,16 @@ impl Window {
             vm_running: Cell::new(false),
             host_key_down: Cell::new(false),
             refresh: RefCell::default(),
+            machine_writes: Cell::new(0),
             screen_watch: OnceCell::new(),
             newer: RefCell::default(),
             tray: RefCell::default(),
             hold: RefCell::default(),
+            held: RefCell::default(),
         }));
         crate::theme::install(&WidgetExt::display(&this.0.window), &prefs);
+        screen_id::follow(this.0.window.upcast_ref());
+        this.watch_look();
         if prefs.get(TRAY) == Some(&Value::Bool(true)) {
             this.set_tray(true, crate::login::started_at_login());
         }
@@ -131,7 +148,7 @@ impl Window {
         keys::add_host_keys(&this);
         actions::add_actions(&this);
         this.connect_close();
-        this.load_machines();
+        this.load();
         this.refresh();
         refresh::start_ticking(&this);
         this
@@ -236,6 +253,16 @@ impl Window {
         self.0.vm_running.get()
     }
 
+    /// The store's machines, or the preview's in a build that has one and a run that asks for it.
+    fn load(&self) {
+        #[cfg(feature = "preview")]
+        if let Some(asked) = crate::preview::wanted() {
+            self.show_preview(&asked);
+            return;
+        }
+        self.load_machines();
+    }
+
     fn load_machines(&self) {
         let context = &self.0.context;
         let problem = import_existing(context).err();
@@ -317,6 +344,7 @@ impl Window {
         }
         let id = machine.id.clone();
         let row = MachineCard::new(self, machine);
+        row.set_compact(look::compact_cards());
         let handle = row.machine();
         self.0.library.add(row.widget());
         let first = self.0.library.hero().chosen().is_none();
@@ -393,10 +421,49 @@ impl Window {
         self.refresh();
     }
 
-    pub fn save_machine(&self, machine: &Machine) {
-        if let Err(failure) = machine.save(&self.0.context) {
-            self.problem(&failure.0);
+    /// Saves what the handle has changed, onto the machine as its file has it now, so that a change
+    /// made meanwhile with `guesthouse-vm` or by a task stays. The handle takes the file as saved.
+    pub fn save_machine(&self, handle: &MachineHandle) {
+        let edited = handle.borrow().clone();
+        let Some(card) = self.card(&edited.id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        match edited.save_changes(&self.0.context, &card.known()) {
+            Ok(saved) => {
+                card.set_known(saved.clone());
+                *handle.borrow_mut() = saved;
+            }
+            Err(failure) => self.problem(&failure.0),
         }
+    }
+
+    /// Brings the handle up to the machine's file, keeping what it has changed and not saved, before
+    /// a change that saves it by itself.
+    pub fn catch_up_machine(&self, handle: &MachineHandle) {
+        let id = handle.borrow().id.clone();
+        let Some(card) = self.card(&id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        let Ok(file) = load(&self.0.context, &id) else { return };
+        let caught_up = handle.borrow().caught_up(&card.known(), &file);
+        match caught_up {
+            Ok(machine) => {
+                *handle.borrow_mut() = machine;
+                card.set_known(file);
+            }
+            Err(failure) => self.problem(&failure.0),
+        }
+    }
+
+    /// Notes the machine's file as it is now, after a change that saved it by itself.
+    pub fn machine_saved(&self, id: &str) {
+        let Some(card) = self.card(id) else { return };
+        self.0.machine_writes.set(self.0.machine_writes.get() + 1);
+        if let Ok(file) = load(&self.0.context, id) {
+            card.set_known(file);
+        }
+    }
+
+    pub(crate) fn machine_writes(&self) -> u64 {
+        self.0.machine_writes.get()
     }
 
     pub fn remember(&self, fields: Value) {
@@ -472,6 +539,7 @@ impl Window {
         actions::allow_host_keys(self, false);
         let fullscreen = machine.borrow().opens_fullscreen && !self.0.window.is_fullscreen();
         let page = ScreenPage::new(self, machine);
+        screen_id::set_showing_screen(&self.0.context, self.0.window.upcast_ref(), true);
         self.0.pages.push(page.widget());
         if fullscreen {
             page.toggle_fullscreen();
@@ -494,6 +562,7 @@ impl Window {
     }
 
     pub fn screen_closed(&self) {
+        screen_id::set_showing_screen(&self.0.context, self.0.window.upcast_ref(), false);
         *self.0.screen_page.borrow_mut() = None;
         *self.0.screen_mark.borrow_mut() = None;
         actions::allow_host_keys(self, true);
@@ -502,8 +571,8 @@ impl Window {
     /// Once by itself. After that it's in the menu, and New Machine says when it's needed.
     pub fn offer_setup(&self) {
         let context = &self.0.context;
-        let offered =
-            read_prefs(context).get("setup_offered").is_some_and(|value| value != &Value::Bool(false));
+        let offered = !self.0.held.borrow().is_empty()
+            || read_prefs(context).get("setup_offered").is_some_and(|value| value != &Value::Bool(false));
         if gpu_ready(context) && !setup_done(context) && !offered {
             self.remember(json!({"setup_offered": true}));
             self.show_setup();

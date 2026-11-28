@@ -45,5 +45,37 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
+/// A character that draws nothing or moves what is drawn around it: a control, or one of the marks
+/// that reverse or hide text.
+pub fn is_hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
+/// `text` with every hidden character shown as its code, like `<1b>`, so a terminal, a log or a row
+/// of text shows what was there and obeys none of it. Line breaks stay when `keep_lines` is set.
+pub fn shown(text: &str, keep_lines: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if is_hidden(c) && !(keep_lines && c == '\n') && c != '\t' {
+            out.push_str(&format!("<{:02x}>", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// `shown`, cut to at most `longest` characters of the original, with `...` after a cut.
+pub fn shown_short(text: &str, longest: usize) -> String {
+    let cut = text.chars().count() > longest;
+    let head: String = text.chars().take(longest).collect();
+    let mut out = shown(&head, false);
+    if cut {
+        out.push_str("...");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

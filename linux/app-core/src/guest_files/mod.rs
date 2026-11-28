@@ -16,11 +16,13 @@ mod tests;
 pub use fetching::{Entry, fetch};
 pub use sending::{DroppedFile, dropped_files, send};
 
+use crate::guest_end::GuestEnd;
 use crate::text::{base64_decode, base64_encode};
 use guesthouse_basics::capped_line::read_capped_line;
 use std::io::{self, BufReader, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 /// What the helper in `guest/windows/files.ps1` calls itself. They change together.
 const VERSION: &str = "files 1";
@@ -36,6 +38,10 @@ const AFTER_A_WAIT: Duration = Duration::from_secs(1);
 
 /// The longest line the helper may answer with. A name and its size are far shorter.
 const LONGEST_LINE: usize = 64 * 1024;
+/// A file is copied in pieces of this many bytes, so a stop is seen between them.
+const COPY_PIECE: usize = 256 * 1024;
+/// The slowest a file may come at, over the whole copy, before it is given up on.
+const SLOWEST_BYTES_PER_SECOND: u64 = 64 * 1024;
 /// The most files one drag may list.
 const MOST_ENTRIES: usize = 10_000;
 
@@ -85,7 +91,7 @@ pub enum Until {
 /// The way to one guest's helper.
 #[derive(Clone)]
 pub struct Helper {
-    port: u16,
+    end: GuestEnd,
     token: String,
 }
 
@@ -94,13 +100,12 @@ fn refused(answer: &str) -> io::Error {
 }
 
 impl Helper {
-    pub fn new(port: u16, token: &str) -> Self {
-        Self { port, token: token.to_owned() }
+    pub fn new(end: GuestEnd, token: &str) -> Self {
+        Self { end, token: token.to_owned() }
     }
 
     fn ask(&self, request: &str, patience: Duration) -> io::Result<TcpStream> {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
-        let mut stream = TcpStream::connect_timeout(&address, CONNECT)?;
+        let mut stream = self.end.connect(CONNECT)?;
         stream.set_read_timeout(Some(patience))?;
         stream.set_write_timeout(Some(PATIENCE))?;
         writeln!(stream, "{} {request}", self.token)?;
@@ -191,15 +196,39 @@ impl Helper {
         Ok(Some(entries))
     }
 
-    /// Copies one file of the last drag caught into `to`, and says how long it was.
-    pub fn get(&self, name: &str, to: &mut impl Write) -> io::Result<u64> {
+    /// Copies one file of the last drag caught into `to`, and says how long it was. The file is no
+    /// longer than `listed`, the size the catch gave it, and the copy is made in pieces, between
+    /// which `stop` is looked at and the time the whole may take, which grows with the size, is.
+    /// `Interrupted` when `stop` is set.
+    pub fn get(&self, name: &str, listed: u64, to: &mut impl Write, stop: &AtomicBool) -> io::Result<u64> {
         let stream = self.ask(&format!("get {}", base64_encode(name.as_bytes())), PATIENCE)?;
         let mut reader = BufReader::new(stream);
         let line = read_capped_line(&mut reader, LONGEST_LINE)?.unwrap_or_default();
         let length = line.trim_end().strip_prefix("ok ").and_then(|length| length.parse::<u64>().ok());
         let length = length.ok_or_else(|| refused(line.trim_end()))?;
-        if io::copy(&mut reader.take(length), to)? != length {
-            return Err(ErrorKind::UnexpectedEof.into());
+        if length > listed {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "The guest sent a longer file than it listed.",
+            ));
+        }
+        let end = Instant::now() + PATIENCE + Duration::from_secs(length / SLOWEST_BYTES_PER_SECOND);
+        let mut piece = vec![0; COPY_PIECE];
+        let mut done = 0;
+        while done < length {
+            if stop.load(Ordering::Relaxed) {
+                return Err(ErrorKind::Interrupted.into());
+            }
+            if Instant::now() > end {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            let wanted = (length - done).min(COPY_PIECE as u64) as usize;
+            let read = reader.read(&mut piece[..wanted])?;
+            if read == 0 {
+                return Err(ErrorKind::UnexpectedEof.into());
+            }
+            to.write_all(&piece[..read])?;
+            done += read as u64;
         }
         Ok(length)
     }

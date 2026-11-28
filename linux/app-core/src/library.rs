@@ -18,9 +18,9 @@ use crate::snapshots::{list_snapshots, snapshots_folder};
 use crate::tasks::{State, slot_of, status};
 use crate::writable_copy::copy_writable;
 use serde_json::json;
-use std::fs::{self, DirBuilder, File};
+use std::fs::{self, File};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -333,7 +333,7 @@ fn make_disk_folder(machine: &Machine) -> Result<()> {
     if machine.disk_folder.is_empty() {
         return Ok(());
     }
-    DirBuilder::new().mode(0o700).create(&machine.disk_folder).map_err(|error| {
+    fs::create_dir(&machine.disk_folder).map_err(|error| {
         Failure(format!("The disk's folder {} could not be made: {error}", machine.disk_folder))
     })
 }
@@ -407,9 +407,7 @@ pub fn delete(context: &Context, machine: &Machine) -> Result<()> {
             "This machine's disk is not in its folder, so only its entry can be removed.",
         ));
     }
-    if crate::duplicate::disk_in_use(&machine.disk) {
-        return Err(Failure::new(crate::duplicate::DISK_IN_USE));
-    }
+    crate::duplicate::refuse_if_in_use(&machine.disk)?;
     let folder = machine.folder(context);
     let linked = folder.is_symlink();
     let real_parent = fs::canonicalize(&folder).ok().and_then(|real| Some(real.parent()?.to_owned()));
@@ -850,44 +848,6 @@ mod tests {
         assert!(!imported.folder(&context).exists());
         assert_eq!(fs::metadata(&imported.disk).unwrap().ino(), disk);
         assert_eq!(import_existing(&context).unwrap(), None, "a removed entry does not come back by itself");
-    }
-
-    #[test]
-    fn a_disk_that_a_vm_outside_the_app_has_open_is_not_deleted() {
-        let scratch = Scratch::new();
-        let context = scratch_context(&scratch);
-        let folder = context.paths.machines.join("held");
-        fs::create_dir_all(&folder).unwrap();
-        let disk = folder.join("disk.qcow2");
-        let made = std::process::Command::new("qemu-img")
-            .args(["create", "-q", "-f", "qcow2"])
-            .arg(&disk)
-            .arg("1M")
-            .status()
-            .unwrap();
-        assert!(made.success());
-        fs::write(folder.join("vars.fd"), "v").unwrap();
-        let held =
-            Machine::new("held", "Held", &disk.to_string_lossy(), &folder.join("vars.fd").to_string_lossy());
-        held.save(&context).unwrap();
-        let mut holder = std::process::Command::new("qemu-io")
-            .args(["-f", "qcow2", "-c", "sleep 20000"])
-            .arg(&disk)
-            .stdout(process::Stdio::null())
-            .stderr(process::Stdio::inherit())
-            .spawn()
-            .unwrap();
-        // Looking at the disk meanwhile would take the lock from it, so it is only given time.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert!(holder.try_wait().unwrap().is_none(), "the holder took the disk");
-        let refused = delete(&context, &held);
-        let _ = holder.kill();
-        let _ = holder.wait();
-        let said = refused.unwrap_err().0;
-        assert!(said.contains("in use by a VM"), "{said}");
-        assert!(disk.exists());
-        delete(&context, &held).unwrap();
-        assert!(!folder.exists());
     }
 
     #[test]

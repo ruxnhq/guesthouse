@@ -54,6 +54,8 @@ pub mod jailing;
 pub mod kept_logs;
 pub mod lean;
 pub mod library;
+#[cfg(test)]
+mod library_tests;
 pub mod limits;
 pub mod linux;
 pub mod log;

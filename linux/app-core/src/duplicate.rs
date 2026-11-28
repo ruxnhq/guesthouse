@@ -140,6 +140,11 @@ pub(crate) fn disk_in_use(disk: &str) -> bool {
     !looked.status.success() && String::from_utf8_lossy(&looked.stderr).contains("lock")
 }
 
+/// Refuses a disk another program has open to write.
+pub(crate) fn refuse_if_in_use(disk: &str) -> Result<()> {
+    if disk_in_use(disk) { Err(Failure::new(DISK_IN_USE)) } else { Ok(()) }
+}
+
 /// `path` in the copy's folder, if it was in the original's.
 fn rerooted(path: &str, from: &Path, to: &Path) -> String {
     match Path::new(path).strip_prefix(from) {

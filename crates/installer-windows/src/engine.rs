@@ -886,6 +886,12 @@ mod tests {
     /// The tests that set log.rs's global (the install folder's setup.log) one at a time.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// One at a time. A test that failed while it held the turn says so itself; the next still
+    /// runs.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// A new, empty folder for a test, standing in for the install folder.
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gh-engine-test-{name}-{}", std::process::id()));
@@ -927,13 +933,19 @@ mod tests {
     /// setup.log too; its lines are shown as they come; exit 0 is done.
     #[test]
     fn setup_ps1_is_run_and_its_reason_read() {
-        let _serial = SERIAL.lock().unwrap();
+        let _serial = serial();
         let dir = folder("setup");
         std::fs::write(
             dir.join("setup.ps1"),
             "param([string]$Verb, [switch]$DeleteMachines)\r\n\
              $log = Join-Path $PSScriptRoot 'setup.log'\r\n\
-             function Say([string]$l) { Add-Content -Path $log -Value \"$(Get-Date -Format s) $l\" }\r\n\
+             function Say([string]$l) {\r\n\
+                 $b = [Text.Encoding]::UTF8.GetBytes(\"$(Get-Date -Format s) $l`r`n\")\r\n\
+                 for ($i = 0; $i -lt 20; $i++) { try {\r\n\
+                     $f = [IO.File]::Open($log, 'Append', 'Write', 'ReadWrite')\r\n\
+                     try { $f.Write($b, 0, $b.Length) } finally { $f.Dispose() }; return\r\n\
+                 } catch { Start-Sleep -Milliseconds 25 } }\r\n\
+             }\r\n\
              Say \"$Verb from $PSScriptRoot\"\r\n\
              Say 'service registered'\r\n\
              Write-Warning 'a warning, as Stop-Service gives one'\r\n\
@@ -971,7 +983,7 @@ mod tests {
     /// Exit 3010 is done, with a restart wanted before machines can run.
     #[test]
     fn setup_ps1_can_ask_for_a_restart() {
-        let _serial = SERIAL.lock().unwrap();
+        let _serial = serial();
         let dir = folder("setup-restart");
         std::fs::write(dir.join("setup.ps1"), "param([string]$Verb)\r\nexit 3010\r\n").unwrap();
         let (ctx, facts) = (real_in(&dir, PathBuf::new()), facts());
@@ -987,7 +999,7 @@ mod tests {
     /// an earlier install's failure: the reason is what PowerShell said, not that old line.
     #[test]
     fn setup_ps1_that_cannot_run() {
-        let _serial = SERIAL.lock().unwrap();
+        let _serial = serial();
         let dir = folder("setup-broken");
         std::fs::write(dir.join("setup.ps1"), "param([string]$Verb)\r\nif ( {\r\n").unwrap();
         std::fs::write(dir.join("setup.log"), "2026-11-18T10:00:00 FAILED: an earlier install's reason\r\n")
@@ -1008,7 +1020,7 @@ mod tests {
     /// one doesn't is deleted.
     #[test]
     fn files_go_over_an_install() {
-        let _serial = SERIAL.lock().unwrap();
+        let _serial = serial();
         let dir = folder("files");
         let build = folder("files-build");
         let write = |root: &Path, rel: &str, bytes: &[u8]| {

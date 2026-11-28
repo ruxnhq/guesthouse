@@ -8,9 +8,11 @@
 
 use super::amd::{RENDER_SERVER, SHADER_CACHE, VULKAN_DRIVER_FOLDERS, mesa_egl, radv_manifest};
 use super::arguments::words;
+use super::disk_node::{DiskOptions, disk_node};
 use super::forwarding_jail::{DEVICES, gpu_nodes};
 use super::macos::UDMABUF;
 use super::{Boot, VmPlan};
+use crate::disk_image::backing::{BackingFile, DISK_FORMAT};
 use crate::firmware::format_of;
 use crate::gpu_maker::GpuMaker;
 use crate::linux::card::ForwardedCard;
@@ -103,11 +105,26 @@ impl AndroidCard {
 pub struct AndroidBoot {
     /// Android's own disk for its data, which the system disk's fstab names as the second one.
     pub data: PathBuf,
+    /// For a throwaway run, the machine's own data disk, which `data` is an overlay on.
+    pub data_base: Option<PathBuf>,
     pub card: AndroidCard,
     /// A folder of the machine's for the drivers' compiled shaders, so a start doesn't build them again.
     pub cache: PathBuf,
     /// Play services through microG.
     pub play: bool,
+}
+
+impl AndroidBoot {
+    /// The files QEMU reads the data disk through: a throwaway run's is an overlay on the machine's
+    /// own, which stands alone.
+    pub(super) fn data_chain(&self) -> Vec<BackingFile> {
+        let base = self.data_base.iter();
+        base.map(|base| BackingFile {
+            path: base.to_string_lossy().into_owned(),
+            format: DISK_FORMAT.to_owned(),
+        })
+        .collect()
+    }
 }
 
 impl VmPlan {
@@ -150,15 +167,16 @@ impl VmPlan {
             &format!("if=pflash,format={format},unit=0,readonly=on,file={}", self.firmware.code.display()),
             "-drive",
             &format!("if=pflash,format={format},unit=1,file={}", qemu_value(&self.vars)),
-            "-drive",
-            // The file before the format, which is how a running VM is known by its disk.
-            &format!("if=none,id=vda,file={},format=qcow2,discard=unmap", qemu_value(&self.disk)),
+            "-blockdev",
+            &disk_node("vda", &self.disk, &self.disk_chain(), DiskOptions { cache: None, discard: true }),
             "-device",
             "virtio-blk-pci,drive=vda,bootindex=0",
-            "-drive",
-            &format!(
-                "if=none,id=vdb,file={},format=qcow2,discard=unmap",
-                qemu_value(&boot.data.to_string_lossy())
+            "-blockdev",
+            &disk_node(
+                "vdb",
+                &boot.data.to_string_lossy(),
+                &boot.data_chain(),
+                DiskOptions { cache: None, discard: true },
             ),
             "-device",
             "virtio-blk-pci,drive=vdb",
@@ -285,6 +303,7 @@ mod tests {
     fn boot(maker: GpuMaker) -> AndroidBoot {
         AndroidBoot {
             data: "/m/droid/data.qcow2".into(),
+            data_base: None,
             card: AndroidCard {
                 maker,
                 render_node: "/dev/dri/renderD129".into(),
@@ -316,9 +335,13 @@ mod tests {
     #[test]
     fn it_boots_its_two_disks_on_virtio_and_draws_on_the_card_through_venus() {
         let arguments = plan(GpuMaker::Amd).qemu_arguments();
-        let disk = value_after(&arguments, "-drive", "if=none,id=vda").unwrap();
-        assert!(disk.contains("file=/m/droid/disk.qcow2"), "{disk}");
-        assert!(value_after(&arguments, "-drive", "if=none,id=vdb").unwrap().contains("data.qcow2"));
+        let disk = value_after(&arguments, "-blockdev", "{").unwrap();
+        assert!(
+            disk.contains(r#""filename":"/m/droid/disk.qcow2""#) && disk.contains(r#""node-name":"vda""#)
+        );
+        let nodes: Vec<&String> =
+            arguments.windows(2).filter(|two| two[0] == "-blockdev").map(|two| &two[1]).collect();
+        assert!(nodes[1].contains("data.qcow2") && nodes[1].contains(r#""node-name":"vdb""#), "{nodes:?}");
         for setting in ["venus=on", "blob=on", "resource_uuid=on", "hostmem=4G"] {
             assert!(arguments.contains(&format!("virtio-vga-gl.{setting}")), "{setting}");
         }
@@ -346,5 +369,42 @@ mod tests {
         assert!(value(&amd, "__EGL_VENDOR_LIBRARY_FILENAMES").ends_with("50_mesa.json"));
         let intel = environment(GpuMaker::Intel);
         assert!(value(&intel, "VK_DRIVER_FILES").contains("intel_icd"));
+    }
+
+    /// The data disk is written by QEMU as the system disk is, so its header is checked the same way:
+    /// it stands alone, and a throwaway run's is an overlay on the machine's own and nothing else.
+    #[test]
+    fn the_data_disk_is_built_on_nothing_its_settings_dont_name() {
+        let scratch = Scratch::new();
+        let qemu_img = |words: &[&str]| {
+            assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+        };
+        let path = |name: &str| scratch.path(name).to_str().unwrap().to_owned();
+        let (disk, data, run_data) = (path("disk.qcow2"), path("data.qcow2"), path("run/data.qcow2"));
+        std::fs::create_dir_all(scratch.path("run")).unwrap();
+        qemu_img(&["create", "-q", "-f", "qcow2", &disk, "1G"]);
+        qemu_img(&["create", "-q", "-f", "qcow2", &data, "1G"]);
+        qemu_img(&["create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", &data, &run_data]);
+        let base = VmPlan { disk: disk.clone(), ..plan(GpuMaker::Amd) };
+        let with = |data: &str, data_base: Option<&str>| VmPlan {
+            boot: Boot::Android(AndroidBoot {
+                data: data.into(),
+                data_base: data_base.map(Into::into),
+                ..boot(GpuMaker::Amd)
+            }),
+            ..base.clone()
+        };
+        assert_eq!(with(&data, None).checked_backing_files().unwrap(), Vec::<std::path::PathBuf>::new());
+        assert_eq!(
+            with(&run_data, Some(&data)).checked_backing_files().unwrap(),
+            [scratch.path("data.qcow2")]
+        );
+        let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+        let other = other.to_str().unwrap();
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, &data]);
+        assert!(with(&data, None).checked_backing_files().unwrap_err().0.contains(other));
+        assert!(with(&run_data, Some(&data)).checked_backing_files().unwrap_err().0.contains(other));
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, &run_data]);
+        assert!(with(&run_data, Some(&data)).checked_backing_files().unwrap_err().0.contains(other));
     }
 }

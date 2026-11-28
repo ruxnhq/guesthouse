@@ -354,10 +354,10 @@ fn an_install_boots_its_disc_with_the_answers_beside_it() {
     let (_scratch, plan) = plan(&Machine { installing: true, ..windows() }, boot);
     let arguments = plan.qemu_arguments();
     assert!(
-        has(&arguments, "if=none,id=cd0,media=cdrom,readonly=on,file=/iso/a,,b.iso"),
+        has(&arguments, "if=none,id=cd0,format=raw,media=cdrom,readonly=on,file=/iso/a,,b.iso"),
         "commas are doubled"
     );
-    assert!(has(&arguments, "if=none,id=cd1,media=cdrom,readonly=on,file=/m/answer.iso"));
+    assert!(has(&arguments, "if=none,id=cd1,format=raw,media=cdrom,readonly=on,file=/m/answer.iso"));
     assert!(!has(&arguments, "usb-mouse,bus=xhci.0"), "an install has no GPU yet");
 }
 
@@ -366,7 +366,7 @@ fn a_comma_in_a_path_cannot_become_an_option() {
     let machine = Machine { disk: "/m,x/disk.qcow2".into(), vars: "/m,x/vars.fd".into(), ..windows() };
     let (_scratch, plan) = plan(&machine, Boot::Gpu);
     let arguments = plan.qemu_arguments();
-    assert!(arguments.iter().any(|word| word.contains("file=/m,,x/disk.qcow2,format=qcow2")));
+    assert!(arguments.iter().any(|word| word.contains(r#""filename":"/m,x/disk.qcow2""#)));
     assert!(arguments.iter().any(|word| word.ends_with("file=/m,,x/vars.fd")));
 }
 
@@ -598,7 +598,7 @@ fn a_machine_that_is_not_windows_has_no_remote_view_forward() {
 }
 
 fn disk_drive(plan: &VmPlan) -> String {
-    plan.qemu_arguments().into_iter().find(|word| word.starts_with("if=none,id=hd0,")).unwrap()
+    plan.qemu_arguments().into_iter().find(|word| word.contains(r#""node-name":"hd0""#)).unwrap()
 }
 
 /// A machine in use keeps the guest's flushes, so a power cut of the host can't leave NTFS or the
@@ -607,18 +607,88 @@ fn disk_drive(plan: &VmPlan) -> String {
 fn only_a_disk_nothing_is_kept_from_drops_the_guests_flushes() {
     for (machine, boot) in [(windows(), Boot::Gpu), (plain_machine(), plain_boot())] {
         let (_scratch, plan) = plan(&machine, boot);
-        assert!(disk_drive(&plan).contains(",cache=writeback,"), "{}", disk_drive(&plan));
+        assert!(
+            disk_drive(&plan).contains(r#""cache":{"direct":false,"no-flush":false}"#),
+            "{}",
+            disk_drive(&plan)
+        );
     }
     let install = Boot::Install { iso: "/iso/w.iso".into(), answer: "/m/answer.iso".into() };
     let (_scratch, setup) = plan(&Machine { installing: true, ..windows() }, install);
-    assert!(disk_drive(&setup).contains(",cache=unsafe,"), "{}", disk_drive(&setup));
+    assert!(
+        disk_drive(&setup).contains(r#""cache":{"direct":false,"no-flush":true}"#),
+        "{}",
+        disk_drive(&setup)
+    );
     for (machine, boot) in [(windows(), Boot::Gpu), (plain_machine(), plain_boot())] {
         let (_scratch, plan) = plan(&Machine { throwaway: true, ..machine.clone() }, boot);
         let run = VmPlan { throwaway: Some(machine.disk.clone()), disk: throwaway_disk(), ..plan };
         assert!(
-            disk_drive(&run).contains("file=/dev/fdset/50,format=qcow2,cache=unsafe,"),
+            disk_drive(&run).contains(r#""cache":{"direct":false,"no-flush":true}"#)
+                && disk_drive(&run).contains(r#""filename":"/dev/fdset/50""#),
             "{}",
             disk_drive(&run)
         );
     }
+}
+
+/// QEMU guesses a disc's format from its first bytes unless told, and a disc is read as it is, so
+/// every drive with a disc in it is raw. An empty tray has nothing to name a format for.
+#[test]
+fn every_disc_is_read_as_raw() {
+    let install = UbuntuInstall {
+        iso: "/iso/ubuntu.iso".into(),
+        seed: "/m/seed/cidata.iso".into(),
+        kernel: "/m/boot/vmlinuz".into(),
+        initrd: "/m/boot/initrd".into(),
+    };
+    let boots = [
+        (plain_machine(), Boot::Plain { iso: "/iso/plain.iso".into() }),
+        (windows(), Boot::Install { iso: "/iso/win.iso".into(), answer: "/m/answer.iso".into() }),
+        (windows(), Boot::Gpu),
+        (windows(), Boot::UbuntuInstall(install)),
+    ];
+    let mut discs = 0;
+    for (machine, boot) in boots {
+        let (_scratch, mut plan) = plan(&machine, boot);
+        plan.driver_disc = Some("/m/driver.iso".into());
+        for word in plan.qemu_arguments().iter().filter(|word| word.contains("media=cdrom")) {
+            if word.contains("file=") {
+                discs += 1;
+                assert!(word.split(',').any(|part| part == "format=raw"), "{word}");
+            } else {
+                assert!(!word.contains("format="), "{word}");
+            }
+        }
+    }
+    assert_eq!(discs, 6, "the plain disc, the install's two, the driver disc, Ubuntu's two");
+}
+
+/// QEMU is given the files a disk is built on, as the settings name them, and none after the last,
+/// so it never takes a name from the disk's header.
+#[test]
+fn the_disk_is_given_with_the_backing_files_its_settings_name() {
+    use crate::disk_image::backing::BackingFile;
+    let base = BackingFile { path: "/b/base.qcow2".into(), format: "qcow2".into() };
+    let node_of = |arguments: &[String], disk: &str| -> serde_json::Value {
+        let at = arguments.iter().position(|word| word.starts_with('{') && word.contains(disk));
+        let at = at.unwrap_or_else(|| panic!("no -blockdev for {disk}: {arguments:?}"));
+        assert_eq!(arguments[at - 1], "-blockdev");
+        serde_json::from_str(&arguments[at]).unwrap()
+    };
+    let (_scratch, plain) = plan(&plain_machine(), plain_boot());
+    let node = node_of(&plain.qemu_arguments(), "/m/disk.qcow2");
+    assert_eq!(node["node-name"], "hd0");
+    assert_eq!(node["backing"], serde_json::Value::Null);
+    let layered = Machine { backing_files: vec![base], ..windows() };
+    let (_scratch, gpu) = plan(&layered, Boot::Gpu);
+    let node = node_of(&gpu.qemu_arguments(), "/m/disk.qcow2");
+    assert_eq!(node["backing"]["file"]["filename"], "/b/base.qcow2");
+    assert_eq!(node["backing"]["backing"], serde_json::Value::Null);
+    // A throwaway run's overlay is on the machine's disk, and that on its base.
+    let run = VmPlan { throwaway: Some("/m/disk.qcow2".into()), disk: throwaway_disk(), ..gpu };
+    let node = node_of(&run.qemu_arguments(), "/dev/fdset/50");
+    assert_eq!(node["backing"]["file"]["filename"], "/m/disk.qcow2");
+    assert_eq!(node["backing"]["backing"]["file"]["filename"], "/b/base.qcow2");
+    assert_eq!(node["cache"]["no-flush"], true);
 }

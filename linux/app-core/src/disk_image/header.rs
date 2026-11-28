@@ -6,13 +6,16 @@
 
 use crate::failure::{Failure, Result};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// What every qcow2 begins with.
 pub const QCOW2_MAGIC: [u8; 4] = *b"QFI\xfb";
 const VERSION_AT: usize = 4;
 const BACKING_FILE_OFFSET_AT: usize = 8;
+const BACKING_FILE_SIZE_AT: usize = 16;
+/// The longest backing file name QEMU writes or reads.
+const MOST_BACKING_NAME_BYTES: u32 = 1023;
 const CRYPT_METHOD_AT: usize = 32;
 const INCOMPATIBLE_FEATURES_AT: usize = 72;
 /// A version 2 header ends before the feature bits, and version 3 adds them.
@@ -35,6 +38,41 @@ fn u64_at(header: &[u8], at: usize) -> u64 {
 pub fn looks_like_qcow2(path: &Path) -> bool {
     let mut magic = [0; QCOW2_MAGIC.len()];
     File::open(path).and_then(|mut file| file.read_exact(&mut magic)).is_ok() && magic == QCOW2_MAGIC
+}
+
+/// The other files a qcow2's header names, which QEMU opens with it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Named {
+    /// The backing file's name as the header has it, which may be relative to the disk's folder.
+    pub backing: Option<String>,
+    /// Its data is in a file of its own, named in a header extension.
+    pub data_file: bool,
+}
+
+/// What a qcow2's header names, from the header alone. A file that can't be read or isn't a qcow2
+/// names nothing here, and QEMU says what's wrong with it.
+pub fn named(path: &Path) -> Result<Named> {
+    let Ok(mut file) = File::open(path) else { return Ok(Named::default()) };
+    let mut header = vec![0; HEADER_BYTES];
+    let read = file.read(&mut header)?;
+    header.truncate(read);
+    if header.len() < INCOMPATIBLE_FEATURES_AT || header[..QCOW2_MAGIC.len()] != QCOW2_MAGIC {
+        return Ok(Named::default());
+    }
+    let version = u32_at(&header, VERSION_AT);
+    let data_file = version >= VERSION_3
+        && header.len() >= INCOMPATIBLE_FEATURES_AT + 8
+        && u64_at(&header, INCOMPATIBLE_FEATURES_AT) & EXTERNAL_DATA_FILE != 0;
+    let at = u64_at(&header, BACKING_FILE_OFFSET_AT);
+    if at == 0 {
+        return Ok(Named { backing: None, data_file });
+    }
+    let size = u32_at(&header, BACKING_FILE_SIZE_AT).min(MOST_BACKING_NAME_BYTES);
+    let mut name = vec![0; size as usize];
+    file.seek(SeekFrom::Start(at))?;
+    let read = file.read(&mut name)?;
+    name.truncate(read);
+    Ok(Named { backing: Some(String::from_utf8_lossy(&name).into_owned()), data_file })
 }
 
 /// Refuses a qcow2 that names another file or is encrypted, from its header alone.
@@ -87,6 +125,22 @@ mod tests {
             .status();
         assert!(done.unwrap().success());
         path
+    }
+
+    #[test]
+    fn the_header_says_which_files_it_names() {
+        let scratch = Scratch::new();
+        let alone = made(&scratch, "alone.qcow2", &[]);
+        assert_eq!(named(&alone).unwrap(), Named::default());
+        scratch.write("base.img", vec![1; 4096]);
+        let backed = made(&scratch, "backed.qcow2", &["-F", "raw", "-b", "base.img"]);
+        assert_eq!(named(&backed).unwrap().backing.as_deref(), Some("base.img"));
+        let data = scratch.path("data.raw");
+        let external = made(&scratch, "external.qcow2", &["-o", &format!("data_file={}", data.display())]);
+        assert!(named(&external).unwrap().data_file);
+        let not_a_disk = scratch.write("not.qcow2", "text");
+        assert_eq!(named(&not_a_disk).unwrap(), Named::default());
+        assert_eq!(named(&scratch.path("missing.qcow2")).unwrap(), Named::default());
     }
 
     #[test]

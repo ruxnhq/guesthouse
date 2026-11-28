@@ -86,7 +86,7 @@ pub fn qemu_pid(context: &Context, slot: Option<Slot>) -> Option<u32> {
 /// The passt a jailed QEMU of this slot was started with, by the pid and start time the launcher
 /// noted, so a pid the system has given to something else since isn't taken for it.
 pub fn passt_pid(context: &Context, slot: Option<Slot>) -> Option<u32> {
-    let pid_file = context.run_folder(slot).join(crate::vm_args::PASST_PID_FILE);
+    let pid_file = context.notes_folder(slot).join(crate::vm_args::PASST_PID_FILE);
     let noted = fs::read_to_string(&pid_file).ok()?;
     let (pid, started) = noted.trim().split_once(' ')?;
     let pid: u32 = pid.parse().ok()?;
@@ -123,12 +123,15 @@ pub fn still_running(context: &Context, qemu: Seen) -> bool {
     has_words && qemu.is_alive(context)
 }
 
-/// Whether one of QEMU's words opens this machine's disk. A comma after the name ends it, unless it's
-/// doubled, when the name goes on and this is some other disk.
+/// Whether one of QEMU's words opens this machine's disk: as a `-blockdev` node, or as a `-drive`, as a
+/// QEMU from an older build does. In a drive, a comma after the name ends it, unless it's doubled, when
+/// the name goes on and this is some other disk.
 fn opens_disk(word: &[u8], machine: &Machine) -> bool {
     let wanted = format!("file={},", qemu_value(&machine.disk)).into_bytes();
     let found = word.windows(wanted.len()).position(|part| part == wanted);
-    found.is_some_and(|at| word.get(at + wanted.len()) != Some(&b',')) || runs_throwaway_of(word, machine)
+    found.is_some_and(|at| word.get(at + wanted.len()) != Some(&b','))
+        || crate::vm_args::names_disk_file(word, &machine.disk)
+        || runs_throwaway_of(word, machine)
 }
 
 /// Whether this word is the note on a throwaway run's overlay, which names the machine's disk last.
@@ -213,7 +216,7 @@ mod tests {
     fn passt_is_found_by_its_pid_and_only_if_it_started_when_noted() {
         let scratch = Scratch::new();
         let context = scratch_context(&scratch);
-        let folder = context.run_folder(None);
+        let folder = context.notes_folder(None);
         fs::create_dir_all(&folder).unwrap();
         assert_eq!(passt_pid(&context, None), None);
         fs::write(folder.join(crate::vm_args::PASST_PID_FILE), "4242 987654\n").unwrap();

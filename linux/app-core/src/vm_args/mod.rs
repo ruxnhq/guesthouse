@@ -6,6 +6,7 @@
 mod amd;
 mod android;
 mod arguments;
+mod disk_node;
 mod drives;
 mod forwarding_jail;
 mod macos;
@@ -19,6 +20,7 @@ mod ubuntu;
 
 pub use amd::{AmdBoot, RENDER_SERVER};
 pub use android::{AndroidBoot, AndroidCard, LOGCAT_FILE};
+pub use disk_node::names_disk_file;
 pub use macos::{MacosBoot, MacosCard, UDMABUF};
 pub use nic::{PASST_PID_FILE, only_through_probe_words, passt_probe_words};
 pub use passt_age::PasstAge;
@@ -28,6 +30,7 @@ pub use throwaway::{THROWAWAY_FDS, THROWAWAY_MARK, throwaway_disk};
 pub use ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_PREFIX, INSTALL_LOG, ssh_port};
 
 use crate::context::Context;
+use crate::disk_image::backing::BackingFile;
 use crate::firmware::Firmware;
 use crate::gpu_identity::{PciIdentity, shown_identity};
 use crate::jailing::LAUNCHER;
@@ -199,6 +202,9 @@ pub struct VmPlan {
     /// For a throwaway machine's run, its own disk, which is only read. `disk` is then the overlay
     /// the app handed QEMU open: see [`crate::throwaway`].
     pub throwaway: Option<String>,
+    /// The files the machine's disk is built on, as its settings name them. A start refuses a disk
+    /// whose header names others.
+    pub backing_files: Vec<BackingFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +301,7 @@ impl VmPlan {
             memory_by_path: None,
             drives_by_path: None,
             throwaway: None,
+            backing_files: machine.backing_files.clone(),
             run_folder,
         }
     }

@@ -1,3 +1,4 @@
+use guesthouse_app_core::disk_image::backing::BackingFile;
 use guesthouse_app_core::linux::card::ForwardedCard;
 use guesthouse_app_core::linux::forwarding::sandbox_runs;
 use guesthouse_app_core::machine::{Kind, Machine};
@@ -228,11 +229,18 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
     let scratch = Scratch::new();
     let context = scratch_context(&scratch);
     let (own, other) = (machine(&scratch, "own"), machine(&scratch, "other"));
+    // Its folder is a link to one elsewhere, as a folder of bases on another drive can be.
+    let real_bases = scratch.path("elsewhere/bases");
+    fs::create_dir_all(&real_bases).unwrap();
+    std::os::unix::fs::symlink(&real_bases, scratch.path("bases")).unwrap();
     let base = scratch.path("bases/base.qcow2");
-    fs::create_dir_all(base.parent().unwrap()).unwrap();
     qemu_img(&["create", "-q", "-f", "qcow2", base.to_str().unwrap(), "1G"]);
     // Named as qemu-img names it from the overlay's own folder, so QEMU goes through `..` to it.
     qemu_img(&["create", "-q", "-f", "qcow2", "-b", "../../bases/base.qcow2", "-F", "qcow2", &own.disk]);
+    // The settings name it as the file system finds it, and QEMU is told to open it by that name.
+    let named =
+        BackingFile { path: base.canonicalize().unwrap().display().to_string(), format: "qcow2".into() };
+    let own = Machine { backing_files: vec![named], ..own };
     // Laid out as a QEMU in its build folder is, so its tree holds nothing of the machines'.
     let qemu = scratch.path("qemu/build/qemu-system-x86_64");
     fs::create_dir_all(qemu.parent().unwrap()).unwrap();
@@ -250,7 +258,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         (own, Boot::Gpu)
     };
     let plan = VmPlan::new(&context, &own, boot, slots::number(3), 0);
-    fs::create_dir_all(&plan.run_folder).unwrap();
+    context.make_run_folder(Some(slots::number(3))).unwrap();
     // The daemon's sockets, which the launcher connects to for a Windows QEMU with no sound.
     let _daemon = (!forwarded).then(|| {
         ["global.sock", "vgpu.sock"].map(|name| UnixListener::bind(plan.run_folder.join(name)).unwrap())
@@ -263,7 +271,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         backing_files: Vec::new(),
     };
     let jail = plan.with_backing_files(jail).unwrap();
-    let granted_base = jail.backing_files[0].clone();
+    assert_eq!(jail.backing_files, [base.canonicalize().unwrap()]);
     // A real VM may hold the slot's own port.
     let (passt, bridged) = (on == Case::Passt, on == Case::Bridged);
     let mode = if bridged { Mode::Bridged } else { Mode::Nat };
@@ -302,7 +310,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .env(PROBE_VARIABLE, "1")
         .env("PROBE_OWN", folder_of(&own))
         .env("PROBE_OTHER", folder_of(&other))
-        .env("PROBE_BASE", &granted_base)
+        .env("PROBE_BASE", base.canonicalize().unwrap())
         .env("PROBE_RUN", &plan.run_folder)
         .env("PROBE_HOME", env::var_os("HOME").unwrap())
         .env(
@@ -313,7 +321,7 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .status()
         .unwrap();
     if passt {
-        let Some(pid) = pid_in(&plan.run_folder.join(PASST_PID_FILE)) else {
+        let Some(pid) = pid_in(&context.notes_folder(Some(slots::number(3))).join(PASST_PID_FILE)) else {
             eprintln!("passt left no pid file");
             return false;
         };

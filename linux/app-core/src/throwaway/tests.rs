@@ -193,7 +193,7 @@ fn qemu_finds_the_overlay_by_its_set_and_the_app_finds_the_machine_by_the_note()
     let note = "fd=50,set=50,opaque=guesthouse-throwaway:/m/a,,b/disk.qcow2";
     assert!(words.windows(2).any(|pair| pair == ["-add-fd", note]), "{words:?}");
     assert!(words.windows(2).any(|pair| pair == ["-add-fd", "fd=51,set=50"]));
-    assert!(words.iter().any(|word| word.contains("file=/dev/fdset/50,")));
+    assert!(words.iter().any(|word| word.contains(r#""filename":"/dev/fdset/50""#)));
     let qemu = context.paths.qemu.display().to_string();
     let socket = format!("unix:{}/qmp.sock,server=on", context.paths.run_folder(slots::first()).display());
     let mut running: Vec<&str> = vec![&qemu, "-qmp", &socket];

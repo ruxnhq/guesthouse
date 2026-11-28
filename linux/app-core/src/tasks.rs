@@ -107,8 +107,9 @@ pub struct Status {
     pub restore_point: Option<RestorePoint>,
 }
 
+/// In the slot's notes folder, as Force off signals the pid it names.
 pub fn task_path(context: &Context, slot: Option<Slot>) -> PathBuf {
-    context.run_folder(slot).join(TASK_FILE)
+    context.notes_folder(slot).join(TASK_FILE)
 }
 
 pub fn read_task(context: &Context, slot: Option<Slot>) -> TaskRecord {
@@ -326,6 +327,21 @@ mod tests {
 
     fn machine() -> Machine {
         Machine::new("sample", "Sample", "/d", "/v")
+    }
+
+    /// QEMU and the daemon may write anything in the run folder, so a record there is not the task's.
+    #[test]
+    fn a_task_record_in_the_run_folder_is_not_read() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        context.make_run_folder(None).unwrap();
+        fake_process(&context, 4242, &["/p/guesthouse-task", "start", "sample"], &[], "");
+        let in_run_folder = record("sample", 4242, "");
+        fs::write(context.run_folder(None).join(TASK_FILE), serde_json::to_string(&in_run_folder).unwrap())
+            .unwrap();
+        let read = read_task(&context, None);
+        assert_eq!(read.pid, 0);
+        assert!(!task_alive(&context, &read));
     }
 
     fn record(machine: &str, pid: u32, error: &str) -> TaskRecord {

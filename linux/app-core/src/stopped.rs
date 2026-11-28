@@ -63,7 +63,7 @@ mod tests {
 
     fn after_action(context: &Context, action: &str) {
         let file = task_path(context, Some(slots::number(1)));
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        context.make_run_folder(Some(slots::number(1))).unwrap();
         let record = json!({"action": action, "machine": "vm", "pid": 0, "step": "", "error": ""});
         fs::write(file, record.to_string()).unwrap();
     }

@@ -141,12 +141,15 @@ fn notes(context: &Context, machine: &Machine) -> Vec<String> {
 
 pub(super) fn command(context: &Context, machine: &Machine, out: &mut dyn Write) -> Result<()> {
     let plan = plan(context, machine)?;
+    // The QEMU this prints opens whatever the disk's header names.
+    plan.checked_backing_files()?;
     let run_folder = path_word(&plan.run_folder);
     writeln!(out, "# {} ({}), as it would start beside your own tools.", machine.name, machine.id)?;
     writeln!(out, "# This starts nothing. Read it, and put in a script what you want.")?;
     show(out, &notes(context, machine))?;
     writeln!(out, "\n# The run folder holds the sockets, and what an earlier run left in it can't stay.")?;
-    writeln!(out, "mkdir -p {run_folder}")?;
+    let notes = path_word(&crate::paths::notes_beside(&plan.run_folder));
+    writeln!(out, "mkdir -p {run_folder} {notes}")?;
     let sockets = daemon::SOCKETS.iter().map(|name| path_word(&plan.run_folder.join(name)));
     writeln!(out, "rm -f {}", sockets.collect::<Vec<_>>().join(" "))?;
     if let Some(swtpm) = plan.swtpm_arguments() {

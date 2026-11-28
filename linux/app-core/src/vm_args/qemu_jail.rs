@@ -9,7 +9,7 @@ use super::arguments::{MONITOR_SOCKETS, words};
 use super::forwarding_jail::DEVICES as CARD_NODES;
 use super::ubuntu::{FORWARDED_INPUT_SOCKET, FRAMES_SOCKET};
 use super::{Boot, QemuJail, VmPlan};
-use crate::disk_image::backing::backing_files as backing_files_of;
+use crate::disk_image::backing::{BackingFile, DISK_FORMAT, checked_chain};
 use crate::failure::{Failure, Result};
 use crate::network::{Mode, Protocol, bridge_helper};
 use guesthouse_jail::launch::{self, Launch, Passt, Tap, UnixSocket};
@@ -201,19 +201,40 @@ impl VmPlan {
         plan
     }
 
-    /// The jail with the files the disk is built on. Refuses a chain QEMU couldn't open, and a
-    /// backing file in the shared folder, where QEMU may write anything.
-    pub fn with_backing_files(&self, jail: QemuJail) -> Result<QemuJail> {
+    /// The files QEMU reads the disks through, as the machine's settings name them: a throwaway
+    /// run's own disk, and the files each disk is built on. Refuses a disk whose header names any
+    /// others, or a chain QEMU couldn't open.
+    pub fn checked_backing_files(&self) -> Result<Vec<PathBuf>> {
         let mut backing_files = Vec::new();
         if let Some(disk) = &self.throwaway {
             backing_files.push(PathBuf::from(disk));
         }
-        backing_files.extend(backing_files_of(Path::new(self.throwaway.as_ref().unwrap_or(&self.disk)))?);
-        // A throwaway run's Android data disk is an overlay on the machine's own.
+        let disk = Path::new(self.throwaway.as_ref().unwrap_or(&self.disk));
+        backing_files.extend(checked_chain(disk, &self.backing_files)?);
+        // A throwaway run's Android data disk is an overlay on the machine's own, which stands alone.
         if let Some(boot) = self.android_boot() {
-            backing_files.extend(backing_files_of(&boot.data)?);
+            let base = boot.data_base.iter().map(|base| BackingFile {
+                path: base.to_string_lossy().into_owned(),
+                format: DISK_FORMAT.to_owned(),
+            });
+            backing_files.extend(checked_chain(&boot.data, &base.collect::<Vec<_>>())?);
         }
-        let shared = |file: &&PathBuf| self.shared_folder().is_some_and(|folder| file.starts_with(folder));
+        // OpenCore's disk is written by QEMU too, and stands alone.
+        if let Boot::Macos(boot) = &self.boot {
+            checked_chain(&boot.opencore, &[])?;
+        }
+        Ok(backing_files)
+    }
+
+    /// The jail with the files the disk is built on. Refuses what [`Self::checked_backing_files`]
+    /// does, and a backing file in the shared folder, where QEMU may write anything.
+    pub fn with_backing_files(&self, jail: QemuJail) -> Result<QemuJail> {
+        let backing_files = self.checked_backing_files()?;
+        // As the file system finds each, so neither a `..` nor a link in a name hides where it is.
+        let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let shared = |file: &&PathBuf| {
+            self.shared_folder().is_some_and(|folder| real(file).starts_with(real(Path::new(folder))))
+        };
         if let Some(file) = backing_files.iter().find(shared) {
             return Err(Failure(format!(
                 "The VM did not start, as its disk is built on {}, which is in the shared folder. \
@@ -229,7 +250,7 @@ impl VmPlan {
         wanted.then(|| Passt {
             program: super::program_on_path(PASST).unwrap_or_else(|| PASST.into()),
             fd: PASST_FD,
-            pid_file: self.run_folder.join(super::PASST_PID_FILE),
+            pid_file: crate::paths::notes_beside(&self.run_folder).join(super::PASST_PID_FILE),
             words: self.passt_words(),
             only_through: self.network.only_through.as_ref().map(|through| launch::OnlyThrough {
                 interface: through.interface.clone(),

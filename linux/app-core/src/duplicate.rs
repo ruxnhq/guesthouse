@@ -10,7 +10,7 @@
 
 use crate::actions::Task;
 use crate::context::Context;
-use crate::disk_image::disk_info;
+use crate::disk_image::backing::checked_chain;
 use crate::failure::{Failure, Result};
 use crate::host::{GIB, free_gib};
 use crate::library::{DISK_FILE, FIRMWARE_FILE, new_id, unused_mac};
@@ -375,19 +375,20 @@ fn copy_folder(context: &Context, from: &Path, to: &Path, skipped: &[&str], disk
     Ok(())
 }
 
-/// The copy names its backing file, if it has one, by its full path, so it reads the same file the
-/// original does from its own folder.
-fn keep_backing_file(disk: &Path, copy: &Path) -> Result<()> {
-    let info = disk_info(&disk.to_string_lossy())?;
-    let (Some(backing), Some(format)) =
-        (info["full-backing-filename"].as_str(), info["backing-filename-format"].as_str())
-    else {
-        return Ok(());
-    };
-    let backing = std::path::absolute(backing)?;
+/// Refuses to copy a disk whose header names other files than the original's settings do, as the
+/// copy's settings name the same ones.
+fn check_backing_files(source: &Machine) -> Result<()> {
+    checked_chain(Path::new(&source.disk), &source.backing_files)
+        .map(|_| ())
+        .map_err(|refused| Failure(refused.0.replacen("The VM did not start", "The copy was not made", 1)))
+}
+
+/// The copy names the backing file the original's settings name, if there is one, by its full path,
+/// so it reads the same file the original does from its own folder.
+fn keep_backing_file(source: &Machine, copy: &Path) -> Result<()> {
+    let Some(backing) = source.backing_files.first() else { return Ok(()) };
     let done = Command::new("qemu-img")
-        .args(["rebase", "-u", "-f", "qcow2", "-F", format, "-b"])
-        .arg(&backing)
+        .args(["rebase", "-u", "-f", "qcow2", "-F", &backing.format, "-b", &backing.path])
         .arg(copy)
         .output()?;
     if !done.status.success() {
@@ -416,8 +417,9 @@ fn build(
     } else {
         format!("Copying the disk, {gib:.1} GiB")
     });
+    check_backing_files(source)?;
     copy_file(Path::new(&source.disk), &staged_disk)?;
-    keep_backing_file(Path::new(&source.disk), &staged_disk)?;
+    keep_backing_file(source, &staged_disk)?;
     task.step("Copying the machine's files");
     let from = source.folder(context);
     if from.is_dir() {

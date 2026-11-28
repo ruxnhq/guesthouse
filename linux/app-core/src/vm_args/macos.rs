@@ -6,6 +6,7 @@
 //! it gets a plain machine's, and the keyboard and pointer are QEMU's.
 
 use super::arguments::{MONITOR_SOCKETS, words};
+use super::disk_node::{DiskOptions, disk_node};
 use super::forwarding_jail::{DEVICES, gpu_nodes};
 use super::{Boot, VmPlan};
 use crate::linux::amd::AmdCard;
@@ -130,13 +131,12 @@ impl VmPlan {
             "type=2",
             "-device",
             "ich9-ahci,id=sata,addr=0x2",
-            "-drive",
-            &format!("id=opencore,if=none,format=qcow2,file={}", boot.opencore.display()),
+            "-blockdev",
+            &disk_node("opencore", &boot.opencore.to_string_lossy(), &[], DiskOptions::default()),
             "-device",
             "ide-hd,bus=sata.2,drive=opencore,bootindex=1",
-            "-drive",
-            // The file before the format, which is how a running VM is known by its disk.
-            &format!("id=disk,if=none,file={},format=qcow2", qemu_value(&self.disk)),
+            "-blockdev",
+            &disk_node("disk", &self.disk, &self.disk_chain(), DiskOptions::default()),
             "-device",
             "ide-hd,bus=sata.3,drive=disk,rotation_rate=1",
         ]);
@@ -324,9 +324,17 @@ mod tests {
             [
                 "if=pflash,format=raw,readonly=on,file=/m/mac/OVMF_CODE.fd",
                 "if=pflash,format=raw,file=/m/mac/OVMF_VARS.fd",
-                "id=opencore,if=none,format=qcow2,file=/m/mac/opencore.qcow2",
-                "id=disk,if=none,file=/m/mac/disk.qcow2,format=qcow2",
             ]
+        );
+        let nodes: Vec<&String> =
+            arguments.windows(2).filter(|two| two[0] == "-blockdev").map(|two| &two[1]).collect();
+        assert!(
+            nodes[0].contains(r#""filename":"/m/mac/opencore.qcow2""#)
+                && nodes[0].contains(r#""backing":null"#)
+        );
+        assert!(
+            nodes[1].contains(r#""filename":"/m/mac/disk.qcow2""#)
+                && nodes[1].contains(r#""node-name":"disk""#)
         );
         assert!(arguments.iter().any(|word| word == "ide-hd,bus=sata.2,drive=opencore,bootindex=1"));
         assert!(!arguments.iter().any(|word| word.contains("installer")), "macOS is installed");
@@ -437,5 +445,23 @@ mod tests {
             arguments.iter().any(|word| word == "ide-hd,bus=sata.5,drive=drive1"),
             "after the installer's port"
         );
+    }
+
+    #[test]
+    fn opencores_disk_is_built_on_nothing() {
+        let scratch = Scratch::new();
+        let opencore = scratch.path("opencore.qcow2");
+        let other = scratch.write("elsewhere/notes.txt", "not the machine's");
+        let qemu_img = |words: &[&str]| {
+            assert!(std::process::Command::new("qemu-img").args(words).status().unwrap().success());
+        };
+        qemu_img(&["create", "-q", "-f", "qcow2", opencore.to_str().unwrap(), "64M"]);
+        let Boot::Macos(base) = boot("") else { unreachable!() };
+        let with =
+            VmPlan { boot: Boot::Macos(MacosBoot { opencore: opencore.clone(), ..base }), ..plan(boot("")) };
+        assert_eq!(with.checked_backing_files().unwrap(), Vec::<std::path::PathBuf>::new());
+        let (other, opencore) = (other.to_str().unwrap(), opencore.to_str().unwrap());
+        qemu_img(&["rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", other, opencore]);
+        assert!(with.checked_backing_files().unwrap_err().0.contains(other));
     }
 }

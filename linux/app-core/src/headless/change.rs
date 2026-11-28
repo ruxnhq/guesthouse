@@ -4,6 +4,7 @@
 use super::args::Forwarding;
 use super::run_task;
 use crate::context::Context;
+use crate::disk_image::backing::chain_to_record;
 use crate::display::{Driver, DriverPackage, forget_note, read_state};
 use crate::failure::{Failure, Result};
 use crate::gpu_identity::{Shown, maker_name, read_state as read_identity, write_state as write_identity};
@@ -20,10 +21,11 @@ use crate::start_checks::share_problem;
 use crate::tasks::{State, status};
 use crate::vm_args::passt_installed;
 use std::fmt::Display;
-use std::io::Write;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 const MUST_BE_OFF: &str = "The VM must be off to change this.";
-const SETTINGS: [&str; 23] = [
+const SETTINGS: [&str; 24] = [
     "cores",
     "ram",
     "vram",
@@ -47,6 +49,7 @@ const SETTINGS: [&str; 23] = [
     "auto-snapshot",
     "throwaway",
     "vendor-id",
+    "backing-files",
 ];
 use guesthouse_remote_view_core::stream_clocks::SETTING as STREAM_CLOCKS;
 const FIXED_NETWORK: &str = "An Ubuntu machine's network is fixed, with its SSH port forwarded.";
@@ -301,6 +304,14 @@ pub(super) fn set(
             }
             folder.clone_into(&mut machine.share);
         }
+        "backing-files" => {
+            must_be_off(context, &machine)?;
+            let files: Vec<PathBuf> = match value {
+                "none" => Vec::new(),
+                named => std::env::split_paths(named).map(std::path::absolute).collect::<io::Result<_>>()?,
+            };
+            machine.backing_files = chain_to_record(Path::new(&machine.disk), &files)?;
+        }
         other => {
             let known = SETTINGS.join(", ");
             return Err(Failure(format!("There is no setting called {other}. They are {known}.")));
@@ -443,6 +454,10 @@ pub(super) fn show(context: &Context, machine: &Machine, out: &mut dyn Write) ->
     }
     if !machine.iso.is_empty() {
         line(out, "iso", &machine.iso)?;
+    }
+    if !machine.backing_files.is_empty() {
+        let files: Vec<&str> = machine.backing_files.iter().map(|file| file.path.as_str()).collect();
+        line(out, "backing-files", &files.join(":"))?;
     }
     if let Some(recipe) = crate::recipe::summary(context, machine) {
         line(out, "recipe", &recipe)?;

@@ -17,7 +17,7 @@ $service = 'remoteman host'
 # firewall rule were lost so, while its files stayed.
 function Save-ToDisk {
     if (-not ('Guesthouse.Registry' -as [type])) {
-        Add-Type -Namespace Guesthouse -Name Registry -MemberDefinition '[DllImport("advapi32.dll")] public static extern int RegFlushKey(IntPtr key);'
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; namespace Guesthouse { public static class Registry { [DllImport("advapi32.dll")] public static extern int RegFlushKey(IntPtr key); } }'
     }
     # HKEY_LOCAL_MACHINE's predefined handle, which flushes every hive under it.
     [Guesthouse.Registry]::RegFlushKey([IntPtr]0x80000002) | Out-Null

@@ -1,5 +1,6 @@
 //! QEMU's monitor, as a question and an answer.
 
+use crate::capped_line::read_capped_line;
 use crate::context::Context;
 use guesthouse_daemon::slot::Slot;
 use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
@@ -42,6 +43,9 @@ pub trait Monitor: Send + Sync {
     fn ask_handing(&self, socket: &Path, file: BorrowedFd<'_>, commands: &[Command]) -> Vec<Value>;
 }
 
+/// The longest line QEMU may send. Its answers are far shorter.
+pub const LONGEST_LINE: usize = 1 << 20;
+
 pub struct QmpMonitor;
 
 /// A connection that has said hello, ready for commands.
@@ -81,8 +85,7 @@ impl Monitor for QmpMonitor {
 }
 
 fn read_line(reader: &mut impl BufRead) -> Option<String> {
-    let mut line = String::new();
-    (reader.read_line(&mut line).ok()? > 0).then_some(line)
+    read_capped_line(reader, LONGEST_LINE).ok()?
 }
 
 fn request_line(command: &Command) -> String {
@@ -204,6 +207,13 @@ mod tests {
     use crate::testing::Scratch;
     use std::os::unix::net::UnixListener;
     use std::thread;
+
+    #[test]
+    fn a_line_with_no_end_is_not_kept() {
+        use std::io::Read;
+        let endless = BufReader::new(std::io::repeat(b'a').take(LONGEST_LINE as u64 * 2));
+        assert_eq!(read_line(&mut { endless }), None);
+    }
 
     #[test]
     fn events_before_the_answer_are_passed_over() {

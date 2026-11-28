@@ -16,8 +16,9 @@ mod tests;
 pub use fetching::{Entry, fetch};
 pub use sending::{DroppedFile, dropped_files, send};
 
+use crate::capped_line::read_capped_line;
 use crate::text::{base64_decode, base64_encode};
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{self, BufReader, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -32,6 +33,11 @@ const PATIENCE: Duration = Duration::from_secs(30);
 const SOON: Duration = Duration::from_secs(2);
 /// On top of the time a wait or a catch was given, for the answer's way back.
 const AFTER_A_WAIT: Duration = Duration::from_secs(1);
+
+/// The longest line the helper may answer with. A name and its size are far shorter.
+const LONGEST_LINE: usize = 64 * 1024;
+/// The most files one drag may list.
+const MOST_ENTRIES: usize = 10_000;
 
 /// How far the drag of dropped files has got in the guest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,12 +108,9 @@ impl Helper {
     }
 
     fn answer(stream: impl Read) -> io::Result<String> {
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line)?;
+        let line = read_capped_line(&mut BufReader::new(stream), LONGEST_LINE)?;
         // The helper closes without a word on a wrong token, and QEMU does when nothing listens.
-        if line.is_empty() {
-            return Err(ErrorKind::ConnectionRefused.into());
-        }
+        let line = line.filter(|line| !line.is_empty()).ok_or(ErrorKind::ConnectionRefused)?;
         Ok(line.trim_end().to_owned())
     }
 
@@ -172,15 +175,18 @@ impl Helper {
     /// helper looks for as long as `time`.
     pub fn catch(&self, time: Duration) -> io::Result<Option<Vec<Entry>>> {
         let stream = self.ask(&format!("catch {}", time.as_millis()), time + AFTER_A_WAIT)?;
-        let mut lines = BufReader::new(stream).lines();
-        match lines.next().transpose()?.as_deref() {
+        let mut reader = BufReader::new(stream);
+        match read_capped_line(&mut reader, LONGEST_LINE)?.as_deref() {
             Some("files") => {}
             Some("none") => return Ok(None),
             answer => return Err(refused(answer.unwrap_or_default())),
         }
         let mut entries = Vec::new();
-        for line in lines {
-            entries.push(Entry::from_line(&line?).ok_or(ErrorKind::InvalidData)?);
+        while let Some(line) = read_capped_line(&mut reader, LONGEST_LINE)? {
+            if entries.len() == MOST_ENTRIES {
+                return Err(ErrorKind::InvalidData.into());
+            }
+            entries.push(Entry::from_line(&line).ok_or(ErrorKind::InvalidData)?);
         }
         Ok(Some(entries))
     }
@@ -189,8 +195,7 @@ impl Helper {
     pub fn get(&self, name: &str, to: &mut impl Write) -> io::Result<u64> {
         let stream = self.ask(&format!("get {}", base64_encode(name.as_bytes())), PATIENCE)?;
         let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
+        let line = read_capped_line(&mut reader, LONGEST_LINE)?.unwrap_or_default();
         let length = line.trim_end().strip_prefix("ok ").and_then(|length| length.parse::<u64>().ok());
         let length = length.ok_or_else(|| refused(line.trim_end()))?;
         if io::copy(&mut reader.take(length), to)? != length {

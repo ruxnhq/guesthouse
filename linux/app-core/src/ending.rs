@@ -5,12 +5,14 @@
 //! down on its monitors just before it does. So while a machine runs, something listens on the
 //! watch monitor, which nothing else uses then, and keeps the last reason in the run folder.
 
+use crate::capped_line::read_capped_line;
 use crate::context::Context;
+use crate::monitor::LONGEST_LINE;
 use crate::monitor::WATCH_SOCKET;
 use crate::slots;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -35,16 +37,12 @@ fn reason_in(line: &str) -> Option<String> {
 fn listen(socket: &Path, note: &Path) -> Option<()> {
     let mut writer = UnixStream::connect(socket).ok()?;
     let mut reader = BufReader::new(writer.try_clone().ok()?);
-    let mut line = String::new();
     // Its hello, and then the one command it wants before it says anything else.
-    reader.read_line(&mut line).ok()?;
+    read_capped_line(&mut reader, LONGEST_LINE).ok()??;
     writer.write_all(format!("{}\n", json!({"execute": "qmp_capabilities"})).as_bytes()).ok()?;
     let _ = fs::remove_file(note);
     loop {
-        line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
-            return Some(());
-        }
+        let Some(line) = read_capped_line(&mut reader, LONGEST_LINE).ok()? else { return Some(()) };
         if let Some(reason) = reason_in(&line) {
             let _ = fs::write(note, reason);
         }
@@ -75,6 +73,7 @@ pub fn take_reason(context: &Context, slot: u8) -> Option<String> {
 mod tests {
     use super::*;
     use crate::testing::{Scratch, scratch_context};
+    use std::io::BufRead;
     use std::os::unix::net::UnixListener;
 
     #[test]

@@ -5,10 +5,11 @@
 //! replaying everything that was typed at it. Nothing here ever waits, as a hung QEMU must not freeze
 //! the window: the window holds the way out.
 
+use crate::capped_line::read_capped_line;
 use rustix::net::{self, AddressFamily, SendFlags, SocketAddrUnix, SocketFlags, SocketType};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, ErrorKind};
+use std::io::{self, BufReader, ErrorKind};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -182,12 +183,7 @@ fn send_without_waiting(stream: &UnixStream, data: &[u8]) -> io::Result<usize> {
 /// Takes in QEMU's replies. Only the list of mice matters, and it comes first, and the guest's resets.
 fn drain(stream: UnixStream, shared: &Shared) {
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if !matches!(reader.read_line(&mut line), Ok(size) if size > 0) {
-            break;
-        }
+    while let Ok(Some(line)) = read_capped_line(&mut reader, crate::monitor::LONGEST_LINE) {
         shared.answered.store(true, Ordering::Relaxed);
         let Ok(reply) = serde_json::from_str::<Value>(&line) else { continue };
         if reply["event"] == RESET_EVENT {
@@ -210,6 +206,7 @@ fn drain(stream: UnixStream, shared: &Shared) {
 mod tests {
     use super::*;
     use crate::testing::Scratch;
+    use std::io::BufRead;
     use std::io::Write;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;

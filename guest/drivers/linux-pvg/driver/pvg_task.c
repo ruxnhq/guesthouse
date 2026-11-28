@@ -428,6 +428,7 @@ static void pvg_task_free(struct pvg_task *task)
 
 	list_for_each_entry_safe(placement, next, &task->stale, stale) {
 		drm_mm_remove_node(&placement->node);
+		drm_gem_object_put(&placement->bo->base);
 		kfree(placement);
 	}
 	drm_mm_takedown(&task->mm);
@@ -582,7 +583,7 @@ static struct pvg_placement *pvg_placement_find(struct pvg_task *task,
 /*
  * Lets go of a place. With the last hold gone the memory leaves the task:
  * its entries are cleared, and the device is told to drop what it has mapped
- * of it. If the device does not say it did, the place is never used again.
+ * of it. If the device does not say it did, the place and its pages are kept.
  */
 static void pvg_placement_put(struct pvg_placement *placement)
 {
@@ -612,14 +613,13 @@ static void pvg_placement_put(struct pvg_placement *placement)
 	list_del(&placement->link);
 	mutex_unlock(&bo->lock);
 	if (ret) {
-		dev_warn_ratelimited(&pvg->pdev->dev,
-				     "task %u: %#llx bytes at %#llx not unmapped: %d\n",
+		dev_warn_ratelimited(&pvg->pdev->dev, "task %u: %#llx bytes at %#llx not unmapped: %d\n",
 				     task->id, bytes, address, ret);
 		list_add(&placement->stale, &task->stale);
-	} else {
-		drm_mm_remove_node(&placement->node);
-		kfree(placement);
+		return;
 	}
+	drm_mm_remove_node(&placement->node);
+	kfree(placement);
 	drm_gem_object_put(&bo->base);
 }
 

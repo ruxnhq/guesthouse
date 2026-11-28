@@ -20,10 +20,13 @@
 //! ]}
 //! ```
 //!
-//! Everything is at `files.ruxn.com/p/guesthouse/<name>`, the owner's file site, which serves a
-//! project's published files flat at `/p/<project>/<file>` (the layout the other hosts' releases
-//! use). `name` is the published file name (with the version in it); `as` is its name in the
-//! package. The guest's install puts the certificate in the guest's trusted stores and turns test
+//! The Windows driver's files are at `files.ruxn.com/p/guesthouse-windows-driver/<name>`, the owner's
+//! file site, which serves a project's published files flat at `/p/<project>/<file>` (the layout the
+//! other hosts' releases use). The project is its own, not the releases', because a package is
+//! published by `.github/workflows/windows-pvg.yml` on its own schedule and with its own rules, and
+//! the files site takes each workflow for one project. `name` is the published file name (with the
+//! version in it, so a file is written once and never changes); `as` is its name in the package.
+//! Only the manifest is replaced, by the next version. The guest's install puts the certificate in the guest's trusted stores and turns test
 //! signing on by itself, so the tester never handles a certificate.
 //!
 //! `GUESTHOUSE_DRIVER_DIR` names a folder of the same files instead, for the lab.
@@ -39,8 +42,12 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Where the owner's file site serves the guesthouse project's published files.
+/// Where the owner's file site serves the guesthouse project's published files, which the Linux
+/// driver's package is published under.
 pub const BASE_URL: &str = "https://files.ruxn.com/p/guesthouse/";
+/// Where it serves the Windows driver's package: a project of its own, published by
+/// `.github/workflows/windows-pvg.yml`.
+pub const WINDOWS_BASE_URL: &str = "https://files.ruxn.com/p/guesthouse-windows-driver/";
 pub const MANIFEST_NAME: &str = "guesthouse-windows-driver-latest.json";
 
 /// What the package must hold, by the name each has in it.
@@ -62,6 +69,8 @@ pub const REQUIRED: [&str; 9] = [
 /// and the files it must hold by their names in it.
 #[derive(Debug)]
 pub struct Package {
+    /// Where the file site serves the package's files, with the slash at the end.
+    pub base: &'static str,
     pub manifest: &'static str,
     pub folder: &'static str,
     pub required: &'static [&'static str],
@@ -70,6 +79,7 @@ pub struct Package {
 }
 
 pub const WINDOWS: Package = Package {
+    base: WINDOWS_BASE_URL,
     manifest: MANIFEST_NAME,
     folder: "windows-driver",
     required: &REQUIRED,
@@ -80,6 +90,7 @@ pub const WINDOWS: Package = Package {
 pub const LINUX_SCRIPT: &str = "install.sh";
 
 pub const LINUX: Package = Package {
+    base: BASE_URL,
     manifest: "guesthouse-linux-driver-latest.json",
     folder: "linux-driver",
     required: &[LINUX_SCRIPT],
@@ -166,12 +177,12 @@ pub fn fetch_package_of(
     transport: &mut dyn Transport,
     downloads: &Path,
 ) -> Result<PathBuf, FetchError> {
-    let text = transport.text(&format!("{BASE_URL}{}", package.manifest))?;
+    let text = transport.text(&format!("{}{}", package.base, package.manifest))?;
     let manifest = Manifest::parse_for(package, &text).map_err(FetchError::new)?;
     let folder = folder_of(package, downloads, &manifest.version);
     let parts = folder.join("parts");
     for entry in &manifest.files {
-        let url = format!("{BASE_URL}{}", entry.name);
+        let url = format!("{}{}", package.base, entry.name);
         let request = Request { url: &url, folder: &parts, name: &entry.name, sha256: &entry.sha256 };
         match fetch::download(transport, &request, &mut |_, _| true)? {
             Outcome::Done(path) => {

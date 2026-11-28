@@ -40,7 +40,7 @@ pub struct FakeNetwork;
 impl FakeNetwork {
     /// The bytes behind a URL: the Ubuntu disc, or a driver file by its published name.
     fn body(url: &str) -> Vec<u8> {
-        match url.strip_prefix(driver::BASE_URL) {
+        match url.strip_prefix(driver::WINDOWS_BASE_URL) {
             Some(name) => driver_bytes(name),
             None => UBUNTU_BYTES.to_vec(),
         }
@@ -71,7 +71,7 @@ impl Transport for FakeNetwork {
     }
 
     fn text(&mut self, url: &str) -> Result<String, FetchError> {
-        if url == format!("{}{}", driver::BASE_URL, driver::MANIFEST_NAME) {
+        if url == format!("{}{}", driver::WINDOWS_BASE_URL, driver::MANIFEST_NAME) {
             let files: Vec<String> = driver::REQUIRED
                 .iter()
                 .map(|package_name| {

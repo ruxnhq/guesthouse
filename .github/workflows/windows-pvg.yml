@@ -6,8 +6,20 @@
 # from nuget.org at build time, checks them against the SHA-256 below, uses them and throws them
 # away. Nothing of the kit is cached, uploaded or put in an artifact.
 #
-# A pull request gets an unsigned build. A push to main, or a run by hand, also signs with the test
-# certificate held as a secret, makes the catalog on Windows and lays out the package.
+# Four jobs, and the key is in one:
+#   build    on a Mac, no secret and no environment. Always unsigned: a pull request and main alike.
+#   sign     on Windows, only on a push to main or a run by hand on main, in the `windows-driver`
+#            environment, which holds the test certificate (WINDOWS_PVG_TEST_PFX, base64, and
+#            WINDOWS_PVG_TEST_PFX_PASSWORD) and is limited to main. It signs ruxnwddm.sys and
+#            ruxnumd.dll, makes the catalog and signs that (release/sign.ps1). Where the environment
+#            has no certificate, as in a fork, it says so and signs nothing, and nothing after it runs.
+#   package  on Linux, no secret: lays the signed files out as the Mac app's installer expects
+#            (release/package.sh).
+#   publish  on Linux, no secret: puts the package on files.ruxn.com, in the project
+#            guesthouse-windows-driver, as mac-nightly.yml puts the nightly there. Each file has the
+#            version in its name and is written once; only guesthouse-windows-driver-latest.json,
+#            which the app reads first, is replaced, last. A version that is up already is not
+#            published again: change DriverVer in the INF for a new package.
 name: Windows graphics driver (Mac host)
 
 on:
@@ -43,12 +55,6 @@ jobs:
     name: build on a Mac
     runs-on: macos-15
     timeout-minutes: 150
-    # Signing needs the test certificate's two secrets. Where they aren't set (a fork, or this
-    # repository before they exist) the build is unsigned and there is no package.
-    env:
-      HAVE_CERT: ${{ secrets.WINDOWS_PVG_TEST_PFX != '' }}
-    outputs:
-      signed: ${{ steps.cert.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,7 +63,7 @@ jobs:
         run: |
           ROOT="$RUNNER_TEMP/root"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-          brew install ninja lld osslsigncode
+          brew install ninja lld
           python3 -m venv "$ROOT/.venv"
           "$ROOT/.venv/bin/pip" install meson cmake
       - name: llvm-mingw
@@ -89,21 +95,6 @@ jobs:
       # LLVM 15 is built twice (for the Mac and for Windows on arm64). It takes most of the job.
       - name: airconv and LLVM 15
         run: sh drivers/windows-pvg/dxmt-win/airconv-build.sh "$ROOT"
-      - name: The test certificate
-        id: cert
-        if: ${{ github.event_name != 'pull_request' && env.HAVE_CERT == 'true' }}
-        env:
-          PFX: ${{ secrets.WINDOWS_PVG_TEST_PFX }}
-          PFX_PASSWORD: ${{ secrets.WINDOWS_PVG_TEST_PFX_PASSWORD }}
-        run: |
-          umask 077
-          printf '%s' "$PFX" | base64 --decode > "$RUNNER_TEMP/test.pfx"
-          openssl pkcs12 -in "$RUNNER_TEMP/test.pfx" -passin env:PFX_PASSWORD -nokeys -out "$RUNNER_TEMP/test.pem"
-          openssl pkcs12 -in "$RUNNER_TEMP/test.pfx" -passin env:PFX_PASSWORD -nocerts -nodes -out "$RUNNER_TEMP/test.key"
-          rm "$RUNNER_TEMP/test.pfx"
-          echo "SIGN_CERT=$RUNNER_TEMP/test.pem" >> "$GITHUB_ENV"
-          echo "SIGN_KEY=$RUNNER_TEMP/test.key" >> "$GITHUB_ENV"
-          echo "signed=true" >> "$GITHUB_OUTPUT"
       - name: Kernel driver, user-mode driver and tools
         run: sh drivers/windows-pvg/ruxnwddm/build.sh "$ROOT"
       - name: winemetal, DXMT and the test programs
@@ -113,9 +104,6 @@ jobs:
           RUXN_STANDIN: "0"
           CHECKS: "0"
         run: sh drivers/windows-pvg/dxmt-win/build.sh "$ROOT"
-      - name: Forget the key
-        if: ${{ always() }}
-        run: rm -f "$RUNNER_TEMP/test.key" "$RUNNER_TEMP/test.pem"
       - name: Gather what the package needs
         run: |
           out="$RUNNER_TEMP/driver"
@@ -133,12 +121,18 @@ jobs:
           path: ${{ runner.temp }}/driver
           retention-days: 7
 
-  package:
-    name: catalog and package on Windows
+  sign:
+    name: sign and make the catalog on Windows
     needs: build
-    if: ${{ github.event_name != 'pull_request' && needs.build.outputs.signed == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     runs-on: windows-2025
     timeout-minutes: 20
+    # The environment holds the test certificate, and only main may use it.
+    environment: windows-driver
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,30 +141,101 @@ jobs:
         with:
           name: windows-pvg-driver
           path: ${{ runner.temp }}/driver
-      - name: Catalog, signed with the test certificate
+      - name: Sign, and make the catalog
+        id: sign
         shell: pwsh
         env:
           PFX: ${{ secrets.WINDOWS_PVG_TEST_PFX }}
           PFX_PASSWORD: ${{ secrets.WINDOWS_PVG_TEST_PFX_PASSWORD }}
         run: |
-          $dir = Join-Path $env:RUNNER_TEMP 'driver'
-          $pfx = Join-Path $env:RUNNER_TEMP 'test.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
-          $password = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
-          $cert = Get-PfxData -FilePath $pfx -Password $password | Select-Object -ExpandProperty EndEntityCertificates
-          $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
-          $signer = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfx, $env:PFX_PASSWORD, $flags)
-          Remove-Item $pfx
-          New-FileCatalog -Path $dir -CatalogFilePath (Join-Path $dir 'ruxnwddm-full.cat') -CatalogVersion 2.0 | Out-Null
-          $result = Set-AuthenticodeSignature -FilePath (Join-Path $dir 'ruxnwddm-full.cat') -Certificate $signer -HashAlgorithm SHA256
-          if ($result.Status -ne 'Valid' -and $result.Status -ne 'UnknownError') { throw "catalog not signed: $($result.StatusMessage)" }
-          # The public half only, as the installer trusts it in the guest.
-          [IO.File]::WriteAllBytes((Join-Path $dir 'ruxn-driver.cer'), $cert[0].Export('Cert'))
+          if (-not $env:PFX) {
+            Write-Output 'This environment has no test certificate (a fork, or it is not set up), so nothing is signed.'
+            'signed=false' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          drivers/windows-pvg/release/sign.ps1 -Folder (Join-Path $env:RUNNER_TEMP 'driver')
+          'signed=true' >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ steps.sign.outputs.signed == 'true' }}
+        with:
+          name: windows-pvg-signed
+          path: ${{ runner.temp }}/driver
+          retention-days: 7
+
+  package:
+    name: lay the package out
+    needs: sign
+    if: ${{ needs.sign.outputs.signed == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-pvg-signed
+          path: ${{ runner.temp }}/signed
       - name: Package
-        shell: bash
-        run: sh drivers/windows-pvg/release/package.sh "$RUNNER_TEMP/driver" "$RUNNER_TEMP/package"
+        run: sh drivers/windows-pvg/release/package.sh "$RUNNER_TEMP/signed" "$RUNNER_TEMP/package"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-pvg-package
           path: ${{ runner.temp }}/package
           retention-days: 7
+
+  publish:
+    name: put it on files.ruxn.com
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: windows-pvg-publish
+      cancel-in-progress: false
+    # No secret: scripts/files-publish.sh sends this job's GitHub OIDC token, which the file site takes
+    # only from this workflow, on main, from a push or a run by hand, for this one project.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: guesthouse-windows-driver
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-pvg-package
+          path: package
+      - name: Check the package against its manifest and the names the file site takes
+        working-directory: package
+        run: |
+          set -eu
+          manifest=guesthouse-windows-driver-latest.json
+          version=$(jq -r .version "$manifest")
+          printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          mapfile -t names < <(jq -r '.files[].name' "$manifest")
+          [ "${#names[@]}" -eq 9 ]
+          for name in "${names[@]}"; do
+            printf '%s\n' "$name" | grep -Eq "^guesthouse-windows-driver-$version-(install\.ps1|ruxn-driver\.cer|ruxnwddm\.sys|ruxnwddm-full\.inf|ruxnwddm-full\.cat|ruxnumd\.dll|winemetal\.dll|ruxndxgi\.dll|ruxnd3d11\.dll)\$"
+            sha256sum -c "$name.sha256"
+            [ "$(sha256sum "$name" | cut -d ' ' -f 1)" = "$(jq -r --arg name "$name" '.files[] | select(.name == $name) | .sha256' "$manifest")" ]
+          done
+      - name: Publish the files once, then the manifest
+        working-directory: package
+        run: |
+          set -eu
+          manifest=guesthouse-windows-driver-latest.json
+          version=$(jq -r .version "$manifest")
+          up=$(curl -fsSL --max-time 30 "https://files.ruxn.com/p/$PROJECT/$manifest" | jq -r '.version // empty' || true)
+          if [ "$up" = "$version" ]; then
+            echo "$version is the version up already. A published file never changes, so change DriverVer in the INF for a new package."
+            exit 0
+          fi
+          mapfile -t names < <(jq -r '.files[].name' "$manifest")
+          args=()
+          for name in "${names[@]}"; do args+=("$name" "$name.sha256"); done
+          ../scripts/files-publish.sh "$PROJECT" "${args[@]}"
+          ../scripts/files-publish.sh --replace "$PROJECT" "$manifest"

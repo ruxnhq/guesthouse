@@ -100,3 +100,91 @@ fn the_newest_kept_package_is_the_highest_number_not_the_last_in_the_alphabet() 
     assert_eq!(kept_package(&downloads).unwrap().file_name().unwrap(), "0.9.5");
     let _ = fs::remove_dir_all(downloads);
 }
+
+/// The file site, as a folder: the files a release published, served at the base URL by name.
+struct Published(PathBuf);
+
+impl Published {
+    fn path(&self, url: &str) -> Result<PathBuf, FetchError> {
+        let name = url
+            .strip_prefix(WINDOWS_BASE_URL)
+            .ok_or_else(|| FetchError::new(format!("{url} is not under {WINDOWS_BASE_URL}")))?;
+        Ok(self.0.join(name))
+    }
+}
+
+impl Transport for Published {
+    fn head(&mut self, url: &str) -> Result<fetch::Head, FetchError> {
+        let length = fs::metadata(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))?.len();
+        Ok(fetch::Head { length, ranges: true })
+    }
+
+    fn get_from(
+        &mut self,
+        url: &str,
+        from: u64,
+        out: &mut dyn std::io::Write,
+        _progress: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<(), FetchError> {
+        let bytes = fs::read(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))?;
+        out.write_all(&bytes[from as usize..]).map_err(|e| FetchError::new(e.to_string()))
+    }
+
+    fn text(&mut self, url: &str) -> Result<String, FetchError> {
+        fs::read_to_string(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))
+    }
+}
+
+/// The release script that lays a package out, in this repository.
+fn package_script() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../drivers/windows-pvg/release/package.sh")
+}
+
+/// What `release/package.sh` makes is what the app fetches, by the names it publishes under, with
+/// each file's SHA-256 in the manifest and in the `.sha256` beside it. With
+/// GUESTHOUSE_TEST_PACKAGE_DIR naming a folder package.sh made (a real build, signed or not), that one
+/// is used instead of stand-in files.
+#[test]
+fn a_package_the_release_script_made_is_what_the_app_fetches() {
+    let script = package_script();
+    let dir = scratch("package");
+    let published = match std::env::var_os("GUESTHOUSE_TEST_PACKAGE_DIR") {
+        Some(real) => PathBuf::from(real),
+        None => {
+            if !script.is_file() {
+                eprintln!("the release script is not in this checkout; skipped");
+                return;
+            }
+            let signed = dir.join("signed");
+            fs::create_dir_all(&signed).unwrap();
+            for name in &REQUIRED[1..] {
+                fs::write(signed.join(name), format!("the file {name}")).unwrap();
+            }
+            fs::write(signed.join("ruxnwddm-full.inf"), "[Version]\nDriverVer = 11/26/2026,0.3.39.0\n")
+                .unwrap();
+            let out = dir.join("out");
+            let made = std::process::Command::new("sh").arg(&script).arg(&signed).arg(&out).output().unwrap();
+            assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+            out
+        }
+    };
+    let text = fs::read_to_string(published.join(MANIFEST_NAME)).unwrap();
+    let manifest = Manifest::parse(&text).unwrap();
+    let version = manifest.version.clone();
+    assert!(guesthouse_update_check::is_version(&version), "{version}");
+    for entry in &manifest.files {
+        // The name it is published under, and the hash file beside it: exactly the names the file
+        // site takes (notes in the Worker's rule), and the same bytes the manifest says.
+        assert_eq!(entry.name, format!("guesthouse-windows-driver-{version}-{}", entry.package_name));
+        let sum = fetch::sha256_of(&published.join(&entry.name)).unwrap();
+        assert_eq!(sum, entry.sha256, "{}", entry.name);
+        let beside = fs::read_to_string(published.join(format!("{}.sha256", entry.name))).unwrap();
+        assert_eq!(beside, format!("{sum}  {}\n", entry.name));
+    }
+    // The app's own fetch, with the folder standing for the file site.
+    let downloads = dir.join("downloads");
+    let folder = fetch_package(&mut Published(published.clone()), &downloads).unwrap();
+    assert_eq!(package_files(&folder).unwrap().len(), REQUIRED.len());
+    assert_eq!(kept_package(&downloads), Some(folder));
+    let _ = fs::remove_dir_all(dir);
+}

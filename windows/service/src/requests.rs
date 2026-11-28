@@ -113,8 +113,10 @@ pub trait Connection {
     /// Whether the window has closed its end.
     fn gone(&mut self) -> bool;
     /// Whether the user asking may read the file at `path`, as the service, which may read any file,
-    /// opens only what the user could.
-    fn may_read(&mut self, path: &Path) -> Result<(), String>;
+    /// opens only what the user could. What comes back is the path of the file that opened, with
+    /// every link on the way resolved, and the file held as the user opened it, so while it's held
+    /// it isn't written, moved or replaced, and nor is any folder it's in.
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String>;
     /// Whether the user asking may share the folder at `path`: read it, write it unless
     /// `read_only`, and change who may open it. Sharing it lets the machine's own account open it,
     /// which the service does as the system, so only a folder the user could do that to is shared.
@@ -457,22 +459,32 @@ impl<W: Work> Service<W> {
             }
         }
         let image = &machine.image;
-        if !image.is_absolute() || image.to_string_lossy().starts_with(r"\\") {
-            return Some(format!("{} isn't a file on this PC's own drives.", image.display()));
-        }
-        // Opened as the user first: the service looking for the file itself would tell anyone
-        // whether a file is there in a folder they can't look in.
-        if let Err(reason) = connection.may_read(image) {
-            return Some(reason);
-        }
-        (!image.is_file()).then(|| format!("{} isn't a file.", image.display()))
+        (!image.is_absolute() || image.to_string_lossy().starts_with(r"\\"))
+            .then(|| format!("{} isn't a file on this PC's own drives.", image.display()))
     }
 
-    fn create(self: &Arc<Self>, machine: NewMachine, connection: &mut dyn Connection) {
-        if let Some(reason) = self.refusal(&machine, connection) {
-            let _ = connection.send(&Answer::Refused { reason });
-            return;
+    /// Opens `machine`'s image as the user, and has it read from then on by the path that open found,
+    /// held as the user opened it until the machine is made. The service looking for the file itself
+    /// would tell anyone whether a file is there in a folder they can't look in.
+    fn image(machine: &mut NewMachine, connection: &mut dyn Connection) -> Result<Held, String> {
+        let (image, held) = connection.may_read(&machine.image)?;
+        if !image.is_file() {
+            return Err(format!("{} isn't a file.", machine.image.display()));
         }
+        machine.image = image;
+        Ok(held)
+    }
+
+    fn create(self: &Arc<Self>, mut machine: NewMachine, connection: &mut dyn Connection) {
+        let image =
+            self.refusal(&machine, connection).map_or_else(|| Self::image(&mut machine, connection), Err);
+        let image = match image {
+            Ok(held) => held,
+            Err(reason) => {
+                let _ = connection.send(&Answer::Refused { reason });
+                return;
+            }
+        };
         let name = machine.name.clone();
         // The folder it's to be kept in is checked as the user, and held until the machine's own
         // folder is made in it.
@@ -534,7 +546,10 @@ impl<W: Work> Service<W> {
         self.machines.tell(&name, Event::State(State::Installing));
 
         let service = Arc::clone(self);
-        let work = thread::spawn(move || service.make(machine));
+        let work = thread::spawn(move || {
+            let _image = image;
+            service.make(machine)
+        });
         let mut window_gone = false;
         let mut pass_on = |event: Event, connection: &mut dyn Connection| {
             if !window_gone && connection.send(&Answer::Event { event }).is_err() {

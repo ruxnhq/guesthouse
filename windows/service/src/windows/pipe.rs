@@ -24,7 +24,7 @@ use std::io::{self, BufReader};
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -396,14 +396,11 @@ impl Connection for Pipe<'_> {
         peeked == 0
     }
 
-    fn may_read(&mut self, path: &Path) -> Result<(), String> {
-        match as_client(self.file, || File::open(path))? {
-            Ok(_) => Ok(()),
-            Err(error) => Err(format!(
-                "{} can't be read by you, so the service won't read it either: {error}",
-                path.display()
-            )),
-        }
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String> {
+        let (own, file) = as_client(self.file, || held_file(path))?.map_err(|error| {
+            format!("{} can't be read by you, so the service won't read it either: {error}", path.display())
+        })?;
+        Ok((own, Box::new(file)))
     }
 
     fn may_share(&mut self, path: &Path, read_only: bool) -> Result<Held, String> {
@@ -433,6 +430,14 @@ impl Connection for Pipe<'_> {
         on_a_fixed_drive(&folder, path)?;
         Ok(Box::new(folder))
     }
+}
+
+/// Opens a file to read, for others to read too and not to write, delete or rename: while it's held,
+/// it stays as it is where it is, and so does every folder it's in. With it comes the path Windows
+/// has for it, every link on the way resolved, which is where the service reads it.
+fn held_file(path: &Path) -> io::Result<(PathBuf, File)> {
+    let file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path)?;
+    Ok((PathBuf::from(final_path(&file)?), file))
 }
 
 /// Opens a folder to share, as whoever is asking. Changing who may open it is asked for too:
@@ -579,6 +584,43 @@ mod folder_tests {
         // rmdir on a junction removes the link alone.
         Command::new("cmd").arg("/c").arg("rmdir").arg(root.join("link")).status().unwrap();
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_file_read_for_the_user_is_read_by_its_own_path_and_stays_put_while_held() {
+        let root = std::env::temp_dir().join(format!("gh-image-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("image.iso"), b"iso").unwrap();
+        junction(&root.join("link"), &real);
+
+        let (own, held) = held_file(&root.join("link").join("image.iso")).unwrap();
+        assert_eq!(
+            own,
+            std::path::absolute(real.join("image.iso")).unwrap(),
+            "the link on the way is resolved"
+        );
+        assert_eq!(std::fs::read(&own).unwrap(), b"iso", "and others may read it meanwhile");
+        // Held, nothing can take its place or its folder's.
+        assert!(std::fs::rename(real.join("image.iso"), root.join("moved.iso")).is_err());
+        assert!(std::fs::write(real.join("image.iso"), b"other").is_err());
+        assert!(std::fs::rename(&real, root.join("moved")).is_err());
+        drop(held);
+        Command::new("cmd").arg("/c").arg("rmdir").arg(root.join("link")).status().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The image a machine is made from opens as `prepare` opens it while it's held for the user.
+    /// `GH_TEST_ISO` names a real ISO.
+    #[test]
+    #[ignore = "needs an ISO, named by GH_TEST_ISO"]
+    fn a_held_iso_opens_as_prepare_opens_it() {
+        let iso = std::env::var_os("GH_TEST_ISO").expect("GH_TEST_ISO names an ISO");
+        let (own, _held) = held_file(Path::new(&iso)).unwrap();
+        guesthouse_hcs::disk::VirtualDisk::open(&own, guesthouse_hcs::disk::Kind::Iso).unwrap();
+        let mut start = [0u8; 4096];
+        std::io::Read::read_exact(&mut File::open(&own).unwrap(), &mut start).unwrap();
     }
 }
 

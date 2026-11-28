@@ -22,8 +22,8 @@ impl Connection for As {
         true
     }
 
-    fn may_read(&mut self, _: &Path) -> Result<(), String> {
-        Ok(())
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String> {
+        Ok((path.to_owned(), Box::new(())))
     }
 
     fn may_share(&mut self, _: &Path, _: bool) -> Result<Held, String> {

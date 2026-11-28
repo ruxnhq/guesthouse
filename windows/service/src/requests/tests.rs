@@ -318,12 +318,13 @@ impl Connection for Window {
         self.gone
     }
 
-    fn may_read(&mut self, path: &Path) -> Result<(), String> {
-        if self.readable { Ok(()) } else { Err(format!("You may not read {}.", path.display())) }
+    fn may_read(&mut self, path: &Path) -> Result<(PathBuf, Held), String> {
+        let refused = || format!("You may not read {}.", path.display());
+        self.readable.then(|| (path.to_owned(), Box::new(()) as Held)).ok_or_else(refused)
     }
 
     fn may_share(&mut self, path: &Path, _: bool) -> Result<Held, String> {
-        self.may_read(path).map(|()| Box::new(()) as Held)
+        self.may_read(path).map(|(_, held)| held)
     }
 
     /// A folder is kept in unless the user may not read it, or it's named `link`, as a link is.
@@ -331,7 +332,7 @@ impl Connection for Window {
         if path.file_name().is_some_and(|name| name == "link") {
             return Err(format!("{} is a link to another folder.", path.display()));
         }
-        self.may_read(path).map(|()| Box::new(()) as Held)
+        self.may_read(path).map(|(_, held)| held)
     }
 
     fn asker(&self) -> Asker {
@@ -1211,6 +1212,7 @@ fn a_file_that_is_a_link_is_not_followed() {
 }
 
 mod hyper_v;
+mod image;
 mod nested;
 mod network;
 mod owners;

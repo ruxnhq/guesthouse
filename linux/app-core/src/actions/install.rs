@@ -53,6 +53,8 @@ const SETMODE_FILE: &str = "setmode.ps1";
 /// What only SYSTEM and administrators may change in the guest: setup runs it from the disc, and every
 /// start sends it again.
 pub(super) const RIGHTS_SCRIPT: &str = "guest-rights.ps1";
+/// The sign-in step every Windows guest shares, which goes before the rights script.
+pub(super) const LOGON_SECRET_SCRIPT: &str = "logon-secret.ps1";
 const TOKEN_ON_DISC: &str = "token.txt";
 
 /// How long the guest gets to put its folder's rights right. A guest made before the rights were set
@@ -62,10 +64,13 @@ const RIGHTS_SECONDS: u64 = 60;
 const RIGHTS_SAID_MOST: usize = 400;
 
 /// Puts the guest's folder back to SYSTEM and administrators alone, at every start, before anything
-/// else is sent: setup does it in a guest made since, and this does it in one made before. What the
+/// else is sent: setup does it in a guest made since, and this does it in one made before. A sign-in
+/// password Windows left in the registry moves to the LSA secret in the same go. What the
 /// guest says goes to the log, and the start goes on whatever it says.
 pub(super) fn keep_guest_folder(task: &Task) {
-    let said = match account_script(task, RIGHTS_SCRIPT) {
+    let script = guest_script(task.context, LOGON_SECRET_SCRIPT)
+        .and_then(|secret| Ok(format!("{secret}\n{}", account_script(task, RIGHTS_SCRIPT)?)));
+    let said = match script {
         Ok(script) => task.ask_guest(&script, RIGHTS_SECONDS),
         Err(failure) => failure.0,
     };
@@ -134,6 +139,7 @@ fn fill_answer_disc(context: &Context, machine: &Machine, files: &Path) -> Resul
     copy_writable(context.paths.guest_files().join(SETMODE_FILE), files.join(SETMODE_FILE))?;
     let rights = guest_script(context, RIGHTS_SCRIPT)?.replace(USER_MARK, machine.account());
     fs::write(files.join(RIGHTS_SCRIPT), rights)?;
+    copy_writable(context.paths.guest_files().join(LOGON_SECRET_SCRIPT), files.join(LOGON_SECRET_SCRIPT))?;
     if machine.windows_maker() == Some(GpuMaker::Intel) {
         // Setup places Intel's loaders in the system folders with the script that does it at a start.
         copy_writable(

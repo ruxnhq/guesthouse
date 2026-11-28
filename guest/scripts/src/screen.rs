@@ -279,7 +279,7 @@ fn both_rules_are_narrowed_and_remotemans_again_after_its_installer_opened_it() 
 /// with, and with Windows taking the LSA secret or not. Nothing reads or writes the registry or the
 /// LSA: the commands it calls are stood in for, and the key's name is no key at all. It says the
 /// answer, the values after, one per line in order, and the secret Windows was given.
-fn sign_in(shell: &str, values: &str, user: &str, secret: &str, takes: bool) -> Said {
+pub(crate) fn sign_in(shell: &str, values: &str, user: &str, secret: &str, takes: bool) -> Said {
     let takes = if takes { "$true" } else { "$false" };
     run(
         shell,
@@ -302,6 +302,7 @@ fn sign_in(shell: &str, values: &str, user: &str, secret: &str, takes: bool) -> 
             foreach ($name in @($values.Keys | Sort-Object)) {{ \"$name=$($values[$name])\" }}
             \"secret $($given['secret'])\"",
             crate::functions_from(&screen_script(), &["Set-SignIn"])
+                + &crate::functions_from(&crate::guest_script("logon-secret.ps1"), &["Move-LeftPassword"])
         ),
     )
 }

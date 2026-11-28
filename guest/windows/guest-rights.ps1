@@ -3,7 +3,8 @@
 # C:\gpupv, so only SYSTEM and administrators may change anything there. Everyone may read it, but
 # the token, which is for SYSTEM and administrators alone: a helper's start lets the account it runs
 # as read the token too. A script in the user's session writes only to a file made for it, given to
-# that account alone, here or by the host as it runs the script. The host puts the account in.
+# that account alone, here or by the host as it runs the script. The host puts the account in, and
+# puts logon-secret.ps1 before this, whose step takes the sign-in password out of the registry.
 $account = '@USER@'
 
 # SYSTEM is S-1-5-18, the administrators' group S-1-5-32-544 and the users' group S-1-5-32-545, the
@@ -147,3 +148,4 @@ try {
     Grant-SessionFile 'C:\gpupv\cap\setmode.txt' $account
 } catch { "setmode.txt: $($_.Exception.Message)" }
 try { Remove-AnswerFile 'C:\Windows\Panther\unattend.xml' 'HKLM:\SYSTEM\Setup' } catch { "answer file: $($_.Exception.Message)" }
+try { "sign-in password: $(Move-LeftPassword 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon')" } catch { "sign-in password: $($_.Exception.Message)" }

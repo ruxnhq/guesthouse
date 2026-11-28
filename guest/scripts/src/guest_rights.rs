@@ -230,6 +230,78 @@ fn the_windows_hosts_report_removes_the_answer_file_the_same_way() {
     assert!(text.contains("Remove-AnswerFile 'C:\\Windows\\Panther\\unattend.xml' 'HKLM:\\SYSTEM\\Setup'"));
 }
 
+/// Windows' own sign-in from the answer file can leave the password in Winlogon's key, which every
+/// account may read. The step every start runs moves it to the LSA secret, with the registry and the
+/// LSA stood in, so nothing here reads or writes either.
+fn move_left(shell: &str, values: &str, takes: bool) -> Said {
+    let takes = if takes { "$true" } else { "$false" };
+    run(
+        shell,
+        &format!(
+            "$ErrorActionPreference = 'Stop'
+            {}
+            $values = @{{ {values} }}
+            $given = @{{}}
+            function Get-ItemProperty {{ param($LiteralPath, $Name, $ErrorAction)
+                if ($LiteralPath -ne 'stand-in') {{ throw \"asked $LiteralPath\" }}
+                if ($values.ContainsKey($Name)) {{ [pscustomobject]@{{ $Name = $values[$Name] }} }} }}
+            function Remove-ItemProperty {{ param($LiteralPath, $Name, $ErrorAction)
+                if ($LiteralPath -ne 'stand-in') {{ throw \"asked $LiteralPath\" }}
+                $values.Remove($Name) }}
+            function Save-LogonSecret {{ param($Secret) $given['secret'] = $Secret; {takes} }}
+            \"answer $(Move-LeftPassword 'stand-in')\"
+            foreach ($name in @($values.Keys | Sort-Object)) {{ \"$name=$($values[$name])\" }}
+            \"secret $($given['secret'])\"",
+            functions_from(&guest_script("logon-secret.ps1"), &["Move-LeftPassword"])
+        ),
+    )
+}
+
+#[test]
+fn a_sign_in_password_left_in_the_registry_moves_to_the_secret() {
+    let Some(shell) = shell() else { return };
+    let values = "AutoAdminLogon = '1'; DefaultUserName = 'guest'; DefaultPassword = 'pw1234'";
+    let said = move_left(shell, values, true);
+    assert_eq!(said.code, Some(0), "{said}");
+    assert_eq!(
+        said.lines(),
+        ["answer moved", "AutoAdminLogon=1", "DefaultUserName=guest", "secret pw1234"],
+        "{said}"
+    );
+    let refused = move_left(shell, values, false);
+    assert_eq!(
+        refused.lines(),
+        ["answer refused", "AutoAdminLogon=1", "DefaultUserName=guest", "secret pw1234"],
+        "{refused}"
+    );
+    let none = move_left(shell, "AutoAdminLogon = '1'", true);
+    assert_eq!(none.lines(), ["answer none", "AutoAdminLogon=1", "secret"], "{none}");
+}
+
+/// One copy of the step: the Linux host's start runs it after the folder's rules, and the Windows
+/// host's screen script is given the same file in front of it.
+#[test]
+fn every_host_runs_the_one_copy_of_the_sign_in_step() {
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+    let shared = read(guest_script("logon-secret.ps1"));
+    for function in ["function Save-LogonSecret", "function Move-LeftPassword"] {
+        assert_eq!(shared.matches(function).count(), 1, "{function}");
+        let screen = read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../shared/remote-view/guest/screen.ps1"),
+        );
+        assert!(!screen.contains(function), "screen.ps1 has its own {function}");
+        assert!(!read(rights_script()).contains(function), "guest-rights.ps1 has its own {function}");
+    }
+    assert!(
+        read(rights_script())
+            .contains("Move-LeftPassword 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'")
+    );
+    let setup = read(guest_script("setup.ps1"));
+    let loaded = setup.find(". (Join-Path $PSScriptRoot 'logon-secret.ps1')").unwrap();
+    assert!(loaded < setup.find("& (Join-Path $PSScriptRoot 'guest-rights.ps1')").unwrap());
+}
+
 /// A recipe's runner writes in the run's folder it is given, in the account's profile in a guest,
 /// and in nothing of SYSTEM's: here it runs a script step from a recipe in a stand-in folder.
 #[cfg(windows)]

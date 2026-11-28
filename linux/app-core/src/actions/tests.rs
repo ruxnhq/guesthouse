@@ -179,6 +179,7 @@ fn a_start_puts_the_guest_folders_rights_right_first() {
     let mut context = plain_task_context(&scratch);
     scratch.write("program/guest/display.ps1", "what the session sees");
     scratch.write("program/guest/guest-rights.ps1", "$account = '@USER@'\nkeep the folder");
+    scratch.write("program/guest/logon-secret.ps1", "move the password");
     let agent = Arc::new(ScriptedAgent::answering(&[
         "C:\\gpupv: SYSTEM and administrators only\r\n",
         "3\n",
@@ -202,7 +203,7 @@ fn a_start_puts_the_guest_folders_rights_right_first() {
     boot(&mut task).unwrap();
     assert_eq!(task.error, "");
     let asked = agent.requests.lock().unwrap();
-    assert_eq!(asked[0].2, format!("$account = '{account}'\nkeep the folder"));
+    assert_eq!(asked[0].2, format!("move the password\n$account = '{account}'\nkeep the folder"));
     assert!(asked[2].2.contains("Win32_VideoController"), "{}", asked[2].2);
     let session = &asked[5].2;
     assert!(session.contains("New-ScheduledTaskPrincipal"), "{session}");

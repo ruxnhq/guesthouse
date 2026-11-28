@@ -24,59 +24,14 @@ function Save-ToDisk {
     Write-VolumeCache -DriveLetter C -ErrorAction SilentlyContinue
 }
 
-# Gives Windows the password it signs in with by itself as the LSA secret DefaultPassword, which only
-# SYSTEM can read, as Sysinternals' Autologon does. Winlogon takes it from there when its registry
-# key has no DefaultPassword value. Says whether Windows took it.
-function Save-LogonSecret([string]$Secret) {
-    if (-not ('Guesthouse.LogonSecret' -as [type])) {
-        Add-Type -Namespace Guesthouse -Name LogonSecret -MemberDefinition @'
-[StructLayout(LayoutKind.Sequential)]
-public struct UnicodeText { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
-[StructLayout(LayoutKind.Sequential)]
-public struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
-[DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr system, ref ObjectAttributes attributes, uint access, out IntPtr policy);
-[DllImport("advapi32.dll")] static extern uint LsaStorePrivateData(IntPtr policy, ref UnicodeText key, ref UnicodeText data);
-[DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
-const uint CreateSecret = 0x20;
-static UnicodeText Text(string value) {
-    UnicodeText text = new UnicodeText();
-    text.Buffer = Marshal.StringToHGlobalUni(value);
-    text.Length = (ushort)(value.Length * 2);
-    text.MaximumLength = (ushort)(value.Length * 2 + 2);
-    return text;
-}
-// 0 once Windows has it, or the status it said.
-public static uint Store(string name, string value) {
-    ObjectAttributes attributes = new ObjectAttributes();
-    attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
-    IntPtr policy;
-    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, CreateSecret, out policy);
-    if (status != 0) return status;
-    UnicodeText key = Text(name);
-    UnicodeText data = Text(value);
-    try { return LsaStorePrivateData(policy, ref key, ref data); }
-    finally {
-        Marshal.FreeHGlobal(key.Buffer);
-        Marshal.ZeroFreeGlobalAllocUnicode(data.Buffer);
-        LsaClose(policy);
-    }
-}
-'@
-    }
-    [Guesthouse.LogonSecret]::Store('DefaultPassword', $Secret) -eq 0
-}
-
 # Winlogon's values for signing in by itself, in $Key. The password goes to the LSA secret and never
-# to the registry, where every account may read it. A guest made before has it in the registry, and
-# it moves to the secret from there, and goes from the registry whatever Windows says. With no user,
-# the account is left as it was. Says 'kept', 'refused' or 'none'.
+# to the registry, where every account may read it: Save-LogonSecret and Move-LeftPassword are in
+# guest/windows/logon-secret.ps1, which the host puts before this script. With no user, the account
+# is left as it was. Says 'kept', 'refused' or 'none'.
 function Set-SignIn([string]$Key, [string]$User, [string]$Secret) {
-    $left = (Get-ItemProperty -LiteralPath $Key -Name DefaultPassword -ErrorAction SilentlyContinue).DefaultPassword
-    if (-not $Secret) { $Secret = $left }
-    if (-not $Secret) { return 'none' }
-    $kept = Save-LogonSecret $Secret
-    if ($null -ne $left) { Remove-ItemProperty -LiteralPath $Key -Name DefaultPassword -ErrorAction SilentlyContinue }
-    if (-not $kept) { return 'refused' }
+    $left = Move-LeftPassword $Key
+    if (-not $Secret) { return @{ moved = 'kept'; refused = 'refused'; none = 'none' }[$left] }
+    if (-not (Save-LogonSecret $Secret)) { return 'refused' }
     if ($User) {
         Set-ItemProperty -LiteralPath $Key -Name AutoAdminLogon -Value '1'
         Set-ItemProperty -LiteralPath $Key -Name DefaultUserName -Value $User

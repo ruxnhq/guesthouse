@@ -367,6 +367,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.end_the_last_start();
         self.display_driver_seen = false;
         self.context_processes.clear();
+        self.devices.clear();
         self.backend.all_processes_gone();
     }
 

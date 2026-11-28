@@ -130,6 +130,8 @@ pub struct AmdBackend {
     next_id: u64,
     memory: HashMap<MemoryId, Bo>,
     spaces: HashMap<SpaceId, Space>,
+    /// The opens of spaces that have gone while a run of theirs was still on the card.
+    closing_vms: Vec<SpaceVm>,
     /// CPU mappings of buffers made on the card, kept while the buffer lives, for the screen copy.
     cpu_views: HashMap<GemHandle, Mapping>,
     /// The DMA engine's commands for copies of tiled surfaces, made at the first.
@@ -268,6 +270,7 @@ impl AmdBackend {
             next_id: 1,
             memory: HashMap::new(),
             spaces: HashMap::new(),
+            closing_vms: Vec::new(),
             cpu_views: HashMap::new(),
             copy_ib: None,
             copy_on_card: None,
@@ -1531,8 +1534,13 @@ impl Backend for AmdBackend {
     }
 
     fn destroy_address_space(&mut self, space: SpaceId) {
-        // Closing the space's open takes its VM, and all that was mapped in it, with it.
-        self.spaces.remove(&space);
+        // Closing the space's open takes its VM, and all that was mapped in it, with it. While a run
+        // of it is still on the card the open is kept, so that run keeps counting.
+        if let Some(mut gone) = self.spaces.remove(&space)
+            && gone.vm.oldest_on_card().is_some()
+        {
+            self.closing_vms.push(gone.vm);
+        }
         self.prepared.retain(|_, run| run.space != space);
         self.prepared_video.retain(|_, run| run.space != space);
         self.video_starts.space_gone(space);
@@ -1842,6 +1850,25 @@ impl Backend for AmdBackend {
                 Err(BackendError::new(format!("engine family {}: {error}", run.ip_type)))
             }
         }
+    }
+
+    fn work_sent(&self) -> u64 {
+        space_vm::runs_sent()
+    }
+
+    /// From each space's sync objects, which only the kernel signals. A space that has gone took
+    /// its runs with it: the core closes one only once the runs sent before have ended.
+    fn work_ended(&mut self) -> u64 {
+        let sent = space_vm::runs_sent();
+        let mut oldest = self.spaces.values_mut().filter_map(|space| space.vm.oldest_on_card()).min();
+        self.closing_vms.retain_mut(|vm| match vm.oldest_on_card() {
+            Some(number) => {
+                oldest = Some(oldest.map_or(number, |oldest| oldest.min(number)));
+                true
+            }
+            None => false,
+        });
+        oldest.map_or(sent, |number| number - 1)
     }
 
     fn close_queue(&mut self, queue: u32) {

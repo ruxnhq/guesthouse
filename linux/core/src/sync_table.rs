@@ -148,6 +148,13 @@ impl SyncTable {
         objects.find(monitored).map(|object| object.fence)
     }
 
+    /// Whether a handle names an object here, or a process that holds one.
+    pub fn mentions(&self, handle: u32) -> bool {
+        self.by_handle.contains_key(&handle)
+            || self.holders.contains_key(&handle)
+            || self.holders.values().any(|&process| process == handle)
+    }
+
     /// Removes every handle a process held, and returns the objects that were left with none.
     pub fn close_held_by(&mut self, process: u32) -> Vec<SyncObject> {
         let held: Vec<u32> =

@@ -504,7 +504,8 @@ impl State {
         if self.lab.as_ref().is_some_and(|lab| lab.runs_nothing) {
             return self.finish_unrun(run);
         }
-        let Some(queue) = self.queues.get(&run.queue) else { return };
+        // xe ends the jobs of a queue that was destroyed, unrun, and signals their timelines.
+        let Some(queue) = self.queues.get(&run.queue) else { return self.finish_signals(&run.syncs) };
         let queue_vm = queue.vm;
         // The register is the queue's context's, so it reads as its queue was made.
         let bit = self.registers.values.entry(COMMON_SLICE_CHICKEN3).or_default();

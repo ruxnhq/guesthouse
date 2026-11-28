@@ -58,6 +58,9 @@ pub struct CardWork {
     spaces: HashMap<SpaceId, spaces::Space>,
     queues: HashMap<u32, queues::Queue>,
     prepared: HashMap<u64, queues::Prepared>,
+    /// Runs sent to the card so far, and queues that went while theirs may still run.
+    runs_sent: u64,
+    closing: Vec<queues::Closing>,
     /// A context's marks whose run will never end, as xe refused it or its queue went, to be
     /// written at the next chance: each with its space and queue, and why.
     left_marks: Vec<(SpaceId, u32, marks::Marks, &'static str)>,
@@ -108,6 +111,8 @@ impl CardWork {
             spaces: HashMap::new(),
             queues: HashMap::new(),
             prepared: HashMap::new(),
+            runs_sent: 0,
+            closing: Vec::new(),
             left_marks: Vec::new(),
             last_look: None,
             blits: blits::Blits::new(card.main_gt().map_or(0, |gt| gt.ip.major)),

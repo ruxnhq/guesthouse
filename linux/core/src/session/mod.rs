@@ -10,6 +10,7 @@ mod first_lock;
 mod frame_ring;
 mod handle_use;
 mod indirect;
+mod limits;
 mod mapping;
 mod reserving;
 mod sync;
@@ -559,7 +560,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             ) => answer_status(Status::SUCCESS, out),
 
             Some(C::Unknown(number)) => {
-                if self.unknown_commands.insert(number) {
+                if self.unknown_commands.len() < limits::MOST_UNKNOWN_COMMANDS_SAID
+                    && self.unknown_commands.insert(number)
+                {
                     log::warn!("the guest sent command {number}, which isn't supported");
                 }
                 // What it carried is the only clue to what the guest wanted, or was reporting.
@@ -575,6 +578,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(crate) fn space_for(&mut self, process: u32) -> Result<SpaceId, BackendError> {
         if let Some(&space) = self.spaces.get(&process) {
             return Ok(space);
+        }
+        if self.spaces.len() >= limits::MOST_SPACES {
+            return Err(BackendError::new("this guest has as many address spaces as it may"));
         }
         let space = self.new_space()?;
         self.spaces.insert(process, space);

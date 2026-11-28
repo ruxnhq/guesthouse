@@ -160,6 +160,13 @@ impl GpuAddresses {
         Self { guest_only: ranges, ..self }
     }
 
+    /// How many addresses the guest can be given or place: the ranges this backend hands out,
+    /// and its ranges only the guest uses.
+    pub fn guest_reach(&self) -> u64 {
+        let size = |range: &GpuRange| range.end - range.start;
+        self.hand_out.iter().chain(self.guest_only).map(size).fold(0, u64::saturating_add)
+    }
+
     /// Whether the guest may map `size` bytes at `address`, an address it chose: wholly in one of
     /// the ranges, or wholly in a range only the guest uses.
     pub fn guest_may_map(&self, address: u64, size: u64) -> bool {

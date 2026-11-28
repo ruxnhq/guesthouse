@@ -148,6 +148,14 @@ impl SyncTable {
         objects.find(monitored).map(|object| object.fence)
     }
 
+    /// How many handles to objects with a fence page a process holds.
+    pub fn fences_held_by(&self, process: u32) -> usize {
+        let held = self.holders.iter().filter(|(_, owner)| **owner == process);
+        let index = |handle: &u32| self.by_handle.get(handle).copied();
+        let objects = held.filter_map(|(handle, _)| index(handle).and_then(|at| self.objects[at].as_ref()));
+        objects.filter(|object| object.fence != 0).count()
+    }
+
     /// Whether a handle names an object here, or a process that holds one.
     pub fn mentions(&self, handle: u32) -> bool {
         self.by_handle.contains_key(&handle)

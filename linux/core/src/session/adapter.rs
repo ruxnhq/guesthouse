@@ -174,8 +174,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         if request.bytes == 0 {
             self.reservations.remove(&(process, request.group));
-        } else {
+        } else if self.reservations.len() < super::limits::MOST_KEYED
+            || self.reservations.contains_key(&(process, request.group))
+        {
             self.reservations.insert((process, request.group), request.bytes);
+        } else {
+            answer_status(Status::NO_MEMORY, out);
+            return Ok(());
         }
         answer_status(Status::SUCCESS, out);
         Ok(())

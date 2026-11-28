@@ -41,9 +41,17 @@ pub const KEPT_SUFFIX: &str = ".1";
 
 /// The machine a note names and when it was written, which is when that run started.
 pub fn noted_run(folder: &Path, note: &str) -> Option<(String, SystemTime)> {
-    let path = folder.join(note);
+    let path = crate::paths::notes_beside(folder).join(note);
     let id = fs::read_to_string(&path).ok()?.trim().to_owned();
     (!id.is_empty()).then_some(id).zip(modified(&path))
+}
+
+/// Writes a machine note beside `folder` as a run leaves it, for a test.
+#[cfg(test)]
+pub fn plant_note(folder: &Path, note: &str, text: &str) {
+    let notes = crate::paths::notes_beside(folder);
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(notes.join(note), text).unwrap();
 }
 
 /// When this machine's current run in the folder started, if the folder's run is this machine's.

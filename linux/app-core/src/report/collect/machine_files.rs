@@ -61,7 +61,9 @@ pub fn latest_machine(context: &Context) -> Option<Machine> {
 /// Which machine a run folder's logs are from: its note, or else, for a folder from before there
 /// was a note, the machine its last task was for.
 pub fn machine_of_folder(context: &Context, folder: &Path, slot: Slot) -> Option<String> {
-    let noted = fs::read_to_string(folder.join(MACHINE_NOTE)).ok().map(|text| text.trim().to_owned());
+    let noted = fs::read_to_string(crate::paths::notes_beside(folder).join(MACHINE_NOTE))
+        .ok()
+        .map(|text| text.trim().to_owned());
     noted.filter(|id| !id.is_empty()).or_else(|| {
         let task = read_task(context, Some(slot));
         (!task.machine.is_empty()).then_some(task.machine)

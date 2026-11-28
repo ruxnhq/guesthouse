@@ -5,8 +5,9 @@
 # Publishing starts release-files.yml, which puts the files on files.ruxn.com with the latest file
 # last, and from then on every app offers the new version. Step 4, the site, stays a pull request.
 #
-# Nothing in the installer is signed, and nothing in its build needs a card, so a runner can build
-# it. From the Actions tab it runs for a tag that's pushed already; with "release" off it only builds.
+# The installer isn't signed; guesthouse-windows-latest.json, which names it and its SHA-256, is signed
+# with the release key from the GUESTHOUSE_RELEASE_KEY secret, which the app checks. Nothing in
+# the build needs a card, so a runner can build it. From the Actions tab it runs for a tag that's pushed already; with "release" off it only builds.
 name: Release build, Windows host
 
 on:
@@ -62,6 +63,8 @@ jobs:
       # It stops if the installer of this version is on files.ruxn.com already.
       - name: Build the app and the installer
         shell: pwsh
+        env:
+          GUESTHOUSE_RELEASE_KEY: ${{ secrets.GUESTHOUSE_RELEASE_KEY }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-release.ps1 -BuildOnly
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -109,6 +112,7 @@ jobs:
           [ "$(jq -r .version guesthouse-windows-latest.json)" = "$VERSION" ]
           [ "$(jq -r .sha256 guesthouse-windows-latest.json)" = "$SAID" ]
           [ "$(jq -r .installer guesthouse-windows-latest.json)" = "https://files.ruxn.com/p/guesthouse/$SETUP" ]
+          jq -r '.signature // empty' guesthouse-windows-latest.json | grep -Eqx '[0-9a-f]{128}'
 
       - name: Draft the notes
         run: |

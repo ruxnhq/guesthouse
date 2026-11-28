@@ -17,8 +17,14 @@
 //! ```json
 //! {"version": "0.3.36", "files": [
 //!   {"name": "guesthouse-windows-driver-0.3.36-ruxnwddm.sys", "as": "ruxnwddm.sys", "sha256": "..."}
-//! ]}
+//! ], "signature": "..."}
 //! ```
+//!
+//! `signature` is the release key's signature of the manifest's fields
+//! (`guesthouse_update_check::driver_manifest`), which the package's workflow adds as it publishes it.
+//! A package is fetched only when one of the release keys built into the app signed its manifest, and
+//! every file is checked against the SHA-256 the signature covers, so what goes to a guest is what
+//! the release key vouched for, wherever it was served from.
 //!
 //! The Windows driver's files are at `files.ruxn.com/p/guesthouse-windows-driver/<name>`, the owner's
 //! file site, which serves a project's published files flat at `/p/<project>/<file>` (the layout the
@@ -122,18 +128,41 @@ pub struct Entry {
 
 impl Manifest {
     /// Reads a manifest and checks it names every file the package needs, once each, with
-    /// names that stay in their folder, checksums that are SHA-256 and no private key.
+    /// names that stay in their folder, checksums that are SHA-256 and no private key, under a
+    /// version that is three numbers, as the version is the name of the folder it is kept in.
     pub fn parse(text: &str) -> Result<Manifest, String> {
         Manifest::parse_for(&WINDOWS, text)
+    }
+
+    /// The same, for a manifest fetched from the file site: one of `keys` (public halves, in hex) has to
+    /// have signed it, for this package. A package kept after it was fetched is read with `parse_for`, as
+    /// it was checked when it came.
+    pub fn parse_signed(package: &Package, text: &str, keys: &[&str]) -> Result<Manifest, String> {
+        let manifest = Manifest::parse_for(package, text)?;
+        if !guesthouse_update_check::driver_manifest::verify(text, package.manifest, keys) {
+            return Err(
+                "The driver's manifest is not signed by a Guesthouse release key, so its files are not used."
+                    .to_owned(),
+            );
+        }
+        Ok(manifest)
     }
 
     /// The same for any guest's package.
     pub fn parse_for(package: &Package, text: &str) -> Result<Manifest, String> {
         let manifest: Manifest =
             serde_json::from_str(text).map_err(|e| format!("The driver's manifest is not readable: {e}"))?;
+        if !guesthouse_update_check::is_version(&manifest.version)
+            || manifest.version.trim() != manifest.version
+        {
+            return Err(format!(
+                "The driver's manifest says its version is {:?}, which is not three numbers.",
+                manifest.version
+            ));
+        }
         for entry in &manifest.files {
             for name in [&entry.name, &entry.package_name] {
-                if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+                if !is_file_name(name) {
                     return Err(format!("The driver's manifest names {name:?}, which is not a file name."));
                 }
             }
@@ -152,6 +181,16 @@ impl Manifest {
         refuse_private_keys(manifest.files.iter().map(|e| e.package_name.as_str()))?;
         Ok(manifest)
     }
+}
+
+/// Whether `name` is a plain file name, kept in its folder and in the file site's address as it is:
+/// letters, digits and `.`, `_`, `-`, `+`, `~`, not starting with a dot, and not too long for a Mac's
+/// disk.
+fn is_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+~".contains(&b))
 }
 
 fn refuse_private_keys<'a>(names: impl Iterator<Item = &'a str>) -> Result<(), String> {
@@ -184,7 +223,8 @@ pub fn fetch_package_of(
     downloads: &Path,
 ) -> Result<PathBuf, FetchError> {
     let text = transport.text(&format!("{}{}", package.base, package.manifest))?;
-    let manifest = Manifest::parse_for(package, &text).map_err(FetchError::new)?;
+    let manifest =
+        Manifest::parse_signed(package, &text, &transport.release_keys()).map_err(FetchError::new)?;
     let folder = folder_of(package, downloads, &manifest.version);
     let parts = folder.join("parts");
     for entry in &manifest.files {

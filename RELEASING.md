@@ -120,7 +120,9 @@ Once a build in `testing` has run with a GPU-PV VM on a real card, run the Proxm
 
 ## The Windows host
 
-CI builds this from the tag too. Nothing in the installer is signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+CI builds this from the tag too. The installer isn't signed, and nothing in its build needs a card, so a GitHub Windows runner can build it. The by-hand way is the fallback.
+
+`guesthouse-windows-latest.json`, which names the installer and its SHA-256, is signed with the release key (see [The release key](#the-release-key)). The app offers only a file a release key signed, then checks the installer against that SHA-256 before it runs it. `scripts/windows-release.ps1` signs the file and reads it back as the app does, and stops if the app wouldn't take it.
 
 ### From the tag, in CI
 
@@ -141,7 +143,7 @@ CI builds this from the tag too. Nothing in the installer is signed, and nothing
 
 ### By hand
 
-This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in. `scripts/windows-release.ps1` does steps 2 to 4.
+This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the cf CLI on PATH and each signed in, and the release key's private half in `GUESTHOUSE_RELEASE_KEY` (`-DryRun` goes on without it, and leaves the latest file unsigned). `scripts/windows-release.ps1` does steps 2 to 4.
 
 1. **Set the version.** Change `windows/version.txt` to the new version (`scripts/release-bump.sh windows VERSION` does it), three numbers and no `v`, and merge that into `main` with a pull request, `Windows VERSION`. It takes nothing else, and the checks have to pass. The service says this version to the app, the installer puts it in Settings > Apps, and the app compares it with the newest to offer the update.
 
@@ -152,3 +154,9 @@ This is on Windows, from a clean checkout of `main`, with git, cargo, gh and the
 4. **Point the site at it.** The workflow does this for a published release, so this is the fallback. In `site/public/index.html`, set the Windows version in the line at the top, and the installer's link, name and hash link, in a pull request. Merge it, and the `Site deploy` workflow puts it up. Then open the page and see that it names the new version.
 
 If the release is wrong, publish a new version: a file on the file drop never changes once it's up. To stop apps offering a broken one meanwhile, put the previous version's `guesthouse-windows-latest.json` back.
+
+## The release key
+
+One Ed25519 key signs what the apps fetch from files.ruxn.com and then trust: the Windows host's `guesthouse-windows-latest.json`, and the guest driver packages' manifests, `guesthouse-windows-driver-latest.json` and `guesthouse-linux-driver-latest.json`, which the Mac app fetches. Its public half is in `RELEASE_KEYS` in `shared/update-check/src/signed.rs`, the list every host checks against. Its private half, in hex, is the `GUESTHOUSE_RELEASE_KEY` secret, which `release-windows.yml`, `windows-pvg.yml` and `linux-package.yml` pass to their signing steps only, and is kept in the password manager too; it is never in the repo.
+
+Make a key with `cargo run -p guesthouse-update-check --example release_key -- new-key KEY-FILE`, which writes the private half to KEY-FILE and prints the public half. A new key goes into `RELEASE_KEYS` in a release of each host before the first file it signs, and an old one comes out once no published file is signed with it. `cargo run -p guesthouse-update-check --example release_key -- sign-driver MANIFEST` signs a driver manifest by hand, as the workflows do.

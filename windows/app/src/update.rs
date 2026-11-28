@@ -8,13 +8,14 @@
 //!
 //! What the file drop's file says to this version is decided in `guesthouse_control::updates`, on
 //! the check every host shares (`guesthouse-update-check`): newer, the newest, or can't tell. Only
-//! an installer at the file drop's own address, as that check has it, is ever downloaded.
+//! a file a release key built into the app signed is taken, and only an installer at the file drop's
+//! own address, as that check has it, is ever downloaded.
 //!
 //! The rules it keeps:
 //!
 //! - It looks by itself, and downloads by itself if the settings say to, but never installs by
 //!   itself: only the person's Install does.
-//! - A download is checked against the SHA-256 the same latest file gave before it's ready, and a
+//! - A download is checked against the SHA-256 the signed latest file gave before it's ready, and a
 //!   file that doesn't match is deleted. Nothing kept from an earlier run of the app is ever
 //!   trusted: every file is downloaded and checked again in this one.
 //! - Each download, check and install is numbered, and an answer to one that's been overtaken (as
@@ -235,6 +236,8 @@ pub struct Updates {
     pub download_by_itself: bool,
     /// This app's version.
     current: String,
+    /// The public halves of the keys a latest file has to be signed by: the release keys.
+    keys: Vec<String>,
 }
 
 impl Updates {
@@ -246,7 +249,16 @@ impl Updates {
             put_aside: false,
             download_by_itself: false,
             current: current.to_owned(),
+            keys: updates::RELEASE_KEYS.iter().map(|key| (*key).to_owned()).collect(),
         }
+    }
+
+    /// The same, taking files signed by the stand-in key [`release_file`] signs with instead of a
+    /// release's, for the tests and the preview.
+    #[cfg(any(test, feature = "preview"))]
+    pub fn with_stand_in_key(mut self) -> Updates {
+        self.keys = vec![stand_in_key().1.clone()];
+        self
     }
 
     /// Takes in what happened at `now`, in seconds since 1970, and says what's to be done next.
@@ -387,7 +399,8 @@ impl Updates {
             Fetched::Text(text) => text,
             Fetched::Unreached => return Phase::CantTell { why: CantTell::Unreached, looked: now },
         };
-        match updates::parse(&text) {
+        let keys: Vec<&str> = self.keys.iter().map(String::as_str).collect();
+        match updates::parse(&text, &keys) {
             Some(latest) if updates::newer(&latest.version, &self.current) => {
                 Phase::Newer { latest, looked: now }
             }
@@ -513,7 +526,9 @@ impl Fake {
     /// would when all is well.
     pub fn finding(fetched: Fetched) -> Fake {
         let hash = match &fetched {
-            Fetched::Text(text) => updates::parse(text).map(|latest| latest.sha256).ok_or_else(String::new),
+            Fetched::Text(text) => {
+                updates::parse(text, &[&stand_in_key().1]).map(|latest| latest.sha256).ok_or_else(String::new)
+            }
             Fetched::Unreached => Err(String::new()),
         };
         Fake { fetched, downloaded: Ok(()), size: 68 * 1024 * 1024, hash, launched: Ok(INSTALLER_CANCELLED) }
@@ -555,12 +570,24 @@ impl Updater for Fake {
     fn discard(&self) {}
 }
 
-/// A latest file as a release writes it, for `version`, for the tests and the preview.
+#[cfg(any(test, feature = "preview"))]
+pub use updates::signed::stand_in_key;
+
+/// A latest file as a release writes it, for `version`, signed with the stand-in key, for the tests
+/// and the preview.
 #[cfg(any(test, feature = "preview"))]
 pub fn release_file(version: &str) -> String {
+    let mut latest = Latest {
+        version: version.to_owned(),
+        installer: format!("https://files.ruxn.com/p/guesthouse/guesthouse-setup-{version}.exe"),
+        sha256: "ab".repeat(32),
+        notes: format!("https://github.com/ruxnlabs/guesthouse/releases/tag/windows-v{version}"),
+        signature: String::new(),
+    };
+    latest.signature = latest.sign(&stand_in_key().0).expect("a signature for the tests");
     format!(
-        r#"{{"version": "{version}", "installer": "https://files.ruxn.com/p/guesthouse/guesthouse-setup-{version}.exe", "sha256": "{}", "notes": "https://github.com/ruxnlabs/guesthouse/releases/tag/windows-v{version}"}}"#,
-        "ab".repeat(32)
+        r#"{{"version": "{}", "installer": "{}", "sha256": "{}", "notes": "{}", "signature": "{}"}}"#,
+        latest.version, latest.installer, latest.sha256, latest.notes, latest.signature
     )
 }
 

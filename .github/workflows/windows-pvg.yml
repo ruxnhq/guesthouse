@@ -15,10 +15,12 @@
 #            has no certificate, as in a fork, it says so and signs nothing, and nothing after it runs.
 #   package  on Linux, no secret: lays the signed files out as the Mac app's installer expects
 #            (release/package.sh).
-#   publish  on Linux, no secret: puts the package on files.ruxn.com, in the project
-#            guesthouse-windows-driver, as mac-nightly.yml puts the nightly there. Each file has the
-#            version in its name and is written once; only guesthouse-windows-driver-latest.json,
-#            which the app reads first, is replaced, last. A version that is up already is not
+#   publish  on Linux: signs guesthouse-windows-driver-latest.json with the release key (the
+#            GUESTHOUSE_RELEASE_KEY secret, given to that one step; RELEASING.md, "The release key"),
+#            without which the Mac app takes no package, then puts the package on files.ruxn.com, in
+#            the project guesthouse-windows-driver, as mac-nightly.yml puts the nightly there. Each
+#            file has the version in its name and is written once; only
+#            guesthouse-windows-driver-latest.json, which the app reads first, is replaced, last. A version that is up already is not
 #            published again: change DriverVer in the INF for a new package.
 name: Windows graphics driver (Mac host)
 
@@ -194,8 +196,9 @@ jobs:
     concurrency:
       group: windows-pvg-publish
       cancel-in-progress: false
-    # No secret: scripts/files-publish.sh sends this job's GitHub OIDC token, which the file site takes
-    # only from this workflow, on main, from a push or a run by hand, for this one project.
+    # The file site needs no secret: scripts/files-publish.sh sends this job's GitHub OIDC token, which
+    # it takes only from this workflow, on main, from a push or a run by hand, for this one project.
+    # The release key is given to the signing step alone.
     permissions:
       contents: read
       id-token: write
@@ -223,6 +226,18 @@ jobs:
             sha256sum -c "$name.sha256"
             [ "$(sha256sum "$name" | cut -d ' ' -f 1)" = "$(jq -r --arg name "$name" '.files[] | select(.name == $name) | .sha256' "$manifest")" ]
           done
+      - name: Build the manifest signer
+        run: cargo build --locked --release -p guesthouse-update-check --example release_key
+      - name: Sign the manifest with the release key
+        env:
+          GUESTHOUSE_RELEASE_KEY: ${{ secrets.GUESTHOUSE_RELEASE_KEY }}
+        run: |
+          set -eu
+          if [ -z "$GUESTHOUSE_RELEASE_KEY" ]; then
+            echo "::error::GUESTHOUSE_RELEASE_KEY holds no key, and the Mac app takes no manifest without the release key's signature."
+            exit 1
+          fi
+          target/release/examples/release_key sign-driver package/guesthouse-windows-driver-latest.json
       - name: Publish the files once, then the manifest
         working-directory: package
         run: |

@@ -10,6 +10,7 @@ license.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 guesthouse-backend.workspace = true
 guesthouse-messages.workspace = true
+guesthouse-sensors.workspace = true
 # The facade, as in the core.
 log = "0.4"
 # ioctl, which the standard library does not offer. Same as the other backends.

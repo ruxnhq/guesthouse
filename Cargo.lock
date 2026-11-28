@@ -1001,6 +1001,7 @@ dependencies = [
  "guesthouse-backend-standin",
  "guesthouse-core",
  "guesthouse-messages",
+ "guesthouse-sensors",
  "libc",
  "log",
 ]

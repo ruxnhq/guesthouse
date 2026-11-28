@@ -110,10 +110,11 @@ impl Needs {
         driver_folder: &Path,
         render_node: PathBuf,
         memory_device: Option<PathBuf>,
+        snapshot: Option<PathBuf>,
     ) -> Self {
         Self {
             run_folder: slot.run_folder(project),
-            shared_files: Vec::new(),
+            shared_files: snapshot.into_iter().collect(),
             devices: std::iter::once(render_node).chain(memory_device).collect(),
             driver_folder: Some(driver_folder.to_owned()),
             read_files: Vec::new(),
@@ -274,6 +275,7 @@ mod tests {
                 Path::new("/store/driver"),
                 node,
                 memory_device.map(PathBuf::from),
+                None,
             );
             let granted = needs.plan().paths.into_iter().filter(|(grant, _)| *grant == Grant::Device);
             granted.map(|(_, path)| path.display().to_string()).collect::<Vec<_>>()

@@ -115,6 +115,7 @@ fn serve_amd(
         &setup.driver_folder,
         node,
         memory_device,
+        None,
     );
     let run_folder = slot.run_folder(&project);
     serve_on_render_node::<AmdBackend>(slot, project, &setup, needs, |backend| {
@@ -164,7 +165,15 @@ fn serve_intel(
             )?;
             log::info!("Intel card at {}", node.device_file.display());
             // Intel's backend makes no dma-buf of the guest's memory, so it is given no device for one.
-            Needs::of_render_node(slot, &project, &setup.driver_folder, node.device_file, None)
+            let snapshot = guesthouse_sensors::snapshot_path_for(address.as_deref());
+            Needs::of_render_node(
+                slot,
+                &project,
+                &setup.driver_folder,
+                node.device_file,
+                None,
+                Some(snapshot),
+            )
         }
     };
     use guesthouse_backend_intel::stage::{DESKTOP_VARIABLE, Desktop};

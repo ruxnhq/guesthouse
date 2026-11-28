@@ -38,7 +38,11 @@ Debian 13, and Ubuntu 24.04 or newer:
 
 ```sh
 sudo install -d /etc/apt/keyrings
-curl -fsSL https://pkg.ruxn.com/ruxn-pkg.gpg | sudo tee /etc/apt/keyrings/ruxn-pkg.gpg >/dev/null
+key=$(mktemp)
+curl -fsSL https://pkg.ruxn.com/ruxn-pkg.gpg -o "$key"
+gpg --show-keys --with-colons "$key" | grep -q '^fpr:::::::::80BE19F31995110352B875E22425E7C41C3ACA45:$' &&
+  sudo install -m 644 "$key" /etc/apt/keyrings/ruxn-pkg.gpg
+rm -f "$key"
 printf '%s\n' 'Types: deb' 'URIs: https://pkg.ruxn.com/guesthouse/apt' 'Suites: stable' 'Components: main' \
   'Signed-By: /etc/apt/keyrings/ruxn-pkg.gpg' | sudo tee /etc/apt/sources.list.d/guesthouse.sources >/dev/null
 sudo apt update && sudo apt install guesthouse
@@ -49,11 +53,18 @@ Keep the list's name, `guesthouse.sources`, as the app's update reads that list 
 Fedora:
 
 ```sh
-curl -fsSL https://pkg.ruxn.com/guesthouse/rpm/guesthouse.repo | sudo tee /etc/yum.repos.d/guesthouse.repo >/dev/null
+key=$(mktemp)
+curl -fsSL https://pkg.ruxn.com/ruxn-pkg.asc -o "$key"
+gpg --show-keys --with-colons "$key" | grep -q '^fpr:::::::::80BE19F31995110352B875E22425E7C41C3ACA45:$' &&
+  sudo install -D -m 644 "$key" /etc/pki/rpm-gpg/RPM-GPG-KEY-ruxn
+rm -f "$key"
+printf '%s\n' '[guesthouse]' 'name=Guesthouse' 'baseurl=https://pkg.ruxn.com/guesthouse/rpm' 'enabled=1' \
+  'gpgcheck=1' 'repo_gpgcheck=1' 'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-ruxn' |
+  sudo tee /etc/yum.repos.d/guesthouse.repo >/dev/null
 sudo dnf install guesthouse
 ```
 
-dnf asks once whether to trust the key, and shows its fingerprint.
+The key is the one in this repo, checked against the fingerprint above before it goes in. dnf asks once to import it, and shows the same fingerprint.
 
 Arch:
 

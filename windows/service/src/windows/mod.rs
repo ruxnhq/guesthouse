@@ -75,9 +75,8 @@ impl Work for HostWork {
         }
     }
 
-    fn console_access(&self) -> Vec<String> {
-        let user = pipe::console_user().or_else(security::own_user);
-        user.into_iter().chain([security::ADMINISTRATORS.to_owned()]).collect()
+    fn console_access(&self, owner: Option<&str>) -> Vec<String> {
+        owner.map(str::to_owned).into_iter().chain([security::ADMINISTRATORS.to_owned()]).collect()
     }
 
     fn grow(&self, disk: &Path, size_gb: u64) -> Result<(), String> {

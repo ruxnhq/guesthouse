@@ -29,6 +29,9 @@ struct Pretend {
     source: Mutex<Option<std::net::Ipv4Addr>>,
 }
 
+/// The user who asks, in these tests, but where one says otherwise.
+const USER: &str = "S-1-5-21-1-2-3-1001";
+
 /// This PC's address on its network, in these tests.
 const THIS_PC: std::net::Ipv4Addr = std::net::Ipv4Addr::new(192, 168, 1, 20);
 
@@ -184,8 +187,8 @@ impl Work for Pretend {
         self.ended.lock().unwrap().push(id.to_owned());
     }
 
-    fn console_access(&self) -> Vec<String> {
-        vec!["S-1-5-21-1-2-3-1001".into()]
+    fn console_access(&self, owner: Option<&str>) -> Vec<String> {
+        owner.map(str::to_owned).into_iter().collect()
     }
 
     fn grow(&self, _: &Path, size_gb: u64) -> Result<(), String> {
@@ -328,6 +331,10 @@ impl Connection for Window {
             return Err(format!("{} is a link to another folder.", path.display()));
         }
         self.may_read(path).map(|()| Box::new(()) as Held)
+    }
+
+    fn asker(&self) -> Asker {
+        Asker { user: USER.into(), administrator: false }
     }
 }
 
@@ -1211,7 +1218,9 @@ fn a_file_that_is_a_link_is_not_followed() {
 }
 
 mod hyper_v;
+mod nested;
 mod network;
+mod owners;
 mod pairing;
 mod places;
 mod remote_view;
@@ -1219,22 +1228,6 @@ mod remote_view_ports;
 mod snapshot_labels;
 mod start_refusals;
 use network::FakeNet;
-#[test]
-fn nested_virtualization_is_off_until_asked_for_and_reaches_the_next_boot() {
-    let setup = setup("nested", Pretend::default());
-    let service = &setup.service;
-    ask(service, Request::Create { machine: new_machine(&setup, "win") });
-    assert!(!status(service)[0].nested_virtualization);
-    let on = MachineSettings { nested_virtualization: true, ..hardware(8192, Card::Default) };
-    assert_eq!(change(service, on), [Answer::Ok]);
-    assert!(status(service)[0].nested_virtualization);
-    assert!(service.machines().store.load()[0].1.nested_virtualization, "kept on disk");
-    assert_eq!(ask(service, Request::Start { name: "win".into() }), [Answer::Ok]);
-    wait_for(service, "win", State::Running);
-    assert!(service.work.booted.lock().unwrap()[0].nested_virtualization);
-    ask(service, Request::Stop { name: "win".into() });
-    wait_for(service, "win", State::Off);
-}
 
 /// A setup whose machines are all Ubuntu guests, with ports in `busy` taken by other programs.
 fn linux_setup(test: &str, busy: &[u16]) -> Setup {

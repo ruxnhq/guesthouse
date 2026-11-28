@@ -65,8 +65,8 @@ pub trait Work: Send + Sync + 'static {
     fn cards(&self) -> Vec<CardInfo>;
     /// Stops at once the machine HCS knows by `id`, if there is one.
     fn end(&self, id: &str);
-    /// Who may open a machine's console: the user signed in at the console, and administrators.
-    fn console_access(&self) -> Vec<String>;
+    /// Who may open a machine's console: its owner, if it has one, and administrators.
+    fn console_access(&self, owner: Option<&str>) -> Vec<String>;
     /// Lets a stopped machine's disk grow to `size_gb`, and never shrinks it.
     fn grow(&self, disk: &Path, size_gb: u64) -> Result<(), String>;
     /// The largest the disk may grow to now, in GB, if it can be read.
@@ -125,11 +125,14 @@ pub trait Connection {
     /// must be the folder itself, by its own path, not a link and not reached through one, on one
     /// of this PC's fixed drives. What comes back holds it open while the machine's folder is made.
     fn may_place(&mut self, path: &Path) -> Result<Held, String>;
+    /// Who is asking.
+    fn asker(&self) -> Asker;
 }
 
 /// The folder a check holds open, for as long as it's kept.
 pub use crate::store::Held;
 
+pub use owners::Asker;
 pub use remote_view::{Opened, Unannounced, ViewSettings, open_relay};
 
 /// HCS's ID for a machine, which also names its pipes. `boot` stops any machine with its ID that's
@@ -227,9 +230,16 @@ impl<W: Work> Service<W> {
 
     /// Answers `request` on `connection`. A write that fails means the window has gone, and the
     /// work it asked for goes on without it.
+    /// A machine that isn't the asker's is answered as one that isn't there.
     pub fn answer(self: &Arc<Self>, request: Request, connection: &mut dyn Connection) {
+        let asker = connection.asker();
+        self.take_unowned(&asker);
+        if let Some(asked) = owners::named(&request).filter(|asked| !self.theirs(asked, &asker)) {
+            let _ = connection.send(&no_machine(asked));
+            return;
+        }
         let answer = match request {
-            Request::Status => self.status(),
+            Request::Status => self.status(&asker),
             Request::Create { machine } => return self.create(machine, connection),
             Request::Start { name } => self.start(&name, connection),
             Request::Stop { name } => self.stop(&name),
@@ -329,7 +339,7 @@ impl<W: Work> Service<W> {
         *self.bridging.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
-    fn status(&self) -> Answer {
+    fn status(&self, asker: &Asker) -> Answer {
         // Each place is held again as it stands: one that's gone is a problem, and one that's back
         // isn't.
         let names: Vec<String> = self.machines.lock().keys().cloned().collect();
@@ -343,6 +353,7 @@ impl<W: Work> Service<W> {
             .machines
             .lock()
             .iter()
+            .filter(|(_, entry)| asker.may_use(entry))
             .map(|(name, entry)| {
                 let record = Record::load(&self.machines.store.disk(name)).unwrap_or_default();
                 Machine {
@@ -475,6 +486,7 @@ impl<W: Work> Service<W> {
         {
             let mut making = self.making.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(other) = &*making {
+                let other = if self.visible(other, &connection.asker()) { other } else { "Another machine" };
                 let reason = format!("{other} is being made. One machine is made at a time, so wait for it.");
                 let _ = connection.send(&Answer::Refused { reason });
                 return;
@@ -512,6 +524,7 @@ impl<W: Work> Service<W> {
             nested_virtualization: false,
             ssh_port: None,
             size_gb: Some(machine.size_gb),
+            owner: Some(connection.asker().user),
         };
         self.machines.lock().insert(name.clone(), Entry::new(settings, State::Installing));
         let (_, events) = self.machines.watch(&name).expect("the machine was just added");
@@ -711,7 +724,7 @@ impl<W: Work> Service<W> {
             memory_mb: entry_settings.memory_mb,
             processors: entry_settings.processors,
             gpu: gpu_choice(&entry_settings.card),
-            console_access: self.work.console_access(),
+            console_access: self.work.console_access(entry_settings.owner.as_deref()),
             nvapi_wrapper: entry_settings.nvapi_wrapper,
             tpm: entry_settings.tpm,
             nested_virtualization: entry_settings.nested_virtualization,
@@ -915,7 +928,9 @@ impl<W: Work> Service<W> {
         let saved = {
             let mut entries = self.machines.lock();
             // This PC's ports are the machines' together: one is one machine's forward only.
+            let asker = connection.asker();
             for (other, entry) in entries.iter().filter(|(other, _)| **other != name) {
+                let other = if asker.may_use(entry) { other.as_str() } else { "another machine" };
                 if let Some(taken) = wanted.forwards.iter().find(|forward| {
                     entry.settings.forwards.iter().any(|kept| kept.host_port == forward.host_port)
                 }) {
@@ -1375,7 +1390,7 @@ impl<W: Work> Service<W> {
             None => None,
         };
         let mut files = self.work.report_parts();
-        files.push(("machines.txt".to_owned(), Ok(self.machines_text())));
+        files.push(("machines.txt".to_owned(), Ok(self.machines_text(&connection.asker()))));
         if let Some(name) = &named {
             for (shown, path) in report_machine_files(&self.machines.store, name) {
                 files.push((shown, tail_file(&path, REPORT_TAIL)));
@@ -1394,8 +1409,8 @@ impl<W: Work> Service<W> {
     }
 
     /// Each machine on a line: its name, system, state, and whether its first boot has set it up.
-    fn machines_text(&self) -> String {
-        let Answer::Status { machines, .. } = self.status() else { return String::new() };
+    fn machines_text(&self, asker: &Asker) -> String {
+        let Answer::Status { machines, .. } = self.status(asker) else { return String::new() };
         machines
             .iter()
             .map(|machine| {
@@ -1625,6 +1640,7 @@ mod size_words_tests;
 mod disk_tree;
 mod forwards;
 mod hyper_v;
+mod owners;
 mod pairing;
 mod remote_view;
 

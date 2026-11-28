@@ -14,7 +14,7 @@
 
 use super::log;
 use super::security::{Descriptor, SYSTEM, is_administrator, last_error, own_user, token_user, wide};
-use crate::requests::{Connection, Held, Service, Work};
+use crate::requests::{Asker, Connection, Held, Service, Work};
 use guesthouse_control::protocol::{NOT_A_REQUEST, request_from};
 use guesthouse_control::{Answer, REQUEST_LIMIT, read_line, write_line};
 use serde_json::Value;
@@ -297,23 +297,21 @@ fn line_within(pipe: &File, within: Duration) -> bool {
 /// Reads one request and answers it, if whoever asked may ask.
 fn answer<W: Work>(service: &Arc<Service<W>>, pipe: File) {
     let line = read_line::<Value>(&mut BufReader::new(&pipe));
-    let mut connection = Pipe { file: &pipe };
+    let refuse = |reason: String| {
+        let _ = write_line(&mut &pipe, &Answer::Refused { reason });
+    };
     match line.map(|line| line.map(request_from)) {
         Ok(Some(Ok(request))) => match allowed(&pipe) {
-            Ok(()) => service.answer(request, &mut connection),
+            Ok(asker) => service.answer(request, &mut Pipe { file: &pipe, asker }),
             Err(reason) => {
                 log(&format!("refused: {reason}"));
-                let _ = connection.send(&Answer::Refused { reason });
+                refuse(reason);
             }
         },
         // An app of another version, or a line that isn't a request: told why, in words any app shows.
-        Ok(Some(Err(reason))) => {
-            let _ = connection.send(&Answer::Refused { reason });
-        }
+        Ok(Some(Err(reason))) => refuse(reason),
         Ok(None) => {}
-        Err(_) => {
-            let _ = connection.send(&Answer::Refused { reason: NOT_A_REQUEST.into() });
-        }
+        Err(_) => refuse(NOT_A_REQUEST.into()),
     }
     // The answer is waited on until the app has read it, and then the instance is closed, which
     // the app reads as the end. Disconnecting it instead would throw away what the app hadn't read,
@@ -324,8 +322,8 @@ fn answer<W: Work>(service: &Arc<Service<W>>, pipe: File) {
 
 /// Whether the one asking on `pipe` may: the system, an elevated administrator, or the user signed
 /// in at the console. With nobody signed in, as when the service runs at a prompt, the service's
-/// own user stands in for the console's.
-fn allowed(pipe: &File) -> Result<(), String> {
+/// own user stands in for the console's. The system counts as an administrator.
+fn allowed(pipe: &File) -> Result<Asker, String> {
     let (user, administrator) = as_client(pipe, || {
         let mut token: HANDLE = null_mut();
         // SAFETY: the thread's token while it impersonates, opened as the service, and closed here.
@@ -338,8 +336,9 @@ fn allowed(pipe: &File) -> Result<(), String> {
         answer
     })?;
     let user = user.ok_or_else(|| last_error("Reading who is asking"))?;
-    if administrator || user == SYSTEM || Some(&user) == console_user().or_else(own_user).as_ref() {
-        Ok(())
+    let administrator = administrator || user == SYSTEM;
+    if administrator || Some(&user) == console_user().or_else(own_user).as_ref() {
+        Ok(Asker { user, administrator })
     } else {
         Err(format!("{user} asked, and only the user signed in at the console may use Guesthouse."))
     }
@@ -375,9 +374,15 @@ fn as_client<T>(pipe: &File, work: impl FnOnce() -> T) -> Result<T, String> {
 
 struct Pipe<'a> {
     file: &'a File,
+    /// Who asked, as checked before the request is answered.
+    asker: Asker,
 }
 
 impl Connection for Pipe<'_> {
+    fn asker(&self) -> Asker {
+        self.asker.clone()
+    }
+
     fn send(&mut self, answer: &Answer) -> io::Result<()> {
         write_line(&mut self.file, answer)
     }
@@ -650,7 +655,7 @@ mod tests {
             Vec::new()
         }
         fn end(&self, _: &str) {}
-        fn console_access(&self) -> Vec<String> {
+        fn console_access(&self, _: Option<&str>) -> Vec<String> {
             Vec::new()
         }
         fn grow(&self, _: &Path, _: u64) -> Result<(), String> {

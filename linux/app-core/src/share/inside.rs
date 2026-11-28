@@ -48,6 +48,23 @@ impl Folder {
         inside.then(|| path.strip_prefix(&self.root).unwrap_or(&path).to_owned())
     }
 
+    /// Whether every link at or under `from` still leads inside the folder once it is at `to`, as a link
+    /// keeps its words and a relative one means something else at another depth. One that already led
+    /// out from where it was may go where it leads to the same place.
+    pub fn links_stay_inside(&self, from: &Path, to: &Path) -> bool {
+        let Ok(links) = self.files.links(from) else { return false };
+        let at = |base: &Path, place: &Path| {
+            let base = self.root.join(base);
+            if place.as_os_str().is_empty() { base } else { base.join(place) }
+        };
+        links.iter().all(|(place, text)| {
+            let seen_from = |link: PathBuf| real_path(&link.parent()?.join(text));
+            let now = seen_from(at(to, place));
+            now.as_ref().is_some_and(|real| self.holds(real))
+                || (now.is_some() && now == seen_from(at(from, place)))
+        })
+    }
+
     /// Where a URL really leads, for what follows links. An absolute link means nothing to `anchored`,
     /// which treats the folder as the root of everything, so it gets the path with its links undone.
     pub fn followed_path_of(&self, target: &str) -> Option<PathBuf> {

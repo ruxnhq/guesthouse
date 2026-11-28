@@ -219,6 +219,9 @@ impl Share {
         let (Some(path), Some(target)) = (path, self.destination(request)) else {
             return reply(output, 403, b"", &[]);
         };
+        if !self.folder.links_stay_inside(&path, &target) {
+            return reply(output, 403, b"", &[]);
+        }
         let replaced = self.folder.files.info(&target).is_some();
         if replaced && request.header("Overwrite") == Some("F") {
             return reply(output, 412, b"", &[]);
@@ -237,9 +240,13 @@ impl Share {
         else {
             return reply(output, 403, b"", &[]);
         };
-        // A folder copied into itself would go on until the disk was full.
+        // A folder copied into itself would go on until the disk was full. `copy` checks that again on
+        // the folders themselves, links and all.
         let files = &self.folder.files;
         if target.starts_with(&path) && files.info(&path).is_some_and(|info| info.is_folder) {
+            return reply(output, 403, b"", &[]);
+        }
+        if !self.folder.links_stay_inside(&path, &target) {
             return reply(output, 403, b"", &[]);
         }
         let replaced = files.info(&target).is_some();

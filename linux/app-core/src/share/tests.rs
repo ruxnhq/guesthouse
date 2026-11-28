@@ -288,3 +288,34 @@ fn only_regular_files_are_opened() {
     assert!(answered[..2].iter().all(|code| *code >= 400), "{answered:?}");
     assert!(!root.join("copied").exists());
 }
+
+#[test]
+fn a_link_copied_or_moved_still_leads_inside_the_folder() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    fs::create_dir_all(root.join("sub/deep")).unwrap();
+    symlink("../../hello.txt", root.join("sub/deep/link")).unwrap();
+    let requests = [
+        request("COPY", "/sub/deep/link", &[("Destination", "http://x/copied")], b""),
+        request("MOVE", "/sub/deep/link", &[("Destination", "http://x/moved")], b""),
+        request("COPY", "/sub", &[("Destination", "http://x/top")], b""),
+        request("COPY", "/sub/deep/link", &[("Destination", "http://x/sub/deep/again")], b""),
+        request("MOVE", "/sub", &[("Destination", "http://x/new%20sub")], b""),
+    ];
+    assert_eq!(codes(&root, &requests), [403, 403, 201, 201, 201]);
+    assert!(
+        fs::symlink_metadata(root.join("copied")).is_err()
+            && fs::symlink_metadata(root.join("moved")).is_err()
+    );
+    assert_eq!(fs::read_to_string(root.join("new sub/deep/again")).unwrap(), "hi");
+}
+
+#[test]
+fn a_folder_cannot_be_copied_into_itself_through_a_link() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    symlink("sub", root.join("alias")).unwrap();
+    let copy = request("COPY", "/sub", &[("Destination", "http://x/alias/all")], b"");
+    assert_eq!(codes_in_time(&root, vec![copy]), Some(vec![403]));
+    assert!(!root.join("sub/all").exists());
+}

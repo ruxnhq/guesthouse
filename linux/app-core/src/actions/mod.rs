@@ -278,6 +278,8 @@ fn boot(task: &mut Task) -> Result<()> {
     let shown = start_gpu_vm(task)?;
     let agent = crate::guest_end::GuestEnd::agent(task.context, &task.machine, None);
     crate::token_change::finish_token_change(task.context, &task.machine, &agent);
+    let said = crate::agent::keep_agent_current(task.context, &task.machine, None);
+    let _ = crate::log::write_log(task.context, &format!("{}: {said}", task.machine.id));
     // Before anything here uses the GPU, as it may restart Windows.
     let ready = nv_store::refresh_driver_store(task).and_then(|()| get_ready(task, shown));
     if ready.is_err() {

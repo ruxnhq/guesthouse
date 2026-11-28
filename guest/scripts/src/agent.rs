@@ -110,3 +110,21 @@ fn a_line_of_megabytes_is_read_whole() {
     let script = format!("$helper = '{}'\nWrite-Output $helper.Length", "a".repeat(2 << 20));
     assert_eq!(agent.ask(TOKEN, &script).trim(), (2 << 20).to_string());
 }
+
+/// guest/windows/agent-update.ps1, which the host sends at every start, on a file of the test's own.
+#[test]
+fn an_older_agent_is_replaced_and_the_same_one_is_left() {
+    let Some(shell) = shell() else { return };
+    let scratch = Scratch::new();
+    let file = scratch.path("agent.ps1");
+    std::fs::write(&file, "an older agent").unwrap();
+    let update = std::fs::read_to_string(guest_script("agent-update.ps1")).unwrap();
+    let new = std::fs::read(guest_script("agent.ps1")).unwrap();
+    let command = format!("$agent = '{}'\n$path = {}\n{update}", base64(&new), quote(&file));
+    let said = crate::run(shell, &command);
+    assert_eq!(said.last(), "agent updated", "{said}");
+    assert_eq!(std::fs::read(&file).unwrap(), new);
+    let said = crate::run(shell, &command);
+    assert_eq!(said.last(), "agent current", "{said}");
+    assert!(!scratch.path("agent.ps1.new").exists());
+}

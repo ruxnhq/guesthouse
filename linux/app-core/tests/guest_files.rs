@@ -5,8 +5,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENT_TO_THE_GUEST: [&str; 36] = [
+const SENT_TO_THE_GUEST: [&str; 37] = [
     "SetupComplete.cmd",
+    "agent-update.ps1",
     "agent.ps1",
     "app-windows-start.ps1",
     "app-windows.cs",

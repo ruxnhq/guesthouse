@@ -153,6 +153,29 @@ impl Context {
     }
 }
 
+/// The agent's own file, which setup puts in the guest.
+const AGENT_SCRIPT: &str = "agent.ps1";
+const AGENT_UPDATE_SCRIPT: &str = "agent-update.ps1";
+/// Where setup puts it in the guest, and the guest's task runs it from.
+const AGENT_IN_GUEST: &str = "C:\\gpupv\\agent.ps1";
+
+/// Puts this app's agent in the guest in place of an earlier one, for the guest to run from its next
+/// boot. What the guest said, or why nothing was sent.
+pub fn keep_agent_current(context: &Context, machine: &Machine, slot: Option<Slot>) -> String {
+    let script =
+        fs::read(context.paths.guest_files().join(AGENT_SCRIPT)).map_err(Failure::from).and_then(|agent| {
+            Ok(format!(
+                "$agent = '{}'\n$path = '{AGENT_IN_GUEST}'\n{}",
+                base64_encode(&agent),
+                guest_script(context, AGENT_UPDATE_SCRIPT)?
+            ))
+        });
+    match script {
+        Ok(script) => context.ask_guest(machine, &script, QUICK_SECONDS, slot).trim().to_owned(),
+        Err(failure) => failure.0,
+    }
+}
+
 /// What ends a helper in the guest: its task, and the PowerShell the task's console left running.
 fn helper_stop(context: &Context, name: &str) -> Result<String> {
     Ok(format!("$helperName = '{name}'\n{}", guest_script(context, HELPER_STOP_SCRIPT)?))

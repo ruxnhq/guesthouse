@@ -14,6 +14,7 @@ use crate::guest_driver_store;
 use crate::iso::{self, iso_maker};
 use crate::lean;
 use crate::library::make_disk;
+use crate::log::write_log;
 use crate::machine::{Kind, Machine};
 use crate::monitor::Command as Qmp;
 use crate::remote_access::{INSTALLER_ON_DISC, Service, disc_scripts, read_access};
@@ -49,7 +50,29 @@ pub use guesthouse_serial_words_core::linux_host::{INSTALL_STEPS, install_step};
 const ANSWER_DISC: &str = "answer.iso";
 const ANSWER_LABEL: &str = "GPUPV_SETUP";
 const SETMODE_FILE: &str = "setmode.ps1";
+/// What only SYSTEM and administrators may change in the guest: setup runs it from the disc, and every
+/// start sends it again.
+pub(super) const RIGHTS_SCRIPT: &str = "guest-rights.ps1";
 const TOKEN_ON_DISC: &str = "token.txt";
+
+/// How long the guest gets to put its folder's rights right. A guest made before the rights were set
+/// has every file in the folder looked at once.
+const RIGHTS_SECONDS: u64 = 60;
+/// The most of what it says that goes into the log.
+const RIGHTS_SAID_MOST: usize = 400;
+
+/// Puts the guest's folder back to SYSTEM and administrators alone, at every start, before anything
+/// else is sent: setup does it in a guest made since, and this does it in one made before. What the
+/// guest says goes to the log, and the start goes on whatever it says.
+pub(super) fn keep_guest_folder(task: &Task) {
+    let said = match account_script(task, RIGHTS_SCRIPT) {
+        Ok(script) => task.ask_guest(&script, RIGHTS_SECONDS),
+        Err(failure) => failure.0,
+    };
+    let said: String =
+        said.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(RIGHTS_SAID_MOST).collect();
+    let _ = write_log(task.context, &format!("guest rights: {said}"));
+}
 
 /// The answer file for a host in this IANA zone, making this account. The template says UTC. The
 /// edition is the disc's own when it was read, and Pro when it wasn't, as it always was. Its key
@@ -109,6 +132,8 @@ fn fill_answer_disc(context: &Context, machine: &Machine, files: &Path) -> Resul
         copy_writable(context.paths.guest_files().join(name), files.join(name))?;
     }
     copy_writable(context.paths.guest_files().join(SETMODE_FILE), files.join(SETMODE_FILE))?;
+    let rights = guest_script(context, RIGHTS_SCRIPT)?.replace(USER_MARK, machine.account());
+    fs::write(files.join(RIGHTS_SCRIPT), rights)?;
     if machine.windows_maker() == Some(GpuMaker::Intel) {
         // Setup places Intel's loaders in the system folders with the script that does it at a start.
         copy_writable(

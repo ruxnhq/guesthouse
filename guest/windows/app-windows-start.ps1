@@ -7,6 +7,9 @@
 # is, and its events reach the helper only by the slow look every second.
 $user = (Get-Process explorer -IncludeUserName -ea 0 | Select -First 1).UserName
 if (-not $user) { 'nobody is logged in'; return }
+# The helper reads the token as that account, which the token's own rules leave to SYSTEM and
+# administrators until a helper's start adds the account.
+icacls C:\gpupv\token.txt /grant "${user}:(R)" | Out-Null
 if (-not (Get-NetFirewallRule -DisplayName 'gpupv-app-windows' -ea 0)) {
     New-NetFirewallRule -DisplayName 'gpupv-app-windows' -Direction Inbound -Protocol TCP -LocalPort 8769 -RemoteAddress 10.0.2.2 -Action Allow | Out-Null
 }

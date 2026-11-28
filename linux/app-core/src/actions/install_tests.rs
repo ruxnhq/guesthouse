@@ -166,6 +166,7 @@ fn with_install_files(scratch: &Scratch, context: &Context) {
         scratch.write(&format!("program/guest/{name}"), "<TimeZone>UTC</TimeZone>");
     }
     scratch.write("program/guest/setmode.ps1", "mode");
+    scratch.write("program/guest/guest-rights.ps1", "$account = '@USER@'");
     scratch.write("program/guest/remote-desktop.ps1", "turn it");
     scratch.write("program/guest/ssh.ps1", "set it up");
     let driver = crate::settings::driver_folder(context);
@@ -196,6 +197,7 @@ fn the_answer_disc_holds_this_machines_token_and_is_private() {
         "/setup.ps1",
         "/agent.ps1",
         "/setmode.ps1",
+        "/guest-rights.ps1",
         "/token.txt",
         "/nvidia/nv_dispi.inf",
         "/nvidia/sub/a.dll",
@@ -204,6 +206,8 @@ fn the_answer_disc_holds_this_machines_token_and_is_private() {
     }
     let token = fs::read_to_string(vm.token_file(&context)).unwrap();
     assert_eq!(String::from_utf8_lossy(&on_disc(&path, "/token.txt")).trim(), token.trim());
+    let rights = String::from_utf8_lossy(&on_disc(&path, "/guest-rights.ps1")).into_owned();
+    assert_eq!(rights, format!("$account = '{}'", vm.account()), "setup runs it for this machine's account");
     assert!(!vm.folder(&context).join("answer-disc.new").exists(), "the files for the disc are gone");
 }
 

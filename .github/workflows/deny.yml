@@ -2,8 +2,8 @@
 name: Dependencies
 
 on:
+  # Every pull request, so the check is there to be asked for whatever the pull request touches.
   pull_request:
-    paths: [Cargo.lock, Cargo.toml, deny.toml, .github/workflows/deny.yml]
   push:
     branches: [main]
     paths: [Cargo.lock, Cargo.toml, deny.toml, .github/workflows/deny.yml]

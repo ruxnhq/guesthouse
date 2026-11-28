@@ -704,9 +704,9 @@ fn video_allocation(session: &mut Guest) -> (u32, u32) {
     set_u32(&mut private, layout.size, 0x1_0000);
     let mut create = message(Command::CreateAllocation, 0x40);
     set_u32(&mut create, 0x28, 1);
-    create.extend_from_slice(&[0; 4]);
-    create.extend_from_slice(&(private.len() as u32).to_le_bytes());
-    create.extend_from_slice(&[0; 4]);
+    // Shared by a global handle, so another process can open it by its resource.
+    set_u32(&mut create, 0x2C, 0x2);
+    create.extend_from_slice(&[[0; 4], (private.len() as u32).to_le_bytes(), [0; 4]].concat());
     create.extend_from_slice(&private);
     let reply = send(session, &create);
     let (resource, handle) = (u32_at(&reply, 4).unwrap(), u32_at(&reply, 0x10).unwrap());

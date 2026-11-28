@@ -3,6 +3,7 @@
 # Guesthouse's setup app, microG and Digitalis's ARM64 translation. Runs inside the container made from
 # Containerfile, with the source tree at /src. See README.md.
 #
+# Needs the signing keys in /keys (see make-keys.sh).
 # Usage: build.sh [sync]   "sync" fetches or updates the source first; without it the tree is built as
 # it is, which keeps what this script put in it.
 set -euo pipefail
@@ -32,6 +33,15 @@ fetch() {
         mv "$file.part" "$file"
     fi
 }
+
+# The image is signed with Guesthouse's own keys, made by make-keys.sh and kept as a secret. They are
+# mounted as /keys, read-only, and copied into the tree for the build; the tree is the only place they go.
+KEYS=${KEYS:-/keys}
+for name in releasekey platform shared media networkstack bluetooth nfc sdk_sandbox testkey; do
+    for file in "$KEYS/$name.pk8" "$KEYS/$name.x509.pem"; do
+        [ -f "$file" ] || { echo "$file is missing: the image is signed with the keys make-keys.sh makes, mounted as $KEYS" >&2; exit 1; }
+    done
+done
 
 cd "$SRC"
 if [ "${1:-}" = sync ]; then
@@ -76,6 +86,16 @@ for patch in "$HERE"/patches/*.patch; do
         git -C "$project" apply "$patch"
     fi
 done
+
+# The keys the build signs with, for the platform's packages and the OTA, in place of the tree's defaults.
+rm -rf vendor/lineage-priv/keys
+mkdir -p vendor/lineage-priv/keys
+cp "$KEYS"/*.pk8 "$KEYS"/*.x509.pem vendor/lineage-priv/keys/
+chmod 600 vendor/lineage-priv/keys/*.pk8
+cat > vendor/lineage-priv/keys/keys.mk <<'MAKEFILE'
+PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/lineage-priv/keys/releasekey
+PRODUCT_OTA_PUBLIC_KEYS := vendor/lineage-priv/keys/releasekey
+MAKEFILE
 
 export PATH="$SRC/prebuilts/sdk/tools/linux/bin/:$PATH" AB_OTA_UPDATER=false ROOMSERVICE_BRANCHES="lineage-24.0"
 set +u

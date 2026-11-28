@@ -201,3 +201,53 @@ fn a_guest_that_restarts_gets_its_gpu_back() {
     let lane = lane_of(&mut session, OTHER_PROCESS);
     assert_eq!(submit_status(&mut session, &lane, 1), SUCCESS);
 }
+
+/// The address space of a process, made by giving it a queue.
+fn space_of(session: &mut TestSession, process: u32) -> SpaceId {
+    let lane = lane_of(session, process);
+    session.queues[&lane.queue].space
+}
+
+#[test]
+fn faults_the_host_driver_reports_count_toward_stopping_all_work() {
+    let mut session = running_session();
+    let now = Instant::now();
+    for process in 0..MOST_FAULTS as u32 {
+        assert!(!session.gpu_work_stopped());
+        let space = space_of(&mut session, FIRST_PROCESS + process);
+        session.backend_mut().faults.push_back(space);
+        session.poll(now);
+    }
+    assert!(session.gpu_work_stopped());
+}
+
+#[test]
+fn a_process_the_host_driver_reports_again_counts_once_and_comes_off_the_gpu() {
+    let mut session = running_session();
+    let now = Instant::now();
+    for process in 2..MOST_FAULTS as u32 {
+        let space = space_of(&mut session, FIRST_PROCESS + process);
+        session.backend_mut().faults.push_back(space);
+    }
+    let lane = lane_of(&mut session, FIRST_PROCESS);
+    let space = session.queues[&lane.queue].space;
+    for _ in 0..MOST_FAILED_QUEUES {
+        session.backend_mut().faults.push_back(space);
+    }
+    session.poll(now);
+    assert!(!session.gpu_work_stopped());
+    assert!(session.queues[&lane.queue].failed);
+    assert!(session.backend().closed_queues.contains(&lane.queue));
+}
+
+#[test]
+fn faults_of_the_daemons_own_copies_each_count() {
+    let mut session = running_session();
+    let own = session.own_space().unwrap();
+    for _ in 0..MOST_FAULTS {
+        assert!(!session.gpu_work_stopped());
+        session.backend_mut().faults.push_back(own);
+        session.gpu_woke(Instant::now());
+    }
+    assert!(session.gpu_work_stopped());
+}

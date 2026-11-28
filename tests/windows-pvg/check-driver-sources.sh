@@ -8,6 +8,9 @@
 # 2. The ALLOCATIONS escape asks caller_is_admin() before it fills its
 #    answer.
 #
+# 3. INFO and PVG_INFO answer only an administrator with their counters, and
+#    UMD_NOTE records the caller's own process id.
+#
 # Usage: check-driver-sources.sh
 set -eu
 
@@ -51,6 +54,28 @@ admin=$(printf '%s\n' "$body" | grep -n 'caller_is_admin' | head -1 | cut -d: -f
 fill=$(printf '%s\n' "$body" | grep -n 'ruxnwddm_alloc_list_fill' | head -1 | cut -d: -f1)
 if [ -z "$admin" ] || [ -z "$fill" ] || [ "$admin" -ge "$fill" ]; then
 	echo "FAIL: the ALLOCATIONS escape does not check for an administrator before it answers"
+	fail=1
+fi
+
+# INFO and PVG_INFO fill their counters only for an administrator, and the
+# user-mode driver's notes carry the caller's own process id.
+for name in INFO PVG_INFO; do
+	body=$(awk -v key="case RUXNWDDM_ESCAPE_$name:" 'index($0, "\t" key) == 1 {on = 1; next} on && /^\tcase RUXNWDDM_ESCAPE_/ {exit} on' \
+		"$drv/ruxnwddm/escape.c")
+	if ! printf '%s\n' "$body" | grep -q 'caller_is_admin'; then
+		echo "FAIL: the $name escape does not ask for an administrator before it fills its counters"
+		fail=1
+	fi
+done
+if ! grep -q 'PsGetCurrentProcessId' "$drv/ruxnwddm/escape.c" ||
+	grep -q 'umd_process\[what\] = note->process' "$drv/ruxnwddm/escape.c"; then
+	echo "FAIL: a note from the user-mode driver does not take the caller's own process id"
+	fail=1
+fi
+
+# A task control's lengths are read once from the escape's buffer.
+if [ "$(grep -c 'esc->in_length' "$drv/ruxnwddm/pvg_client.c")" != 1 ]; then
+	echo "FAIL: pvg_escape reads the escape's input length more than once"
 	fail=1
 fi
 

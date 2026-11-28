@@ -8,7 +8,7 @@
 //! held to the table's room and every share to a whole.
 
 use crate::words::SharedWords;
-use crate::{milliseconds_since_epoch, snapshot_path};
+use crate::{AHEAD, milliseconds_since_epoch, snapshot_path};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,8 +18,6 @@ pub const ROOM: usize = 64;
 /// The writer reads each second, so a table older than this means it has stopped, and a figure in it
 /// is no longer the last second's.
 pub const OLDEST_USABLE: Duration = Duration::from_secs(3);
-/// Clocks can step, so a table stamped up to this far ahead still counts.
-const AHEAD: Duration = Duration::from_secs(1);
 /// The table's layout, in the file's name as with the snapshot's.
 pub const LAYOUT: u32 = 1;
 

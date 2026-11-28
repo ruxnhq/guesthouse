@@ -186,6 +186,8 @@ pub(super) struct Blits {
     cpu_instead: u64,
     /// Rows of the copy under way's target whose red and blue change over once it ends.
     turn_after: Option<(SpaceId, Area)>,
+    /// A copy by the CPU under way, in steps: see [`super::cpu_copy`].
+    pub(super) cpu: Option<super::cpu_copy::CpuCopy>,
     /// Whether the log has been told colours are changed over.
     pub(super) turned_said: bool,
     /// The time frames took, said now and then: see [`super::copies::CopyTally`].
@@ -357,6 +359,9 @@ impl CardWork {
     /// passes [`COPY_PATIENCE`] counts as failed, and the next copy waits for it to end all the
     /// same, as it reads the same page.
     pub fn poll_blit(&mut self, now: Instant) -> Option<Result<(), BackendError>> {
+        if self.cpu_copy_running() {
+            return self.step_cpu_copy();
+        }
         self.finish_copy(now, Some(CopyKind::Engine))
     }
 
@@ -373,7 +378,11 @@ impl CardWork {
         };
         // How it ended is asked again below, with the queue's ban, so a failed wait says nothing yet.
         let _ = self.xe.point_reached(done, point, COPY_PATIENCE);
-        self.finish_copy(Instant::now(), None).unwrap_or_else(|| {
+        let mut ended = self.finish_copy(Instant::now(), None);
+        while ended.is_none() && self.cpu_copy_running() {
+            ended = self.step_cpu_copy();
+        }
+        ended.unwrap_or_else(|| {
             // Waited for as long as its patience, so it counts as failed, as a poll would say later.
             if let Some(engine) = self.blits.engine.as_mut() {
                 engine.running = None;
@@ -427,12 +436,11 @@ impl CardWork {
         if let Some(kind) = kind {
             self.note_copy(kind, now.saturating_duration_since(since));
         }
-        if let Some((space, area)) = turn
-            && let Err(error) = self.turn_colours(space, &area)
-        {
-            return Some(Err(error));
+        match turn {
+            // The colours change over in steps, as a copy by the CPU does.
+            Some((space, area)) => self.start_cpu_copy(space, None, Some(area)),
+            None => Some(Ok(())),
         }
-        Some(Ok(()))
     }
 
     /// Says why a copy by the copy engine failed: the first few as warnings, the rest in the debug

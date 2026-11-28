@@ -24,7 +24,44 @@ foreach ($store in 'Root', 'TrustedPublisher') {
 Get-ChildItem Cert:\LocalMachine\My | Where-Object Subject -like $ourCertificates |
     ForEach-Object { Remove-Item "Cert:\LocalMachine\My\$($_.Thumbprint)" -DeleteKey }
 
-New-Item -ItemType Directory -Force $settingsFolder | Out-Null
+# The settings' folder is SYSTEM's and the administrators'. The driver's own account (LocalService) may change what is
+# in it, and everyone may read it. A folder that someone else owns, or a link, goes and is made anew, so nothing in
+# it is another account's; a folder SYSTEM or the administrators made keeps its files, which take its rules.
+# Takes every link inside a folder away, one level at a time and never into a link.
+function Remove-InnerLinks([string]$Path) {
+    foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            if ($child.PSIsContainer) { & cmd.exe /c rmdir "$($child.FullName)" 2>$null | Out-Null }
+            else { Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue }
+        } elseif ($child.PSIsContainer) {
+            Remove-InnerLinks $child.FullName
+        }
+    }
+}
+
+function Set-SettingsFolder([string]$Path, [string[]]$Owners = ('S-1-5-18', 'S-1-5-32-544')) {
+    # A program's complaint on its error stream is not a stop here.
+    $ErrorActionPreference = 'Continue'
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($item) {
+        $owner = $null
+        try { $owner = (Get-Acl -LiteralPath $Path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value } catch { }
+        $link = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+        if ($link -or $Owners -notcontains $owner) {
+            # rmdir takes a link away without going into it.
+            & cmd.exe /c rmdir /s /q "$Path" 2>$null
+            if (Test-Path -LiteralPath $Path) { throw "$Path can't be replaced" }
+        }
+    }
+    New-Item -ItemType Directory -Force $Path | Out-Null
+    Remove-InnerLinks $Path
+    & icacls.exe $Path /reset /Q | Out-Null
+    & icacls.exe $Path /setowner '*S-1-5-32-544' /Q 2>$null | Out-Null
+    & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' '*S-1-5-32-545:(OI)(CI)RX' /Q | Out-Null
+    & icacls.exe "$Path\*" /reset /T /Q 2>$null | Out-Null
+}
+
+Set-SettingsFolder $settingsFolder
 Copy-Item "$folder\vdd_settings.xml" $settingsFolder -Force
 
 # The catalog names every file in the folder, so it's made outside and moved in.

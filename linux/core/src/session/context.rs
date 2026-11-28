@@ -39,6 +39,11 @@ fn program_name(message: &[u8]) -> String {
 
 impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn create_process(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
+        if self.guest_pids.len() >= super::limits::MOST_PROCESSES {
+            return Err(
+                guesthouse_backend::BackendError::new("this guest has as many processes as it may").into()
+            );
+        }
         let handle = self.take_handle()?;
         if u8_at(message, PROCESS_FLAGS)? & PROCESS_32_BIT != 0 {
             self.processes_32_bit.insert(handle);
@@ -117,10 +122,26 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.run_deferred();
         self.free_allocations(handles);
         self.resources.clear();
+        self.global_shares.clear();
         self.resource_users.clear();
         self.shared_objects.clear();
         processes.into_iter().for_each(|process| self.end_process(process));
         self.run_deferred();
+    }
+
+    /// What the last start left waiting goes: its waits, held replies and wake-ups, which name
+    /// transactions and events of a guest that has gone, and every sync object, whose fence pages
+    /// come back once the card is done.
+    pub(super) fn forget_the_last_start(&mut self) {
+        self.pending.clear();
+        self.gates.clear();
+        self.shared_waits.clear();
+        self.replies.clear();
+        self.forget_held_for_the_last_start();
+        for object in self.sync_objects.close_all().into_iter().filter(|object| object.fence != 0) {
+            self.defer(DeferredAction::ReturnFence((object.fence, object.gpu_address)));
+        }
+        self.queue_progress.clear();
     }
 
     /// Frees an address space, and anything still running or mapped there.
@@ -204,6 +225,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             request.answer(message, 0, out);
             return Ok(());
         }
+        if self.context_processes.len() >= super::limits::MOST_CONTEXTS {
+            log::warn!("refused a context, as this guest has {} already", super::limits::MOST_CONTEXTS);
+            request.answer(message, 0, out);
+            return Ok(());
+        }
         let handle = self.take_handle()?;
         log::debug!("context {handle:#x} on node {}, hint {:#x}", request.node, request.client_hint);
         self.context_nodes.insert(handle, request.node);
@@ -222,7 +248,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// the default until the device has set one.
     pub(super) fn queued_limit(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = QueuedLimit::parse(message)?;
-        if request.is_set() {
+        let room = self.present_limits.len() < super::limits::MOST_KEYED;
+        if request.is_set() && (room || self.present_limits.contains_key(&request.device)) {
             self.present_limits.insert(request.device, request.limit);
         }
         let limit = self.present_limits.get(&request.device).copied().unwrap_or(DEFAULT_QUEUED_PRESENT_LIMIT);
@@ -258,10 +285,16 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(super) fn create_hardware_queue(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = CreateHardwareQueue::parse(message)?;
         request.begin_answer(message, out);
+        let process = MessageHeader::process_of(message)?;
+        if self.fence_share_taken(process) {
+            return Err(
+                guesthouse_backend::BackendError::new("this process holds its share of fence pages").into()
+            );
+        }
         let queue = self.take_handle()?;
         let progress = self.take_handle()?;
         let (fence, fence_gpu_address) = self.take_fence()?;
-        let space = self.space_for(MessageHeader::process_of(message)?)?;
+        let space = self.space_for(process)?;
         self.queues.insert(queue, Queue::new(fence, fence_gpu_address, space, request.context));
         self.context_queues.entry(request.context).or_default().push(queue);
         self.queue_progress.insert(progress, fence);

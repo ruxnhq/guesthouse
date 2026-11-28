@@ -493,3 +493,16 @@ mod held {
         assert_eq!(session.backend().slot_copies.len(), copies);
     }
 }
+
+#[test]
+fn the_screen_is_still_copied_once_the_guests_gpu_work_has_stopped() {
+    let mut session = session();
+    let surfaces = screen(&mut session, WIDTH, HEIGHT);
+    let own = session.own_space().unwrap();
+    for _ in 0..crate::MOST_FAULTS {
+        session.backend_mut().faults.push_back(own);
+    }
+    session.poll(Instant::now());
+    assert!(session.gpu_work_stopped());
+    present(&mut session, surfaces);
+}

@@ -73,12 +73,19 @@ pub(super) struct Space {
     pub mappings: BTreeMap<u64, Mapping>,
     /// A queue of this process was banned, or its work was lost: nothing more of it runs.
     pub failed: bool,
+    /// Its xe address spaces were destroyed, as xe would not take back a mapping.
+    gone: bool,
     /// The latest changes to `mappings`, at most [`CHANGES_KEPT`], and how many were ever made.
     pub changes: VecDeque<Change>,
     pub changes_made: u64,
 }
 
 impl Space {
+    /// How many xe address spaces it holds.
+    pub(super) fn xe_vms(&self) -> usize {
+        if self.gone { 0 } else { 1 + usize::from(self.ring.is_some()) }
+    }
+
     pub(super) fn note(&mut self, address: u64, length: u64, now_mapped: bool, backing: &'static str) {
         self.changes_made += 1;
         if self.changes.len() == CHANGES_KEPT {
@@ -126,6 +133,7 @@ impl CardWork {
     /// A VM for a guest process. An xe that refuses the scratch page gives one without it, where
     /// a read past a buffer's end costs the process its device, which is better than no work.
     fn create_vm(&mut self) -> io::Result<u32> {
+        self.room_for_vm()?;
         match self.xe.create_vm(choices::VM_FLAGS) {
             Err(error) if plan::bind_verdict(&error) == BindVerdict::Wrong => {
                 log::warn!(
@@ -162,6 +170,7 @@ impl CardWork {
                 ranges,
                 mappings: BTreeMap::new(),
                 failed: false,
+                gone: false,
                 changes: VecDeque::new(),
                 changes_made: 0,
             },
@@ -180,7 +189,8 @@ impl CardWork {
             self.close_queue(queue);
         }
         let Some(gone) = self.spaces.remove(&space) else { return };
-        for vm in [Some(gone.vm), gone.ring.map(|ring| ring.vm)].into_iter().flatten() {
+        let vms = if gone.gone { [None, None] } else { [Some(gone.vm), gone.ring.map(|ring| ring.vm)] };
+        for vm in vms.into_iter().flatten() {
             if let Err(error) = self.xe.destroy_vm(vm) {
                 log::warn!("intel work: destroying an address space failed: {error}");
             }
@@ -193,14 +203,55 @@ impl CardWork {
     /// Sends one change to a space's mappings: to its VM, signalling the next point of its bind
     /// timeline, and to its ring VM if it has one.
     fn bind(&mut self, space_id: SpaceId, op: &BindOp) -> io::Result<()> {
+        self.bind_in_vm(space_id, op)?;
         let space = self.spaces.get_mut(&space_id).ok_or(io::ErrorKind::NotFound)?;
-        let point = space.bind_point + 1;
-        self.xe.bind(space.vm, op, Some(Sync::Signal { timeline: space.binds, point }))?;
-        space.bind_point = point;
         if let Some(ring) = space.ring.as_mut() {
             Self::bind_in_ring(self.xe.as_mut(), ring, op)?;
         }
         Ok(())
+    }
+
+    /// Sends one change to a space's own VM alone.
+    fn bind_in_vm(&mut self, space_id: SpaceId, op: &BindOp) -> io::Result<()> {
+        let space = self.spaces.get_mut(&space_id).ok_or(io::ErrorKind::NotFound)?;
+        if space.gone {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        let point = space.bind_point + 1;
+        self.xe.bind(space.vm, op, Some(Sync::Signal { timeline: space.binds, point }))?;
+        space.bind_point = point;
+        Ok(())
+    }
+
+    /// Ends what a space's work can reach, as xe did not take a mapping back: its queues go, its
+    /// address spaces are destroyed, and nothing of it runs again. Its books are emptied, as no
+    /// address is bound any more.
+    fn lose_bindings(&mut self, space_id: SpaceId, why: &str) {
+        let queues: Vec<u32> =
+            self.queues.iter().filter(|(_, queue)| queue.space == space_id).map(|(id, _)| *id).collect();
+        for queue in queues {
+            self.close_queue(queue);
+        }
+        let Some(space) = self.spaces.get_mut(&space_id) else { return };
+        if space.gone {
+            return;
+        }
+        space.gone = true;
+        let vms = [Some(space.vm), space.ring.take().map(|ring| ring.vm)];
+        let mapped: Vec<(u64, Mapping)> = std::mem::take(&mut space.mappings).into_iter().collect();
+        for (start, mapping) in mapped {
+            let backing = self.blocks.get(&mapping.memory).map_or(GONE, |block| block.backing.kind());
+            if let Some(space) = self.spaces.get_mut(&space_id) {
+                space.note(start, mapping.length, false, backing);
+            }
+        }
+        for vm in vms.into_iter().flatten() {
+            if let Err(error) = self.xe.destroy_vm(vm) {
+                log::warn!("intel work: destroying an address space failed: {error}");
+            }
+        }
+        log::warn!("intel work: space {space_id:?} lost its address spaces: {why}");
+        self.fail_space(space_id, why);
     }
 
     fn bind_in_ring(xe: &mut dyn crate::xe::device::Xe, ring: &mut Ring, op: &BindOp) -> io::Result<()> {
@@ -229,7 +280,25 @@ impl CardWork {
         let op = plan::bind_for(request, &block.backing).map_err(|refused| {
             BackendError::new(format!("a mapping at {:#x}: {refused}", request.address))
         })?;
-        self.bind(request.space, &op).map_err(|error| failed("a mapping", &error))?;
+        self.bind_in_vm(request.space, &op).map_err(|error| failed("a mapping", &error))?;
+        let ring_bound = self.spaces.get_mut(&request.space).and_then(|space| {
+            space.ring.as_mut().map(|ring| Self::bind_in_ring(self.xe.as_mut(), ring, &op))
+        });
+        if let Some(Err(error)) = ring_bound {
+            let undo = UnmapRequest {
+                space: request.space,
+                memory: request.memory,
+                address: request.address,
+                length: request.length,
+            };
+            if let Err(undo_error) = self.bind_in_vm(request.space, &plan::unbind_for(&undo)) {
+                self.lose_bindings(
+                    request.space,
+                    &format!("a mapping could not be taken back: {undo_error}"),
+                );
+            }
+            return Err(failed("a mapping in a long-running address space", &error));
+        }
         let mapping = Mapping { length: request.length, memory: request.memory, offset: request.offset, op };
         let space = self.spaces.get_mut(&request.space).expect("found above");
         space.mappings.insert(request.address, mapping);
@@ -249,15 +318,29 @@ impl CardWork {
             .filter(|&(&start, mapping)| start >= unmap.address && start + mapping.length <= end)
             .map(|(&start, &mapping)| (start, mapping))
             .collect();
-        for (start, mapping) in &removed {
-            space.mappings.remove(start);
-            let backing = self.blocks.get(&mapping.memory).map_or(GONE, |block| block.backing.kind());
-            space.note(*start, mapping.length, false, backing);
-        }
         if removed.is_empty() || unmap.length == 0 {
             return Ok(());
         }
-        self.bind(unmap.space, &plan::unbind_for(unmap)).map_err(|error| failed("an unmapping", &error))
+        if let Err(error) = self.bind(unmap.space, &plan::unbind_for(unmap)) {
+            self.lose_bindings(
+                unmap.space,
+                &format!("an unmapping at {:#x} was refused: {error}", unmap.address),
+            );
+            return Err(failed("an unmapping", &error));
+        }
+        self.forget(unmap.space, &removed);
+        Ok(())
+    }
+
+    /// Takes mappings out of a space's books, once xe has unbound them.
+    fn forget(&mut self, space: SpaceId, removed: &[(u64, Mapping)]) {
+        for (start, mapping) in removed {
+            let backing = self.blocks.get(&mapping.memory).map_or(GONE, |block| block.backing.kind());
+            if let Some(space) = self.spaces.get_mut(&space) {
+                space.mappings.remove(start);
+                space.note(*start, mapping.length, false, backing);
+            }
+        }
     }
 
     /// Takes a block out of every space it is mapped in.
@@ -277,13 +360,18 @@ impl CardWork {
             })
             .collect();
         for unmap in mapped {
-            if let Some(space) = self.spaces.get_mut(&unmap.space) {
-                space.mappings.remove(&unmap.address);
-                let backing = self.blocks.get(&memory).map_or(GONE, |block| block.backing.kind());
-                space.note(unmap.address, unmap.length, false, backing);
-            }
-            if let Err(error) = self.bind(unmap.space, &plan::unbind_for(&unmap)) {
-                log::warn!("intel work: unmapping freed memory at {:#x} failed: {error}", unmap.address);
+            let Some(mapping) =
+                self.spaces.get(&unmap.space).and_then(|held| held.mappings.get(&unmap.address))
+            else {
+                continue;
+            };
+            let mapping = *mapping;
+            match self.bind(unmap.space, &plan::unbind_for(&unmap)) {
+                Ok(()) => self.forget(unmap.space, &[(unmap.address, mapping)]),
+                Err(error) => {
+                    log::warn!("intel work: unmapping freed memory at {:#x} failed: {error}", unmap.address);
+                    self.lose_bindings(unmap.space, "freed memory could not be unmapped");
+                }
             }
         }
     }
@@ -320,6 +408,7 @@ impl CardWork {
             && !found.failed
         {
             found.failed = true;
+            self.faults.push_back(space);
             log::warn!(
                 "intel work: space {space:?} runs nothing more: {why}. Its guest process loses its device; \
                  the others go on"

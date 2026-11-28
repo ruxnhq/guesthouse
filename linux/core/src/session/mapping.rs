@@ -3,14 +3,15 @@
 use super::{Handled, Session, answer_status};
 use crate::deferred::{DeferredAction, FreedAllocation};
 use crate::gpu_addresses::{ADDRESSES_END, ALLOCATION_ALIGN, AddressUse, LARGE_ALIGN, Window};
-use crate::pending::Pending;
-use crate::tables::Mapping;
+use crate::pending::{MOST_WAITING, MOST_WAITING_UPDATE_BYTES, Pending};
+use crate::tables::{Allocation, Mapping};
 use guesthouse_backend::{Backend, BackendError, GuestMemory, MapRequest, MemoryId, SpaceId, UnmapRequest};
 use guesthouse_messages::address::{
     MapRequest as GuestMap, PAGE_SIZE, UpdateOperation, UpdateRequest, two_values_and_status,
 };
 use guesthouse_messages::wire::{Malformed, align_up, checked_align_up};
 use guesthouse_messages::{MessageHeader, Status};
+use std::time::Instant;
 
 /// From this size an allocation can use 2 MiB pages.
 const LARGE_PAGES_FROM: u64 = 2 << 20;
@@ -32,6 +33,15 @@ fn mapped_span(request: &GuestMap, allocation_size: u64) -> Option<(u64, u64, u6
 fn map_window(request: &GuestMap) -> Window {
     let to = if request.limit == 0 { u64::MAX } else { request.limit };
     Window { from: request.lowest, to }
+}
+
+/// How far into an allocation a mapping may reach: the guest's own pages behind it, or whole pages
+/// of the rest, as host drivers map whole pages.
+fn memory_extent(allocation: &Allocation) -> u64 {
+    match allocation.view {
+        Some(view) => view.size,
+        None => align_up(allocation.size, PAGE_SIZE),
+    }
 }
 
 /// The end of a range from an address update.
@@ -68,7 +78,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             && allocation.mappings.is_empty()
             && !guest_pages
         {
-            // A vendor's size can be too small, and nothing is stored here yet.
+            // A vendor's size can be too small, and nothing is stored here yet. Growing is held to
+            // the guest's video memory cap like any new allocation.
+            let held = if allocation.spilled { 0 } else { allocation.size };
+            if self.over_video_cap(needed - held) {
+                map_answer(0, Status::NO_VIDEO_MEMORY, out);
+                return Ok(());
+            }
             self.backend.release_memory(memory);
             let allocation = self.allocations.get_mut(&handle).expect("read above");
             allocation.memory = None;
@@ -81,7 +97,13 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             memory = grown;
         }
         if request.address != 0 {
-            // A guest-chosen address, usually in a reserved range: map only the pages it asked for.
+            // A guest-chosen address, usually in a reserved range: map only the pages it asked for,
+            // and only pages the allocation's memory holds.
+            if needed > memory_extent(&self.allocations[&handle]) {
+                log::warn!("refused a map of {handle:#x} reaching {needed:#x} bytes in, past its memory");
+                map_answer(0, Status::INVALID_PARAMETER, out);
+                return Ok(());
+            }
             log::debug!("map {handle:#x} at {:#x}: {first:#x} for {length:#x}", request.address);
             if let Some((protection, driver_protection)) =
                 GuestMap::protections(message).filter(|said| said.1 != 0)
@@ -381,6 +403,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             };
             let piece = (size - done).min(found.address + found.length - source - done);
             let offset = found.first + (source + done - found.address);
+            if !self.gpu_addresses.guest_may_map(destination + done, piece) {
+                return Err(OUTSIDE_THE_RANGES);
+            }
             let copy = Mapping { address: destination + done, first: offset, length: piece, ..found };
             self.map_piece(handle, copy)?;
             done += piece;
@@ -394,7 +419,14 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
                 let driver_protection =
                     self.protection_in_range(address, space, driver_protection.unwrap_or(0));
                 let end = range_end(address, size)?;
-                range_end(offset, size)?;
+                let extent =
+                    self.allocations.get(&allocation).map(memory_extent).ok_or(UNKNOWN_ALLOCATION)?;
+                if range_end(offset, size)? > extent {
+                    return Err(PAST_THE_MEMORY);
+                }
+                if !self.gpu_addresses.guest_may_map(address, size) {
+                    return Err(OUTSIDE_THE_RANGES);
+                }
                 if let Some((handle, current)) = self.mapping_at(address, space)
                     && handle == allocation
                     && current.first + (address - current.address) == offset
@@ -450,7 +482,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(crate) fn note_waiting_updates(&self, queue: u32) {
         let Some(space) = self.queues.get(&queue).map(|queue| queue.space) else { return };
         let mut waiting = self.pending.iter().filter_map(|item| match item {
-            Pending::Update { fence, value, space: waits, operations } if *waits == space => {
+            Pending::Update { fence, value, space: waits, operations, .. } if *waits == space => {
                 Some((*fence, *value, operations))
             }
             _ => None,
@@ -518,12 +550,20 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             }
             self.write_fence(fence, value.saturating_add(1));
         } else {
+            let bytes = request.raw_operations().len();
+            if self.fence_waits() >= MOST_WAITING
+                || self.waiting_update_bytes().saturating_add(bytes) > MOST_WAITING_UPDATE_BYTES
+            {
+                log::warn!("refused an address update, as too many are waiting for their fences already");
+                answer_status(Status::NO_MEMORY, out);
+                return Ok(());
+            }
             let operations = request.raw_operations().to_vec();
             log::debug!(
                 "update waits in {space:?} for fence {fence:#x} to reach {value}: {}",
                 describe_operations(&operations)
             );
-            self.pending.push(Pending::Update { fence, value, space, operations });
+            self.pending.push(Pending::Update { fence, value, space, operations, since: Instant::now() });
         }
         answer_status(Status::SUCCESS, out);
         Ok(())
@@ -578,3 +618,7 @@ fn describe_operations(operations: &[u8]) -> String {
 const UNKNOWN_ALLOCATION: BackendError = BackendError(std::borrow::Cow::Borrowed("no such allocation"));
 const OVERLAPPING_COPY: BackendError = BackendError(std::borrow::Cow::Borrowed("a copy over its own source"));
 const RANGE_TOO_LONG: BackendError = BackendError(std::borrow::Cow::Borrowed("a range too long for 64 bits"));
+const PAST_THE_MEMORY: BackendError =
+    BackendError(std::borrow::Cow::Borrowed("a mapping past the end of its allocation's memory"));
+const OUTSIDE_THE_RANGES: BackendError =
+    BackendError(std::borrow::Cow::Borrowed("a mapping outside the GPU address ranges"));

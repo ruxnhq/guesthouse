@@ -5,6 +5,7 @@ use crate::channel::{
     ListFull,
 };
 use crate::list_repair;
+use crate::local_window::mirrors_pool;
 use crate::pushbuffer::{ENTRY_SIZE, Header, RingEntry, ZERO_EXTENDED_BASE, has_no_extended_base};
 use crate::ring_position::has_ring_position_flag;
 use crate::ring_request::RingMove;
@@ -121,14 +122,6 @@ impl LiveQueue {
             local_memory_tried: false,
         }
     }
-}
-
-/// The kinds of context whose driver sets a pool on one channel for all of them: OpenCL and CUDA.
-/// Others aren't read, so games pay nothing for it.
-const POOL_SHARING_HINTS: [u32; 2] = [3, 5];
-
-fn mirrors_pool(work: &Work<'_>) -> bool {
-    POOL_SHARING_HINTS.contains(&work.client_hint)
 }
 
 /// The slice for a new ring channel whose context has other queues, if it gets one of its own.
@@ -289,11 +282,16 @@ impl<R: Rm> NvidiaBackend<R> {
 
     /// Where a new graphics channel's shader local memory goes, and the window it is reached
     /// through. Nothing until a queue has set the window, as no value is made up for it.
-    fn local_memory_place(&mut self, host: &mut dyn HostServices, engine: Engine) -> Option<(u64, u64)> {
+    fn local_memory_place(
+        &mut self,
+        host: &mut dyn HostServices,
+        space: SpaceId,
+        engine: Engine,
+    ) -> Option<(u64, u64)> {
         if engine != Engine::Graphics {
             return None;
         }
-        let Some(window) = self.local_window.window() else {
+        let Some(window) = self.local_window.window(space) else {
             log::debug!("a graphics channel waits for the shader local window before it has a pool");
             return None;
         };
@@ -308,11 +306,11 @@ impl<R: Rm> NvidiaBackend<R> {
 
     /// Reads a graphics submission's commands for the shader local window, until a queue sets it.
     fn watch_local_window(&mut self, host: &dyn HostServices, work: &Work<'_>, listing: &[u8]) {
-        if self.local_window.window().is_some() {
+        if self.local_window.window(work.space).is_some() {
             return;
         }
         for words in command_buffers(host, work.space, listing) {
-            self.local_window.read(work.queue, &words);
+            self.local_window.read(work.space, work.queue, &words);
         }
     }
 
@@ -362,11 +360,11 @@ impl<R: Rm> NvidiaBackend<R> {
     /// A pool for a queue's graphics channel that was made before the window was known. It runs
     /// ahead of the queue's next submission. A queue that named its own pool keeps it.
     fn give_late_local_memory(&mut self, host: &mut dyn HostServices, queue_id: u32) {
-        let Some(window) = self.local_window.window() else { return };
+        let Some(queue) = self.queues.get_mut(&queue_id) else { return };
+        let Some(window) = self.local_window.window(queue.space) else { return };
         if self.local_window.sets_own_pool(queue_id) {
             return;
         }
-        let Some(queue) = self.queues.get_mut(&queue_id) else { return };
         let channel = match &mut queue.channel {
             QueueChannel::Ring { channel, .. } => channel,
             QueueChannel::List(list) => &mut list.channel,
@@ -412,7 +410,7 @@ impl<R: Rm> NvidiaBackend<R> {
         };
         let place = ChannelPlace { ring_address, ring_entries, area_address, area_size: AREA_SIZE };
         let engine = self.video_engine(work).map_or(Engine::Graphics, Engine::Video);
-        let local_memory = self.local_memory_place(host, engine);
+        let local_memory = self.local_memory_place(host, work.space, engine);
         let Some(space) = self.spaces.get(&work.space) else { return };
         let made = Channel::new(&mut self.device, self.generation, self.host_branch, space, place, engine);
         let (everyone, shared) =
@@ -538,7 +536,7 @@ impl<R: Rm> NvidiaBackend<R> {
         self.settle_move(host, work.queue, Instant::now())?;
         let first = end.saturating_sub(entries);
         let mirrored = self.engine_for(work) == Engine::Graphics && mirrors_pool(work);
-        if self.video_engine(work).is_none() && (self.local_window.window().is_none() || mirrored) {
+        if self.video_engine(work).is_none() && (self.local_window.window(work.space).is_none() || mirrored) {
             let ring = self.queue_ring(work.queue).unwrap_or(ring_address);
             let listing = Self::ring_listing(host, work.space, ring, entries, end);
             self.watch_local_window(host, work, &listing);
@@ -606,12 +604,10 @@ impl<R: Rm> NvidiaBackend<R> {
             log::warn!("queue {:#x} moved to ring {ring_address:#x} and stops: {why}", work.queue);
             WorkStart::QueueFailed
         };
-        let Some(RingMove { handle, entries: ring_entries }) = self.ring_moves.take(ring_address) else {
-            return Err(stop("no ring was asked for there"));
-        };
-        if word(work.private, MOVE_HANDLE) != handle {
-            return Err(stop("the submission names another move"));
-        }
+        let named = word(work.private, MOVE_HANDLE);
+        let RingMove { handle, entries: ring_entries } =
+            (self.ring_moves.take(work.space, ring_address, named))
+                .ok_or_else(|| stop("no ring was asked for there under that handle"))?;
         let queue = self.queues.get_mut(&work.queue).ok_or(WorkStart::Finished)?;
         let QueueChannel::Ring { channel, .. } = &queue.channel else {
             return Err(WorkStart::Finished);
@@ -700,7 +696,7 @@ impl<R: Rm> NvidiaBackend<R> {
         }
         let mut queue = LiveQueue::new(work.space);
         let engine = self.engine_for(work);
-        let local_memory = self.local_memory_place(host, engine);
+        let local_memory = self.local_memory_place(host, work.space, engine);
         queue.local_memory_tried = local_memory.is_some();
         if let (Some(area_address), Some(space)) =
             (self.take_area(host, LIST_AREA), self.spaces.get(&work.space))
@@ -1391,7 +1387,7 @@ mod tests {
             let started = backend.start_work(host, &ring_work(space, &first, 1));
             assert_eq!(started, WorkStart::Started { doorbell: 3, work: 2 });
             backend.ring_moves.answered(MemoryId(0x77), MOVE, NEW_RING_BYTES);
-            backend.ring_moves.mapped(MemoryId(0x77), NEW_RING);
+            backend.ring_moves.mapped(space, MemoryId(0x77), NEW_RING);
             (backend, space)
         }
 

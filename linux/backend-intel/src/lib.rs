@@ -49,6 +49,8 @@ pub mod work;
 pub mod xe;
 pub mod xe_query;
 
+use stage::self_test_verdict;
+
 use books::Books;
 use card::CardFacts;
 use generation::Generation;
@@ -419,23 +421,6 @@ fn render_keying(card: &CardFacts, summary: &xe::selftest::Summary) -> Keying {
     }
 }
 
-/// Whether the self-test lets the guest's work on the card: every step work needs passed. A failed
-/// step work does without, such as a video engine, the clock or the cleanup, is a warning only.
-fn self_test_verdict(summary: &xe::selftest::Summary) -> Result<(), Fallback> {
-    let needed = summary.failed_that_work_needs();
-    if !needed.is_empty() {
-        return Err(Fallback::SelfTestFailed(needed));
-    }
-    let spared = summary.failed_that_work_does_without();
-    if !spared.is_empty() {
-        log::warn!(
-            "{PREFIX} self-test: {} failed, which the guest's work doesn't need, so it runs on the card all the same",
-            spared.join(", ")
-        );
-    }
-    Ok(())
-}
-
 /// The facts of a card recorded elsewhere, for a lab run on a PC without it. The guest must have
 /// been given the recorded card's address, so a machine made for another card can't start on it
 /// unnoticed. The log says loudly that nothing here is a card.
@@ -522,11 +507,9 @@ fn start_copy(
         return StagingStart::Finished(Status::UNSUCCESSFUL);
     };
     work.note_cpu_instead(&error);
-    let copied_rows = work.copy_rows(space, &rows);
-    StagingStart::Finished(copied(copied_rows.and_then(|()| match turn {
-        Some(area) => work.turn_colours(space, &area),
-        None => Ok(()),
-    })))
+    // A large copy goes in steps, which the copy's polls take: see `work::cpu_copy`.
+    work.start_cpu_copy(space, Some(rows), turn)
+        .map_or(StagingStart::Running, |ended| StagingStart::Finished(copied(ended)))
 }
 
 /// A copy's result as the guest is told it, with the reason in the log.
@@ -1049,6 +1032,10 @@ impl Backend for IntelBackend {
         self.work.as_mut().map_or(0, CardWork::runs_ended)
     }
 
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.work.as_mut()?.take_fault()
+    }
+
     fn close_queue(&mut self, queue: u32) {
         self.traffic.queue_closed(queue);
         if let Some(work) = &mut self.work {
@@ -1076,7 +1063,7 @@ impl Backend for IntelBackend {
         start_copy(work, host, copy.own_space, blit, Rows::of_slot(copy, COPY_PIXEL_BYTES), None)
     }
 
-    /// Only a copy by the copy engine is ever under way; the CPU's are finished when they start.
+    /// A copy by the copy engine, or a large one by the CPU, which takes a step at each poll.
     fn poll_staging_copy(&mut self, _host: &mut dyn HostServices, now: Instant) -> Option<Status> {
         let Some(work) = &mut self.work else { return Some(Status::SUCCESS) };
         match work.poll_blit(now)? {

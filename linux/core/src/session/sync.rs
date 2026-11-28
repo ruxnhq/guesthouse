@@ -87,6 +87,10 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let handle = self.take_handle()?;
         let monitored = request.kind == KIND_MONITORED_FENCE;
+        if monitored && self.fence_share_taken(MessageHeader::process_of(message)?) {
+            log::warn!("a process holds its share of fence pages, so it gets no more");
+            return Err(Failure::Malformed);
+        }
         let (fence, gpu_address) = if monitored { self.take_fence()? } else { (0, 0) };
         let event = if request.kind == KIND_CPU_NOTIFICATION {
             Some(request.initial.ok_or(Malformed)?)

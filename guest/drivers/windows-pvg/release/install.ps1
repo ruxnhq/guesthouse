@@ -6,7 +6,7 @@
 # release package, as the Mac app puts it on the stick). It takes ALREADY-SIGNED files and signs
 # nothing: no key is needed or present. It
 #   1. refuses a folder with a private key in it,
-#   2. trusts the public certificate in the machine's Root and TrustedPublisher stores,
+#   2. trusts the public certificate, when it is for signing code and nothing else, in the machine's Root and TrustedPublisher stores,
 #   3. turns test signing on if it is not on,
 #   4. installs the driver with pnputil,
 #   5. says how it went on the first serial port, in the words the Mac app waits for,
@@ -39,11 +39,25 @@ function Stop-With([uint32]$Code) {
 	exit ([int]$Code)
 }
 
+# The certificate may name what it is for. If it does, it is for signing code and nothing else.
+function Test-CodeSigningOnly([string]$Path) {
+	$certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $Path
+	foreach ($extension in $certificate.Extensions) {
+		if ($extension -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]) {
+			foreach ($use in $extension.EnhancedKeyUsages) {
+				if ($use.Value -ne '1.3.6.1.5.5.7.3.3') { return $false }
+			}
+		}
+	}
+	return $true
+}
+
 # 1. No private key, whoever put it here.
 if (Get-ChildItem -Path $Here -File | Where-Object { $_.Extension -in '.pfx', '.p12', '.pvk', '.key', '.snk' }) {
 	Stop-With $PrivateKey
 }
 if (-not (Test-Path $Certificate)) { Stop-With $NoCertificate }
+if (-not (Test-CodeSigningOnly $Certificate)) { Stop-With $NotTrusted }
 
 # 2. Trust the public certificate, in the two stores the driver's signature is checked against.
 foreach ($store in 'Root', 'TrustedPublisher') {

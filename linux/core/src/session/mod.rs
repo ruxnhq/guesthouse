@@ -10,6 +10,7 @@ mod first_lock;
 mod frame_ring;
 mod handle_use;
 mod indirect;
+mod limits;
 mod mapping;
 mod reserving;
 mod sync;
@@ -154,6 +155,9 @@ pub struct Session<B, M> {
     /// a creation that hands it back is known for one of them.
     pub(crate) standard_data: VecDeque<(Vec<u8>, AllocationShape)>,
     pub(crate) resources: HashMap<u32, Vec<u32>>,
+    /// Resources made to be shared by a global handle, which is the resource's own: only these open
+    /// by it. Others open through a shared object.
+    pub(crate) global_shares: HashSet<u32>,
     /// Users of a resource, when more than the process that made it.
     pub(crate) resource_users: HashMap<u32, u32>,
     /// Shared handle to the object behind it.
@@ -187,6 +191,10 @@ pub struct Session<B, M> {
     /// The display driver has registered a ring since the guest last started, so its process holds
     /// the screen and no allocation is a primary from here on.
     pub(crate) display_driver_seen: bool,
+    /// The process whose ring was first shown since the guest started. It alone speaks for the screen
+    /// until it ends, through mode changes that end its ring, so no other process takes the screen
+    /// in the gap.
+    pub(crate) display_driver: Option<u32>,
     pub(crate) queues_made: u32,
     /// Statistics have been refused once, which is worth saying once.
     pub(crate) statistics_refused: bool,
@@ -280,6 +288,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             resources: HashMap::new(),
             resource_users: HashMap::new(),
             shared_objects: HashMap::new(),
+            global_shares: HashSet::new(),
             sync_objects: SyncTable::new(),
             paging_queues: HashMap::new(),
             queue_progress: HashMap::new(),
@@ -294,6 +303,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             shared_waits: HashMap::new(),
             first_locks_waited: HashSet::new(),
             display_driver_seen: false,
+            display_driver: None,
             gates: HashMap::new(),
             rings_not_before: HashMap::new(),
             queues_made: 0,
@@ -559,7 +569,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             ) => answer_status(Status::SUCCESS, out),
 
             Some(C::Unknown(number)) => {
-                if self.unknown_commands.insert(number) {
+                if self.unknown_commands.len() < limits::MOST_UNKNOWN_COMMANDS_SAID
+                    && self.unknown_commands.insert(number)
+                {
                     log::warn!("the guest sent command {number}, which isn't supported");
                 }
                 // What it carried is the only clue to what the guest wanted, or was reporting.
@@ -575,6 +587,9 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     pub(crate) fn space_for(&mut self, process: u32) -> Result<SpaceId, BackendError> {
         if let Some(&space) = self.spaces.get(&process) {
             return Ok(space);
+        }
+        if self.spaces.len() >= limits::MOST_SPACES {
+            return Err(BackendError::new("this guest has as many address spaces as it may"));
         }
         let space = self.new_space()?;
         self.spaces.insert(process, space);

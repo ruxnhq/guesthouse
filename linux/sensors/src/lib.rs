@@ -2,14 +2,15 @@
 //!
 //! One process reads the card and publishes a [`Snapshot`] in a small file in shared memory. Any
 //! process of the same user can read it: a daemon answering a guest's performance queries, or the
-//! app showing the host's figures over a guest's screen. A reader takes no lock and never waits.
+//! app showing the host's figures over a guest's screen. A reader takes no lock and never waits, and
+//! reads the file with positional reads, so it is never faulted by the file changing length.
 //! What reads the card, and when, is the reader's own business and lives elsewhere.
 //!
 //! [`guest_use`] is the same kind of file for one guest: the video memory its daemon's books say it
 //! holds, kept in its run folder for the app's share panel. [`card_processes`] is each process's part
 //! of one card, for a driver that counts that per process.
 
-// Linux only: it uses mmap, flock and getuid. Other systems get an empty crate.
+// Linux only: it uses flock and getuid. Other systems get an empty crate.
 #![cfg(target_os = "linux")]
 
 pub mod card_processes;
@@ -59,8 +60,12 @@ pub fn milliseconds_since_epoch() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64)
 }
 
+/// Clocks can step, so a reading stamped up to this far ahead still counts.
+pub const AHEAD: Duration = Duration::from_secs(1);
+
 pub fn is_fresh(snapshot: &Snapshot, now: u64) -> bool {
-    now.saturating_sub(snapshot.taken_at) <= OLDEST_USABLE.as_millis() as u64
+    snapshot.taken_at <= now.saturating_add(AHEAD.as_millis() as u64)
+        && now.saturating_sub(snapshot.taken_at) <= OLDEST_USABLE.as_millis() as u64
 }
 
 /// The folder of this user's shared readings, in the user's runtime folder, which no other user can

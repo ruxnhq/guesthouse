@@ -121,8 +121,12 @@ pub mod linux {
     /// The guest's GPU files on the files disk, which it mounts at /usr/lib/wsl.
     pub const WSL_LIB: &str = r"wsl\lib";
     pub const WSL_DRIVERS: &str = r"wsl\drivers";
-    /// The file install.sh makes the guest's administrator from, and then deletes.
+    /// The file install.sh makes the guest's administrator from. The guest has the files disk
+    /// read-only, so the host takes it off at the first start after the install.
     pub const ACCOUNT: &str = r"guesthouse\account";
+    /// Ubuntu's installer's answer file, which the host takes off with the account, so the installed
+    /// system never takes it for its own.
+    pub const USER_DATA: &str = "user-data";
 
     const GRUB: &str = include_str!("../guest/linux/grub.cfg");
 
@@ -133,7 +137,7 @@ pub mod linux {
         (r"EFI\ubuntu\grub.cfg", GRUB),
         (r"boot\grub\grub.cfg", GRUB),
         (r".disk\info", "Guesthouse's files disk\n"),
-        ("user-data", include_str!("../guest/linux/user-data")),
+        (USER_DATA, include_str!("../guest/linux/user-data")),
         ("meta-data", include_str!("../guest/linux/meta-data")),
         (r"guesthouse\install.sh", include_str!("../guest/linux/install.sh")),
         (r"guesthouse\start.sh", include_str!("../guest/linux/start.sh")),

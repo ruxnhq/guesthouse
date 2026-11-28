@@ -30,7 +30,7 @@ autoinstall:
     - echo guesthouse-install-failed > /dev/ttyS0
   late-commands:
     - mkdir -p /run/guesthouse-files
-    - mount LABEL=CIDATA /run/guesthouse-files
+    - mount -o ro LABEL=CIDATA /run/guesthouse-files
     - sh /run/guesthouse-files/guesthouse/install.sh /run/guesthouse-files /target
     - umount /run/guesthouse-files
     - echo guesthouse-install-finished > /dev/ttyS0

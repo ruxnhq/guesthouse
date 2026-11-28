@@ -121,19 +121,20 @@ pub fn disk_size_gb(disk: &Path) -> Result<u64, String> {
     Ok(opened.size().map_err(|error| error.to_string())? / prepare::BYTES_PER_GB)
 }
 
-/// A Linux guest's files disk, and its installer until it has installed.
+/// A Linux guest's files disk, and its installer until it has installed. The guest only reads the
+/// files disk: what is on it is the host's, and the host reads it back before each start.
 fn more_disks(disk: &Path, record: &Record) -> Vec<Attachment> {
     if record.guest != Guest::Linux {
         return Vec::new();
     }
-    let attach = |kind, path: &Path| Attachment {
+    let attach = |kind, path: &Path, read_only| Attachment {
         r#type: kind,
         path: path.to_string_lossy().into_owned(),
-        read_only: None,
+        read_only,
     };
-    let mut disks = vec![attach(AttachmentType::VirtualDisk, &files_disk(disk))];
+    let mut disks = vec![attach(AttachmentType::VirtualDisk, &files_disk(disk), Some(true))];
     if let Some(installer) = record.installer.as_deref().filter(|_| !record.installed) {
-        disks.push(attach(AttachmentType::Iso, installer));
+        disks.push(attach(AttachmentType::Iso, installer, None));
     }
     disks
 }
@@ -484,6 +485,19 @@ mod tests {
         assert!(sink.0.lock().unwrap().is_empty());
         drop(guest);
         let _ = std::fs::remove_dir_all(disk.parent().unwrap());
+    }
+
+    #[test]
+    fn a_linux_guest_has_its_files_disk_read_only() {
+        let record = Record {
+            guest: Guest::Linux,
+            installer: Some(PathBuf::from(r"D:\ubuntu.iso")),
+            ..Record::default()
+        };
+        let disks = more_disks(Path::new(r"D:\machines\ubuntu.vhdx"), &record);
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].path, r"D:\machines\ubuntu.files.vhdx");
+        assert_eq!(disks[0].read_only, Some(true));
     }
 
     /// A junction at `link` to the folder `target`, as anyone may make one.

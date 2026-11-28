@@ -9,7 +9,7 @@ use super::prepare::{BYTES_PER_GB, attach_new, diskpart, free_letters, new_passw
 use super::volumes;
 use crate::events::Sink;
 use crate::guest::linux::{
-    ACCOUNT, BOOT_FILES, FILES, INSTALLER_INITRD, LABEL, WSL_DRIVERS, WSL_LIB, account, unix_text,
+    ACCOUNT, BOOT_FILES, FILES, INSTALLER_INITRD, LABEL, USER_DATA, WSL_DRIVERS, WSL_LIB, account, unix_text,
 };
 use crate::machine::Guest;
 use crate::record::{Record, files_disk};
@@ -20,6 +20,7 @@ use guesthouse_hcs::drivers::copy_folder;
 use guesthouse_hcs::gpu::Card;
 use guesthouse_hcs::guest_volume::{Entry, GuestVolume};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// The file on the files disk that names the shares for gpu.sh, a line each, as `NAME PORT ro` or
@@ -41,6 +42,8 @@ const GUEST_SCRIPTS: &str = "guesthouse\\";
 /// Room on the files disk beyond the GPU files, for a driver update that's larger.
 const HEADROOM_BYTES: u64 = BYTES_PER_GB;
 const SMALLEST_FILES_DISK_GB: u64 = 2;
+/// The file system the files disk is made with, which has no links.
+const FILE_SYSTEM: &str = "FAT32";
 /// diskpart formats FAT32 up to this size.
 const LARGEST_FILES_DISK_GB: u64 = 32;
 /// The library nvidia-smi and CUDA load beside NVIDIA's. It comes with WSL, not with the driver.
@@ -129,20 +132,45 @@ fn make(
 }
 
 /// Brings the host's GPU files on the files disk up to date with the host's, while no machine has
-/// the disk open.
+/// the disk open. Only the disk prepare made is touched: one FAT32 volume labelled CIDATA. The
+/// guest has the disk read-only, so its installer can't take its account and answer file off it
+/// once it has installed, and they're taken off here, at the first start after `installed`.
 pub fn refresh_disk(
     files: &Path,
     card: Option<&Card>,
     shares: &[Share],
+    installed: bool,
     sink: &dyn Sink,
 ) -> Result<(), String> {
     let mut attached = VirtualDisk::open(files, Kind::Vhdx).map_err(|error| error.to_string())?;
     attached.attach(false).map_err(|error| error.to_string())?;
-    let volume = volumes(&attached)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("{} has no volume on it.", files.display()))?;
+    let found = volumes(&attached)?;
+    let [volume] = found.as_slice() else {
+        return Err(format!(
+            "{} has {} volumes, and the files disk Guesthouse makes has one. It was left as it is.",
+            files.display(),
+            found.len()
+        ));
+    };
     let guest = GuestVolume::open(&volume.root).map_err(|error| format!("{}: {error}", files.display()))?;
+    let made = guest.file_system().map_err(|error| format!("{}: {error}", files.display()))?;
+    if made.name != FILE_SYSTEM || !made.label.eq_ignore_ascii_case(LABEL) {
+        return Err(format!(
+            "{} isn't the files disk Guesthouse made: its volume is {} labelled \"{}\", not {FILE_SYSTEM} \
+             labelled {LABEL}. It was left as it is.",
+            files.display(),
+            made.name,
+            made.label
+        ));
+    }
+    if installed {
+        for path in [ACCOUNT, USER_DATA] {
+            match guest.remove_file(path) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.to_string()),
+                _ => {}
+            }
+        }
+    }
     refresh(&guest, card, shares, sink)
 }
 

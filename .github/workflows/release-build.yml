@@ -88,7 +88,9 @@ jobs:
           echo "Release $VERSION, after ${PREVIOUS:-nothing}."
 
       # Step 3's rule: the docs, the licences, vdd_settings.xml and the scripts in setup/ go in from the
-      # tree, so they don't count. Nor do the driver's tests, which aren't in its project.
+      # tree, so they don't count. Nor do the driver's tests, which aren't in its project, nor lines that
+      # are only comments. The folder's contents are compared, so a release from before #553 moved it
+      # (from drivers/windows-display) is compared where it was then.
       - name: Whether the display driver changed since the release before
         id: driver
         env:
@@ -100,9 +102,11 @@ jobs:
             echo "driver=build" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          CHANGED=$(git diff --name-only "$PREVIOUS" "$TAG" -- "$D" ":(exclude,glob)$D/**/*.md" \
-            ":(exclude)$D/LICENSE" ":(exclude)$D/LICENSE-MS-PL" ":(exclude)$D/vdd_settings.xml" \
-            ":(exclude)$D/setup" ":(exclude)$D/tests")
+          WAS=$D
+          git cat-file -e "$PREVIOUS:$D" 2>/dev/null || WAS=drivers/windows-display
+          CHANGED=$(git diff --name-only -I '^\s*(\*|//|/\*)' "$PREVIOUS:$WAS" "$TAG:$D" -- \
+            ":(exclude,glob)**/*.md" ":(exclude)LICENSE" ":(exclude)LICENSE-MS-PL" \
+            ":(exclude)vdd_settings.xml" ":(exclude)setup" ":(exclude)tests")
           if [ -n "$CHANGED" ]; then
             printf 'Changed since %s, so the driver is built:\n%s\n' "$PREVIOUS" "$CHANGED"
             echo "driver=build" >>"$GITHUB_OUTPUT"

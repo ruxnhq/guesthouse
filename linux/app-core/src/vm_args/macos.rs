@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 
 /// macOS puts every 64-bit BAR below 4 GiB, so the guest's RAM leaves room for the device's there.
 const MACHINE: &str = "q35,memory-backend=ram,dump-guest-core=off,max-ram-below-4g=1G";
-/// A CPU macOS knows, whatever the host's is, with what its kernel asks for at boot.
-const CPU: &str = "Skylake-Client-noTSX-IBRS,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,\
-                   +sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check";
+/// A CPU macOS knows, whatever the host's is, with what its kernel asks for at boot. KVM keeps a TSC
+/// adjust register for every vCPU on any host, and CpuTscSync needs it to put the cores' clocks in step.
+const CPU: &str = "Skylake-Client-noTSX-IBRS,kvm=on,vendor=GenuineIntel,+invtsc,+tsc-adjust,vmware-cpuid-freq=on,\
+                   +ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check";
 /// The key macOS reads from the system management controller of every Mac.
 const SMC: &str = "isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc";
 const LOG_VARIABLE: &str = "REIMS_VGPU_LOG";
@@ -307,6 +308,8 @@ mod tests {
         assert_eq!(value_after(&arguments, "-smp"), "6,sockets=1,cores=6,threads=1");
         assert_eq!(value_after(&arguments, "-display"), "dbus,p2p=yes", "or the device opens a window");
         assert_eq!(value_after(&arguments, "-vga"), "none");
+        let cpu = value_after(&arguments, "-cpu");
+        assert!(cpu.contains(",+tsc-adjust,"), "CpuTscSync needs it, or the cores' clocks drift: {cpu}");
         let device = arguments.iter().find(|word| word.starts_with("reims-graphics-pci,")).unwrap();
         assert!(device.contains(",resolution=2560x1440,romfile=/p/macos/ReimsGraphics.rom"), "{device}");
         assert!(arguments.iter().any(|word| word.ends_with("display.sock,server=on,wait=off")));

@@ -155,13 +155,13 @@ mod tests {
     /// Where the part comes from, what it must hash to and how big it is, as they were pinned.
     #[test]
     fn the_part_is_what_it_was() {
-        assert_eq!(PART_NAME, "guesthouse-macos-part-1");
+        assert_eq!(PART_NAME, "guesthouse-macos-part-2");
         assert_eq!(
             ARCHIVE_URL,
-            "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-1/guesthouse-macos-part-1-x86_64.tar.xz"
+            "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-2/guesthouse-macos-part-2-x86_64.tar.xz"
         );
-        assert_eq!(ARCHIVE_SHA256, "578710e662fc755b3105cc3800de35d6eae812cdd716624ac02bad322981a8bc");
-        assert_eq!(ARCHIVE_BYTES, 22_435_448);
+        assert_eq!(ARCHIVE_SHA256, "454f0800e5d231cde7dc29432053739a1393ff95b444b9a9dcad2f0bb08cec96");
+        assert_eq!(ARCHIVE_BYTES, 22_772_560);
     }
     use crate::testing::{Scratch, scratch_paths};
 

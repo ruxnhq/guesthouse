@@ -66,8 +66,8 @@ let
   # So it comes with the package, patched like the rest, in the program folder where the app looks
   # first. Its number and hash are app-core's macos_part.rs.
   macosPart = fetchurl {
-    url = "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-1/guesthouse-macos-part-1-x86_64.tar.xz";
-    hash = "sha256-V4cQ5mL8dVsxBcw4AN411uroEs3XFmJKwCutMimBqLw=";
+    url = "https://github.com/ruxnlabs/guesthouse/releases/download/macos-part-2/guesthouse-macos-part-2-x86_64.tar.xz";
+    hash = "sha256-RU8IAOXSMc3n3ClDIFNzmhOT/5W0RLmp3K0vC7CM7JY=";
   };
 in
 stdenvNoCC.mkDerivation {

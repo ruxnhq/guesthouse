@@ -11,7 +11,7 @@
 # a new one outside any home folder, as build-release.sh's is, and for the same reasons.
 set -eu
 
-PART=1
+PART=2
 ARCH=x86_64
 REIMS_UPSTREAM=https://github.com/steelbrain/reims-vgpu
 REIMS_COMMIT=818868564e31f9023c074f73840de97542592c91
@@ -19,6 +19,16 @@ REIMS_COMMIT=818868564e31f9023c074f73840de97542592c91
 REIMS_QEMU_COMMIT=010bf82714f00d0f2758671d4a81402a6d94767f
 UTIL_UPSTREAM=https://github.com/steelbrain/reims-util
 UTIL_COMMIT=84e5c98ae7fa6b0b68e7be690525dda29697ab34
+# Acidanthera's kexts that keep the guest's cores on one clock. On a host whose TSC Linux found
+# unstable, each vCPU's TSC drifts from the others', and a macOS guest with more than one core then
+# never finishes booting. CpuTscSync needs Lilu, which loads before it. Release zips and licences,
+# checked by hash; each is BSD-3-Clause.
+LILU_VERSION=1.7.2
+LILU_SHA256=53967d7dcfaab01023a33df2e969a89522f13d6654a6a56ac4711b62dabf3ab8
+LILU_LICENCE_SHA256=74c3ca48189b796b0d262866e67de8efba77a71516667ce68dc3a8f13c2a3c57
+TSC_VERSION=1.1.2
+TSC_SHA256=bc289f780c52015ae788827b3db8e6c2ab9f512992b3a157a4a5c15df1eb4ed3
+TSC_LICENCE_SHA256=4be2c86dd60442507470ed5283946b66899a794c7ca0d768460a9794a62b4ac6
 QEMU_PROGRAM=qemu-system-$ARCH
 # What a macOS machine's QEMU loads of QEMU's own firmware. The rest of pc-bios is for other machines.
 FIRMWARE='kvmvapic.bin linuxboot_dma.bin multiboot_dma.bin pvh.bin efi-virtio.rom'
@@ -50,7 +60,26 @@ fetch_commit() { # folder, upstream, commit
     mv "$1.new" "$1"
 }
 
+fetch_checked() { # url, sha256, file
+    [ -f "$3" ] || { curl -fsSL -o "$3.new" "$1" && mv "$3.new" "$3"; } || die "$1 couldn't be fetched."
+    [ "$(sha256sum "$3" | cut -d ' ' -f 1)" = "$2" ] || die "$1 isn't what it should be."
+}
+
+fetch_clock_kexts() {
+    kexts=$OUT/clock-kexts
+    acidanthera=https://github.com/acidanthera
+    raw=https://raw.githubusercontent.com/acidanthera
+    mkdir -p "$kexts"
+    fetch_checked "$acidanthera/Lilu/releases/download/$LILU_VERSION/Lilu-$LILU_VERSION-RELEASE.zip" \
+        "$LILU_SHA256" "$kexts/Lilu.zip"
+    fetch_checked "$raw/Lilu/$LILU_VERSION/LICENSE.txt" "$LILU_LICENCE_SHA256" "$kexts/Lilu-LICENSE.txt"
+    fetch_checked "$acidanthera/CpuTscSync/releases/download/$TSC_VERSION/CpuTscSync-$TSC_VERSION-RELEASE.zip" \
+        "$TSC_SHA256" "$kexts/CpuTscSync.zip"
+    fetch_checked "$raw/CpuTscSync/$TSC_VERSION/LICENSE" "$TSC_LICENCE_SHA256" "$kexts/CpuTscSync-LICENSE"
+}
+
 fetch_sources() {
+    fetch_clock_kexts
     fetch_commit "$OUT/reims-vgpu" "$REIMS_UPSTREAM" "$REIMS_COMMIT"
     fetch_commit "$OUT/reims-util" "$UTIL_UPSTREAM" "$UTIL_COMMIT"
     tree=$OUT/reims-vgpu
@@ -143,6 +172,8 @@ Guesthouse's macOS part $PART, built from:
 reims-vgpu  $REIMS_UPSTREAM  $REIMS_COMMIT
 its QEMU    vendor/qemu in that tree  $REIMS_QEMU_COMMIT
 reims-util  $UTIL_UPSTREAM  $UTIL_COMMIT
+Lilu        https://github.com/acidanthera/Lilu  $LILU_VERSION, its release zip
+CpuTscSync  https://github.com/acidanthera/CpuTscSync  $TSC_VERSION, its release zip
 EOF
 }
 
@@ -152,6 +183,34 @@ copy_licences() { # folder
     cp -R "$tree/LICENSE" "$tree/LICENSES" "$1/reims-vgpu/"
     cp "$tree/vendor/qemu/LICENSE" "$tree/vendor/qemu/COPYING" "$tree/vendor/qemu/COPYING.LIB" "$1/qemu/"
     cp -R "$OUT/reims-util/LICENSE" "$OUT/reims-util/LICENSES" "$1/reims-util/"
+    mkdir -p "$1/Lilu" "$1/CpuTscSync"
+    cp "$OUT/clock-kexts/Lilu-LICENSE.txt" "$1/Lilu/LICENSE.txt"
+    cp "$OUT/clock-kexts/CpuTscSync-LICENSE" "$1/CpuTscSync/LICENSE"
+}
+
+# One [[kext]] entry of the list, written as reims-vgpu's own are.
+kext_entry() { # folder, name, comment
+    printf '\n[[kext]]\nBundlePath = "%s.kext"\nExecutablePath = "Contents/MacOS/%s"\n' "$2" "$2"
+    printf 'PlistPath = "Contents/Info.plist"\nArch = "x86_64"\nMinKernel = ""\nMaxKernel = ""\n'
+    printf 'Comment = "%s"\nsha256 = "%s"\n' "$3" "$(sha256sum "$1/$2.kext/Contents/MacOS/$2" | cut -d ' ' -f 1)"
+}
+
+# Lilu and CpuTscSync go into the kexts folder, and first in its list, ahead of reims-vgpu's.
+add_clock_kexts() { # kexts folder
+    for name in Lilu CpuTscSync; do
+        python3 -m zipfile -e "$OUT/clock-kexts/$name.zip" "$1/" || die "$name's zip couldn't be unpacked."
+        [ -f "$1/$name.kext/Contents/MacOS/$name" ] || die "$name's zip has no $name.kext."
+    done
+    rm -rf "$1"/*.dSYM
+    list=$1/set.toml
+    {
+        sed -n '/^\[\[kext\]\]/q;p' "$list" | sed '$ { /^$/d; }'
+        kext_entry "$1" Lilu "Acidanthera's kernel patcher, which CpuTscSync needs"
+        kext_entry "$1" CpuTscSync "Keeps every core's TSC in step, for hosts whose TSC is unstable"
+        printf '\n'
+        sed -n '/^\[\[kext\]\]/,$p' "$list"
+    } >"$list.new"
+    mv "$list.new" "$list"
 }
 
 stage_part() {
@@ -167,6 +226,7 @@ stage_part() {
     done
     cp "$tree/firmware/prebuilt/ReimsGraphics.rom" "$part/"
     cp -R "$tree/guest/prebuilt" "$part/kexts"
+    add_clock_kexts "$part/kexts"
     cp "$OUT/util-target/release/reims-util" "$part/"
     strip "$part/reims-util" "$part/qemu/bin/$QEMU_PROGRAM"
     copy_licences "$part/licences"
@@ -215,6 +275,10 @@ reims-vgpu/     $REIMS_UPSTREAM at $REIMS_COMMIT, unmodified. The library in QEM
 
 reims-util/     $UTIL_UPSTREAM at $UTIL_COMMIT, unmodified.
 
+kexts/          The release zips of Lilu $LILU_VERSION and CpuTscSync $TSC_VERSION, as Acidanthera
+                published them. Their source: https://github.com/acidanthera/Lilu/tree/$LILU_VERSION
+                and https://github.com/acidanthera/CpuTscSync/tree/$TSC_VERSION.
+
 crates/         Every crate those two builds took, as cargo vendor wrote them: metal2vulkan and SDL3's
                 source among them, in reims-vgpu/.
 
@@ -240,6 +304,8 @@ stage_source() {
             (cd "$OUT/$tree" && cargo vendor -q --versioned-dirs "$source/crates/$tree" >/dev/null)
     done
     fetch_library_sources "$source/libraries"
+    mkdir -p "$source/kexts"
+    cp "$OUT/clock-kexts/Lilu.zip" "$OUT/clock-kexts/CpuTscSync.zip" "$source/kexts/"
     cp "$REPO/packaging/Containerfile.macos" "$REPO/packaging/macos-configure-flags" \
         "$REPO/packaging/build-macos-part.sh" "$source/recipes/"
     write_sources_note >"$source/SOURCES.txt"

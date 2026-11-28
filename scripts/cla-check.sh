@@ -2,12 +2,20 @@
 # Says whether a pull request's author has signed the contributor licence agreement:
 # whether the pull request leaves CLA/signers/LOGIN.md, with their line for this version in it.
 # The file is named after the login in lower case, and the line has to be the author's own.
-# Usage: cla-check.sh LOGIN [SIGNERS_DIR]
+# Usage: cla-check.sh LOGIN [SIGNERS_DIR], or cla-check.sh --exempt LOGIN
 set -eu
 
 VERSION=1
 # Accounts that sign nothing: the bots, and RUXN LLC's own.
 EXEMPT='dependabot[bot] github-actions[bot] xnixy'
+
+# cla-check.sh --exempt LOGIN only says, by its exit status, whether LOGIN is one of them.
+if [ "${1:-}" = --exempt ]; then
+    for name in $EXEMPT; do
+        [ "${2:-}" = "$name" ] && exit 0
+    done
+    exit 1
+fi
 
 login=${1:?usage: cla-check.sh LOGIN [SIGNERS_DIR]}
 signers=${2:-CLA/signers}

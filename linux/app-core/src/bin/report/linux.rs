@@ -216,5 +216,6 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    context.keep_private();
     run(&context, options)
 }

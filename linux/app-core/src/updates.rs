@@ -129,8 +129,10 @@ fn package_command(method: Method) -> Option<&'static str> {
 pub fn update(context: &Context, app: u32) -> Result<()> {
     let method = method(context).ok_or_else(|| Failure::new(NO_SCRIPT))?;
     let mut command = if method == Method::Script {
+        // What it installs is for every user, whatever this program makes private.
         let mut command = Command::new("sh");
         command
+            .args(["-c", "umask 022; exec sh \"$@\"", "sh"])
             .arg(context.paths.helper(INSTALL_SCRIPT))
             .arg(UPDATE_OPTION)
             .arg(format!("{FROM_APP_OPTION}{app}"));
@@ -138,7 +140,7 @@ pub fn update(context: &Context, app: u32) -> Result<()> {
     } else {
         let words = package_command(method).ok_or_else(|| Failure::new(PACMAN_SAYS))?;
         let mut command = Command::new("pkexec");
-        command.args(["sh", "-c", words]);
+        command.args(["sh", "-c"]).arg(format!("umask 022; {words}"));
         command
     };
     let result = match command.stdin(Stdio::null()).output() {

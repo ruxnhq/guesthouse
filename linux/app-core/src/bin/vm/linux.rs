@@ -13,6 +13,7 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    context.keep_private();
     match run(&context, &arguments, &mut io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(problem @ Problem::Usage(_)) => {

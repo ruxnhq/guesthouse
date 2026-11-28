@@ -146,6 +146,7 @@ pub fn run(restart: Option<Restart>) -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         }
     };
+    context.keep_private();
     log_panics(&context);
     gpu_reset::watch();
     if restart.is_some() {

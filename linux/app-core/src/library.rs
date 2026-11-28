@@ -18,9 +18,9 @@ use crate::snapshots::{list_snapshots, snapshots_folder};
 use crate::tasks::{State, slot_of, status};
 use crate::writable_copy::copy_writable;
 use serde_json::json;
-use std::fs::{self, File};
+use std::fs::{self, DirBuilder, File};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -333,7 +333,7 @@ fn make_disk_folder(machine: &Machine) -> Result<()> {
     if machine.disk_folder.is_empty() {
         return Ok(());
     }
-    fs::create_dir(&machine.disk_folder).map_err(|error| {
+    DirBuilder::new().mode(0o700).create(&machine.disk_folder).map_err(|error| {
         Failure(format!("The disk's folder {} could not be made: {error}", machine.disk_folder))
     })
 }

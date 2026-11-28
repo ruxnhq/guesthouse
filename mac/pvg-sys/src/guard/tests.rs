@@ -1196,7 +1196,7 @@ fn a_user_task_s_table_is_the_host_s_copy_and_names_only_the_guest_s_pages() {
 
     // The driver places a buffer and takes one away: the next command that names the task
     // brings the copy up to date, and one for another task does not.
-    play.put(USER_LEAF + 4, &[page(SURFACE), 0, page(SURFACE + PAGE_BYTES)]);
+    play.put(USER_LEAF + 4, &[page(SURFACE), shape.writable, page(SURFACE + PAGE_BYTES)]);
     play.run(4, &[], &[(0x4000, 8)]);
     assert_eq!(play.why(), Some(Why::NoSuchTask));
     assert_eq!(ours.word(leaf + 4), Some(0));
@@ -1508,7 +1508,8 @@ fn the_kernel_task_s_table_is_copied_for_the_device_entry_by_entry() {
     let mut play = Play::with_ring();
     let shape = play.profile.task.clone();
     // The glyph's page, a page that is not the guest's, and a page the host may write.
-    play.put(TASK_TABLE, &[page(GLYPH), page(OUTSIDE), page(GLYPH) | shape.writable]);
+    // Then an entry of no page with only the bit for writing, which names nothing.
+    play.put(TASK_TABLE, &[page(GLYPH), page(OUTSIDE), page(GLYPH) | shape.writable, shape.writable]);
     play.put(TASK_ROOT, &[page(TASK_TABLE), 1]);
     let define = play.profile.commands.define_task.number;
     let position = play.written;
@@ -1522,9 +1523,11 @@ fn the_kernel_task_s_table_is_copied_for_the_device_entry_by_entry() {
     assert_eq!(ours.word(play.shadow.kernel_root() + shape.depth_at), Some(1));
     let table = play.shadow.kernel_table();
     assert_eq!(
-        [ours.word(table), ours.word(table + 4), ours.word(table + 8)],
-        [Some(page(GLYPH)), Some(0), Some(page(GLYPH) | shape.writable)]
+        [ours.word(table), ours.word(table + 4), ours.word(table + 8), ours.word(table + 12)],
+        [Some(page(GLYPH)), Some(0), Some(page(GLYPH) | shape.writable), Some(0)]
     );
+    let task = play.guard.kernel_task.clone().expect("the task");
+    assert_eq!([0, 1, 2, 3].map(|page| task.maps(page * PAGE_BYTES, 1)), [true, false, true, false]);
     // What the device would have written into the guest's pages, written for it.
     assert_eq!(play.memory.word(ROOT_PAGE), Some(page(TASK_ROOT)));
     assert_eq!(play.memory.word64(TASK_ROOT + shape.length_at), Some(u64::from(TASK_BYTES)));

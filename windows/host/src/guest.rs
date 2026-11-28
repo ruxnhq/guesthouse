@@ -329,10 +329,14 @@ mod linux_tests {
         let Some(bridged) = ssh_from_on(Some("bridged\n192.168.1.20\n"), &["192.168.1.1"], &networks) else {
             return;
         };
-        assert_eq!(only_from(&bridged), ["127.0.0.1", "::1", "192.168.1.20", "192.168.1.0/24", "10.1.0.0/16"]);
+        assert_eq!(
+            only_from(&bridged),
+            ["127.0.0.1", "::1", "192.168.1.20", "192.168.1.0/24", "10.1.0.0/16"]
+        );
         let nothing_known = ssh_from_on(Some("bridged\n"), &[], &["192.168.1.0/24"]).unwrap();
         assert_eq!(only_from(&nothing_known), ["127.0.0.1", "::1", "192.168.1.0/24"]);
-        let shared = ssh_from_on(Some("shared\n192.168.1.20\n"), &["172.29.1.1"], &["172.29.0.0/20"]).unwrap();
+        let shared =
+            ssh_from_on(Some("shared\n192.168.1.20\n"), &["172.29.1.1"], &["172.29.0.0/20"]).unwrap();
         assert_eq!(only_from(&shared), ["127.0.0.1", "::1", "192.168.1.20", "172.29.1.1"]);
     }
 

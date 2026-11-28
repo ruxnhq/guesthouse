@@ -340,7 +340,9 @@ mod tests {
         let started = with_mac(&context, with_gpu(), mac).qemu_arguments();
         let card = value_after(&started, "-nic");
         assert!(
-            card.starts_with(&format!("user,model=virtio-net-pci,mac={mac},hostfwd=tcp:127.0.0.1:")),
+            card.starts_with(&format!(
+                "user,host-loopback=off,model=virtio-net-pci,mac={mac},hostfwd=tcp:127.0.0.1:"
+            )),
             "{card}"
         );
         let install = UbuntuInstall {
@@ -350,7 +352,12 @@ mod tests {
             initrd: PathBuf::from("/m/boot/initrd"),
         };
         let installing = with_mac(&context, Boot::UbuntuInstall(install), mac).qemu_arguments();
-        assert_eq!(value_after(&installing, "-nic"), format!("user,model=virtio-net-pci,mac={mac}"));
+        assert_eq!(
+            value_after(&installing, "-nic"),
+            format!("user,host-loopback=off,model=virtio-net-pci,mac={mac}")
+        );
+        super::super::nic::assert_user_networks_keep_off_host_loopback(&started);
+        super::super::nic::assert_user_networks_keep_off_host_loopback(&installing);
     }
 
     #[test]
@@ -360,7 +367,8 @@ mod tests {
         let mac = "52:54:00:a2:1c:6d";
         let plan = with_mac(&context, no_gpu(), mac);
         assert!(
-            value_after(&plan.qemu_arguments(), "-nic").starts_with("user,model=virtio-net-pci,hostfwd=")
+            value_after(&plan.qemu_arguments(), "-nic")
+                .starts_with("user,host-loopback=off,model=virtio-net-pci,hostfwd=")
         );
         let machine = Machine { kind: Kind::Linux, ..Machine::new("ubuntu", "Ubuntu", "/m/disk.qcow2", "") };
         std::fs::create_dir_all(machine.folder(&context)).unwrap();
@@ -373,7 +381,10 @@ mod tests {
     fn a_machine_with_no_address_yet_keeps_qemus_default() {
         let scratch = Scratch::new();
         let arguments = with_mac(&scratch_context(&scratch), no_gpu(), "").qemu_arguments();
-        assert!(value_after(&arguments, "-nic").starts_with("user,model=virtio-net-pci,hostfwd="));
+        assert!(
+            value_after(&arguments, "-nic")
+                .starts_with("user,host-loopback=off,model=virtio-net-pci,hostfwd=")
+        );
     }
 
     #[test]

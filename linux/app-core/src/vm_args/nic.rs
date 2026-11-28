@@ -34,6 +34,11 @@ const CARD: &str = "e1000e";
 const MACOS_CARD: &str = "virtio-net-pci";
 const MACOS_CARD_SLOT: &str = "0x3";
 const QEMU_NAT: &str = "user";
+/// QEMU's own NAT with the host's loopback out of the guest's reach: 10.0.2.2 and the IPv6 prefix
+/// lead to no service on the host's loopback, and forwards from the host still arrive from 10.0.2.2.
+/// The word is in `qemu/qemu-host-loopback.patch`. A restricted network sends nothing the guest
+/// starts out of QEMU, so it goes without.
+const NO_HOST_LOOPBACK: &str = "host-loopback=off";
 
 /// One of passt's settings: a name and its value, or a switch.
 enum PasstSetting {
@@ -186,7 +191,7 @@ impl VmPlan {
     /// with the machine's own address like any other machine's card. `settings` are the network's own.
     pub(super) fn ubuntu_nic(&self, settings: &str) -> String {
         let comma = if settings.is_empty() { "" } else { "," };
-        format!("{QEMU_NAT},model=virtio-net-pci{}{comma}{settings}", self.mac_word())
+        format!("{QEMU_NAT},{NO_HOST_LOOPBACK},model=virtio-net-pci{}{comma}{settings}", self.mac_word())
     }
 
     /// What the first NIC is connected to: QEMU's name for it, and its settings if it has any.
@@ -200,8 +205,8 @@ impl VmPlan {
                     self.passt_settings().iter().map(PasstSetting::qemu_word).collect();
                 ("passt", settings.join(","))
             }
-            (Mode::Nat, false) => ("user", link),
-            (Mode::None, _) => ("user", format!("restrict=on,{link}")),
+            (Mode::Nat, false) => (QEMU_NAT, format!("{NO_HOST_LOOPBACK},{link}")),
+            (Mode::None, _) => (QEMU_NAT, format!("restrict=on,{link}")),
             // The jail's launcher has the device from the helper already, as QEMU can't run it.
             (Mode::Bridged, _) if self.jail.is_some() => ("tap", format!("fd={TAP_FD}")),
             (Mode::Bridged, _) => {
@@ -253,5 +258,32 @@ impl VmPlan {
             "-device",
             &format!("{},netdev=link,mac={CONTROL_MAC},bus=pcie.0,addr=0x1e", self.nic_card()),
         ])
+    }
+}
+
+/// Every QEMU user network in `arguments`, each with whether it keeps the guest off the host's
+/// loopback: restricted, or with [`NO_HOST_LOOPBACK`].
+#[cfg(test)]
+pub(super) fn user_networks(arguments: &[String]) -> Vec<(String, bool)> {
+    arguments
+        .windows(2)
+        .filter(|pair| pair[0] == "-nic" || pair[0] == "-netdev")
+        .map(|pair| &pair[1])
+        .filter(|value| value.split(',').next() == Some(QEMU_NAT))
+        .map(|value| {
+            let words: Vec<&str> = value.split(',').collect();
+            (value.clone(), words.contains(&"restrict=on") || words.contains(&NO_HOST_LOOPBACK))
+        })
+        .collect()
+}
+
+/// Panics unless `arguments` have a QEMU user network and every one keeps the guest off the host's
+/// loopback.
+#[cfg(test)]
+pub(super) fn assert_user_networks_keep_off_host_loopback(arguments: &[String]) {
+    let networks = user_networks(arguments);
+    assert!(!networks.is_empty(), "no user network in {arguments:?}");
+    for (network, kept) in networks {
+        assert!(kept, "a QEMU user network is restricted or has {NO_HOST_LOOPBACK}: {network}");
     }
 }

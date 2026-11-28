@@ -264,6 +264,14 @@ fn qemu_with_no_display_says_what_to_install() {
     assert_eq!(super::local::start_failure("it broke"), "The VM did not start. it broke");
 }
 
+#[test]
+fn a_qemu_without_the_host_loopback_setting_says_which_qemu_to_use() {
+    let refused =
+        "qemu-system-x86_64: -nic user,model=e1000e,host-loopback=off: Invalid parameter 'host-loopback'";
+    let help = super::local::start_failure(refused);
+    assert!(help.contains("the QEMU that comes with Guesthouse") && help.contains("passt"), "{help}");
+}
+
 /// A NixOS tester saw only "No such file or directory (os error 2)", which didn't say what was missing.
 #[test]
 fn a_program_that_cant_be_run_is_named() {

@@ -353,6 +353,7 @@ mod tests {
         assert_eq!(value_after(&arguments, "-smbios", "type=1").unwrap(), "type=1,sku=guesthouse");
         let play = plan(GpuMaker::Nvidia).qemu_arguments();
         assert_eq!(value_after(&play, "-smbios", "type=1").unwrap(), "type=1,sku=guesthouse microg");
+        super::super::nic::assert_user_networks_keep_off_host_loopback(&arguments);
     }
 
     #[test]

@@ -338,7 +338,11 @@ mod tests {
         );
         assert!(arguments.iter().any(|word| word == "ide-hd,bus=sata.2,drive=opencore,bootindex=1"));
         assert!(!arguments.iter().any(|word| word.contains("installer")), "macOS is installed");
-        assert!(value_after(&arguments, "-netdev").starts_with("user,id=net0,ipv6=off,hostfwd="));
+        assert!(
+            value_after(&arguments, "-netdev")
+                .starts_with("user,id=net0,ipv6=off,host-loopback=off,hostfwd=")
+        );
+        super::super::nic::assert_user_networks_keep_off_host_loopback(&arguments);
         let card = "virtio-net-pci,netdev=net0,id=net0,mac=52:54:00:9b:79:fe,addr=0x3";
         assert!(arguments.iter().any(|word| word == card), "where macOS was installed with it");
     }

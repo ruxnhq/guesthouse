@@ -110,6 +110,7 @@ mod tests {
         let plain = plan(&context, Boot::Plain { iso: "/iso/Fedora.iso".into() }).qemu_arguments();
         let with_gpu = plan(&context, own(with_gpu())).qemu_arguments();
         assert!(with_gpu.len() > plain.len());
+        super::super::nic::assert_user_networks_keep_off_host_loopback(&with_gpu);
         assert_eq!(&with_gpu[..plain.len()], &plain[..], "the guest's own devices stay where it saw them");
         let added = &with_gpu[plain.len()..];
         assert!(added.iter().any(|word| word.starts_with("nvfwd,allow=/p/linux/allow.txt,")));

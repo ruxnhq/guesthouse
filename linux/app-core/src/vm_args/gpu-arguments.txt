@@ -23,7 +23,7 @@ kvm-pit.lost_tick_policy=discard
 -device
 ahci,id=ahci
 -nic
-user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,hostfwd=udp:127.0.0.1:19065-:7791
+user,model=e1000e,host-loopback=off,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,hostfwd=udp:127.0.0.1:19065-:7791
 -device
 qemu-xhci,id=xhci
 -device

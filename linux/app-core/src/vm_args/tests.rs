@@ -154,10 +154,36 @@ fn nothing_set_is_the_line_every_machine_had() {
     let arguments = plan.qemu_arguments();
     assert_eq!(
         value_after(&arguments, "-nic"),
-        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
-         hostfwd=udp:127.0.0.1:19065-:7791"
+        "user,model=e1000e,host-loopback=off,hostfwd=tcp:127.0.0.1:18765-:8765,\
+         hostfwd=tcp:127.0.0.1:18865-:8767,hostfwd=udp:127.0.0.1:19065-:7791"
     );
     assert!(!has(&arguments, "-netdev"), "NAT has one adapter");
+}
+
+/// Every QEMU user network keeps the guest off the host's loopback, in every network mode and for
+/// every kind of boot made here. Ubuntu, macOS, Android and a Linux of the user's own check theirs
+/// beside their other words.
+#[test]
+fn every_user_network_keeps_the_guest_off_the_hosts_loopback() {
+    let modes = [
+        Machine { network_mode: Mode::Nat, ..windows() },
+        Machine { network_mode: Mode::Nat, passt: true, ..windows() },
+        Machine { network_mode: Mode::None, ..windows() },
+        Machine { network_mode: Mode::Bridged, ..windows() },
+        Machine { share: "/home/me/shared".into(), ..windows() },
+    ];
+    for machine in &modes {
+        let (_scratch, plan) = plan(machine, Boot::Gpu);
+        nic::assert_user_networks_keep_off_host_loopback(&plan.qemu_arguments());
+    }
+    let install = Boot::Install { iso: "/m/win.iso".into(), answer: "/m/answer.iso".into() };
+    for (machine, boot) in [(windows(), install), (plain_machine(), plain_boot())] {
+        let (_scratch, plan) = plan(&machine, boot);
+        nic::assert_user_networks_keep_off_host_loopback(&plan.qemu_arguments());
+    }
+    let (_scratch, held) = plan(&windows(), Boot::Gpu);
+    let held = VmPlan { network: held_to("wg0", true), ..held };
+    nic::assert_user_networks_keep_off_host_loopback(&held.qemu_arguments());
 }
 
 #[test]
@@ -541,8 +567,8 @@ fn app_windows_on_adds_one_forward_for_its_helper_after_the_files_helpers() {
     assert_eq!(plan.app_windows_port, Some(18965));
     assert_eq!(
         value_after(&plan.qemu_arguments(), "-nic"),
-        "user,model=e1000e,hostfwd=tcp:127.0.0.1:18765-:8765,hostfwd=tcp:127.0.0.1:18865-:8767,\
-         hostfwd=tcp:127.0.0.1:18965-:8769,hostfwd=udp:127.0.0.1:19065-:7791"
+        "user,model=e1000e,host-loopback=off,hostfwd=tcp:127.0.0.1:18765-:8765,\
+         hostfwd=tcp:127.0.0.1:18865-:8767,hostfwd=tcp:127.0.0.1:18965-:8769,hostfwd=udp:127.0.0.1:19065-:7791"
     );
     let second = VmPlan::new(&context, &windows(), Boot::Gpu, slots::number(2), 0);
     assert!(

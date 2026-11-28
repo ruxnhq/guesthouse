@@ -32,6 +32,12 @@ const LAST_WORDS_BYTES: usize = 300;
 const NO_DBUS_DISPLAY: &str = "Display 'dbus' is not available";
 const NO_DBUS_DISPLAY_HELP: &str = "This QEMU can't show its screen in Guesthouse. Install its D-Bus \
                                     display, which Fedora calls qemu-ui-dbus, and start the machine again.";
+/// QEMU's words for a user network setting it doesn't know, here the one that keeps the guest off the
+/// host's loopback, which the QEMU that comes with Guesthouse has and others don't.
+const NO_HOST_LOOPBACK: &str = "Invalid parameter 'host-loopback'";
+const NO_HOST_LOOPBACK_HELP: &str = "This QEMU's own network can't keep the guest off this PC's loopback, \
+                                     which every machine on it needs. Start the machine with the QEMU \
+                                     that comes with Guesthouse, or turn passt on in its network settings.";
 const NO_QEMU_HELP: &str = "QEMU isn't installed. Install qemu-system-x86_64, and start the machine again.";
 const STOP_POLL: Duration = Duration::from_millis(500);
 const MONITOR_WAIT: Duration = Duration::from_secs(20);
@@ -455,6 +461,9 @@ pub fn sound_on_this_host() -> Option<Sound> {
 pub(super) fn start_failure(said: &str) -> String {
     if said.contains(NO_DBUS_DISPLAY) {
         return NO_DBUS_DISPLAY_HELP.to_owned();
+    }
+    if said.contains(NO_HOST_LOOPBACK) {
+        return NO_HOST_LOOPBACK_HELP.to_owned();
     }
     format!("The VM did not start. {said}").trim().to_owned()
 }

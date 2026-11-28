@@ -254,6 +254,12 @@ cp "$licence_file" "$app/Contents/Resources/licences/Guesthouse-GPL-2.0.txt"
         echo "source is (QEMU at the commit it names, with the patches in qemu/mac/patches of the repository"
         echo "above, built by qemu/mac/build.sh), and their licences are in Contents/Resources/qemu/licences."
     fi
+    if [ -f "$app/Contents/Resources/qemu/pvgfb.rom" ]; then
+        echo
+        echo "pvgfb.rom (Contents/Resources/qemu) is a UEFI driver of ours that gives a guest's firmware a"
+        echo "screen on the graphics device before the guest has a driver. It is MIT-licensed, and its source"
+        echo "is mac/pvgfb of the repository above, built by mac/pvgfb/build.sh."
+    fi
 } >"$app/Contents/Resources/NOTICE.txt"
 
 if [ -n "$stage_to" ]; then

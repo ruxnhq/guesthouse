@@ -14,6 +14,7 @@ on:
       - mac/pvg-sys/**
       - mac/pvg-host/**
       - qemu/mac/**
+      - mac/pvgfb/**
       - mac/build-pvg-host.sh
       - .github/workflows/mac-graphics.yml
   push:
@@ -22,6 +23,7 @@ on:
       - mac/pvg-sys/**
       - mac/pvg-host/**
       - qemu/mac/**
+      - mac/pvgfb/**
       - mac/build-pvg-host.sh
       - .github/workflows/mac-graphics.yml
 
@@ -57,9 +59,13 @@ jobs:
       - name: Build the graphics process
         run: sh mac/build-pvg-host.sh
       - name: Install what QEMU's build needs
-        run: brew install glib pixman libslirp ninja pkgconf
+        run: brew install glib pixman libslirp ninja pkgconf lld
       - name: Build QEMU
         run: sh qemu/mac/build.sh
+      - name: Build the framebuffer ROM
+        run: |
+          sh mac/pvgfb/build.sh --helpers target/mac-helpers
+          test -s target/mac-helpers/Resources/qemu/pvgfb.rom
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-helpers

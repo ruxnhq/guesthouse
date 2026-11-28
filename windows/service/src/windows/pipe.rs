@@ -7,6 +7,10 @@
 //! request is checked against who is asking: the system, an elevated administrator, or the user
 //! signed in at the console. The console's user changes as people sign in and out, which a pipe's
 //! fixed security can't follow, so that's checked for each request.
+//!
+//! Each connection is served on a thread of its own, and only so many are served at once: so many
+//! for each user, by the account of the process that connected, and so many in all. One past either
+//! is closed at once, and the pipe goes on being served. So does it when no thread can be made.
 
 use super::log;
 use super::security::{Descriptor, SYSTEM, is_administrator, last_error, own_user, token_user, wide};
@@ -14,6 +18,7 @@ use crate::requests::{Connection, Held, Service, Work};
 use guesthouse_control::protocol::{NOT_A_REQUEST, request_from};
 use guesthouse_control::{Answer, REQUEST_LIMIT, read_line, write_line};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::os::windows::ffi::OsStringExt;
@@ -21,7 +26,7 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use std::ptr::null_mut;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
@@ -36,11 +41,14 @@ use windows_sys::Win32::Storage::FileSystem::{
     VOLUME_NAME_DOS, WRITE_DAC,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, PeekNamedPipe,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    PeekNamedPipe,
 };
 use windows_sys::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
-use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 /// The system, administrators and the pipe's owner, who is whoever made it, may do anything with
 /// the pipe, making more instances of it too. Interactive users may read it and write to it
@@ -53,6 +61,27 @@ const DRIVE_FIXED: u32 = 3;
 const BUFFER: u32 = REQUEST_LIMIT as u32;
 /// How long to wait before trying again when an instance couldn't be made.
 const AGAIN: Duration = Duration::from_secs(1);
+/// How many connections may be open at once. The app has a few open at a time (its requests, one
+/// after another, a watch, a machine being made, the remote view's), far fewer than this for a user.
+pub const LIMITS: Limits = Limits { per_user: 32, in_all: 256 };
+/// Whom a connection is counted against when the account of the process that made it can't be read.
+const UNKNOWN_USER: &str = "an unknown user";
+
+/// How many connections may be open at once, for one user and in all.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub per_user: usize,
+    pub in_all: usize,
+}
+
+/// A connection's work, handed to a new thread.
+type ConnectionWork = Box<dyn FnOnce() + Send>;
+
+/// Starts `work` on a thread of its own. The work is dropped, and with it its connection, if no
+/// thread can be made.
+fn on_new_thread(work: ConnectionWork) -> io::Result<()> {
+    thread::Builder::new().name("request".into()).spawn(work).map(drop)
+}
 
 /// Makes the pipe's first instance, which fails if any other program has its name, and then serves
 /// it on a thread of its own for as long as the process runs.
@@ -61,7 +90,8 @@ pub fn listen<W: Work>(name: &'static str, service: Arc<Service<W>>) -> Result<(
     let first = instance(name, &security, true).map_err(|error| {
         format!("{error}. Another program may have the pipe's name, or the service is running already.")
     })?;
-    thread::spawn(move || serve(name, service, security, first));
+    let slots = Slots::new(LIMITS);
+    thread::spawn(move || serve(name, service, security, first, &slots, on_new_thread));
     Ok(())
 }
 
@@ -94,7 +124,14 @@ fn instance(name: &str, security: &Descriptor, first: bool) -> Result<OwnedHandl
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
-fn serve<W: Work>(name: &str, service: Arc<Service<W>>, security: Descriptor, first: OwnedHandle) {
+fn serve<W: Work>(
+    name: &str,
+    service: Arc<Service<W>>,
+    security: Descriptor,
+    first: OwnedHandle,
+    slots: &Arc<Slots>,
+    spawn: impl Fn(ConnectionWork) -> io::Result<()>,
+) {
     let mut waiting = first;
     loop {
         // SAFETY: an instance of ours, waited on with no overlapped I/O.
@@ -112,11 +149,109 @@ fn serve<W: Work>(name: &str, service: Arc<Service<W>>, security: Descriptor, fi
             }
         };
         let served = std::mem::replace(&mut waiting, next);
-        if connected {
-            let service = Arc::clone(&service);
-            thread::spawn(move || answer(&service, File::from(served)));
+        if !connected {
+            continue;
+        }
+        let user = client_user(&served).unwrap_or_else(|| UNKNOWN_USER.to_owned());
+        // One past the limit is closed here, unanswered, as `served` goes.
+        let Some(slot) = slots.take(&user) else { continue };
+        let service = Arc::clone(&service);
+        let work = Box::new(move || {
+            let _slot = slot;
+            answer(&service, File::from(served));
+        });
+        if let Err(error) = spawn(work) {
+            log(&format!("A request was closed unanswered, as no thread could be made for it: {error}"));
         }
     }
+}
+
+/// The connections open now, by whom.
+pub struct Slots {
+    limits: Limits,
+    open: Mutex<Open>,
+}
+
+#[derive(Default)]
+struct Open {
+    by_user: HashMap<String, usize>,
+    in_all: usize,
+    /// The users told of in the log as having reached their limit, until one of theirs closes.
+    told: HashSet<String>,
+}
+
+/// One connection's place, given back as it goes.
+pub struct Slot {
+    slots: Arc<Slots>,
+    user: String,
+}
+
+impl Slots {
+    pub fn new(limits: Limits) -> Arc<Self> {
+        Arc::new(Slots { limits, open: Mutex::new(Open::default()) })
+    }
+
+    /// A place for one more of `user`'s connections, if there's room for it.
+    fn take(self: &Arc<Self>, user: &str) -> Option<Slot> {
+        let mut open = self.lock();
+        let theirs = open.by_user.get(user).copied().unwrap_or(0);
+        if theirs >= self.limits.per_user || open.in_all >= self.limits.in_all {
+            if open.told.insert(user.to_owned()) {
+                log(&format!(
+                    "refused: {user} has {theirs} connections open, of {} in all, which is as many as are served",
+                    open.in_all
+                ));
+            }
+            return None;
+        }
+        *open.by_user.entry(user.to_owned()).or_default() += 1;
+        open.in_all += 1;
+        Some(Slot { slots: Arc::clone(self), user: user.to_owned() })
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Open> {
+        self.open.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut open = self.slots.lock();
+        open.in_all -= 1;
+        open.told.remove(&self.user);
+        if let Some(theirs) = open.by_user.get_mut(&self.user) {
+            *theirs -= 1;
+            if *theirs == 0 {
+                open.by_user.remove(&self.user);
+            }
+        }
+    }
+}
+
+/// The account of the process that connected to `pipe`, if it can be read.
+fn client_user(pipe: &OwnedHandle) -> Option<String> {
+    let mut process = 0u32;
+    // SAFETY: an instance of ours with a client; the ID comes back in a place for it.
+    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut process) } == 0 {
+        return None;
+    }
+    // SAFETY: plain call; the handle is closed below.
+    let opened = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process) };
+    if opened.is_null() {
+        return None;
+    }
+    let mut token: HANDLE = null_mut();
+    // SAFETY: the process's handle is open, and the token comes back in a place for it.
+    let got = unsafe { OpenProcessToken(opened, TOKEN_QUERY, &mut token) } != 0;
+    // SAFETY: ours, and not used again.
+    unsafe { CloseHandle(opened) };
+    if !got {
+        return None;
+    }
+    let user = token_user(token);
+    // SAFETY: ours, and not used again.
+    unsafe { CloseHandle(token) };
+    user
 }
 
 /// Reads one request and answers it, if whoever asked may ask.
@@ -412,7 +547,8 @@ mod tests {
     use guesthouse_host_windows::settings::{BootSettings, PrepareSettings};
     use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::channel;
 
     struct Nothing;
 
@@ -540,5 +676,113 @@ mod tests {
             Some(Answer::Refused { reason: OTHER_VERSION.into() })
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The pipe served as `listen` serves it, under a name of the test's own, with these limits,
+    /// its connections' threads made by `spawn`.
+    fn serving(
+        test: &str,
+        limits: Limits,
+        spawn: impl Fn(ConnectionWork) -> io::Result<()> + Send + 'static,
+    ) -> &'static str {
+        let name = format!(r"\\.\pipe\guesthouse-test-{test}-{}", std::process::id());
+        let name: &'static str = Box::leak(name.into_boxed_str());
+        let root = std::env::temp_dir().join(format!("gh-pipe-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let service = Service::new(Store::new(root), Nothing);
+        let security = Descriptor::new(PIPE_SECURITY).unwrap();
+        let first = instance(name, &security, true).unwrap();
+        let slots = Slots::new(limits);
+        thread::spawn(move || serve(name, service, security, first, &slots, spawn));
+        name
+    }
+
+    /// A connection to the pipe, waiting a moment while the service makes its next instance.
+    fn connect(name: &str) -> File {
+        const ERROR_PIPE_BUSY: i32 = 231;
+        for _ in 0..200 {
+            match OpenOptions::new().access_mode(0x0012_008b).open(name) {
+                Ok(pipe) => return pipe,
+                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                    thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+        panic!("the pipe stayed busy");
+    }
+
+    /// What a connection that asks for the status gets within a few seconds: an answer, the end
+    /// with none (`Some(None)`), or nothing yet (`None`).
+    fn status_within(name: &'static str) -> Option<Option<Answer>> {
+        let (said, heard) = channel();
+        thread::spawn(move || {
+            let pipe = connect(name);
+            let _ = write_line(&mut &pipe, &request_line(&Request::Status));
+            let _ = said.send(read_line::<Answer>(&mut BufReader::new(&pipe)).ok().flatten());
+        });
+        heard.recv_timeout(Duration::from_secs(5)).ok()
+    }
+
+    /// Whether the service closes `pipe`, which has asked nothing, within `seconds`.
+    fn closed_within(pipe: &File, seconds: u64) -> bool {
+        let until = std::time::Instant::now() + Duration::from_secs(seconds);
+        while std::time::Instant::now() < until {
+            // SAFETY: only asks whether the pipe is still there, reading nothing.
+            let there = unsafe {
+                PeekNamedPipe(pipe.as_raw_handle(), null_mut(), 0, null_mut(), null_mut(), null_mut())
+            } != 0;
+            if !there {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Asks for the status until it's answered, as a connection that has just closed gives its
+    /// place back a moment later.
+    fn answered_soon(name: &'static str) -> bool {
+        (0..50).any(|_| {
+            let answered = matches!(status_within(name), Some(Some(Answer::Status { .. })));
+            if !answered {
+                thread::sleep(Duration::from_millis(50));
+            }
+            answered
+        })
+    }
+
+    /// A user's connections that ask nothing hold no more than their share, the one past it is
+    /// closed at once, and the pipe answers again as soon as one of theirs goes.
+    #[test]
+    fn connections_past_the_limit_are_closed_and_the_pipe_goes_on() {
+        for (test, limits) in [
+            ("per-user", Limits { per_user: 2, in_all: 100 }),
+            ("in-all", Limits { per_user: 100, in_all: 2 }),
+        ] {
+            let name = serving(test, limits, on_new_thread);
+            let held = [connect(name), connect(name)];
+            assert!(!closed_within(&held[0], 1), "{test}: a connection within the limit is kept");
+            let past = connect(name);
+            assert!(closed_within(&past, 5), "{test}: the connection past the limit is closed");
+            assert_eq!(status_within(name), Some(None), "{test}: and so is the next, while the limit holds");
+            let [first, _second] = held;
+            drop(first);
+            assert!(answered_soon(name), "{test}: once one goes, the pipe answers again");
+        }
+    }
+
+    #[test]
+    fn a_connection_no_thread_could_be_made_for_is_closed_and_the_pipe_goes_on() {
+        let failed = AtomicBool::new(false);
+        let name = serving("no-thread", LIMITS, move |work| {
+            if failed.swap(true, Ordering::SeqCst) {
+                on_new_thread(work)
+            } else {
+                Err(io::Error::other("no thread this time"))
+            }
+        });
+        assert_eq!(status_within(name), Some(None), "the first is closed unanswered");
+        assert!(answered_soon(name), "the next is answered");
     }
 }

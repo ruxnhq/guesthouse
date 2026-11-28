@@ -97,6 +97,8 @@ int pin_range(struct call *c, u32 at, u64 size)
 		return -EINVAL;
 	start = user & PAGE_MASK;
 	npages = (user + size - start + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (npages > totalram_pages()) /* more than the guest has can't be pinned */
+		return -ENOMEM;
 	off = ALIGN(c->next, 16);
 	pages = kvmalloc_array(npages, sizeof(*pages), GFP_KERNEL);
 	if (!pages)
@@ -109,7 +111,6 @@ int pin_range(struct call *c, u32 at, u64 size)
 		kvfree(pages);
 		return got < 0 ? got : -EFAULT;
 	}
-	/* The pins stay until the guest reboots: nothing here hears when the host lets go. */
 	runs = (struct nvfwd_runs *)(c->data + off);
 	runs->count = 0;
 	runs->first_offset = user - start;
@@ -128,11 +129,35 @@ int pin_range(struct call *c, u32 at, u64 size)
 		runs->run[runs->count].gpa = gpa;
 		runs->run[runs->count++].len = PAGE_SIZE;
 	}
-	kvfree(pages);
-	if (rc)
+	if (rc) {
+		unpin_user_pages(pages, npages);
+		kvfree(pages);
 		return rc;
+	}
+	/* Held by the call until the host has answered: see pins_settle(). */
+	c->pins = pages;
+	c->npins = npages;
 	c->next = off + sizeof(*runs) + runs->count * sizeof(runs->run[0]);
 	return add_fix(c, NVFWD_FIX_PAGES, at, off, 8);
+}
+
+/*
+ * After the host has answered. Pages of an allocation the host made stay pinned under the pin id
+ * it answered with, until it lets that go (pins.c). Pages of one it refused, or never saw, go
+ * back now.
+ */
+void pins_settle(struct call *c, bool made)
+{
+	if (!c->pins)
+		return;
+	if (made) {
+		pins_keep(c->req->a3, c->pins, c->npins);
+	} else {
+		unpin_user_pages(c->pins, c->npins);
+		kvfree(c->pins);
+	}
+	c->pins = NULL;
+	c->npins = 0;
 }
 
 /* A call on this file, with a slot of its own, or NULL. */
@@ -147,15 +172,19 @@ struct call *call_new(u32 fdid, u32 cmd)
 	c->data = (u8 *)c->req + NVFWD_HDR_SIZE;
 	c->next = 0;
 	c->nsaved = c->nout = 0;
+	c->pins = NULL;
+	c->npins = 0;
 	c->req->op = NVFWD_OP_IOCTL;
 	c->req->fdid = fdid;
 	c->req->cmd = cmd;
 	c->req->nfix = 0;
+	c->req->a3 = 0; /* the host's answer for an OS descriptor allocation: its pin */
 	return c;
 }
 
 void call_free(struct call *c)
 {
+	pins_settle(c, false);
 	slot_put(c->slot);
 	kfree(c);
 }

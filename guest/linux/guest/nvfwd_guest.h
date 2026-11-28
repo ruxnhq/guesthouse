@@ -16,6 +16,7 @@
 #include "nvfwd_proto.h"
 
 #define ESC_RM_ALLOC_MEMORY 0x27
+#define ESC_RM_FREE 0x29
 #define ESC_RM_CONTROL 0x2a
 #define ESC_RM_ALLOC 0x2b
 #define ESC_RM_MAP_MEMORY 0x4e
@@ -79,6 +80,8 @@ struct call {
 	int nsaved, nout;
 	struct saved saved[NVFWD_MAX_FIX];
 	struct outbuf out[NVFWD_MAX_FIX];
+	struct page **pins; /* pinned for this call's allocation, see pins_settle() */
+	unsigned long npins;
 };
 
 /* slots.c */
@@ -92,6 +95,11 @@ int place(struct call *c, u64 user, u32 len, u32 *off);
 int follow(struct call *c, u32 at, u32 len, u32 *off);
 int fix_fd(struct call *c, u32 at);
 int pin_range(struct call *c, u32 at, u64 size);
+void pins_settle(struct call *c, bool made);
+
+/* pins.c */
+void pins_keep(u64 pin, struct page **pages, unsigned long npages);
+void pins_check(void);
 struct call *call_new(u32 fdid, u32 cmd);
 void call_free(struct call *c);
 
@@ -104,7 +112,9 @@ int uvm_process_join(void);
 void uvm_process_leave(int place);
 
 /* show.c */
-long show_ioctl(unsigned int cmd, unsigned long arg);
+long show_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg);
+void show_file_closed(struct nvf_file *nf);
+void show_kernel_claim(void);
 
 /* files.c */
 extern const struct file_operations nvf_fops;

@@ -235,12 +235,8 @@ impl VmPlan {
         if self.passes_unix_sockets() {
             arguments.extend(words(&["-pidfile", &self.in_run_folder(super::PID_FILE)]));
         }
-        arguments.extend(words(&[
-            "-serial",
-            &format!("file:{}", self.in_run_folder(KERNEL_LOG_FILE)),
-            "-D",
-            &self.in_run_folder("qemu.log"),
-        ]));
+        arguments.extend(self.serial_arguments(KERNEL_LOG_FILE));
+        arguments.extend(words(&["-D", &self.in_run_folder("qemu.log")]));
         arguments
     }
 

@@ -92,6 +92,7 @@ EXPORT_SYMBOL_GPL(nvfwd_kopen);
 void nvfwd_kclose(u32 fdid)
 {
 	simple_op(NVFWD_OP_CLOSE, fdid, 0, 0, 0, 0, NULL);
+	pins_check();
 }
 EXPORT_SYMBOL_GPL(nvfwd_kclose);
 
@@ -117,6 +118,7 @@ EXPORT_SYMBOL_GPL(nvfwd_kunmap);
 
 long nvfwd_show_surface(u32 fdid, u64 id, u32 width, u32 height, u32 pitch, u32 fourcc, u64 size)
 {
+	show_kernel_claim();
 	return simple_op(NVFWD_OP_SHOW_SURFACE, fdid, id, width | (u64)height << 32, pitch | (u64)fourcc << 32, size, NULL);
 }
 EXPORT_SYMBOL_GPL(nvfwd_show_surface);

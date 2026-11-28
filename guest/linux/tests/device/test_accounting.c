@@ -125,8 +125,54 @@ static void test_alloc(void)
     assert(run(o, ESC_RM_ALLOC, RM_ALLOC_LONG_BYTES, 2) == STATUS_INVALID_ARGUMENT);
 }
 
+/* An OS descriptor allocation that mapped guest pages gets a pin, and a duplicate of it holds the same pin. */
+static void test_pins(void)
+{
+    Objects *o = new_objects();
+    AccountHold hold;
+    uint32_t pin;
+
+    memset(args, 0, sizeof(args));
+    put32(args, RM_MEMORY_ROOT, CLIENT);
+    put32(args, RM_MEMORY_PARENT, CLIENT);
+    put32(args, RM_MEMORY_CLASS, CLASS_OS_DESCRIPTOR);
+    put64(args, RM_MEMORY_LIMIT, 4095);
+    {
+        AccountCall call = { .nr = ESC_RM_ALLOC_MEMORY, .arg = args, .size = RM_MEMORY_BYTES, .file = 1,
+                             .data = params, .data_size = sizeof(params), .host_range = args, .host_bytes = 4096,
+                             .host_runs = 1 };
+
+        assert(!account_before(o, &call, &hold));
+        put32(args, RM_MEMORY_OBJECT, 0x50);
+        put32(args, RM_MEMORY_STATUS, STATUS_OK);
+        assert(account_after(o, &call, &hold));
+        pin = call.pin;
+    }
+    assert(pin && objects_pin_of(o, CLIENT, 0x50) == pin);
+
+    memset(args, 0, sizeof(args));
+    put32(args, RM_DUP_CLIENT, CLIENT);
+    put32(args, RM_DUP_PARENT, CLIENT);
+    put32(args, RM_DUP_OBJECT, 0x51);
+    put32(args, RM_DUP_SOURCE_CLIENT, CLIENT);
+    put32(args, RM_DUP_SOURCE_OBJECT, 0x50);
+    {
+        AccountCall call = { .nr = ESC_RM_DUP_OBJECT, .arg = args, .size = RM_DUP_BYTES, .file = 1,
+                             .data = params, .data_size = sizeof(params) };
+
+        assert(!account_before(o, &call, &hold));
+        put32(args, RM_DUP_STATUS, STATUS_OK);
+        assert(account_after(o, &call, &hold) && call.pin == pin);
+    }
+    objects_remove(o, CLIENT, 0x50);
+    assert(objects_pin_held(o, pin));
+    objects_remove(o, CLIENT, 0x51);
+    assert(!objects_pin_held(o, pin));
+}
+
 int main(void)
 {
+    test_pins();
     test_heap();
     test_alloc_memory();
     test_alloc();

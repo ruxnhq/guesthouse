@@ -241,6 +241,40 @@ static void no_daemon_does_not_loosen_the_mask(FILE *log)
     assert(poll_for(s, POLL_PROCESSES) == STATUS_NOT_SUPPORTED);
 }
 
+static uint32_t alloc_handle(Sensors *s, uint32_t object, bool taken)
+{
+    SensorCall call = {
+        .nr = ESC_RM_ALLOC, .arg = args, .size = ALLOC_BYTES, .file = FILE_ID, .map_file = FILE_ID,
+        .data = (uint8_t *)&mask_param, .data_size = sizeof(mask_param), .handle_taken = taken,
+    };
+
+    memset(args, 0, sizeof(args));
+    mask_param = 0;
+    put32(0, CLIENT);
+    put32(8, object);
+    put32(12, CLASS_SENSOR_PAGE);
+    put64(16, (uint64_t)(uintptr_t)&mask_param);
+    put32(32, sizeof(mask_param));
+    assert(sensors_answer(s, &call));
+    return get32(40);
+}
+
+/* A handle is the object's alone, and one file holds only a few. */
+static void handles_are_not_shared_and_a_file_holds_few(FILE *log)
+{
+    Sensors *s = sensors_with(NULL, "good", log);
+
+    assert(alloc_handle(s, OBJECT, false) == STATUS_OK);
+    assert(alloc_handle(s, OBJECT, false) == 0x19);     /* the same handle again */
+    assert(alloc_handle(s, OBJECT + 1, true) == 0x19);  /* a handle the device holds for a real object */
+    for (uint32_t i = 1; i < 256; i++) {
+        assert(alloc_handle(s, OBJECT + 1 + i, false) == STATUS_OK);
+    }
+    assert(alloc_handle(s, OBJECT + 1000, false) == 0x1a);
+    sensors_file_closed(s, FILE_ID);
+    assert(alloc_handle(s, OBJECT, false) == STATUS_OK);
+}
+
 int main(int argc, char **argv)
 {
     FILE *log = fopen("/dev/null", "w");
@@ -255,6 +289,7 @@ int main(int argc, char **argv)
     a_daemon_that_dies_takes_its_readings_with_it(log);
     a_quiet_death_is_noticed_too(log);
     no_daemon_does_not_loosen_the_mask(log);
+    handles_are_not_shared_and_a_file_holds_few(log);
     puts("sensors: all passed");
     return 0;
 }

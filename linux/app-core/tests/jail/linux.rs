@@ -6,10 +6,12 @@ use guesthouse_app_core::network::Mode;
 use guesthouse_app_core::slots;
 use guesthouse_app_core::testing::{Scratch, scratch_context};
 use guesthouse_app_core::vm_args::{
-    Boot, NetworkPlan, PASST_FD, PASST_PID_FILE, PasstAge, QemuJail, TAP_FD, UbuntuBoot, VmPlan,
+    Boot, NetworkPlan, PASST_FD, PASST_PID_FILE, PasstAge, QemuJail, SERIAL_FD, TAP_FD, UbuntuBoot, VmPlan,
     passt_age_now, passt_installed,
 };
+use guesthouse_daemon::handover::{KEPT_ABOVE, leave_open_at};
 use guesthouse_jail::Support;
+use rustix::io::fcntl_dupfd_cloexec;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -22,6 +24,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PROBE_VARIABLE: &str = "JAIL_PROBE";
+/// What the probe writes to the guest's serial port and to QEMU's output, which reach the app by pipes.
+const SERIAL_WORDS: &[u8] = b"BdsDxe: starting Boot0001\n";
+const OUTPUT_WORDS: &[u8] = b"qemu-system-x86_64: the probe's own words\n";
 const HELPER_VARIABLE: &str = "JAIL_PROBE_HELPER";
 /// What the pretend bridge helper hands back for the device.
 const PRETEND_DEVICE: &str = "/dev/null";
@@ -198,6 +203,14 @@ fn probe() {
         let discs = env::split_paths(&discs).collect::<Vec<_>>();
         checks.push(("setup's disc and its answers", discs.iter().all(|disc| fs::read(disc).is_ok())));
     }
+    if env::var_os("PROBE_SERIAL").is_some() {
+        // SAFETY: a question about a number, which is answered whether or not it's open.
+        let open = unsafe { libc::fcntl(SERIAL_FD, libc::F_GETFD) } != -1;
+        // SAFETY: the descriptor the app leaves open for the serial port, which nothing else here uses.
+        let written = open && unsafe { File::from_raw_fd(SERIAL_FD) }.write_all(SERIAL_WORDS).is_ok();
+        checks.push(("its serial port", written));
+    }
+    checks.push(("its output", std::io::stderr().write_all(OUTPUT_WORDS).is_ok()));
     if env::var_os("PROBE_BRIDGED").is_some() {
         let device = fs::read_link(format!("/proc/self/fd/{TAP_FD}"));
         checks.push(("the bridge's device", device.is_ok_and(|path| path == Path::new(PRETEND_DEVICE))));
@@ -207,6 +220,22 @@ fn probe() {
         eprintln!("not as it should be: {failed:?}");
         process::exit(1);
     }
+}
+
+/// What a pipe holds now. passt, which keeps QEMU's standard streams, may still hold the other end.
+fn waiting_bytes(reader: std::io::PipeReader) -> Vec<u8> {
+    let reader = std::os::fd::OwnedFd::from(reader);
+    let flags = rustix::fs::fcntl_getfl(&reader).unwrap() | rustix::fs::OFlags::NONBLOCK;
+    rustix::fs::fcntl_setfl(&reader, flags).unwrap();
+    let mut file = File::from(reader);
+    let (mut bytes, mut chunk) = (Vec::new(), [0; 4096]);
+    while let Ok(read) = file.read(&mut chunk) {
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    bytes
 }
 
 fn vm_args_program(name: &str) -> bool {
@@ -339,6 +368,15 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
             .env("PROBE_BUS", bus)
             .env("PROBE_IMAGE", scratch.path("store/linux-driver/driver.iso"));
     }
+    // QEMU's output and its serial port, as the app hands them over: pipes, the port at its number.
+    let (output, output_end) = std::io::pipe().unwrap();
+    run.stdout(output_end.try_clone().unwrap()).stderr(output_end);
+    let serial = plan.serial_log().map(|_| std::io::pipe().unwrap());
+    let placed = serial.as_ref().map(|(_, end)| fcntl_dupfd_cloexec(end, KEPT_ABOVE).unwrap());
+    if let Some(placed) = &placed {
+        leave_open_at(&mut run, &[(placed, SERIAL_FD)]);
+        run.env("PROBE_SERIAL", "1");
+    }
     let done = run
         .env(PROBE_VARIABLE, "1")
         .env("PROBE_OWN", folder_of(&own))
@@ -354,6 +392,21 @@ fn run_jailed(namespaces: bool, on: Case) -> bool {
         .env("PROBE_OTHER_PORT", free_port().to_string())
         .status()
         .unwrap();
+    drop(run);
+    drop(placed);
+    let said = waiting_bytes(output);
+    if !said.windows(OUTPUT_WORDS.len()).any(|part| part == OUTPUT_WORDS) {
+        eprintln!("QEMU's output didn't come through: {}", String::from_utf8_lossy(&said));
+        return false;
+    }
+    if let Some((port, end)) = serial {
+        drop(end);
+        let said = waiting_bytes(port);
+        if said != SERIAL_WORDS {
+            eprintln!("the serial port didn't come through: {}", String::from_utf8_lossy(&said));
+            return false;
+        }
+    }
     if passt {
         let Some(pid) = pid_in(&context.notes_folder(Some(slots::number(3))).join(PASST_PID_FILE)) else {
             eprintln!("passt left no pid file");

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <linux/overflow.h>
 #include "standin.h"
 
 /*
@@ -189,12 +190,30 @@ fail:
 	return NULL;
 }
 
+/* A u64 at `at` lies inside memory of `size` bytes. */
+static bool word_fits(u64 at, u64 size)
+{
+	return size >= 8 && at <= size - 8;
+}
+
+/* The semaphore at `index`, and its max submitted value, lie inside the surface's memory. */
+static bool index_fits(struct NvKmsKapiSemaphoreSurface *s, u64 index)
+{
+	struct NvKmsKapiMemory *max = s->max ? s->max : s->sem;
+	u64 at, max_at;
+
+	if (check_mul_overflow(index, (u64)s->d->semsurf_stride, &at) || !word_fits(at, s->sem->size))
+		return false;
+	return !s->max_map ||
+	       (!check_add_overflow(at, (u64)s->d->semsurf_max_offset, &max_at) && word_fits(max_at, max->size));
+}
+
 NvKmsKapiRegisterWaiterResult registerSemaphore(struct NvKmsKapiDevice *d, struct NvKmsKapiSemaphoreSurface *s, NvKmsSemaphoreSurfaceCallbackProc *proc,
 						       void *data, NvU64 index, NvU64 wait, NvU64 value, struct NvKmsKapiSemaphoreSurfaceCallback **h)
 {
 	struct NvKmsKapiSemaphoreSurfaceCallback *w;
 
-	if (!s || (!proc && !value) || (value && value <= wait)) {
+	if (!s || (!proc && !value) || (value && value <= wait) || !index_fits(s, index)) {
 		pr_warn_ratelimited("nvidia-modeset stand-in: bad waiter at %llu: wait %llu value %llu\n", index, wait, value);
 		return NVKMS_KAPI_REG_WAITER_FAILED;
 	}

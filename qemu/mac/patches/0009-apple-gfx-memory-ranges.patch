@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 10:05:42 -0800
+Subject: hw/display/apple-gfx: map each range at its place in its
+ region, and keep it
+
+A guest memory range handed to the framework now starts at its own offset in
+its RAM region, and the region is kept for as long as the framework may use
+the address. The flat view is read under RCU, and the map descriptor is
+released once the device descriptor holds its copy. When the device's realize
+fails, no host device is made that would point into it.
+---
+ hw/display/apple-gfx-mmio.m | 5 +++--
+ hw/display/apple-gfx.m      | 7 ++++++-
+ 2 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/hw/display/apple-gfx-mmio.m b/hw/display/apple-gfx-mmio.m
+index 19e2d38..e246813 100644
+--- a/hw/display/apple-gfx-mmio.m
++++ b/hw/display/apple-gfx-mmio.m
+@@ -254,8 +254,9 @@ static void apple_gfx_mmio_realize(DeviceState *dev, Error **errp)
+         }
+ 
+         if (!apple_gfx_common_realize(&s->common, dev, desc, errp)) {
+-            [s->pgiosfc release];
+-            s->pgiosfc = nil;
++            /* s goes with the failed device: nothing may keep pointers into it */
++            [desc release];
++            return;
+         }
+ 
+         s->pgiosfc = apple_gfx_prepare_iosurface_host_device(s);
+diff --git a/hw/display/apple-gfx.m b/hw/display/apple-gfx.m
+index 75845a3..c3ec0fa 100644
+--- a/hw/display/apple-gfx.m
++++ b/hw/display/apple-gfx.m
+@@ -614,7 +614,10 @@ bool apple_gfx_register_memory_cb(Int128 start, Int128 len,
+     if (memory_access_is_direct(mr, true, MEMTXATTRS_UNSPECIFIED)) {
+         range.physicalAddress = start;
+         range.physicalLength = len;
+-        range.hostAddress = memory_region_get_ram_ptr(mr);
++        /* A range can start partway into its region. */
++        range.hostAddress = (uint8_t *)memory_region_get_ram_ptr(mr) + offset_in_region;
++        /* The framework keeps these addresses for the device's life, so the memory stays too. */
++        memory_region_ref((MemoryRegion *)mr);
+         [memory_map_descriptor addRange:range];
+     }
+     return false;
+@@ -625,10 +628,12 @@ static void apple_gfx_register_memory(AppleGFXState *s,
+ {
+     PGMemoryMapDescriptor* memoryMapDescriptor = [PGMemoryMapDescriptor new];
+ 
++    RCU_READ_LOCK_GUARD();
+     FlatView* fv = address_space_to_flatview(&address_space_memory);
+     flatview_for_each_range(fv, apple_gfx_register_memory_cb, memoryMapDescriptor);
+ 
+     desc.memoryMapDescriptor = memoryMapDescriptor;
++    [memoryMapDescriptor release]; /* the property keeps a copy */
+ }
+ 
+ API_OBSOLETED("Legacy ParavirtualizedGraphics", macos(11.0, 27.0, 27.0))

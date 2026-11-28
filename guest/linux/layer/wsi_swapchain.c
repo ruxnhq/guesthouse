@@ -255,14 +255,21 @@ VKAPI_ATTR VkResult VKAPI_CALL acquire2(VkDevice d, const VkAcquireNextImageInfo
 
 VKAPI_ATTR VkResult VKAPI_CALL present(VkQueue q, const VkPresentInfoKHR *info)
 {
-    VkPipelineStageFlags stages[16];
-    for (uint32_t i = 0; i < info->waitSemaphoreCount && i < 16; i++) {
+    VkPipelineStageFlags *stages = calloc(info->waitSemaphoreCount + 1, sizeof(*stages));
+    if (!stages) {
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    for (uint32_t i = 0; i < info->waitSemaphoreCount; i++) {
         stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     }
     for (uint32_t i = 0; i < info->swapchainCount; i++) {
         struct swapchain *s = (void *)(uintptr_t)info->pSwapchains[i];
         uint32_t index = info->pImageIndices[i];
         VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+        if (index >= s->count) {
+            free(stages);
+            return VK_ERROR_OUT_OF_DATE_KHR;
+        }
         if (i == 0) {
             si.waitSemaphoreCount = info->waitSemaphoreCount;
             si.pWaitSemaphores = info->pWaitSemaphores;
@@ -272,7 +279,7 @@ VKAPI_ATTR VkResult VKAPI_CALL present(VkQueue q, const VkPresentInfoKHR *info)
         if (s->show) {
             uint32_t slot;
             show_publish(s, s->device);
-            if (ioctl(show_fd, NVFWD_SHOW_IOC_NEXT, &slot) == 0) {
+            if (ioctl(show_fd, NVFWD_SHOW_IOC_NEXT, &slot) == 0 && slot < NVFWD_SHOW_SLOTS) {
                 s->slot_of[index] = slot;
                 s->present_of[index] = s->presents + 1;
                 si.commandBufferCount = 1;
@@ -296,8 +303,10 @@ VKAPI_ATTR VkResult VKAPI_CALL present(VkQueue q, const VkPresentInfoKHR *info)
             info->pResults[i] = r;
         }
         if (r) {
+            free(stages);
             return r;
         }
     }
+    free(stages);
     return VK_SUCCESS;
 }

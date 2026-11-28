@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:34:27 -0800
+Subject: target/arm/emulate: hold an emulated access to the one that
+ faulted
+
+The instruction behind a data abort with no syndrome is read again from
+guest memory after the exit. Each access the emulation makes now has to lie
+in the page of the faulting address and go the same way, read or write, as
+the fault did; otherwise the guest gets the data abort it would get for an
+access that can't be emulated. Failed emulations are reported once.
+---
+ target/arm/emulate/arm_emulate.c | 19 ++++++++++++++++---
+ target/arm/emulate/arm_emulate.h |  8 ++++++--
+ target/arm/hvf/hvf.c             |  6 +++---
+ target/arm/whpx/whpx-all.c       |  6 +++---
+ 4 files changed, 28 insertions(+), 11 deletions(-)
+
+diff --git a/target/arm/emulate/arm_emulate.c b/target/arm/emulate/arm_emulate.c
+index 6c63a0d..ad92395 100644
+--- a/target/arm/emulate/arm_emulate.c
++++ b/target/arm/emulate/arm_emulate.c
+@@ -18,6 +18,8 @@ typedef struct {
+     CPUState *cpu;
+     CPUARMState *env;
+     ArmEmulResult result;
++    uint64_t fault_page; /* the page of the access that faulted */
++    bool is_write;       /* and which way it went */
+ } DisasContext;
+ 
+ #include "decode-a64-ldst.c.inc"
+@@ -70,9 +72,18 @@ static void fpreg_write(DisasContext *ctx, int reg, const void *buf, int size)
+ 
+ /* Memory access wrappers */
+ 
++/*
++ * The instruction is fetched again after the exit, so it is held to the access the hardware
++ * reported: the same page, the same direction.
++ */
++static bool same_access(DisasContext *ctx, uint64_t va, bool is_write)
++{
++    return (va & TARGET_PAGE_MASK) == ctx->fault_page && is_write == ctx->is_write;
++}
++
+ static int mem_read(DisasContext *ctx, uint64_t va, void *buf, int size)
+ {
+-    if (((va & ~TARGET_PAGE_MASK) + size) > TARGET_PAGE_SIZE) {
++    if (((va & ~TARGET_PAGE_MASK) + size) > TARGET_PAGE_SIZE || !same_access(ctx, va, false)) {
+         ctx->result = ARM_EMUL_ERR_MEM;
+         return -1;
+     }
+@@ -85,7 +96,7 @@ static int mem_read(DisasContext *ctx, uint64_t va, void *buf, int size)
+ 
+ static int mem_write(DisasContext *ctx, uint64_t va, const void *buf, int size)
+ {
+-    if (((va & ~TARGET_PAGE_MASK) + size) > TARGET_PAGE_SIZE) {
++    if (((va & ~TARGET_PAGE_MASK) + size) > TARGET_PAGE_SIZE || !same_access(ctx, va, true)) {
+         ctx->result = ARM_EMUL_ERR_MEM;
+         return -1;
+     }
+@@ -435,12 +446,14 @@ static bool trans_NOP(DisasContext *ctx, arg_NOP *a)
+ 
+ /* Entry point */
+ 
+-ArmEmulResult arm_emul_insn(CPUArchState *env, uint32_t insn)
++ArmEmulResult arm_emul_insn(CPUArchState *env, uint32_t insn, uint64_t fault_va, bool is_write)
+ {
+     DisasContext ctx = {
+         .cpu = env_cpu(env),
+         .env = env,
+         .result = ARM_EMUL_OK,
++        .fault_page = fault_va & TARGET_PAGE_MASK,
++        .is_write = is_write,
+     };
+ 
+     if (!decode_a64_ldst(&ctx, insn)) {
+diff --git a/target/arm/emulate/arm_emulate.h b/target/arm/emulate/arm_emulate.h
+index 7fe2983..06b646e 100644
+--- a/target/arm/emulate/arm_emulate.h
++++ b/target/arm/emulate/arm_emulate.h
+@@ -23,8 +23,12 @@ typedef enum {
+ /**
+  * arm_emul_insn - decode and emulate one AArch64 instruction
+  *
+- * Caller must synchronize CPU state and fetch @insn before calling.
++ * Caller must synchronize CPU state and fetch @insn before calling. Every access
++ * the instruction makes must lie in the page of @fault_va, the faulting address,
++ * and go the way @is_write says the fault did, or ARM_EMUL_ERR_MEM is returned
++ * and nothing is accessed.
+  */
+-ArmEmulResult arm_emul_insn(CPUArchState *env, uint32_t insn);
++ArmEmulResult arm_emul_insn(CPUArchState *env, uint32_t insn, uint64_t fault_va,
++                            bool is_write);
+ 
+ #endif /* ARM_EMULATE_H */
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 40c9fc0..b88dd79 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -2471,20 +2471,20 @@ static int hvf_handle_exception(CPUState *cpu, hv_vcpu_exit_exception_t *excp)
+                 uint32_t esr = syn_data_abort_no_iss(same_el,
+                     1, 0, 0, 0, iswrite, 0x10);
+ 
+-                error_report("HVF: cannot read insn at pc=0x%" PRIx64,
++                error_report_once("HVF: cannot read insn at pc=0x%" PRIx64,
+                              (uint64_t)env->pc);
+                 env->exception.vaddress = excp->virtual_address;
+                 hvf_raise_exception(cpu, EXCP_DATA_ABORT, esr, 1);
+                 break;
+             }
+ 
+-            r = arm_emul_insn(env, insn);
++            r = arm_emul_insn(env, insn, excp->virtual_address, iswrite);
+             if (r == ARM_EMUL_UNHANDLED || r == ARM_EMUL_ERR_MEM) {
+                 bool same_el = arm_current_el(env) == 1;
+                 uint32_t esr = syn_data_abort_no_iss(same_el,
+                     1, 0, 0, 0, iswrite, 0x10);
+ 
+-                error_report("HVF: ISV=0 %s insn 0x%08x at "
++                error_report_once("HVF: ISV=0 %s insn 0x%08x at "
+                              "pc=0x%" PRIx64 ", injecting data abort",
+                              r == ARM_EMUL_UNHANDLED ? "unhandled"
+                                                      : "memory error",
+diff --git a/target/arm/whpx/whpx-all.c b/target/arm/whpx/whpx-all.c
+index 7514055..e23e28c 100644
+--- a/target/arm/whpx/whpx-all.c
++++ b/target/arm/whpx/whpx-all.c
+@@ -402,15 +402,15 @@ static int whpx_handle_mmio(CPUState *cpu, WHV_MEMORY_ACCESS_CONTEXT *ctx)
+ 
+         if (cpu_memory_rw_debug(cpu, env->pc,
+                                 (uint8_t *)&insn, 4, false) != 0) {
+-            error_report("WHPX: cannot read insn at pc=0x%" PRIx64,
++            error_report_once("WHPX: cannot read insn at pc=0x%" PRIx64,
+                          (uint64_t)env->pc);
+             whpx_inject_data_abort(cpu, iswrite);
+             return 1;
+         }
+ 
+-        r = arm_emul_insn(env, insn);
++        r = arm_emul_insn(env, insn, ctx->Gva, iswrite);
+         if (r == ARM_EMUL_UNHANDLED || r == ARM_EMUL_ERR_MEM) {
+-            error_report("WHPX: ISV=0 %s insn 0x%08x at "
++            error_report_once("WHPX: ISV=0 %s insn 0x%08x at "
+                          "pc=0x%" PRIx64 ", injecting data abort",
+                          r == ARM_EMUL_UNHANDLED ? "unhandled"
+                                                  : "memory error",

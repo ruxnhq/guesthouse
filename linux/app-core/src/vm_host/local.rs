@@ -3,6 +3,7 @@
 use super::android_stop::long_power_press;
 use super::macos_stop::{KEYS_SHARE, shutdown_keys};
 use super::{Stopped, VmHost};
+use crate::capped_log;
 use crate::context::Context;
 use crate::daemon::{self, DaemonStart, detached, is_own_daemon};
 use crate::failure::{Failure, Result};
@@ -20,7 +21,8 @@ use crate::processes::{memory_taken, passt_pid, qemu_pid};
 use crate::setup::swtpm_profile::{self, missing_rules};
 use crate::start_checks::SECOND_INSTANCE_REFUSAL;
 use crate::throwaway::ThrowawayRun;
-use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, Sound, VmPlan};
+use crate::vm_args::{OUTPUT_FILE, PASST_PID_FILE, SERIAL_FD, Sound, VmPlan};
+use guesthouse_daemon::handover::leave_open_at;
 use rustix::process::{Pid, Signal, kill_process, kill_process_group};
 use std::fs::{self, File};
 use std::path::Path;
@@ -169,7 +171,13 @@ impl LocalHost<'_> {
     fn spawn_qemu(&self, plan: &VmPlan, memory: Option<&GuestMemory>, handed: &Handed) -> Result<Child> {
         super::qemu_probe::check(plan)?;
         self.spawn_tpm(plan)?;
-        let output = File::create(self.run_file(OUTPUT_FILE))?;
+        // QEMU's output and the guest's serial port go through pipes into files held to a size.
+        let output =
+            capped_log::start(self.context, &self.run_file(OUTPUT_FILE), capped_log::OUTPUT_MOST_BYTES)?;
+        let serial = match plan.serial_log() {
+            Some(file) => Some(capped_log::start(self.context, &file, capped_log::SERIAL_MOST_BYTES)?),
+            None => None,
+        };
         let command = plan.qemu_command();
         let (program, arguments) = command.split_first().ok_or_else(|| Failure::new("Nothing to run."))?;
         let mut qemu = Command::new(program);
@@ -180,14 +188,17 @@ impl LocalHost<'_> {
             memory.hand_to(&mut qemu);
         }
         handed.drives.hand_to(&mut qemu);
+        if let Some(serial) = &serial {
+            leave_open_at(&mut qemu, &[(serial, SERIAL_FD)]);
+        }
         if let Some(run) = handed.throwaway {
             run.hand_to(&mut qemu);
         }
         let spawned = detached(qemu.args(arguments))
             .envs(plan.qemu_environment())
             .stdin(Stdio::null())
-            .stdout(output.try_clone()?)
-            .stderr(output)
+            .stdout(Stdio::from(output.try_clone()?))
+            .stderr(Stdio::from(output))
             .spawn()
             .map_err(|error| not_run(program, &error))?;
         Ok(spawned)
@@ -507,6 +518,7 @@ pub(super) fn not_run(program: &str, error: &std::io::Error) -> Failure {
 
 pub fn last_words(context: &Context) -> String {
     let path = context.run_folder(None).join(OUTPUT_FILE);
+    capped_log::settled(&path);
     let text = fs::read(path).unwrap_or_default();
     let text = String::from_utf8_lossy(&text);
     let text = text.trim();

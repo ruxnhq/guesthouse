@@ -68,6 +68,11 @@ int wl_setup(struct swapchain *s, struct surface *surface, const VkSwapchainCrea
         return 0;
     }
     s->wl_pixels = mmap(NULL, one * WL_BUFFERS, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (s->wl_pixels == MAP_FAILED) {
+        s->wl_pixels = NULL;
+        close(fd);
+        return 0;
+    }
     s->wl_pool = wl_shm_create_pool(wl_found_shm, fd, one * WL_BUFFERS);
     close(fd);
     for (int i = 0; i < WL_BUFFERS; i++) {
@@ -165,6 +170,9 @@ void wl_present(struct swapchain *s)
             s->wl_busy[i] = 1;
             wl_surface_attach(s->wl_wrapper, s->wl_buffer[i], 0, 0);
             wl_surface_damage_buffer(s->wl_wrapper, 0, 0, s->width, s->height);
+            if (s->frame_flag && !*s->frame_flag) {
+                free(s->frame_flag); /* its callback has come: nothing else has it */
+            }
             s->frame_flag = calloc(1, sizeof(int)); /* outlives the swapchain if the callback comes late */
             *s->frame_flag = 1;
             s->frame_asked_ms = now_ms();

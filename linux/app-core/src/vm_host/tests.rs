@@ -40,6 +40,7 @@ impl Clock for QuickClock {
 /// moment after its spawn.
 fn pretend_programs(scratch: &Scratch, context: &mut crate::context::Context) -> (PathBuf, PathBuf) {
     context.paths.binaries = scratch.path("bin");
+    scratch.program("bin/guesthouse-task", crate::testing::PRETEND_KEEPER);
     let (daemon_pid, qemu_pid) = (scratch.path("daemon-pid"), scratch.path("qemu-pid"));
     let daemon = format!(
         "#!/bin/sh\necho $$ > {}\ntouch \"$1/run/vgpu.sock\" \"$1/run/global.sock\"\nexec sleep {PRETEND_LIFE_SECONDS}\n",
@@ -191,6 +192,7 @@ fn a_daemon_that_stops_says_why_and_no_qemu_is_started() {
     let scratch = Scratch::new();
     let mut context = scratch_context(&scratch);
     context.paths.binaries = scratch.path("bin");
+    scratch.program("bin/guesthouse-task", crate::testing::PRETEND_KEEPER);
     let marker = scratch.path("qemu-ran");
     context.paths.qemu = scratch.program("not-qemu", &format!("#!/bin/sh\ntouch {}\n", marker.display()));
     scratch.program("bin/guesthouse-daemon", "#!/bin/sh\necho 'no card here'\nexit 1\n");
@@ -322,6 +324,7 @@ fn memory_that_doesnt_fit_stops_a_start_before_anything_runs() {
     let mut context = scratch_context(&scratch);
     context.reserve_memory = |_, _, _| Err(crate::Failure::new("no room for it"));
     context.paths.binaries = scratch.path("bin");
+    scratch.program("bin/guesthouse-task", crate::testing::PRETEND_KEEPER);
     let marker = scratch.path("ran");
     let daemon = format!("#!/bin/sh\ntouch {}\n", marker.display());
     scratch.program("bin/guesthouse-daemon", &daemon);

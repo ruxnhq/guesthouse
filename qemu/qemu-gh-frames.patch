@@ -1027,3 +1027,175 @@ index ffecedb..bc946c5 100644
 -- 
 2.47.3
 
+From bc4a6386e01dee318dedd33ea0bf94226747a4ae Mon Sep 17 00:00:00 2001
+From: xnixy <x@ruxn.com>
+Date: Sat, 28 Nov 2026 09:29:14 -0800
+Subject: [PATCH] hw/display/gh-frames: keep rows, ring files, descriptors and
+ cursors in bounds
+
+A frame's and the firmware screen's row length is at most 1 MiB and the copy
+works in size_t. A ring slot is mapped only from a file at least as long as
+the slot. Every descriptor a packet brings is either kept by it or closed,
+however many came. A cursor's row is at most 64 KiB, and its hot spot lies
+inside it.
+---
+ hw/display/gh-frames.c | 59 ++++++++++++++++++++++++++++++++----------
+ 1 file changed, 46 insertions(+), 13 deletions(-)
+
+diff --git a/hw/display/gh-frames.c b/hw/display/gh-frames.c
+index b1d8e43..e7197f5 100644
+--- a/hw/display/gh-frames.c
++++ b/hw/display/gh-frames.c
+@@ -53,6 +53,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(GHFramesState, GH_FRAMES)
+ #define GH_SDR_FOURCC 0x34325258u        /* DRM_FORMAT_XRGB8888, "XR24" */
+ #define GH_MODIFIER_LINEAR 0u
+ #define GH_PACKET_MAX 8192
++/* the longest row: a 16384 pixel line at four bytes, with room for any alignment */
++#define GH_MOST_STRIDE (1u << 20)
++#define GH_MOST_CURSOR_PITCH (64u * 1024)
+ /* the cadence the console presents at (60 Hz) */
+ #define GH_FRAME_INTERVAL_NS 16666667
+ 
+@@ -222,7 +225,8 @@ static void gh_blit_ramfb(GHFramesState *s)
+ {
+     DisplaySurface *surface;
+     uint8_t *src, *data;
+-    int src_stride, ds_stride, w, h, y, copy;
++    size_t src_stride, ds_stride, copy;
++    int w, h, y;
+ 
+     src = surface_data(s->ramfb_ds);
+     src_stride = surface_stride(s->ramfb_ds);
+@@ -245,7 +249,7 @@ static void gh_blit_ramfb(GHFramesState *s)
+     ds_stride = surface_stride(surface);
+     copy = MIN(ds_stride, src_stride);
+     for (y = 0; y < h; y++) {
+-        memcpy(data + y * ds_stride, src + y * src_stride, copy);
++        memcpy(data + (size_t)y * ds_stride, src + (size_t)y * src_stride, copy);
+     }
+     qemu_console_update_full(s->con);
+ }
+@@ -255,7 +259,8 @@ static void gh_blit(GHFramesState *s, bool force)
+     DisplaySurface *surface;
+     uint8_t *src, *data;
+     uint32_t gen, slot;
+-    int ds_stride, y, copy;
++    size_t ds_stride, copy;
++    int y;
+ 
+     qemu_mutex_lock(&s->lock);
+     s->blit_scheduled = false;
+@@ -312,9 +317,9 @@ static void gh_blit(GHFramesState *s, bool force)
+     }
+     data = surface_data(surface);
+     ds_stride = surface_stride(surface);
+-    copy = MIN(ds_stride, (int)s->frame_stride);
++    copy = MIN(ds_stride, (size_t)s->frame_stride);
+     for (y = 0; y < (int)s->frame_h; y++) {
+-        memcpy(data + y * ds_stride, src + y * s->frame_stride, copy);
++        memcpy(data + (size_t)y * ds_stride, src + (size_t)y * s->frame_stride, copy);
+     }
+     s->last_blit_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+     s->frames_seen = true;
+@@ -384,7 +389,7 @@ static void gh_ramfb_fw_cfg_write(void *opaque, off_t offset, size_t len)
+     /* a row shorter than the width would make the copy run past the
+      * mapping, and a stride that isn't whole pixels trips the assert in
+      * qemu_create_displaysurface_from */
+-    if (stride < linesize || stride % 4 != 0) {
++    if (stride < linesize || stride % 4 != 0 || stride > GH_MOST_STRIDE) {
+         return;
+     }
+     mapsize = size = stride * (height - 1) + linesize;
+@@ -510,7 +515,7 @@ static void gh_stage_frame(GHFramesState *s, const uint8_t *payload,
+     uint64_t rows;
+     if (!s->slot_maps[slot] ||
+         width == 0 || height == 0 || width > 16384u || height > 16384u ||
+-        stride < (uint64_t)width * 4 ||
++        stride < (uint64_t)width * 4 || stride > GH_MOST_STRIDE ||
+         __builtin_mul_overflow((uint64_t)stride, height, &rows) ||
+         offset > s->slot_size || rows > s->slot_size - offset) {
+         qemu_mutex_unlock(&s->lock);
+@@ -563,13 +568,25 @@ static int gh_recv_packet(int fd, uint8_t *buf, size_t buflen,
+     if (n <= 0) {
+         return n < 0 ? -errno : 0;
+     }
++    /* every descriptor that came is kept for the packet or closed here */
+     for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+         if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+             int count = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+-            memcpy(fds, CMSG_DATA(cmsg), count * sizeof(int));
+-            *nfds = count;
++            for (int i = 0; i < count; i++) {
++                int got;
++
++                memcpy(&got, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
++                if (*nfds < max_fds) {
++                    fds[(*nfds)++] = got;
++                } else {
++                    close(got);
++                }
++            }
+         }
+     }
++    if (msg.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) {
++        return 1; /* part of it was lost: too short to be read, so it is passed over */
++    }
+     return n;
+ }
+ 
+@@ -635,6 +652,13 @@ static void *gh_reader_thread(void *opaque)
+ 
+         /* message loop */
+         for (;;) {
++            /* what the last packet brought and did not keep */
++            for (i = 0; i < (int)GH_MOST_SLOTS; i++) {
++                if (fds[i] >= 0) {
++                    close(fds[i]);
++                    fds[i] = -1;
++                }
++            }
+             rc = gh_recv_packet(fd, packet, sizeof(packet), fds,
+                                 GH_MOST_SLOTS, &nfds);
+             if (rc <= 0) {
+@@ -658,7 +682,15 @@ static void *gh_reader_thread(void *opaque)
+                 memcpy(&generation, packet + 8, 4);
+                 memcpy(&slots, packet + 12, 4);
+                 memcpy(&size, packet + 16, 8);
+-                if (slots == 0 || slots > GH_MOST_SLOTS || nfds != (int)slots) {
++                for (i = 0; i < nfds && slots == (uint32_t)nfds; i++) {
++                    struct stat st;
++
++                    /* a file shorter than its slot would fault the blit */
++                    if (fstat(fds[i], &st) || st.st_size < 0 || (uint64_t)st.st_size < size) {
++                        slots = 0;
++                    }
++                }
++                if (slots == 0 || slots > GH_MOST_SLOTS || nfds != (int)slots || size == 0) {
+                     /* a rejected ring still carries descriptors */
+                     for (i = 0; i < nfds; i++) {
+                         close(fds[i]);
+@@ -710,7 +742,8 @@ static void *gh_reader_thread(void *opaque)
+                 memcpy(&size, packet + 32, 4);
+                 (void)shape;
+                 if (cw == 0 || ch == 0 || cw > 512 || ch > 512 ||
+-                    pitch < cw * 4u || (uint64_t)pitch * ch > size) {
++                    pitch < cw * 4u || pitch > GH_MOST_CURSOR_PITCH ||
++                    (uint64_t)pitch * ch > size) {
+                     close(fds[0]);
+                     fds[0] = -1;
+                     break;
+@@ -737,8 +770,8 @@ static void *gh_reader_thread(void *opaque)
+                  * little endian word that is exactly qemu's cursor
+                  * format (0xAARRGGBB) */
+                 cur = cursor_alloc((uint16_t)cw, (uint16_t)ch);
+-                cur->hot_x = (int)hot_x;
+-                cur->hot_y = (int)hot_y;
++                cur->hot_x = (int)MIN(hot_x, cw - 1);
++                cur->hot_y = (int)MIN(hot_y, ch - 1);
+                 for (uint32_t y = 0; y < ch; y++) {
+                     memcpy(cur->data + (size_t)y * cw,
+                            px + (size_t)y * pitch, (size_t)cw * 4);
+-- 
+2.56.1
+
+

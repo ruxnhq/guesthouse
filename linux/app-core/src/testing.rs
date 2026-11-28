@@ -109,9 +109,14 @@ pub fn scratch_paths(scratch: &Scratch) -> Paths {
     paths
 }
 
+/// A task program that does only `keep-log`, as a file without its size limit.
+pub const PRETEND_KEEPER: &str = "#!/bin/sh\n[ \"$1\" = keep-log ] && exec cat >> \"$2\"\nexit 1\n";
+
 pub fn scratch_context(scratch: &Scratch) -> Context {
     let mut context = Context::new(scratch_paths(scratch), crate::slots::first());
     context.processes = scratch.path("proc");
+    // What keeps QEMU's output and serial port in the run folder: the task program's keep-log.
+    scratch.program("program/guesthouse-task", PRETEND_KEEPER);
     context.memory_holders = context.processes.clone();
     fs::create_dir_all(&context.processes).unwrap();
     // Nor does it have drives, or use any, unless a test says so.

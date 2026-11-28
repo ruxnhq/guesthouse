@@ -1,10 +1,55 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <linux/capability.h>
+#include <linux/cred.h>
 #include <linux/file.h>
+#include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include "nvfwd_guest.h"
 
+/*
+ * One file shows frames at a time. Another file of the same user, or of an administrator, takes
+ * over from it, as a program that starts again does; another user's waits until it closes. Once
+ * the kernel's display driver shows its surfaces, the screen is its alone.
+ */
+static DEFINE_SPINLOCK(show_lock);
+static struct nvf_file *show_owner;
+static kuid_t show_owner_uid;
+static bool show_by_kernel;
+
+void show_kernel_claim(void)
+{
+	spin_lock(&show_lock);
+	show_by_kernel = true;
+	show_owner = NULL;
+	spin_unlock(&show_lock);
+}
+
+static bool show_claim(struct nvf_file *nf)
+{
+	kuid_t uid = current_euid();
+	bool ok;
+
+	spin_lock(&show_lock);
+	ok = !show_by_kernel &&
+	     (!show_owner || show_owner == nf || uid_eq(uid, show_owner_uid) || capable(CAP_SYS_ADMIN));
+	if (ok && show_owner != nf) {
+		show_owner = nf;
+		show_owner_uid = uid;
+	}
+	spin_unlock(&show_lock);
+	return ok;
+}
+
+void show_file_closed(struct nvf_file *nf)
+{
+	spin_lock(&show_lock);
+	if (show_owner == nf)
+		show_owner = NULL;
+	spin_unlock(&show_lock);
+}
+
 /* The "show this surface" calls. These go to QEMU's own code, never to the host's driver. */
-long show_ioctl(unsigned int cmd, unsigned long arg)
+long show_ioctl(struct nvf_file *nf, unsigned int cmd, unsigned long arg)
 {
 	struct nvfwd_show_buffer b;
 	struct nvfwd_req *r;
@@ -12,6 +57,10 @@ long show_ioctl(unsigned int cmd, unsigned long arg)
 	long rc;
 	int slot;
 
+	if (cmd != NVFWD_SHOW_IOC_BUFFER && cmd != NVFWD_SHOW_IOC_NEXT && cmd != NVFWD_SHOW_IOC_FRAME)
+		return -ENOTTY;
+	if (!show_claim(nf))
+		return -EBUSY;
 	if (cmd == NVFWD_SHOW_IOC_BUFFER) {
 		struct file *f;
 

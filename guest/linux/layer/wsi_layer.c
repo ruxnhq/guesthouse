@@ -70,6 +70,10 @@ static VKAPI_ATTR VkResult VKAPI_CALL create_device(VkPhysicalDevice gpu, const 
     VkDeviceCreateInfo copy = *info;
     copy.enabledExtensionCount = count;
     copy.ppEnabledExtensionNames = names;
+    if (!info->queueCreateInfoCount) { /* not a valid device, and the driver says so */
+        free(names);
+        return create(gpu, info, alloc, out);
+    }
     VkDeviceQueueCreateInfo *queues = calloc(info->queueCreateInfoCount, sizeof(*queues));
     memcpy(queues, info->pQueueCreateInfos, info->queueCreateInfoCount * sizeof(*queues));
     uint32_t own = queues[0].queueCount;

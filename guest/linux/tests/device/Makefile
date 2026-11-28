@@ -6,7 +6,7 @@ DEVICE = $(QEMU)/hw/misc/nvfwd
 CFLAGS := -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -D_GNU_SOURCE
 GLIB := $(shell pkg-config --cflags --libs glib-2.0)
 TESTS := test_runs test_callrate test_objects test_maps test_bounce test_rmargs test_clients test_accounting \
-         test_card test_refused
+         test_card test_refused test_show
 
 all: $(TESTS:%=$(BUILD)/%) $(BUILD)/test_sensors $(BUILD)/fake_sensord
 	@echo "== throttle comes first"
@@ -49,6 +49,9 @@ $(BUILD)/test_card: test_card.c
 $(BUILD)/test_refused: test_refused.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -I$(DEVICE) -o $@ $< $(DEVICE)/refused.c
+$(BUILD)/test_show: test_show.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -I$(DEVICE) -o $@ $<
 $(BUILD)/test_sensors: test_sensors.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Istand-in -I$(DEVICE) $(GLIB) -o $@ $< $(DEVICE)/sensors.c $(GLIB)

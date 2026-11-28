@@ -42,33 +42,40 @@ static int device_open(struct NvKmsKapiDevice *d)
 		return h;
 	d->ctl = h;
 	h = nvfwd_kopen(NVFWD_DEV_GPU);
-	if (h < 0)
+	if (h < 0) {
+		nvfwd_kclose(d->ctl);
 		return h;
+	}
 	d->gpu = h;
 	{
 		struct nvfwd_krm a = { d->gpu, CTL_ESC(ESC_REGISTER_FD, sizeof(reg)), &reg, sizeof(reg), 0, NULL, 0, 0, -1, d->ctl };
 
 		rc = nvfwd_rm(&a);
 		if (rc)
-			return rc;
+			goto fail;
 	}
 	strscpy(root.name, "nvidia-modeset stand-in", sizeof(root.name));
 	d->client = 0;
 	rc = rm_alloc(d, 0, &handle, 0x41, &root, sizeof(root));
 	if (rc)
-		return rc;
+		goto fail;
 	d->client = handle;
 	d->gpu_id = attached_gpu(d);
 	handle = HANDLE_DEVICE;
 	rc = rm_alloc(d, d->client, &handle, 0x80, device, sizeof(device));
 	if (rc)
-		return rc;
+		goto fail;
 	handle = HANDLE_SUBDEVICE;
 	rc = rm_alloc(d, HANDLE_DEVICE, &handle, 0x2080, &subdevice, sizeof(subdevice));
 	if (rc)
-		return rc;
+		goto fail;
 	pr_info("nvidia-modeset stand-in: client %x, gpu id %x\n", d->client, d->gpu_id);
 	return 0;
+fail:
+	/* The files go, and the driver frees what was made on them with them. */
+	nvfwd_kclose(d->gpu);
+	nvfwd_kclose(d->ctl);
+	return rc;
 }
 
 NvU32 enumerateGpus(void (*found)(const struct NvKmsKapiGpuInfo *info))

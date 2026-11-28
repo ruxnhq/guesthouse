@@ -81,6 +81,13 @@ static void test_alloc(void)
     put32(PARAMS + 8, 0);
     assert(known(ESC_RM_ALLOC, 48, &params, 1));
 
+    /* The size in the call is not the driver's: the class table's is, so every field in it is checked. */
+    put32(RM_ALLOC_LONG_PARAMS_SIZE, 4);
+    put32(PARAMS + 4, THEIRS);
+    assert(!known(ESC_RM_ALLOC, 48, &params, 1));
+    put32(PARAMS + 4, 0);
+    put32(RM_ALLOC_LONG_PARAMS_SIZE, 0);
+
     memset(data + PARAMS, 0, 64);
     put32(RM_ALLOC_CLASS, 0x83de);
     put32(PARAMS + 4, THEIRS); /* hAppClient */

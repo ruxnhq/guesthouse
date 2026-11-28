@@ -322,6 +322,49 @@ fn any_qcow2_in_an_export_is_checked_before_qemu_img_opens_it() {
 }
 
 #[test]
+fn a_name_with_control_characters_is_refused() {
+    let scratch = Scratch::new();
+    let context = roomy_pc(&scratch);
+    let files = [("vars.fd", b"v".to_vec()), (DISK_FILE, qcow2(&scratch, "d", &[]))];
+    let settings = Machine { name: "Mine\x1b]0;title\x07".into(), ..plain_settings() };
+    let file = crafted(&scratch, &settings, &files);
+    assert!(imported(&context, &file, None).is_err());
+    nothing_left(&context);
+    let plain = crafted(&scratch, &plain_settings(), &files);
+    assert!(imported(&context, &plain, Some("Two\nlines")).is_err());
+    nothing_left(&context);
+}
+
+#[test]
+fn an_extra_image_is_a_disk_image_of_a_machine_that_boots_what_it_is_given() {
+    let scratch = Scratch::new();
+    let context = roomy_pc(&scratch);
+    let disk = qcow2(&scratch, "d", &[]);
+    for (kind, field, name) in [
+        (Kind::Plain, "opencore", "remote-view.json"),
+        (Kind::Plain, "android_data", "remote-access.json"),
+        (Kind::Plain, "android_data", "recipe.json"),
+        (Kind::Windows, "opencore", "opencore.qcow2"),
+        (Kind::Linux, "android_data", "data.qcow2"),
+    ] {
+        let mut settings = Machine { kind, ..plain_settings() };
+        match field {
+            "opencore" => settings.opencore = name.into(),
+            _ => settings.android_data = name.into(),
+        }
+        let files = [("vars.fd", b"v".to_vec()), (name, b"{}".to_vec()), (DISK_FILE, disk.clone())];
+        let file = crafted(&scratch, &settings, &files);
+        assert!(imported(&context, &file, None).is_err(), "{kind:?} {field} {name}");
+        nothing_left(&context);
+    }
+    let settings = Machine { android_data: "data.qcow2".into(), ..plain_settings() };
+    let files = [("vars.fd", b"v".to_vec()), ("data.qcow2", qcow2(&scratch, "x", &[])), (DISK_FILE, disk)];
+    let file = crafted(&scratch, &settings, &files);
+    let imported = imported(&context, &file, None).unwrap();
+    assert!(imported.machine.folder(&context).join("data.qcow2").exists());
+}
+
+#[test]
 fn only_files_the_app_knows_are_written_and_each_is_checked_or_made_again() {
     let scratch = Scratch::new();
     let context = roomy_pc(&scratch);

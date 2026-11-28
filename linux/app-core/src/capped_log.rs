@@ -38,10 +38,20 @@ const SETTLE: Duration = Duration::from_secs(2);
 /// The keepers this process started, by file, each saying when it's done.
 static KEEPERS: Mutex<Option<HashMap<PathBuf, Receiver<()>>>> = Mutex::new(None);
 
+/// `file` as these options open it, following no link, and only if it's a plain file.
+fn open_plain(options: &mut OpenOptions, file: &Path) -> io::Result<std::fs::File> {
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    let opened = options.mode(0o600).custom_flags(flags.bits() as i32).open(file)?;
+    if !opened.metadata()?.is_file() {
+        return Err(io::Error::new(ErrorKind::InvalidInput, "not a plain file"));
+    }
+    Ok(opened)
+}
+
 /// Reads `input` to its end into `file`, which never holds more than `most` bytes: when the next
 /// bytes wouldn't fit, the file goes back to its first half, says so, and carries on.
 pub fn keep(mut input: impl Read, file: &Path, most: u64) -> io::Result<()> {
-    let mut out = OpenOptions::new().create(true).append(true).mode(0o600).open(file)?;
+    let mut out = open_plain(OpenOptions::new().create(true).append(true), file)?;
     let start = most / 2;
     let mut size = out.metadata()?.len();
     let mut buffer = vec![0; CHUNK];
@@ -67,7 +77,12 @@ pub fn keep(mut input: impl Read, file: &Path, most: u64) -> io::Result<()> {
 /// Empties `file` and starts the process that keeps it. Returns the pipe's end for QEMU, closed on
 /// exec and above the numbers QEMU's descriptors are placed at.
 pub fn start(context: &Context, file: &Path, most: u64) -> Result<OwnedFd> {
-    OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(file)?;
+    // Made new: whatever was at the name, a link among them, goes, and nothing it named is touched.
+    match std::fs::remove_file(file) {
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
+    open_plain(OpenOptions::new().write(true).create_new(true), file)?;
     let (reading, writing) = io::pipe()?;
     let mut keeper = detached(
         Command::new(context.paths.binary(TASK_PROGRAM)).arg(KEEP_LOG).arg(file).arg(most.to_string()),
@@ -129,6 +144,30 @@ mod tests {
         assert!(kept.starts_with(b"first boot line\n"));
         assert!(kept.ends_with(b"\nthe newest line\n"));
         assert!(kept.windows(LEFT_OUT.len()).any(|part| part == LEFT_OUT));
+    }
+
+    /// The run folder is QEMU's to write in: a link put where the log goes leads nowhere.
+    #[test]
+    fn a_link_where_the_log_goes_is_not_followed() {
+        let scratch = Scratch::new();
+        let elsewhere = scratch.write("elsewhere.txt", "the user's");
+        let file = scratch.path("serial.log");
+        std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+        assert!(keep(&b"words"[..], &file, 1024).is_err());
+        assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "the user's");
+    }
+
+    #[test]
+    fn a_start_puts_a_new_file_where_a_link_was() {
+        let scratch = Scratch::new();
+        let context = crate::testing::scratch_context(&scratch);
+        let elsewhere = scratch.write("elsewhere.txt", "the user's");
+        let file = scratch.path("output");
+        std::os::unix::fs::symlink(&elsewhere, &file).unwrap();
+        drop(start(&context, &file, 1024).unwrap());
+        settled(&file);
+        assert!(fs::symlink_metadata(&file).unwrap().is_file());
+        assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "the user's");
     }
 
     #[test]

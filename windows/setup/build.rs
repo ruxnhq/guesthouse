@@ -9,6 +9,14 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/setup.ico");
+    // The DLLs the exe imports come from System32 only, never from the folder it is in
+    // (LOAD_LIBRARY_SEARCH_SYSTEM32 as its dependent load flags): the elevated part is this same
+    // file run from where it was downloaded, and its imports are found before any of its code
+    // runs. What it loads by name later comes from System32 too (src/system.rs,
+    // `safe_dll_search`). The release is built with MSVC's linker, the one that takes this.
+    if std::env::var("CARGO_CFG_TARGET_ENV").ok().as_deref() == Some("msvc") {
+        println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
+    }
     #[cfg(windows)]
     if std::env::var("CARGO_CFG_TARGET_OS").ok().as_deref() == Some("windows") {
         windows_only();

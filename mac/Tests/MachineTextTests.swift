@@ -311,10 +311,15 @@ struct InstallTextTests {
     @Test func sizesFollowTheMacAndTheSpaceIsCountedLikeTheCore() {
         #expect(InstallGuest.windows.cores(hostCores: 10) == 4)
         #expect(InstallGuest.windows.cores(hostCores: 2) == 2)
-        #expect(InstallGuest.windows.spaceNeededGB(diskGB: 64) == 80)
-        #expect(InstallGuest.ubuntu.spaceNeededGB(diskGB: 32) == 40)
-        #expect(InstallText.spaceSentence(needGB: 80, freeGB: 212) == ("Needs 80 GB. This Mac has 212 GB free.", true))
-        #expect(InstallText.spaceSentence(needGB: 80, freeGB: 50).enough == false)
+        #expect(InstallGuest.windows.spaceNeededGB(diskGB: 64) == 36)
+        #expect(InstallGuest.ubuntu.spaceNeededGB(diskGB: 32) == 20)
+        let roomy = InstallText.spaceSentence(needGB: 36, freeGB: 212, diskGB: 64)
+        #expect(roomy.text == "Needs 36 GB. This Mac has 212 GB free." && roomy.enough && roomy.warning == nil)
+        #expect(InstallText.spaceSentence(needGB: 36, freeGB: 20).enough == false)
+        // 24 GB free is enough for an Ubuntu install of a 32 GB disk, and says the disk could outgrow it.
+        let tight = InstallText.spaceSentence(needGB: 20, freeGB: 24, diskGB: 32)
+        #expect(tight.enough)
+        #expect(tight.warning?.contains("can grow by up to 32 GB and this Mac has 24 GB free") == true)
     }
 
     @Test func aTakenNameGetsTheNextNumber() {
@@ -444,8 +449,8 @@ struct ProblemFromCoreTests {
     }
 
     @Test func aDiskAnswerAndNoProblemAreRead() {
-        let disk = #"{"problem":{"kind":"not_enough_disk","machine":"W","title":"t","message":"m"}}"#
-        #expect(Problem.from(core: disk) == .notEnoughDisk(machine: "W", title: "t", message: "m"))
+        let disk = #"{"problem":{"kind":"not_enough_disk","machine":"W","title":"t","message":"m","start_anyway":true}}"#
+        #expect(Problem.from(core: disk) == .notEnoughDisk(machine: "W", title: "t", message: "m", startAnyway: true))
         #expect(Problem.from(core: #"{"problem":null}"#) == nil)
         #expect(Problem.from(core: "{}") == nil)
         #expect(Problem.from(core: "garbled") == nil)

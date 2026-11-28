@@ -217,17 +217,8 @@ impl RealSteps<'_> {
         fs::create_dir_all(&folder)
             .map_err(|e| StepError::new(format!("Cannot make {}: {e}", folder.display())))?;
         let need = space_needed_gb(self.setup.guest, self.setup.disk_gb);
-        if let Some(free) = fetch::free_bytes(&folder).filter(|_| self.setup.check_space)
-            && free / 1_000_000_000 < need
-        {
-            let more = need - free / 1_000_000_000;
-            return Err(StepError::coded(
-                "no_space",
-                format!(
-                    "Not enough room. This install needs {need} GB and this Mac has {} free: free {more} GB and try again.",
-                    fetch::gigabytes(free)
-                ),
-            ));
+        if let Some(free) = fetch::free_bytes(&folder).filter(|_| self.setup.check_space) {
+            room_for(need, free)?;
         }
         let disk = folder.join("disk.img");
         if !disk.exists() {
@@ -435,6 +426,21 @@ impl Steps for RealSteps<'_> {
             Step::FirstStart => self.first_start(info, progress),
         }
     }
+}
+
+/// An error saying how much to free, when `free` bytes are fewer than `need` gigabytes.
+fn room_for(need: u64, free: u64) -> Result<(), StepError> {
+    if free / 1_000_000_000 >= need {
+        return Ok(());
+    }
+    let more = need - free / 1_000_000_000;
+    Err(StepError::coded(
+        "no_space",
+        format!(
+            "Not enough room. This install needs {need} GB and this Mac has {} free: free {more} GB and try again.",
+            fetch::gigabytes(free)
+        ),
+    ))
 }
 
 #[cfg(test)]

@@ -88,13 +88,26 @@ impl Plan {
     }
 }
 
-/// The room an install needs on the Mac, in gigabytes: the installer, the disk it is made into, and
-/// what the steps use meanwhile. The Windows figure is the design's 80 for a 64 GB disk.
+/// What an install writes on the Mac, in gigabytes. The disk is a sparse file: making it takes
+/// no room, and it holds only what the guest writes, so the room an install needs is the
+/// downloaded or chosen installer, what the installed system writes and the driver package
+/// (under 0.1 GB), with a margin so that the Mac is not left full. The figures are those of a
+/// fresh install of each, rounded up.
+const WINDOWS_INSTALLER_GB: u64 = 6;
+const WINDOWS_SYSTEM_GB: u64 = 25;
+const UBUNTU_INSTALLER_GB: u64 = 3;
+const UBUNTU_SYSTEM_GB: u64 = 12;
+const INSTALL_MARGIN_GB: u64 = 5;
+
+/// The room an install needs on the Mac, in gigabytes: the installer, what the system writes
+/// (never more than the disk holds) and the margin. The app counts it the same way
+/// (`InstallGuest.spaceNeededGB`) and says separately when the whole disk would not fit.
 pub fn space_needed_gb(guest: Guest, disk_gb: u64) -> u64 {
-    match guest {
-        Guest::Windows => disk_gb + 16,
-        Guest::Ubuntu => disk_gb + 8,
-    }
+    let (installer, system) = match guest {
+        Guest::Windows => (WINDOWS_INSTALLER_GB, WINDOWS_SYSTEM_GB),
+        Guest::Ubuntu => (UBUNTU_INSTALLER_GB, UBUNTU_SYSTEM_GB),
+    };
+    installer + system.min(disk_gb) + INSTALL_MARGIN_GB
 }
 
 #[cfg(test)]
@@ -122,7 +135,11 @@ mod tests {
     }
 
     #[test]
-    fn windows_with_the_designs_disk_needs_eighty_gigabytes() {
-        assert_eq!(space_needed_gb(Guest::Windows, 64), 80);
+    fn an_install_needs_what_it_writes_and_not_the_disks_whole_size() {
+        assert_eq!(space_needed_gb(Guest::Windows, 64), 36);
+        assert_eq!(space_needed_gb(Guest::Ubuntu, 32), 20);
+        // A disk bigger or smaller than the system changes it only when it is the smaller.
+        assert_eq!(space_needed_gb(Guest::Windows, 256), 36);
+        assert_eq!(space_needed_gb(Guest::Ubuntu, 8), 3 + 8 + 5);
     }
 }

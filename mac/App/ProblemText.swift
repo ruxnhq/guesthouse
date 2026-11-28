@@ -12,8 +12,9 @@ nonisolated enum Problem: Identifiable, Equatable {
     /// `message`). `running` is the one machine holding the memory, if it is one. `startAnyway` when
     /// the shortage is only what is free at the moment, which the Mac can make room for.
     case notEnoughMemory(machine: String, title: String, message: String, running: String?, startAnyway: Bool)
-    /// The machine's disk can grow to more than this Mac has room for (the core's words).
-    case notEnoughDisk(machine: String, title: String, message: String)
+    /// The machine's disk can grow to more than this Mac has room for, or this Mac is nearly full
+    /// (the core's words). `startAnyway` for the first: a disk takes only what the guest writes.
+    case notEnoughDisk(machine: String, title: String, message: String, startAnyway: Bool)
     /// The graphics driver in the machine is older than the released one (`reported` is its
     /// version) or is not in it at all (`reported` is nil). The version it should have is `released`.
     case driverOld(machine: String, machineID: String, released: String, reported: String?)
@@ -24,7 +25,7 @@ nonisolated enum Problem: Identifiable, Equatable {
         switch self {
         case .noGPU: "no-gpu"
         case .notEnoughMemory(let machine, _, _, _, _): "memory-" + machine
-        case .notEnoughDisk(let machine, _, _): "disk-" + machine
+        case .notEnoughDisk(let machine, _, _, _): "disk-" + machine
         case .driverOld(_, let machineID, _, _): "driver-" + machineID
         case .didNotStart(_, let machineID): "start-" + machineID
         }
@@ -34,7 +35,7 @@ nonisolated enum Problem: Identifiable, Equatable {
         switch self {
         case .noGPU:
             String(localized: "This Mac can't draw a machine with its GPU")
-        case .notEnoughMemory(_, let title, _, _, _), .notEnoughDisk(_, let title, _):
+        case .notEnoughMemory(_, let title, _, _, _), .notEnoughDisk(_, let title, _, _):
             title
         case .driverOld(let machine, _, _, let reported):
             reported == nil
@@ -49,7 +50,7 @@ nonisolated enum Problem: Identifiable, Equatable {
         switch self {
         case .noGPU(let has):
             String(localized: "Guesthouse needs a Mac with Apple silicon and macOS 27 or later. This one has \(has). Machines can still run, drawn by the processor, which is slow.")
-        case .notEnoughMemory(_, _, let message, _, _), .notEnoughDisk(_, _, let message):
+        case .notEnoughMemory(_, _, let message, _, _), .notEnoughDisk(_, _, let message, _):
             message
         case .driverOld(_, _, _, let reported):
             reported == nil
@@ -74,7 +75,8 @@ nonisolated enum Problem: Identifiable, Equatable {
                 machine: machine, title: title, message: message,
                 running: problem["running"] as? String, startAnyway: problem["start_anyway"] as? Bool ?? false)
         case "not_enough_disk":
-            return .notEnoughDisk(machine: machine, title: title, message: message)
+            return .notEnoughDisk(
+                machine: machine, title: title, message: message, startAnyway: problem["start_anyway"] as? Bool ?? false)
         default:
             return nil
         }

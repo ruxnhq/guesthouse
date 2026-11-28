@@ -59,6 +59,7 @@ fn the_disk_can_grow_to_its_whole_size_and_needs_that_much_room() {
     );
     assert_eq!(lack["problem"]["needed_gb"], 46);
     assert_eq!(lack["problem"]["free_gb"], 30);
+    assert_eq!(lack["problem"]["start_anyway"], true, "room that may never be used is a warning");
     assert!(
         lack["problem"]["message"]
             .as_str()
@@ -69,6 +70,28 @@ fn the_disk_can_grow_to_its_whole_size_and_needs_that_much_room() {
         json!({"check": "disk", "machine": "W", "size_bytes": 64 * gb, "on_disk_bytes": 20 * gb, "free_bytes": 100 * gb}),
     );
     assert_eq!(roomy["problem"], Value::Null);
+}
+
+#[test]
+fn a_disk_that_could_outgrow_the_free_room_may_start_anyway_but_not_when_the_mac_is_nearly_full() {
+    let gb = 1_000_000_000i64;
+    // 11 GB on disk of 68.72 GB, 24 GB free: a warning that can be passed.
+    let tight = run(
+        json!({"check": "disk", "machine": "Windows 11", "size_bytes": 68_720_000_000i64, "on_disk_bytes": 11 * gb, "free_bytes": 24 * gb}),
+    );
+    assert_eq!(tight["problem"]["kind"], "not_enough_disk");
+    assert_eq!(tight["problem"]["start_anyway"], true);
+    // Under the floor it is a stop, whatever the disk could grow by.
+    let full = run(
+        json!({"check": "disk", "machine": "W", "size_bytes": 10 * gb, "on_disk_bytes": 9 * gb, "free_bytes": 4 * gb}),
+    );
+    assert_eq!(full["problem"]["start_anyway"], false);
+    assert_eq!(full["problem"]["key"], "disk_nearly_full");
+    assert_eq!(full["problem"]["free_gb"], 4);
+    let at_floor = run(
+        json!({"check": "disk", "machine": "W", "size_bytes": 10 * gb, "on_disk_bytes": 9 * gb, "free_bytes": 5 * gb}),
+    );
+    assert_eq!(at_floor["problem"], Value::Null);
 }
 
 #[test]

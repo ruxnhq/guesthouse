@@ -22,10 +22,21 @@ struct MenuBarContent: View {
                 openWindow(id: LibraryView.windowID)
                 NSApp.activate()
             }
-            menuButton("New Machine…") {
+            // The same three the sidebar's New Machine button offers.
+            menuButton("Install Windows…") {
                 openWindow(id: LibraryView.windowID)
                 NSApp.activate()
                 library.installing = .windows
+            }
+            menuButton("Install Ubuntu…") {
+                openWindow(id: LibraryView.windowID)
+                NSApp.activate()
+                library.installing = .ubuntu
+            }
+            menuButton("Use a Disk or Installer…") {
+                openWindow(id: LibraryView.windowID)
+                NSApp.activate()
+                library.showingNewMachine = true
             }
             SettingsLink { Text("Settings…").frame(maxWidth: .infinity, alignment: .leading) }
                 .buttonStyle(.plain)

@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Adds a machine from a disk image that already has Windows on it. The files are cloned into
 /// the machine's own folder (copied where cloning is not possible), so the originals are never
-/// touched. Installing Windows from a download is not built yet.
+/// touched. Installing Windows or Ubuntu from a download is the Install choices' (`InstallConfirmSheet`).
 struct NewMachineSheet: View {
     @Environment(Library.self) private var library
     @Environment(\.dismiss) private var dismiss
@@ -33,7 +33,7 @@ struct NewMachineSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("New Machine").font(.title2.weight(.semibold))
+                Text("Use a Disk or Installer").font(.title2.weight(.semibold))
                 Text("Make a machine from a disk that already has Windows on it. Guesthouse copies the files into its own folder; the originals are left alone.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -81,9 +81,6 @@ struct NewMachineSheet: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 14)
             HStack {
-                Text("Installing Windows from a download is not built yet.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 Spacer()
                 if creating {
                     ProgressView().controlSize(.small)

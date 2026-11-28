@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
-/// Where an install stands, as the agent says it, for the install screens (not built yet) and for
+/// Where an install stands, as the agent says it, for the install screens and for
 /// `--print-states`. Read from the agent's `install` event and the `installs` of a listing.
 nonisolated struct InstallStatus: Equatable {
     struct Step: Equatable {

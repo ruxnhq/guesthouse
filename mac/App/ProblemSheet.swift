@@ -69,8 +69,14 @@ struct ProblemSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        case .notEnoughDisk:
+        case .notEnoughDisk(let machine, _, _, let startAnyway):
             Button("Cancel") { dismiss() }
+            if startAnyway, let target = library.machines.first(where: { $0.name == machine }) {
+                Button("Start Anyway") {
+                    dismiss()
+                    library.start(target, ignoring: [.disk])
+                }
+            }
             Button("Show in Finder") {
                 if let folder = Core.machinesFolder { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
                 dismiss()

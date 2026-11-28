@@ -25,9 +25,13 @@ nonisolated enum InstallGuest: String, CaseIterable, Identifiable {
 
     func cores(hostCores: Int) -> Int { min(max(hostCores, 1), Self.defaultMostCores) }
 
-    /// Room the install needs on the Mac, as the core counts it: the disk, the installer and the
-    /// copies made on the way.
-    func spaceNeededGB(diskGB: Int) -> Int { diskGB + (self == .windows ? 16 : 8) }
+    /// Room the install needs on the Mac, as the core counts it (`plan.rs`): the installer, what
+    /// the system writes and a margin. The disk is a sparse file that holds only what the guest
+    /// writes, so its full size is not needed, only warned about (`InstallText.spaceSentence`).
+    func spaceNeededGB(diskGB: Int) -> Int {
+        let (installer, system) = self == .windows ? (6, 25) : (3, 12)
+        return installer + min(system, diskGB) + 5
+    }
 
     /// Microsoft's page for the ARM installer. Its download cannot be automated (the page checks
     /// that a person is there), so the app opens it in the browser. The same address the core
@@ -78,11 +82,17 @@ nonisolated enum InstallText {
         String(localized: "\(cores) processors, \(memoryGB) GB memory, \(diskGB) GB disk")
     }
 
-    /// The space row: "Needs 80 GB. This Mac has 212 GB free." and whether it is enough.
-    static func spaceSentence(needGB: Int, freeGB: Int?) -> (text: String, enough: Bool) {
-        guard let freeGB else { return (String(localized: "Needs \(needGB) GB."), true) }
+    /// The space row: "Needs 36 GB. This Mac has 212 GB free." and whether it is enough. When it
+    /// is, but the whole disk would not fit, a second sentence says so as a warning, not a stop
+    /// (the disk takes only what the guest writes).
+    static func spaceSentence(needGB: Int, freeGB: Int?, diskGB: Int = 0) -> (text: String, enough: Bool, warning: String?) {
+        guard let freeGB else { return (String(localized: "Needs \(needGB) GB."), true, nil) }
         let enough = freeGB >= needGB
-        return (String(localized: "Needs \(needGB) GB. This Mac has \(freeGB) GB free."), enough)
+        let text = String(localized: "Needs \(needGB) GB. This Mac has \(freeGB) GB free.")
+        let warning = enough && diskGB > freeGB
+            ? String(localized: "The disk can grow by up to \(diskGB) GB and this Mac has \(freeGB) GB free. It only takes the room the guest writes, so it may never get that big. If this Mac fills up, the machine stops.")
+            : nil
+        return (text, enough, warning)
     }
 
     /// A name no machine has: the wanted name, or the wanted name and the first number after it.

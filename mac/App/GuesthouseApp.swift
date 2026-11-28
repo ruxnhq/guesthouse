@@ -72,11 +72,20 @@ struct AppCommands: Commands {
             Button("About Guesthouse") { showAboutPanel() }
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Machine…") {
+            // The same three the sidebar's New Machine button offers.
+            Button("Install Windows…") {
+                openWindow(id: LibraryView.windowID)
+                library.installing = .windows
+            }
+            .keyboardShortcut("n")
+            Button("Install Ubuntu…") {
+                openWindow(id: LibraryView.windowID)
+                library.installing = .ubuntu
+            }
+            Button("Use a Disk or Installer…") {
                 openWindow(id: LibraryView.windowID)
                 library.showingNewMachine = true
             }
-            .keyboardShortcut("n")
         }
         CommandGroup(after: .toolbar) {
             Toggle("Show Statistics", isOn: $showStatistics)

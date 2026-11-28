@@ -231,19 +231,15 @@ fn a_driver_windows_turns_away_gives_its_code_and_the_choice_to_go_on_without() 
 }
 
 #[test]
-fn a_disk_that_does_not_fit_says_how_much_to_free() {
-    let world = World::new("space");
-    let mut setup = world.setup(Guest::Ubuntu, false);
-    setup.disk_gb = 50_000_000;
-    setup.check_space = true;
-    let mut control = Control::default();
-    let mut network = Network;
-    let mut steps = RealSteps { setup, transport: &mut network, control: &mut control };
-    let info = InstallInfo::new("m", &Plan::for_guest(Guest::Ubuntu), Source::Download);
-    let error = steps.run(Step::MakeDisk, &info, &mut |_| true).unwrap_err();
+fn too_little_room_says_how_much_to_free() {
+    let error = room_for(20, 12_400_000_000).unwrap_err();
     assert_eq!(error.code.as_deref(), Some("no_space"));
-    assert!(error.message.contains("free") && error.message.contains("GB"), "{}", error.message);
-    let _ = fs::remove_dir_all(world.root);
+    assert!(
+        error.message.contains("needs 20 GB") && error.message.contains("free 8 GB"),
+        "{}",
+        error.message
+    );
+    assert!(room_for(20, 24_000_000_000).is_ok());
 }
 
 #[test]

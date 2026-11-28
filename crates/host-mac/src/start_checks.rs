@@ -17,6 +17,12 @@ pub const TIGHT_LEFTOVER_MB: i64 = 4096;
 pub const HEADROOM_MB: i64 = 1024;
 /// Margin on top of what a disk can still grow by.
 const DISK_MARGIN_BYTES: i64 = 2_000_000_000;
+/// Below this much free space on the Mac a machine does not start at all. Above it, a disk that
+/// could grow past what is free is only a warning: the disk is a sparse file that holds what the
+/// guest has written, and most guests never fill it. Under the floor the Mac itself is nearly
+/// out of room (macOS keeps its swap and its logs there), and a guest that writes a little
+/// would make writes fail underneath it, which stops the machine in the middle of a write.
+pub const DISK_FLOOR_BYTES: i64 = 5_000_000_000;
 const BYTES_PER_GB: i64 = 1_000_000_000;
 
 #[derive(Debug, Deserialize)]
@@ -117,17 +123,27 @@ pub fn judge(check: &Check) -> Value {
             memory_problem(machine, *wanted_mb, spare, None, *running_mb, true)
         }
         Check::Disk { machine, size_bytes, on_disk_bytes, free_bytes } => {
+            let free_gb = free_bytes / BYTES_PER_GB;
+            if *free_bytes < DISK_FLOOR_BYTES {
+                return json!({"problem": {
+                    "key": "disk_nearly_full", "kind": "not_enough_disk", "machine": machine,
+                    "title": "This Mac is almost out of disk space",
+                    "message": format!("It has {free_gb} GB free, and {machine} needs room to write to its disk: if the Mac fills up, {machine} stops in the middle of a write. Free some space on this Mac, or move machines you do not need to the Trash, and then start {machine}."),
+                    "needed_gb": DISK_FLOOR_BYTES / BYTES_PER_GB, "free_gb": free_gb,
+                    "start_anyway": false,
+                }});
+            }
             let needed = (size_bytes - on_disk_bytes).max(0) + DISK_MARGIN_BYTES;
             if *free_bytes >= needed {
                 return json!({"problem": null});
             }
             let needed_gb = (needed + BYTES_PER_GB - 1) / BYTES_PER_GB;
-            let free_gb = free_bytes / BYTES_PER_GB;
             json!({"problem": {
                 "key": "not_enough_disk", "kind": "not_enough_disk", "machine": machine,
-                "title": format!("Not enough disk space to start {machine}"),
-                "message": format!("{machine}'s disk can grow by up to {needed_gb} GB and this Mac has {free_gb} GB free. Free some space on this Mac, or move machines you do not need to the Trash."),
+                "title": format!("{machine}'s disk could fill this Mac"),
+                "message": format!("{machine}'s disk can grow by up to {needed_gb} GB and this Mac has {free_gb} GB free. It only takes the room the guest writes, so it may never get that big. If this Mac fills up, {machine} stops. You can start it anyway, or free some space first."),
                 "needed_gb": needed_gb, "free_gb": free_gb,
+                "start_anyway": true,
             }})
         }
         Check::Advice { new_mb, running_mb, host_mb } => {

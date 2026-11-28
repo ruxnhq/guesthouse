@@ -24,8 +24,8 @@ struct InstallConfirmSheet: View {
     private let hostGB = Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)
     private let freeGB = Library.freeSpaceGB()
 
-    private var space: (text: String, enough: Bool) {
-        InstallText.spaceSentence(needGB: guest.spaceNeededGB(diskGB: diskGB), freeGB: freeGB)
+    private var space: (text: String, enough: Bool, warning: String?) {
+        InstallText.spaceSentence(needGB: guest.spaceNeededGB(diskGB: diskGB), freeGB: freeGB, diskGB: diskGB)
     }
 
     private var needsInstaller: Bool { guest == .windows }
@@ -175,10 +175,18 @@ struct InstallConfirmSheet: View {
 
     private var spaceRow: some View {
         row("Space") {
-            Image(systemName: space.enough ? "checkmark" : "exclamationmark.triangle.fill")
-                .foregroundStyle(space.enough ? Color.green : Color.orange)
+            Image(systemName: space.enough && space.warning == nil ? "checkmark" : "exclamationmark.triangle.fill")
+                .foregroundStyle(space.enough && space.warning == nil ? Color.green : Color.orange)
                 .accessibilityHidden(true)
-            Text(space.text)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(space.text)
+                if let warning = space.warning {
+                    Text(warning)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Spacer()
         }
     }

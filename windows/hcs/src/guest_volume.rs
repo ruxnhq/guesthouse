@@ -14,6 +14,7 @@
 //! - Names are always single parts: a part with a separator, a stream's colon, `.` or `..` is
 //!   refused.
 
+use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read};
@@ -27,17 +28,23 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
     FILE_BASIC_INFORMATION, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_INFORMATION,
-    FILE_FULL_DIR_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT,
-    FILE_RENAME_INFORMATION, FILE_STANDARD_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileBasicInformation,
-    FileDispositionInformation, FileFullDirectoryInformation, FileRenameInformation, FileStandardInformation,
-    NtCreateFile, NtQueryDirectoryFile, NtQueryInformationFile, NtSetInformationFile,
+    FILE_FULL_DIR_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_FOR_BACKUP_INTENT, FILE_OPEN_IF,
+    FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_STANDARD_INFORMATION,
+    FILE_SYNCHRONOUS_IO_NONALERT, FileBasicInformation, FileDispositionInformation,
+    FileFullDirectoryInformation, FileRenameInformation, FileStandardInformation, NtCreateFile,
+    NtQueryDirectoryFile, NtQueryInformationFile, NtSetInformationFile,
 };
 use windows_sys::Win32::Foundation::{
-    HANDLE, LocalFree, NTSTATUS, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE, RtlNtStatusToDosError,
+    CloseHandle, HANDLE, LocalFree, NTSTATUS, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE, RtlNtStatusToDosError,
     STATUS_NO_MORE_FILES, UNICODE_STRING,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{
+    AdjustTokenPrivileges, ImpersonateSelf, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, RevertToSelf,
+    SE_BACKUP_NAME, SE_PRIVILEGE_ENABLED, SE_RESTORE_NAME, SecurityImpersonation, TOKEN_ADJUST_PRIVILEGES,
+    TOKEN_IMPERSONATE, TOKEN_QUERY,
 };
 use windows_sys::Win32::Security::{
     DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
@@ -51,6 +58,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken, SetThreadToken};
 
 /// How deep a folder removed or given permissions may go. A guest's own folders are far
 /// shallower; past this the work stops with an error rather than going on.
@@ -273,6 +281,10 @@ impl GuestVolume {
         let relative = relative.as_ref();
         let (folder, name) = split(relative)?;
         let parent = self.walk(&folder, true)?;
+        // What a user of the guest set on something in the folder can't keep it from being set
+        // right, so this step reads and writes past permissions, as a backup does. Only this
+        // thread, and only until this returns.
+        let _privileged = Privileged::enable();
         let access = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC;
         let create = || open_at(parent.raw(), name, access, FILE_CREATE, FILE_DIRECTORY_FILE);
         let mut handle = match open_at(parent.raw(), name, access | DELETE, FILE_OPEN, 0) {
@@ -392,6 +404,102 @@ impl GuestVolume {
 
     fn context(&self, relative: &Path, error: io::Error) -> io::Error {
         with_path(&self.shown(relative), error)
+    }
+}
+
+thread_local! {
+    /// Whether this thread opens with backup intent, while it holds `Privileged`.
+    static BACKUP: Cell<bool> = const { Cell::new(false) };
+}
+
+fn backup_intent() -> u32 {
+    if BACKUP.get() { FILE_OPEN_FOR_BACKUP_INTENT } else { 0 }
+}
+
+/// The backup and restore privileges, on this thread only, while this is held. The thread takes a
+/// copy of the process's token with them on, and has the token it had before back when this is
+/// dropped, however the work ends. A process that doesn't hold them, as one not run as the system
+/// or an elevated administrator, goes on without them.
+struct Privileged {
+    /// The thread's own token before, when it had one.
+    before: Option<HANDLE>,
+    impersonating: bool,
+}
+
+/// `TOKEN_PRIVILEGES` with room for two.
+#[repr(C)]
+struct TwoPrivileges {
+    count: u32,
+    privileges: [LUID_AND_ATTRIBUTES; 2],
+}
+
+impl Privileged {
+    fn enable() -> Privileged {
+        let mut before: HANDLE = null_mut();
+        // SAFETY: plain calls on this thread; `before` is closed in `drop`.
+        let had = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, 1, &mut before) } != 0;
+        let before = had.then_some(before);
+        // SAFETY: plain call; it gives this thread a copy of the process's token.
+        if unsafe { ImpersonateSelf(SecurityImpersonation) } == 0 {
+            return Privileged { before, impersonating: false };
+        }
+        let privileged = Privileged { before, impersonating: true };
+        let mut token: HANDLE = null_mut();
+        // SAFETY: as above; the token is closed below.
+        if unsafe {
+            OpenThreadToken(GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, 1, &mut token)
+        } == 0
+        {
+            return privileged;
+        }
+        let mut wanted = TwoPrivileges {
+            count: 2,
+            privileges: [LUID_AND_ATTRIBUTES { Luid: Default::default(), Attributes: SE_PRIVILEGE_ENABLED };
+                2],
+        };
+        // SAFETY: the names are the system's constants, and each LUID is written in place.
+        let found = unsafe {
+            LookupPrivilegeValueW(null(), SE_BACKUP_NAME, &mut wanted.privileges[0].Luid) != 0
+                && LookupPrivilegeValueW(null(), SE_RESTORE_NAME, &mut wanted.privileges[1].Luid) != 0
+        };
+        if found {
+            // SAFETY: the structure is a TOKEN_PRIVILEGES of two. A privilege the token doesn't
+            // hold is left off, which isn't an error here.
+            unsafe {
+                AdjustTokenPrivileges(token, 0, (&raw const wanted).cast(), 0, null_mut(), null_mut());
+            }
+        }
+        // SAFETY: ours, and not used after this.
+        unsafe { CloseHandle(token) };
+        BACKUP.set(true);
+        privileged
+    }
+}
+
+impl Drop for Privileged {
+    fn drop(&mut self) {
+        BACKUP.set(false);
+        let before = self.before.take();
+        if !self.impersonating {
+            if let Some(before) = before {
+                // SAFETY: ours, and not used after this.
+                unsafe { CloseHandle(before) };
+            }
+            return;
+        }
+        // SAFETY: plain calls on this thread, and `before` is ours.
+        let back = match before {
+            Some(before) => unsafe {
+                let set = SetThreadToken(null(), before);
+                CloseHandle(before);
+                set
+            },
+            None => unsafe { RevertToSelf() },
+        };
+        // A thread that can't put its token back mustn't go on with the privileges.
+        if back == 0 {
+            std::process::abort();
+        }
     }
 }
 
@@ -605,7 +713,7 @@ fn open_relative(
             FILE_ATTRIBUTE_NORMAL,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             disposition,
-            options | FILE_OPEN_REPARSE_POINT,
+            options | FILE_OPEN_REPARSE_POINT | backup_intent(),
             null(),
             0,
         )

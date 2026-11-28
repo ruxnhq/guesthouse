@@ -2,8 +2,10 @@ use super::*;
 use std::fs;
 use std::os::windows::fs::symlink_file;
 use std::process::Command;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
-use windows_sys::Win32::Security::GetKernelObjectSecurity;
+use windows_sys::Win32::Security::{GetKernelObjectSecurity, TOKEN_QUERY};
+use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
 /// A folder standing in for a guest's volume, and one beside it standing in for the host's own
 /// files, which nothing done on the volume may reach.
@@ -269,6 +271,18 @@ fn a_folder_given_only_some_lets_only_them_in_and_holds_no_links() {
     assert!(!dacl_of(&scratch.host).starts_with("D:P"), "what the link named was left as it was");
 }
 
+/// Whether this thread has a token of its own, as it does while it acts with other rights.
+fn thread_has_token() -> bool {
+    let mut token: HANDLE = null_mut();
+    // SAFETY: plain call; the token is closed if there is one.
+    let had = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) } != 0;
+    if had {
+        // SAFETY: ours.
+        unsafe { CloseHandle(token) };
+    }
+    had
+}
+
 #[test]
 fn a_compressed_file_is_a_file_and_a_junction_is_still_refused() {
     let scratch = Scratch::new("compressed");
@@ -347,4 +361,56 @@ fn a_reparse_point_that_redirects_no_name_is_a_plain_file_or_folder() {
     assert_eq!(volume.read("tagged.bin", 100).unwrap(), b"replaced");
     volume.remove_tree("placeholder").unwrap();
     assert_eq!(volume.entry("placeholder").unwrap(), None);
+}
+
+#[test]
+fn a_file_that_lets_nobody_in_does_not_stop_the_folder_being_set() {
+    let scratch = Scratch::new("deny-file");
+    let folder = scratch.volume.join("Guesthouse");
+    fs::create_dir_all(&folder).unwrap();
+    let denied = folder.join("denied.txt");
+    fs::write(&denied, "x").unwrap();
+    let set = Command::new("icacls")
+        .arg(&denied)
+        .args(["/inheritance:r", "/deny", "*S-1-1-0:(F)"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "{}", String::from_utf8_lossy(&set.stdout));
+    let sid = own_sid();
+    let grants = [("SY", "FA"), ("BA", "FA"), (sid.as_str(), "FA"), ("OW", "RC")];
+    let volume = scratch.open();
+
+    volume.give_only("Guesthouse", &grants).unwrap();
+    assert!(!thread_has_token(), "the thread has its own rights back");
+    // With the backup privileges it is let in and given the folder's permissions; without them,
+    // as here unless elevated, it is removed through the folder's own permissions.
+    if denied.exists() {
+        let dacl = dacl_of(&denied);
+        assert!(!dacl.contains("(D;"), "{dacl}");
+    }
+}
+
+/// Needs the backup and restore privileges, which only an elevated prompt or the system has.
+#[test]
+#[ignore = "needs an elevated prompt, for the backup and restore privileges"]
+fn a_folder_that_lets_nobody_in_is_given_the_folders_permissions_with_the_backup_privileges() {
+    let scratch = Scratch::new("deny-folder");
+    let folder = scratch.volume.join("Guesthouse");
+    let denied = folder.join("denied");
+    fs::create_dir_all(&denied).unwrap();
+    fs::write(denied.join("inside.txt"), "inside").unwrap();
+    let set = Command::new("icacls")
+        .arg(&denied)
+        .args(["/inheritance:r", "/deny", "*S-1-1-0:(OI)(CI)(F)"])
+        .output()
+        .unwrap();
+    assert!(set.status.success());
+    let sid = own_sid();
+    let grants = [("SY", "FA"), ("BA", "FA"), (sid.as_str(), "FA"), ("OW", "RC")];
+    let volume = scratch.open();
+    let given = volume.give_only("Guesthouse", &grants);
+    assert!(!thread_has_token());
+    let _ = Command::new("icacls").arg(&denied).args(["/reset", "/t"]).output();
+    given.unwrap();
+    assert!(!dacl_of(&denied).contains("(D;"));
 }

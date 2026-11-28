@@ -108,11 +108,11 @@ A Guesthouse program reads two things from a guest on a Windows host: what it wr
 
 The machine itself runs in Windows' own worker process, which Windows already keeps apart. So `boot` hands the serial port to `guesthouse-serial-relay`, which sits beside it and runs jailed, as QEMU does on Linux:
 
-- In an AppContainer with no capabilities, it can open none of your files, and it has no network, not even loopback. That does what Landlock does on Linux.
+- In a less privileged AppContainer with no capabilities, it can open none of your files, nor what Windows grants to all application packages (most of Program Files and the registry), only the system's DLLs and its own file, and it has no network, not even loopback. That does what Landlock does on Linux.
 - Process mitigations block every win32k call, code made at run time, and DLLs from a share or a low-integrity file. That does what seccomp does.
 - Its job lets it start no process, keeps it off the desktop and the clipboard, caps its memory, and stops it when `boot` ends. That does what no new privileges does.
 
-The jail's test reads four of these back from Windows inside the jailed process: the AppContainer, and that win32k calls, dynamic code and child processes are refused. The rest are set and not yet read back. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
+The jail's test reads four of these back from Windows inside the jailed process: the AppContainer, and that win32k calls, dynamic code and child processes are refused. It also finds a file granted to all application packages closed to it. The rest are set and not yet read back. The relay shows any control character, an escape sequence included, as a code, so a guest can't drive your terminal. `boot` never reads the port unjailed unless `--no-jail` asks it to. Windows keeps the relay's AppContainer under the name `guesthouse.serial-relay`. The first start lets that container read and run the relay's own file, and nothing else.
 
 ## The service
 

@@ -2,9 +2,11 @@
 //! Landlock or seccomp, and a process can't jail itself after it starts, so the parent starts it
 //! jailed, with the same three promises as on Linux:
 //!
-//! - Files and network, as Landlock holds them: the program runs in an AppContainer with no
-//!   capabilities. It may open only what's granted to that container, which is the program's own
-//!   file and the system's DLLs, and it has no network at all, loopback included.
+//! - Files and network, as Landlock holds them: the program runs in a less privileged AppContainer
+//!   with no capabilities. It may open only what's granted to that container by name, which is the
+//!   program's own file, or to every restricted package, which is the system's DLLs; what's granted
+//!   to all application packages, most of Program Files and the registry among them, it may not. It
+//!   has no network at all, loopback included.
 //! - System calls, as seccomp holds them: it can make no win32k calls, so the window manager's half
 //!   of the kernel is out of reach, and it can't make code at run time, load DLLs from a share or a
 //!   low-integrity file, take extension DLLs into itself, or use a handle that isn't valid.
@@ -46,11 +48,11 @@ use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, GetProcessMitigationPolicy,
     INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken,
-    PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy, ProcessSystemCallDisablePolicy,
-    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ProcessChildProcessPolicy,
+    ProcessDynamicCodePolicy, ProcessSystemCallDisablePolicy, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// Process mitigations, by the bits Windows' SDK gives them in the first word of
@@ -86,9 +88,12 @@ mod mitigation {
 const JOB_OBJECT_UILIMIT_ALL: u32 = 0x1FF;
 /// The child-process policy that lets a process start none, as in Windows' SDK.
 const PROCESS_CREATION_CHILD_PROCESS_RESTRICTED: u32 = 1;
-/// The attributes a jailed start sets: its container, its handles, its mitigations and its
-/// child-process policy.
-const ATTRIBUTES: u32 = 4;
+/// The policy that leaves a container out of what's granted to all application packages, which
+/// makes it a less privileged one, as in Windows' SDK.
+const PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT: u32 = 1;
+/// The attributes a jailed start sets: its container, its handles, its mitigations, its
+/// child-process policy and its all-packages policy.
+const ATTRIBUTES: u32 = 5;
 /// The most a jailed program may hold in memory, unless the caller says otherwise. What it does is
 /// read lines, so this is generous.
 const DEFAULT_MEMORY_LIMIT: usize = 64 << 20;
@@ -148,6 +153,7 @@ impl Jail {
         };
         let mitigations: u64 = mitigation::ALL;
         let child_policy: u32 = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
+        let packages_policy: u32 = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
         let attributes = AttributeList::new(ATTRIBUTES)?;
         attributes.set(
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
@@ -163,6 +169,11 @@ impl Jail {
         attributes.set(
             PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY,
             &raw const child_policy,
+            size_of::<u32>(),
+        )?;
+        attributes.set(
+            PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
+            &raw const packages_policy,
             size_of::<u32>(),
         )?;
 

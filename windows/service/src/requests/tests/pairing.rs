@@ -335,3 +335,38 @@ fn no_name_or_code_reaches_a_log() {
         assert!(!text.contains("guesthouse: ctl"), "{text}");
     }
 }
+
+fn removed_list(setup: &Setup) -> Vec<String> {
+    guesthouse_remote_view_core::revoked::removed(&setup.service.machines().store.folder("win"))
+}
+
+fn trusted(service: &Arc<Service<Pretend>>) -> Vec<String> {
+    service.work.remoteman.model.lock().unwrap().devices.iter().map(|device| device.0.clone()).collect()
+}
+
+#[test]
+fn a_removed_device_is_revoked_again_at_each_start_before_the_view_opens_until_it_pairs_again() {
+    let setup = running("pair-removed");
+    let service = &setup.service;
+    service.work.remoteman.model.lock().unwrap().devices.push((PHONE.into(), "Phone".into(), false, false));
+    ask_info(service, Request::DeviceRevoke { name: "win".into(), fingerprint: PHONE.into() });
+    assert_eq!(removed_list(&setup), [PHONE]);
+    stop(service, "win");
+
+    // A snapshot from before brings the guest's own list back, with the device on it.
+    service.work.remoteman.model.lock().unwrap().devices.push((PHONE.into(), "Phone".into(), false, false));
+    let before = asked_count(service);
+    start_and_run(service, "win");
+    wait_view(service, "win", ShareState::Listening);
+    assert_eq!(trusted(service), [viewer()], "revoked again before the view opened");
+    assert!(sent(service, before).contains(&format!("revoke {PHONE}")), "{:?}", sent(service, before));
+    assert_eq!(removed_list(&setup), [PHONE], "kept for the next start");
+
+    // Paired again here, it's no longer one that was removed.
+    open(service, None);
+    arrive(service, PHONE, "Phone", "123 456");
+    wait_until(service, "showed the device waiting", |info| info.pending.is_some());
+    ask_info(service, Request::PairAccept { name: "win".into() });
+    assert!(removed_list(&setup).is_empty());
+    stop(service, "win");
+}

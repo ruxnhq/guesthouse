@@ -268,14 +268,12 @@ impl<W: Work> Service<W> {
             }
             Request::RemoteView { name } => self.remote_view(&name),
             Request::PairClose { name } => self.pairing_event(&name, PairingEvent::Stop),
-            Request::PairAccept { name } => self.pairing_event(&name, PairingEvent::Accept),
+            Request::PairAccept { name } => self.accept(&name),
             Request::PairDecline { name } => self.pairing_event(&name, PairingEvent::Decline),
             Request::DeviceAllow { name, fingerprint, what, on } => {
                 self.device(&name, |policy| policy.device_allow(&fingerprint, &what, on))
             }
-            Request::DeviceRevoke { name, fingerprint } => {
-                self.device(&name, |policy| policy.device_revoke(&fingerprint))
-            }
+            Request::DeviceRevoke { name, fingerprint } => self.revoke_device(&name, &fingerprint),
             Request::EnableHyperV => return self.enable_hyper_v(connection),
             Request::Assign { name, owner } => self.assign(&name, &owner, &asker),
         };
@@ -629,6 +627,7 @@ impl<W: Work> Service<W> {
             entry.stop = Some(Arc::clone(&stop));
             entry.ctl = Some(ctl.clone());
             entry.boot_addresses = Vec::new();
+            entry.removed_told = false;
             entry.state = State::Starting;
             // What the guest said last run isn't where its forwards lead until it says it again.
             entry.run_address = None;

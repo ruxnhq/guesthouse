@@ -30,6 +30,7 @@ use guesthouse_relay::{Lan, LanSettings, ShareState as RelayState};
 use guesthouse_remote_view_core::announce::{Announcement, Announcer};
 use guesthouse_remote_view_core::pairing::{Event, Millis};
 use guesthouse_remote_view_core::policy::Policy;
+use guesthouse_remote_view_core::revoked;
 use guesthouse_remote_view_core::session::{Driver, StepEvent};
 use guesthouse_remote_view_core::share::{ShareState, pairing_seconds};
 use guesthouse_remote_view_core::switch::others_ports;
@@ -425,7 +426,7 @@ impl<W: Work> Service<W> {
 
     /// The port and guest address `name`'s view should be open on now, or what it shows instead.
     fn wanted_view(&self, name: &str, record: &Record) -> Result<Wanted, ViewStanding> {
-        let (switch, network, said, bridged, given) = {
+        let (switch, network, said, bridged, given, told) = {
             let entries = self.machines.lock();
             let entry = entries.get(name).ok_or_else(|| standing(ShareState::Off, None))?;
             (
@@ -434,6 +435,7 @@ impl<W: Work> Service<W> {
                 entry.run_address.clone(),
                 matches!(entry.settings.network_mode, NetworkMode::Bridged { .. }),
                 entry.boot_addresses.clone(),
+                entry.removed_told,
             )
         };
         let port = match switch.values() {
@@ -442,6 +444,10 @@ impl<W: Work> Service<W> {
         };
         if let Some(reason) = refusal(name, record, network) {
             return Err(standing(ShareState::Failed, Some(reason)));
+        }
+        // Not before the guest has been told again of the devices removed from it.
+        if !told && !revoked::removed(&self.machines.store.folder(name)).is_empty() {
+            return Err(standing(ShareState::Starting, None));
         }
         // Rules a stopped service left are swept first, or this one would go with them.
         if !self.cleaned.load(Ordering::SeqCst) {

@@ -6,10 +6,11 @@ use crate::guest_end::GuestEnd;
 use crate::machine::Machine;
 use crate::monitor::MAIN_SOCKET;
 use crate::paths::{Paths, Variables};
+use guesthouse_basics::capped_line::read_capped_line;
 use guesthouse_daemon::slot::Slot;
 use std::fs;
+use std::io::BufReader;
 use std::io::Write;
-use std::io::{BufRead, BufReader};
 use std::os::unix::fs::symlink;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -170,10 +171,14 @@ fn usernet_table(tcp: &[(u16, u16)], udp: &[(u16, u16)]) -> String {
     table
 }
 
+/// The longest line the stand-in monitor reads.
+const MOST_MONITOR_LINE: usize = 1 << 16;
+
 fn serve_monitor(stream: UnixStream, table: &str) {
     let Ok(mut writer) = stream.try_clone() else { return };
     let _ = writer.write_all(b"{\"QMP\": {\"version\": {}, \"capabilities\": []}}\n");
-    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+    let mut reader = BufReader::new(stream);
+    while let Ok(Some(line)) = read_capped_line(&mut reader, MOST_MONITOR_LINE) {
         let request: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
         let answer = if request["execute"] == "human-monitor-command"
             && request["arguments"]["command-line"] == "info usernet"

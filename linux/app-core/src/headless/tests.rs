@@ -114,6 +114,20 @@ fn the_list_has_a_line_for_each_machine_in_columns() {
 }
 
 #[test]
+fn nothing_written_moves_the_cursor_or_writes_to_the_clipboard() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let work = make(&context, "work", "Office PC", Kind::Plain);
+    let file = context.paths.log_file();
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, "12:00:00 from a guest \x1b]52;c;QUJD\x07 and \x1b[2J\n").unwrap();
+    let (out, result) = said(&context, &format!("log {}", work.id));
+    assert_eq!(result, Ok(()));
+    assert!(out.contains("from a guest <1b>]52;c;QUJD<07> and <1b>[2J\n"), "{out:?}");
+    assert!(!out.contains('\x1b') && !out.contains('\x07'));
+}
+
+#[test]
 fn an_empty_library_says_so() {
     let scratch = Scratch::new();
     let (out, result) = said(&scratch_context(&scratch), "list");
@@ -163,7 +177,9 @@ fn status_says_when_a_machine_held_to_an_interface_had_its_network_cut() {
     let disk = format!("file={},format=qcow2", machine.disk);
     let words = [&qemu, "-qmp", &monitor, &disk, "-nic", "socket,model=e1000e,fd=11"];
     fake_process(&context, 40, &words, &[], "");
+    let run_folder = context.run_folder(None);
     let notes = context.notes_folder(None);
+    std::fs::create_dir_all(&run_folder).unwrap();
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(notes.join("network-cut"), "wg0 went away\n").unwrap();
     let (out, _) = said(&context, "status work");
@@ -172,6 +188,9 @@ fn status_says_when_a_machine_held_to_an_interface_had_its_network_cut() {
     let (out, _) = said(&context, "status work");
     assert!(out.contains("State: Running") && out.contains("Its network is cut"), "{out}");
     std::fs::remove_file(notes.join("network-cut")).unwrap();
+    assert!(!said(&context, "status work").0.contains("network is cut"));
+    // The run folder is the jailed programs' to write in, so a file there says nothing.
+    std::fs::write(run_folder.join("network-cut"), "forged\n").unwrap();
     assert!(!said(&context, "status work").0.contains("network is cut"));
 }
 

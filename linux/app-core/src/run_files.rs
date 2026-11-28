@@ -15,22 +15,19 @@ use std::time::SystemTime;
 
 /// What the host's side of a run leaves: the daemon's output and QEMU's, QEMU's own log, the TPM's,
 /// the Linux GPU device's calls, and the small notes the app and the daemon leave for the machine's
-/// row (written in jailing.rs, daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs
-/// and actions/desktop.rs). The jail's note is in the notes folder beside the run folder.
-pub const HOST_LOGS: [&str; 10] = [
+/// row (written in daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs and
+/// actions/desktop.rs). The jail's note is the app's own, in its notes folder: see `jailing.rs`.
+pub const HOST_LOGS: [&str; 9] = [
     daemon::OUTPUT_FILE,
     vm_args::OUTPUT_FILE,
     "qemu.log",
     "swtpm.log",
     "calls.log",
-    NOTES_FOLDER_LOG,
     "display-ring",
     "gpu-stopped",
     "gpu-off-reason",
     "guesthouse-boots",
 ];
-/// The one of those that is kept in the notes folder, out of the jails' reach.
-const NOTES_FOLDER_LOG: &str = crate::jailing::NOTE_FILE;
 /// The logs a start keeps from the run before, in vm_host/local.rs.
 pub const KEPT_HOST_LOGS: [&str; 2] = [daemon::OUTPUT_FILE, "qemu.log"];
 /// What the guest wrote to its serial port.
@@ -44,9 +41,17 @@ pub const KEPT_SUFFIX: &str = ".1";
 
 /// The machine a note names and when it was written, which is when that run started.
 pub fn noted_run(folder: &Path, note: &str) -> Option<(String, SystemTime)> {
-    let path = folder.join(note);
+    let path = crate::paths::notes_beside(folder).join(note);
     let id = fs::read_to_string(&path).ok()?.trim().to_owned();
     (!id.is_empty()).then_some(id).zip(modified(&path))
+}
+
+/// Writes a machine note beside `folder` as a run leaves it, for a test.
+#[cfg(test)]
+pub fn plant_note(folder: &Path, note: &str, text: &str) {
+    let notes = crate::paths::notes_beside(folder);
+    fs::create_dir_all(&notes).unwrap();
+    fs::write(notes.join(note), text).unwrap();
 }
 
 /// When this machine's current run in the folder started, if the folder's run is this machine's.
@@ -63,19 +68,6 @@ pub fn kept_run_of(folder: &Path, id: &str) -> Option<SystemTime> {
 /// Each of these files, with `suffix` added, that is there and changed at or after `since`.
 pub fn files_since(folder: &Path, names: &[&str], suffix: &str, since: SystemTime) -> Vec<(String, PathBuf)> {
     found_since(names, suffix, since, |name| folder.join(name))
-}
-
-/// The same for a run folder, whose jail note is in the notes folder beside it.
-pub fn run_files_since(
-    run_folder: &Path,
-    names: &[&str],
-    suffix: &str,
-    since: SystemTime,
-) -> Vec<(String, PathBuf)> {
-    let notes = crate::paths::notes_beside(run_folder);
-    found_since(names, suffix, since, |name| {
-        if name == NOTES_FOLDER_LOG { notes.join(name) } else { run_folder.join(name) }
-    })
 }
 
 fn found_since(

@@ -35,7 +35,7 @@ fn first_present(paths: &[&str]) -> PathBuf {
 }
 
 /// A folder that already exists is made private too, as the first run could have made it otherwise.
-pub(crate) fn make_private_folder(folder: &Path) -> std::io::Result<()> {
+pub fn make_private_folder(folder: &Path) -> std::io::Result<()> {
     DirBuilder::new().recursive(true).mode(PRIVATE_FOLDER).create(folder)?;
     fs::set_permissions(folder, Permissions::from_mode(PRIVATE_FOLDER))
 }
@@ -159,6 +159,26 @@ impl Context {
         Ok(Self { recorded_intel_card, ..Self::new(Paths::from_process(), slot) })
     }
 
+    /// Makes what this process writes from here on readable by this user only, and the folders that
+    /// hold the machines, their disks and the logs private, as an earlier run may have made them
+    /// otherwise. Called first by every program that writes machine files.
+    pub fn keep_private(&self) {
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
+        for folder in [&self.paths.store, &self.paths.machines, &self.paths.state] {
+            if folder.is_dir() {
+                let _ = make_private_folder(folder);
+            }
+        }
+        let (machines, _) = crate::machine::load_all(self);
+        for machine in machines.iter().filter(|machine| !machine.disk_folder.is_empty()) {
+            let folder = Path::new(&machine.disk_folder);
+            let ours = fs::symlink_metadata(folder).is_ok_and(|found| found.is_dir());
+            if ours {
+                let _ = fs::set_permissions(folder, Permissions::from_mode(PRIVATE_FOLDER));
+            }
+        }
+    }
+
     pub fn second_instance(&self) -> bool {
         self.paths.second_instance()
     }
@@ -202,6 +222,40 @@ mod tests {
         context.make_run_folder(None).unwrap();
         for folder in [context.paths.runtime.clone(), context.run_folder(None), context.notes_folder(None)] {
             assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & OTHERS, 0);
+        }
+    }
+
+    #[test]
+    fn what_is_written_after_keep_private_is_for_this_user_and_the_machine_folders_are_closed() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let elsewhere = scratch.path("other-drive/disk-of-work");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let machine = crate::machine::Machine {
+            disk_folder: elsewhere.display().to_string(),
+            ..crate::machine::Machine::new("work", "Work", "/d", "/v")
+        };
+        fs::create_dir_all(machine.folder(&context)).unwrap();
+        machine.save(&context).unwrap();
+        for folder in [&context.paths.store, &context.paths.machines, &context.paths.state, &elsewhere] {
+            fs::create_dir_all(folder).unwrap();
+            fs::set_permissions(folder, Permissions::from_mode(0o755)).unwrap();
+        }
+        let before = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+        context.keep_private();
+        let made = scratch.path("made-after");
+        fs::write(&made, "x").unwrap();
+        fs::create_dir(scratch.path("folder-made-after")).unwrap();
+        rustix::process::umask(before);
+        assert_eq!(fs::metadata(&made).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::metadata(scratch.path("folder-made-after")).unwrap().permissions().mode() & OTHERS, 0);
+        for folder in [&context.paths.store, &context.paths.machines, &context.paths.state, &elsewhere] {
+            assert_eq!(
+                fs::metadata(folder).unwrap().permissions().mode() & OTHERS,
+                0,
+                "{}",
+                folder.display()
+            );
         }
     }
 

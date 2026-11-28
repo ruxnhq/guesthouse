@@ -196,9 +196,9 @@ pub fn network_in_use(context: &Context, machine: &Machine) -> Option<InUse> {
     let running = running_vms(context);
     let (slot, qemu) = running.iter().find(|(_, qemu)| qemu.runs(machine))?;
     let found = network::in_use_of(&qemu.words)?;
-    let cut = slots::all().find(|known| known.number() == *slot).is_some_and(|slot| {
-        crate::paths::notes_beside(&context.paths.run_folder(slot)).join(CUT_FILE).exists()
-    });
+    let cut = slots::all()
+        .find(|known| known.number() == *slot)
+        .is_some_and(|slot| context.paths.notes_folder(slot).join(CUT_FILE).exists());
     let held = !machine.only_through.is_empty();
     Some(if found == InUse::Passt && held && cut { InUse::Cut } else { found })
 }

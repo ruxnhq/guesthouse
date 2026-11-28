@@ -1,22 +1,23 @@
 //! What the app and the program say to each other: one request as a line of JSON on a Unix socket in
-//! the notes folder beside the run folder, and one line back. The monitor and the daemon are reached
-//! the same way, and the socket is only open to this user. A program that is not running has no answer,
+//! the app's notes folder beside the run folder, and one line back. No jail is given that folder, so
+//! only the app and this program reach the socket. A program that is not running has no answer,
 //! which is how the app finds out it is not there.
 //!
 //! What the lines say is `guesthouse-relay`'s, as the network side they ask is.
 
 use super::SOCKET;
+use guesthouse_basics::capped_line::read_capped_line;
 pub use guesthouse_relay::{Counters, RelayClient, RelayReply, RelayStatus, Request, ShareState};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// A request is a few dozen bytes. A longer line is not one of ours.
-const LONGEST_REQUEST: u64 = 4096;
+const LONGEST_REQUEST: usize = 4096;
 /// A status with the most devices the relay allows is a few kilobytes.
-const LONGEST_REPLY: u64 = 256 * 1024;
+const LONGEST_REPLY: usize = 256 * 1024;
 /// How long either side waits for the other to say its line.
 const LINE_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_MODE: u32 = 0o600;
@@ -36,8 +37,7 @@ pub fn ask(run_folder: &Path, request: &Request) -> io::Result<RelayReply> {
     let mut line = serde_json::to_string(request).map_err(io::Error::other)?;
     line.push('\n');
     stream.write_all(line.as_bytes())?;
-    let mut answer = String::new();
-    BufReader::new(stream.take(LONGEST_REPLY)).read_line(&mut answer)?;
+    let answer = read_capped_line(&mut BufReader::new(stream), LONGEST_REPLY)?.unwrap_or_default();
     serde_json::from_str(&answer).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
@@ -66,8 +66,7 @@ pub fn serve(listener: &UnixListener, mut answer: impl FnMut(Request) -> RelayRe
 fn serve_one(stream: UnixStream, answer: &mut impl FnMut(Request) -> RelayReply) -> io::Result<()> {
     stream.set_read_timeout(Some(LINE_TIMEOUT))?;
     stream.set_write_timeout(Some(LINE_TIMEOUT))?;
-    let mut line = String::new();
-    BufReader::new((&stream).take(LONGEST_REQUEST)).read_line(&mut line)?;
+    let line = read_capped_line(&mut BufReader::new(&stream), LONGEST_REQUEST)?.unwrap_or_default();
     let reply = match serde_json::from_str(&line) {
         Ok(request) => answer(request),
         Err(error) => RelayReply::Error(format!("not a request: {error}")),
@@ -81,6 +80,7 @@ fn serve_one(stream: UnixStream, answer: &mut impl FnMut(Request) -> RelayReply)
 mod tests {
     use super::*;
     use crate::testing::Scratch;
+    use std::io::BufRead;
     use std::thread;
 
     fn status(state: ShareState) -> RelayStatus {
@@ -142,14 +142,30 @@ mod tests {
     #[test]
     fn nobody_listening_is_an_error() {
         let scratch = Scratch::new();
-        assert!(ask(scratch.root(), &Request::Status).is_err());
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(ask(&folder, &Request::Status).is_err());
     }
 
     #[test]
     fn an_old_socket_is_replaced() {
         let scratch = Scratch::new();
-        let first = listener(scratch.root()).unwrap();
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        let first = listener(&folder).unwrap();
         drop(first);
-        assert!(listener(scratch.root()).is_ok(), "the file the first left behind does not stop the second");
+        assert!(listener(&folder).is_ok(), "the file the first left behind does not stop the second");
+    }
+
+    #[test]
+    fn the_socket_is_outside_the_run_folder_that_the_jails_are_given() {
+        let scratch = Scratch::new();
+        let folder = scratch.path("run");
+        std::fs::create_dir_all(&folder).unwrap();
+        let _listener = listener(&folder).unwrap();
+        let socket = socket_path(&folder);
+        assert!(socket.exists() && !socket.starts_with(&folder));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "nothing for the jailed programs to open");
+        assert_eq!(std::fs::metadata(socket.parent().unwrap()).unwrap().permissions().mode() & 0o077, 0);
     }
 }

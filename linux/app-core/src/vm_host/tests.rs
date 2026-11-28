@@ -582,17 +582,8 @@ fn a_passt_note_in_the_run_folder_is_never_signalled() {
 }
 
 #[test]
-fn a_leftover_tpm_is_found_by_its_own_state_folder_only() {
-    let pattern = super::local::leftover_tpm_for_tests(Path::new("/m/w.1/tpm"));
-    let matches = |line: &str| {
-        let mut grep =
-            Command::new("grep").args(["-Eq", &pattern]).stdin(std::process::Stdio::piped()).spawn().unwrap();
-        std::io::Write::write_all(grep.stdin.as_mut().unwrap(), line.as_bytes()).unwrap();
-        drop(grep.stdin.take());
-        grep.wait().unwrap().success()
-    };
-    assert!(matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm --ctrl type=unixio,fd=20"));
-    assert!(matches("swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm --ctrl type=unixio,path=/r/tpm.sock"));
-    assert!(!matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/wx1/tpm --ctrl type=unixio,fd=20"));
-    assert!(!matches("/usr/bin/swtpm socket --tpm2 --tpmstate dir=/m/w.1/tpm-other --ctrl x"));
+fn the_pattern_for_a_tpms_socket_takes_its_path_literally() {
+    use super::local::swtpm_pattern;
+    let pattern = swtpm_pattern(Path::new("/run/user/1000/a.b+c(d)/tpm.sock"));
+    assert_eq!(pattern, r"^[^ ]*swtpm socket .*path=/run/user/1000/a\.b\+c\(d\)/tpm\.sock");
 }

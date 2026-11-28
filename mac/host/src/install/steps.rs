@@ -31,6 +31,10 @@ pub trait MachineControl {
     fn machine_state(&mut self, id: &str) -> (String, Option<String>);
     /// Everything the guest has said on its serial port so far.
     fn serial(&mut self, id: &str) -> String;
+    /// Presses the key `qcode` names (`spc`) in the guest, as a person at its keyboard would.
+    fn press_key(&mut self, id: &str, qcode: &str) -> Result<(), String>;
+    /// The bytes the machine's disk has written since it started, when the machine can say.
+    fn disk_written(&mut self, id: &str) -> Option<u64>;
     fn now_ms(&mut self) -> u64;
     fn sleep_ms(&mut self, ms: u64);
 }
@@ -45,7 +49,9 @@ pub struct Setup {
     pub mac_user: String,
     /// Where downloads are kept.
     pub downloads: PathBuf,
-    /// A folder of the driver's files to use instead of the published package (the lab's).
+    /// A folder of the driver's files to use instead of the published package (the lab's). It
+    /// counts only for the guest whose files it holds (`lab_folder`): one setting names a
+    /// folder for every guest, so a Linux package in it is not a Windows install's.
     pub driver_dir: Option<PathBuf>,
     /// The guest account's password, which only the answer files get.
     pub password: Option<String>,
@@ -59,6 +65,7 @@ pub struct Setup {
 }
 
 mod linux;
+mod windows_boot;
 
 /// How often the serial port is read while waiting for the guest, and how long each wait may last.
 const POLL_MS: u64 = 5_000;
@@ -137,6 +144,12 @@ pub fn firmware_dirs_of(qemu: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// The graphics device's option ROM (`pvgfb.rom`), from the first of QEMU's data folders that has
+/// one (`firmware_dirs_of`).
+pub fn find_option_rom(dirs: &[PathBuf]) -> Option<PathBuf> {
+    linux::find_option_rom(dirs)
+}
+
 /// QEMU's firmware for ARM: the code and the empty variables, from the first folder that has them.
 pub fn find_firmware(dirs: &[PathBuf]) -> Result<(Vec<u8>, Vec<u8>), StepError> {
     for dir in dirs {
@@ -151,6 +164,12 @@ pub fn find_firmware(dirs: &[PathBuf]) -> Result<(Vec<u8>, Vec<u8>), StepError> 
 }
 
 impl RealSteps<'_> {
+    /// The lab's driver folder, when it holds `script`, the one file that says whose package a
+    /// folder is (`install.ps1` for Windows, `install.sh` for Linux).
+    pub(super) fn lab_folder(&self, script: &str) -> Option<PathBuf> {
+        self.setup.driver_dir.clone().filter(|dir| dir.join(script).is_file())
+    }
+
     fn folder(&self) -> PathBuf {
         self.setup.machines.join(&self.setup.id)
     }
@@ -203,15 +222,12 @@ impl RealSteps<'_> {
         set_keys(&self.folder(), &[("installer", Some(&installer.display().to_string()))])?;
         // The driver comes with the installer, so a missing package stops the install here and
         // not an hour in. A folder named by the lab takes its place.
-        if self.setup.guest == Guest::Windows && self.setup.driver_dir.is_none() {
+        if self.setup.guest == Guest::Windows && self.lab_folder(driver::SCRIPT).is_none() {
             driver::fetch_package(self.transport, &self.setup.downloads).map_err(from_fetch)?;
         }
         // Ubuntu can be opened without it, so a package that is not there is said at the driver
         // step, where that is offered.
-        let lab_linux = self.setup.driver_dir.as_ref();
-        if self.setup.guest == Guest::Ubuntu
-            && !lab_linux.is_some_and(|dir| dir.join(driver::LINUX_SCRIPT).is_file())
-        {
+        if self.setup.guest == Guest::Ubuntu && self.lab_folder(driver::LINUX_SCRIPT).is_none() {
             let _ = driver::fetch_package_of(&driver::LINUX, self.transport, &self.setup.downloads);
         }
         Ok(Ended::Done)
@@ -237,10 +253,11 @@ impl RealSteps<'_> {
                 .and_then(|()| fs::write(folder.join("vars.fd"), vars))
                 .map_err(|e| StepError::new(format!("Cannot write the firmware: {e}")))?;
         }
-        // The graphics device's ROM gives the firmware and the installer a picture. Without one
-        // the guest is still installed, and shows nothing until its driver runs.
-        if self.setup.guest == Guest::Ubuntu
-            && !folder.join(linux::OPTION_ROM).exists()
+        // The graphics device's ROM gives the firmware and the installer a picture, for either
+        // guest: a Windows machine has none until its driver runs, and with no picture there is
+        // nothing to show at the boot prompt or Setup's pages. Without a ROM the guest is still
+        // installed, and shows nothing until its driver runs.
+        if !folder.join(linux::OPTION_ROM).exists()
             && let Some(rom) = linux::find_option_rom(&self.setup.firmware_dirs)
         {
             fs::copy(&rom, folder.join(linux::OPTION_ROM))
@@ -271,13 +288,12 @@ impl RealSteps<'_> {
                     password: &secret,
                     computer_name: WINDOWS_COMPUTER_NAME,
                     edition: WINDOWS_EDITION,
+                    ui_language: None,
                 });
                 fs::write(answers.join("autounattend.xml"), text)
                     .map_err(|e| StepError::new(e.to_string()))?;
                 let dir = self
-                    .setup
-                    .driver_dir
-                    .clone()
+                    .lab_folder(driver::SCRIPT)
                     .or_else(|| driver::kept_package(&self.setup.downloads))
                     .ok_or_else(|| {
                         StepError::coded(
@@ -318,9 +334,24 @@ impl RealSteps<'_> {
         usual_ms: u64,
         from: usize,
         progress: Progress,
+        done: impl FnMut(&str) -> Option<Result<T, StepError>>,
+    ) -> Result<Option<T>, StepError> {
+        self.wait_for_watching(max_ms, usual_ms, from, progress, false, done)
+    }
+
+    /// As `wait_for`; with `watch_disk` it also tells the progress when the guest's disk has
+    /// written nothing for a while (`Report::Quiet`), so a stuck install and a working one differ.
+    fn wait_for_watching<T>(
+        &mut self,
+        max_ms: u64,
+        usual_ms: u64,
+        from: usize,
+        progress: Progress,
+        watch_disk: bool,
         mut done: impl FnMut(&str) -> Option<Result<T, StepError>>,
     ) -> Result<Option<T>, StepError> {
         let began = self.control.now_ms();
+        let mut last_write = None;
         loop {
             let serial = self.control.serial(&self.setup.id);
             let heard = serial.get(from..).unwrap_or("");
@@ -340,6 +371,10 @@ impl RealSteps<'_> {
                     format!("The guest did not finish in {} minutes.", max_ms / 60_000),
                 ));
             }
+            if watch_disk {
+                let quiet = self.quiet_minutes(&mut last_write);
+                progress(Report::Quiet(quiet));
+            }
             if !progress(Report::Fraction((elapsed as f64 / usual_ms.max(1) as f64).min(GUESS_CEILING))) {
                 return Ok(None);
             }
@@ -355,14 +390,24 @@ impl RealSteps<'_> {
             Guest::Windows => SYSTEM_INSTALL_MAX_MS,
             Guest::Ubuntu => UBUNTU_INSTALL_USUAL_MS,
         };
-        let heard = self.wait_for(SYSTEM_INSTALL_MAX_MS, usual, 0, progress, |text| match guest {
-            Guest::Windows => text.contains(windows::marker::SYSTEM_INSTALLED).then_some(Ok(())),
-            Guest::Ubuntu if text.contains(ubuntu::FAILED) => Some(Err(StepError::coded(
-                "autoinstall",
-                "Ubuntu's installer reported an error. Its log is in the machine's serial.log.",
-            ))),
-            Guest::Ubuntu => text.contains(ubuntu::FINISHED).then_some(Ok(())),
-        })?;
+        if guest == Guest::Windows {
+            self.pass_boot_prompt()?;
+        }
+        let heard = self.wait_for_watching(
+            SYSTEM_INSTALL_MAX_MS,
+            usual,
+            0,
+            progress,
+            guest == Guest::Windows,
+            |text| match guest {
+                Guest::Windows => text.contains(windows::marker::SYSTEM_INSTALLED).then_some(Ok(())),
+                Guest::Ubuntu if text.contains(ubuntu::FAILED) => Some(Err(StepError::coded(
+                    "autoinstall",
+                    "Ubuntu's installer reported an error. Its log is in the machine's serial.log.",
+                ))),
+                Guest::Ubuntu => text.contains(ubuntu::FINISHED).then_some(Ok(())),
+            },
+        )?;
         if heard.is_none() {
             return Ok(Ended::Stopped);
         }

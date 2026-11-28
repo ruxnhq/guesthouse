@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const LAUNCHER: &str = "guesthouse-jail";
-/// The row's line about the jail. Empty or missing is a whole jail.
-pub const NOTE_FILE: &str = "jail-note";
+/// The row's line about the jail, in the run folder. Empty or missing is a whole jail.
+pub(crate) const NOTE_FILE: &str = "jail-note";
 const CHECK_SECONDS: &str = "10";
 /// QEMU only knows `-sandbox` if it was built with seccomp, and it stops at `-version` either way.
 const SANDBOX_QUESTION: [&str; 3] = ["-sandbox", "on", "-version"];
@@ -161,18 +161,20 @@ pub fn decide(
     Ok(Choice { qemu: Some(jail), daemon_jailed: true, note })
 }
 
-/// Where the row's line is kept: in the notes folder beside the run folder, which no jail reaches.
-pub fn note_file(run_folder: &Path) -> PathBuf {
+/// Where the note is kept: in the app's notes folder beside the run folder, which no jail is given,
+/// as it is the app's own word about the jail.
+pub(crate) fn note_path(run_folder: &Path) -> std::path::PathBuf {
     crate::paths::notes_beside(run_folder).join(NOTE_FILE)
 }
 
 pub fn write_note(run_folder: &Path, note: &str) -> std::io::Result<()> {
-    fs::write(note_file(run_folder), note)
+    crate::context::make_private_folder(&crate::paths::notes_beside(run_folder))?;
+    fs::write(note_path(run_folder), note)
 }
 
 /// The row's line, if the running machine's jail has one.
 pub fn read_note(run_folder: &Path) -> Option<String> {
-    let note = fs::read_to_string(note_file(run_folder)).ok()?;
+    let note = guesthouse_daemon::note_file::read_capped(&note_path(run_folder))?;
     Some(note.trim().to_owned()).filter(|note| !note.is_empty())
 }
 
@@ -314,6 +316,11 @@ mod tests {
         assert_eq!(read_note(&folder), None);
         write_note(&folder, "").unwrap();
         assert_eq!(read_note(&folder), None);
+        write_note(&folder, "Not jailed: no Landlock").unwrap();
+        assert!(!folder.join(NOTE_FILE).exists(), "the run folder is the jailed programs' to write in");
+        assert!(note_path(&folder).is_file());
+        fs::write(note_path(&folder), "x".repeat(1 << 20)).unwrap();
+        assert!(read_note(&folder).unwrap().len() <= 4096, "a note is read only as far as a note goes");
         write_note(&folder, "Not jailed: no Landlock").unwrap();
         assert_eq!(read_note(&folder).as_deref(), Some("Not jailed: no Landlock"));
     }

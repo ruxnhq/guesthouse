@@ -11,7 +11,7 @@ use crate::machine::Machine;
 use crate::report::scrub::scrub_emails;
 use crate::run_files::{
     GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, KEPT_HOST_LOGS, KEPT_SUFFIX, files_since,
-    kept_run_of, local_time, run_files_since, run_of,
+    kept_run_of, local_time, run_of,
 };
 use crate::slots;
 use crate::tasks::{read_task, task_path};
@@ -46,7 +46,8 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = run_of(&folder, &machine.id) {
             found.has_run_logs = true;
-            add_all(found, &place, run_files_since(&folder, &current, "", since));
+            found.add_file_if_there(&format!("{place}/jail-note"), &crate::jailing::note_path(&folder));
+            add_all(found, &place, files_since(&folder, &current, "", since));
             found.notes.push(format!(
                 "The logs in {place} are from the run folder, of the run that started at {}.",
                 local_time(since)
@@ -54,7 +55,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = kept_run_of(&folder, &machine.id) {
             let kept: Vec<&str> = wanted(&[&KEPT_HOST_LOGS[..], &[GUEST_SERIAL]].concat());
-            add_all(found, &place, run_files_since(&folder, &kept, KEPT_SUFFIX, since));
+            add_all(found, &place, files_since(&folder, &kept, KEPT_SUFFIX, since));
         }
     }
     if !found.has_run_logs {
@@ -130,7 +131,12 @@ mod tests {
             ("vm-gpupv.out", 30),
         ];
         for (name, age) in ages {
-            fs::write(folder.join(name), if name == MACHINE_NOTE { "w11" } else { name }).unwrap();
+            if name == MACHINE_NOTE {
+                crate::run_files::plant_note(&folder, name, "w11");
+                set_age(&crate::paths::notes_beside(&folder).join(name), age);
+                continue;
+            }
+            fs::write(folder.join(name), name).unwrap();
             set_age(&folder.join(name), age);
         }
         let mut found = Collection::default();
@@ -145,7 +151,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let folder = context.run_folder(Some(slots::first()));
         fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join(MACHINE_NOTE), "phone").unwrap();
+        crate::run_files::plant_note(&folder, MACHINE_NOTE, "phone");
         fs::write(folder.join("logcat.log"), "E Auth: no token for quillon.marrow@example.com\n").unwrap();
         let machine = Machine::new("phone", "Phone", "/d", "/v");
         let mut found = Collection::default();
@@ -163,7 +169,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let folder = context.run_folder(Some(slots::first()));
         fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&folder, MACHINE_NOTE, "w11");
         let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
         std::os::unix::fs::symlink(&elsewhere, folder.join("qemu.log")).unwrap();
         let pipe =
@@ -182,8 +188,21 @@ mod tests {
         let context = scratch_context(&scratch);
         let folder = context.run_folder(Some(slots::first()));
         fs::create_dir_all(&folder).unwrap();
-        fs::write(folder.join(MACHINE_NOTE), "other").unwrap();
+        crate::run_files::plant_note(&folder, MACHINE_NOTE, "other");
         fs::write(folder.join("serial.log"), "another guest").unwrap();
+        let mut found = Collection::default();
+        collect(&context, &Machine::new("w11", "W11", "/d", "/v"), &request(true), &mut found);
+        assert_eq!(found.names().count(), 0);
+    }
+
+    #[test]
+    fn a_note_in_the_run_folder_itself_does_not_say_whose_run_it_is() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let folder = context.run_folder(Some(slots::first()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join(MACHINE_NOTE), "w11").unwrap();
+        fs::write(folder.join("serial.log"), "a guest").unwrap();
         let mut found = Collection::default();
         collect(&context, &Machine::new("w11", "W11", "/d", "/v"), &request(true), &mut found);
         assert_eq!(found.names().count(), 0);
@@ -195,7 +214,8 @@ mod tests {
         let context = scratch_context(&scratch);
         let folder = context.run_folder(Some(slots::first()));
         fs::create_dir_all(&folder).unwrap();
-        for name in ["run-machine.1", "daemon.out.1", "serial.log.1"] {
+        crate::run_files::plant_note(&folder, "run-machine.1", "w11");
+        for name in ["daemon.out.1", "serial.log.1"] {
             fs::write(folder.join(name), "w11").unwrap();
         }
         let mut found = Collection::default();
@@ -210,7 +230,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let run = scratch.path("old-run");
         fs::create_dir_all(&run).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "daemon").unwrap();
         fs::write(run.join("serial.log"), "guest").unwrap();
         keep_run(&context, &run).unwrap();

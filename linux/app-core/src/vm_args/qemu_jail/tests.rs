@@ -562,7 +562,7 @@ fn the_row_notes_and_the_remote_views_socket_are_in_the_notes_folder() {
     let (_scratch, plan) = held_to_wg0(windows(), true);
     let notes = crate::paths::notes_beside(&plan.run_folder);
     assert!(crate::remote_view::socket_path(&plan.run_folder).starts_with(&notes));
-    assert!(crate::jailing::note_file(&plan.run_folder).starts_with(&notes));
+    assert!(crate::jailing::note_path(&plan.run_folder).starts_with(&notes));
     let command = plan.qemu_command();
     let guard = command.iter().position(|word| word == "--passt-only-through").unwrap();
     assert!(Path::new(&command[guard + 2]).starts_with(&notes), "{}", command[guard + 2]);

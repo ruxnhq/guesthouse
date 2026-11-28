@@ -573,7 +573,7 @@ impl Machine {
         if !valid_id(&self.id) {
             found.push("The machine's id can only hold small letters, digits and dashes.".to_owned());
         }
-        if self.name.trim().is_empty() {
+        if self.name.trim().is_empty() || self.name.chars().any(guesthouse_basics::text::is_hidden) {
             found.push("The machine needs a name.".to_owned());
         }
         found.extend(account::name_problem(self.kind, &self.user));

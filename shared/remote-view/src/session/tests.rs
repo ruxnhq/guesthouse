@@ -441,3 +441,44 @@ fn a_status_that_names_a_new_device_at_every_reading_still_ends() {
     }
     assert!(guest.sent.get() > 0);
 }
+
+/// A guest whose every answer comes after a step's whole time, with a status that keeps asking for
+/// more: the step stops once it has gone on for longer than a step may.
+#[test]
+fn a_step_stops_beginning_rounds_after_its_time() {
+    struct Slow<'a> {
+        now: &'a Cell<u64>,
+        readings: Cell<u32>,
+    }
+    impl Guest for Slow<'_> {
+        fn ctl(&self, words: &Words) -> Result<String, Unanswered> {
+            self.now.set(self.now.get() + STEP_MOST_MS + 1);
+            if words.join(" ") != "status" {
+                return Ok("ok".into());
+            }
+            let n = self.readings.get();
+            self.readings.set(n + 1);
+            let devices: Vec<String> = (0..=n)
+                .map(|i| format!(r#"{{"fingerprint":"{:064x}","name":"d{i}"}}"#, u64::from(i) + 1))
+                .collect();
+            let pending = format!(
+                r#","pending":{{"name":"p","fingerprint":"{:064x}","code":"1","seconds":60}}"#,
+                1000 + n
+            );
+            Ok(format!(
+                r#"{{"pairing":false,"clipboard":true,"files":true,"devices":[{}]{pending}}}"#,
+                devices.join(",")
+            ))
+        }
+        fn log(&self, _line: &str) {}
+    }
+    let now = Cell::new(1_000_000);
+    let (sessions, policy) = (Sessions::default(), Policy::linux());
+    let guest = Slow { now: &now, readings: Cell::new(0) };
+    let clock = || now.get();
+    let driver = driver(&sessions, &policy, &guest, &clock);
+    driver.step(StepEvent::Read);
+    let why = driver.step(StepEvent::Plain(Event::SwitchOff));
+    assert!(why.as_deref().is_some_and(|why| why.contains("longer than a step")), "{why:?}");
+    assert!(guest.readings.get() <= 8, "{} readings", guest.readings.get());
+}

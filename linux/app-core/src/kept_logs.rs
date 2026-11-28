@@ -6,8 +6,7 @@
 use crate::context::Context;
 use crate::report::trim::trim;
 use crate::run_files::{
-    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, local_time, noted_run, open_run_file,
-    run_files_since,
+    GUEST_LOGCAT, GUEST_SERIAL, HOST_LOGS, INSTALL_SERIAL, files_since, local_time, noted_run, open_run_file,
 };
 use crate::vm_host::MACHINE_NOTE;
 use std::fs;
@@ -41,7 +40,7 @@ pub fn keep_run(context: &Context, run_folder: &Path) -> io::Result<()> {
     if !crate::machine::valid_id(&id) {
         return Ok(());
     }
-    let files = run_files_since(run_folder, &kept_names(), "", since);
+    let files = files_since(run_folder, &kept_names(), "", since);
     if files.is_empty() {
         return Ok(());
     }
@@ -99,7 +98,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let run = scratch.path("run");
         fs::create_dir_all(&run).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "first run").unwrap();
         keep_run(&context, &run).unwrap();
         let kept = kept_folder(&context, "w11");
@@ -108,7 +107,7 @@ mod tests {
         // The next run: the first one's daemon output is older than its note.
         let old = fs::File::options().append(true).open(run.join("daemon.out")).unwrap();
         old.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("qemu.log"), "second run").unwrap();
         keep_run(&context, &run).unwrap();
         assert!(!kept.join("daemon.out").exists(), "the copy before is replaced whole");
@@ -122,7 +121,7 @@ mod tests {
         let run = scratch.path("run");
         fs::create_dir_all(&run).unwrap();
         let elsewhere = scratch.write("elsewhere/notes.txt", "not the run's");
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "the run's").unwrap();
         std::os::unix::fs::symlink(&elsewhere, run.join("qemu.log")).unwrap();
         keep_run(&context, &run).unwrap();
@@ -148,7 +147,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let run = scratch.path("run");
         fs::create_dir_all(&run).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "line\n".repeat(MOST_KEPT_BYTES)).unwrap();
         keep_run(&context, &run).unwrap();
         let size = fs::metadata(kept_folder(&context, "w11").join("daemon.out")).unwrap().len();

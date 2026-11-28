@@ -606,6 +606,10 @@ impl Hub {
             secure.close();
         }
         self.close_all();
+        // The entries that named its windows in the task bar are not needed once they are gone.
+        if let Ok(machine) = guesthouse_app_core::machine::load(&self.context, &self.machine) {
+            guesthouse_app_core::app_windows::launcher::remove_hidden(&self.context, &machine);
+        }
         self.newest.borrow_mut().take();
         self.screen.end_headless();
         self.link.borrow_mut().take();

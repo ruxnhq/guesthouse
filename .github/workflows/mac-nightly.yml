@@ -76,7 +76,7 @@ jobs:
           fi
 
   helpers:
-    name: build QEMU, the graphics process and rmhost
+    name: build QEMU, the graphics process, rmhost and the framebuffer ROM
     needs: plan
     if: needs.plan.outputs.build == 'true'
     # A Mac with Xcode 27, as the build job has. No secret, no environment and no token here: what
@@ -95,13 +95,15 @@ jobs:
       - name: Use Xcode 27.2
         run: sudo xcode-select -s "$XCODE"
       - name: Install what QEMU's build needs
-        run: brew install glib pixman libslirp ninja pkgconf
+        run: brew install glib pixman libslirp ninja pkgconf lld
       - name: Build the graphics process
         run: sh mac/build-pvg-host.sh
       - name: Build QEMU
         run: sh qemu/mac/build.sh
       - name: Build rmhost
         run: sh mac/rmhost/build.sh --helpers target/mac-helpers
+      - name: Build the framebuffer ROM
+        run: sh mac/pvgfb/build.sh --helpers target/mac-helpers
       - name: Pack the helpers
         run: |
           set -eu

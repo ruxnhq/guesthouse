@@ -12,6 +12,7 @@
 
 mod ctl_channel;
 mod guest_rights;
+mod host_rules;
 mod nv_files;
 mod nv_store;
 mod screen;

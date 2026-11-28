@@ -4,6 +4,5 @@ rem The report runs at every start from now on, and once now through the same ta
 rem registers itself: see report.ps1.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Guesthouse\report.ps1 -Register
 rem Remote Desktop, the way to see this guest's screen for now. Windows Home has no server for it,
-rem so on Home these change nothing.
+rem so on Home this changes nothing. The report's own firewall rule lets it in from this PC alone.
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
-netsh advfirewall firewall set rule group="remote desktop" new enable=Yes

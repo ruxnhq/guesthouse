@@ -141,7 +141,7 @@ fn run(
     let hosts = settings
         .host_addresses
         .as_ref()
-        .map(|addresses| crate::screen::hosts_file(settings.bridge.is_some(), addresses));
+        .map(|addresses| crate::guest::hosts_file(settings.bridge.is_some(), addresses));
     match record.guest {
         Guest::Windows => refresh_windows_disk(
             &disk,

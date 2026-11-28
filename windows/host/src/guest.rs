@@ -34,6 +34,23 @@ pub use guesthouse_serial_words_core::windows_host::SHUTDOWN_LINE;
 /// Where the report goes, from the root of the guest's Windows volume. `SetupComplete.cmd` names it
 /// as `C:\Guesthouse\report.ps1`.
 pub const REPORT_PATH: &str = r"Guesthouse\report.ps1";
+/// Where the host says who may reach the ports a Windows guest lets in, Remote Desktop's and its
+/// screen's, from the root of its Windows volume. `report.ps1` names it as `C:\Guesthouse\hosts.txt`.
+/// Written before each start; with none, the guest lets nobody in by those rules.
+pub const HOSTS_PATH: &str = r"Guesthouse\hosts.txt";
+
+/// What [`HOSTS_PATH`] holds: the network the machine is on, `shared` or `bridged`, then this PC's
+/// addresses, a line each. On the shared network the guest also lets in its default gateway, which
+/// is this PC on that network, where port forwards reach it from, and may not have an address yet
+/// when the file is written, as Windows makes the network's adapter as the machine starts.
+pub fn hosts_file(bridged: bool, addresses: &[std::net::Ipv4Addr]) -> String {
+    let mut text = String::from(if bridged { "bridged\n" } else { "shared\n" });
+    for address in addresses {
+        text.push_str(&format!("{address}\n"));
+    }
+    text
+}
+
 pub const SETUP_COMPLETE: &str = include_str!("../guest/SetupComplete.cmd");
 /// Windows runs this once its own setup is done.
 pub const SETUP_COMPLETE_PATH: &str = r"Windows\Setup\Scripts\SetupComplete.cmd";
@@ -101,6 +118,25 @@ mod tests {
         assert!(REPORT.contains(r"$shareFolder = 'C:\Guesthouse\share'"));
         assert!(REPORT.contains("'guesthouse-guest-share.exe'"));
         assert!(REPORT.contains("'winfsp.msi'"));
+    }
+
+    #[test]
+    fn the_guest_is_told_its_network_and_this_pcs_addresses_a_line_each() {
+        use std::net::Ipv4Addr;
+        let addresses = [Ipv4Addr::new(192, 168, 1, 20), Ipv4Addr::new(172, 30, 0, 1)];
+        assert_eq!(hosts_file(true, &addresses), "bridged\n192.168.1.20\n172.30.0.1\n");
+        assert_eq!(hosts_file(false, &[]), "shared\n");
+        assert!(REPORT.contains(&format!(r"'C:\{HOSTS_PATH}'")), "the guest reads the file by this name");
+    }
+
+    /// Remote Desktop is let in by the report's own rule, at every start, and SetupComplete.cmd turns
+    /// on no firewall rule of Windows' own.
+    #[test]
+    fn remote_desktop_is_let_in_by_the_reports_rule_alone() {
+        assert!(SETUP_COMPLETE.contains("fDenyTSConnections"));
+        assert!(!SETUP_COMPLETE.to_lowercase().contains("advfirewall"), "{SETUP_COMPLETE}");
+        assert!(REPORT.contains("'@FirewallAPI.dll,-28752'"));
+        assert!(REPORT.contains("Set-RemoteDesktop $hostAddresses 'Guesthouse Remote Desktop'"));
     }
 
     #[test]

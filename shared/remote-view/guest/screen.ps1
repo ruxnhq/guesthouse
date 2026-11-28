@@ -77,6 +77,18 @@ if ($signIn -eq 'kept' -and $user) {
 }
 if ($signIn -ne 'none') { Save-ToDisk }
 
+# Who may reach remoteman's port: this PC alone, by the addresses in C:\Guesthouse\hosts.txt, read
+# and let in by report.ps1's functions, as report.ps1 runs this script. Set before anything else, so
+# no way out of this script leaves a rule open. remoteman's installer lets its host's program in on
+# its port, open to every address each time it runs, so that rule is narrowed to the same addresses,
+# or turned off, here and again after the installer runs. The viewer's packets never reached the
+# program by that rule alone in a guest, so the port is let in as well, by a rule of Guesthouse's
+# own. With no address known both stay shut.
+$rule = 'Guesthouse screen'
+$allowed = @(Get-HostAddresses 'C:\Guesthouse\hosts.txt' (Get-Gateways 0))
+Send-Line "screen: $(Set-HostRule $rule 'UDP' 7791 $allowed)"
+Send-Line "screen: $(Limit-HostRule 'remoteman host' $allowed)"
+
 if (-not (Test-Path -LiteralPath $setup)) {
     Send-Line "screen: remoteman's host wasn't given, so the guest has no screen"
     return
@@ -160,36 +172,6 @@ function Get-SetupArguments([string]$Folder, [string]$Encoder, [string]$Log) {
     '--silent', '--trust', "`"$(Join-Path $Folder 'trusted')`"", '--encoder', $Encoder, '--no-pair', '--log', "`"$Log`""
 }
 
-# Who may reach remoteman's port: this PC alone. hosts.txt, which the host writes at each boot, says
-# the network the machine is on and this PC's addresses, a line each. On the shared network this PC
-# is the guest's default gateway too, which has its address only once the machine has started. With
-# no file, from a host before this, or nothing in it, the rules are left as they are.
-function Get-ScreenHosts([string]$Folder, [string[]]$Gateways) {
-    $file = Join-Path $Folder 'hosts.txt'
-    if (-not (Test-Path -LiteralPath $file)) { return @() }
-    $lines = @(Get-Content -LiteralPath $file | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    if ($lines.Count -eq 0) { return @() }
-    $address = '^\d{1,3}(\.\d{1,3}){3}$'
-    $allowed = @($lines | Select-Object -Skip 1 | Where-Object { $_ -match $address })
-    switch ($lines[0]) {
-        'shared' { $allowed += @($Gateways | Where-Object { $_ -match $address -and $_ -ne '0.0.0.0' }) }
-        'bridged' { }
-        default { return @() }
-    }
-    return @($allowed | Select-Object -Unique)
-}
-
-# Lets only $Allowed reach the port by each rule named, Guesthouse's own and the one remoteman's
-# installer makes, which it makes open again each time it runs.
-function Limit-ScreenRules([string[]]$Allowed, [string[]]$Names) {
-    if (@($Allowed).Count -eq 0) { return }
-    foreach ($name in $Names) {
-        if (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue) {
-            Set-NetFirewallRule -DisplayName $name -RemoteAddress $Allowed -ErrorAction SilentlyContinue
-        }
-    }
-}
-
 $encoder = (Get-Content -LiteralPath (Join-Path $screen 'encoder.txt') -Raw).Trim()
 $wanted = Get-InstallNote $screen
 $installedFile = Join-Path $screen 'installed.txt'
@@ -205,11 +187,15 @@ if ($missing -or -not (Test-Path -LiteralPath $hostExe) -or (Test-NoteChanged $s
         if (Test-Path -LiteralPath $setupLog) {
             foreach ($line in (Get-Content -LiteralPath $setupLog -Tail 12)) { Send-Line "screen: setup: $line" }
         }
+        # It may have made its rule open before it failed.
+        Send-Line "screen: $(Limit-HostRule 'remoteman host' $allowed)"
         return
     }
     Set-Content -LiteralPath $installedFile -Value $wanted -Encoding ascii
-    Save-ToDisk
     Send-Line 'screen: remoteman host installed'
+    # It has made its rule open again.
+    Send-Line "screen: $(Limit-HostRule 'remoteman host' $allowed)"
+    Save-ToDisk
 }
 
 Set-SharingFile
@@ -233,15 +219,6 @@ foreach ($entry in Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id 
     Send-Line "screen: crash: $($text.Substring(0, [Math]::Min(400, $text.Length)))"
 }
 
-# remoteman's installer lets its host's program in on its port. The viewer's packets never reached
-# it in a guest, so the port is let in as well, by a rule of Guesthouse's own, and the guest says
-# what its firewall and the port look like.
-$rule = 'Guesthouse screen'
-if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $rule -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7791 -Profile Any | Out-Null
-}
-$gateways = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | ForEach-Object { $_.NextHop })
-Limit-ScreenRules (Get-ScreenHosts $screen $gateways) @('remoteman host', $rule)
 foreach ($network in Get-NetConnectionProfile -ErrorAction SilentlyContinue) {
     Send-Line "screen: network $($network.InterfaceAlias) is $($network.NetworkCategory)"
 }

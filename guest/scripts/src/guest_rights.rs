@@ -214,3 +214,18 @@ fn the_answer_file_stays_while_setup_runs() {
         assert!(kept, "{setup}{said}");
     }
 }
+
+/// The Windows host's report has its own copy of the function, run at each of its guests' starts.
+#[test]
+fn the_windows_hosts_report_removes_the_answer_file_the_same_way() {
+    let function = |path: &std::path::Path| {
+        let text = std::fs::read_to_string(path).unwrap();
+        let start = text.find("function Remove-AnswerFile").unwrap_or_else(|| panic!("{}", path.display()));
+        let end = start + text[start..].find("\n}\n").unwrap();
+        text[start..end].to_owned()
+    };
+    let report = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../windows/host/guest/report.ps1");
+    assert_eq!(function(&report), function(&rights_script()));
+    let text = std::fs::read_to_string(&report).unwrap();
+    assert!(text.contains("Remove-AnswerFile 'C:\\Windows\\Panther\\unattend.xml' 'HKLM:\\SYSTEM\\Setup'"));
+}

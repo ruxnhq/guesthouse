@@ -949,6 +949,7 @@ queue it ran on. If this card also draws your desktop, the screen may freeze for
 the driver can't recover, the desktop may need a restart or the PC a reboot. Save your work first.";
 
 /// Asks for the typed word. Anything else, or no input at all, is a no.
+#[allow(clippy::disallowed_methods)] // a line the person types at the terminal
 pub fn confirm_break(input: &mut dyn BufRead, out: &mut dyn Write) -> bool {
     let _ = writeln!(out, "{BREAK_WARNING}");
     let _ = write!(out, "Type {BREAK_WORD} to run them: ");

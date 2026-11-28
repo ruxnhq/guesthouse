@@ -47,9 +47,9 @@ jobs:
           echo "headers for $kernel"
       - name: Build with make
         run: |
-          make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/drivers/linux-pvg/driver" modules
+          make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/guest/drivers/linux-pvg/driver" modules
           modinfo guest/drivers/linux-pvg/driver/pvg.ko | grep -E '^(filename|license|vermagic|alias):'
-          make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/drivers/linux-pvg/driver" clean
+          make -C "/usr/src/linux-headers-$KERNEL" M="$PWD/guest/drivers/linux-pvg/driver" clean
       - name: Build with DKMS, as the package's pvg-dkms does
         run: |
           version=0.0.0-ci

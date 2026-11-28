@@ -19,11 +19,12 @@ $mostWaiting = 16
 # Vulkan won't use a display unless it looks like a remote session's, and it goes by the name. The
 # key can show up after setup or on a later boot, so this looks every time. Windows reads it at boot.
 function Name-Display {
-    Get-ChildItem $VideoKey -ea 0 | ForEach-Object { Join-Path $_.PSPath '0000' } |
+    param([string]$Key)
+    Get-ChildItem $Key -ea 0 | ForEach-Object { Join-Path $_.PSPath '0000' } |
         Where-Object { (Get-ItemProperty $_ -ea 0).DriverDesc -eq 'Microsoft Basic Display Adapter' } |
         ForEach-Object { Set-ItemProperty $_ DriverDesc 'Microsoft Basic Display Adapter (RDPUDD Chained DD)' }
 }
-Name-Display
+Name-Display $VideoKey
 $token = (Get-Content -LiteralPath $TokenFile -Raw).Trim()
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse($ListenAddress), $Port)
 $listener.Start()
@@ -35,7 +36,7 @@ function Serve-Line($Waiting) {
         if ($null -eq $line) { return }
         $parts = $line.Split(' ', 2)
         if ($parts[0] -eq $token) {
-            Name-Display
+            Name-Display $VideoKey
             $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($parts[1]))
             try { $out = Invoke-Expression $script 2>&1 | Out-String -Width 220 } catch { $out = "ERROR: $_" }
             $writer = [System.IO.StreamWriter]::new($Waiting.Client.GetStream())

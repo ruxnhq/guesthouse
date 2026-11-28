@@ -106,19 +106,22 @@ impl<W: Work> Service<W> {
         answer
     }
 
-    /// Tells the running guest again to stop trusting each device removed from it, once in a run,
-    /// and lets its view open then.
-    fn tell_removed(&self, name: &str, ctl: &GuestCtl) {
+    /// Tells the running guest again to stop trusting each device removed from it, and lets its view
+    /// open once each was answered. Whether it was: one the guest didn't answer is told again later.
+    fn tell_removed(&self, name: &str, ctl: &GuestCtl) -> bool {
         let policy = policy(&self.machines.store.disk(name));
+        let mut answered = true;
         for fingerprint in revoked::removed(&self.machines.store.folder(name)) {
             let Ok(words) = policy.device_revoke(&fingerprint) else { continue };
             if let Err(reason) = self.drive(name, ctl, |driver| driver.device(&words)) {
                 self.work.log(&format!("{name}: a removed device wasn't revoked again: {reason}"));
             }
+            answered &= !self.sessions.with(name, |session| session.unsure);
         }
-        if let Some(entry) = self.machines.lock().get_mut(name) {
+        if answered && let Some(entry) = self.machines.lock().get_mut(name) {
             entry.removed_told = true;
         }
+        answered
     }
 
     /// Sends one command about a paired device, made by `words` with the machine's policy, which
@@ -154,6 +157,7 @@ impl<W: Work> Service<W> {
     pub(super) fn keep_pairing(&self, name: &str, over: &AtomicBool) {
         let mut last: Option<Instant> = None;
         let mut told = false;
+        let mut last_told: Option<Instant> = None;
         while !over.load(Ordering::SeqCst) {
             thread::sleep(LOOK);
             let (on, ctl) = match self.machines.lock().get(name) {
@@ -162,9 +166,9 @@ impl<W: Work> Service<W> {
             };
             let Some(ctl) = ctl.filter(|_| on) else { continue };
             let answered = self.sessions.with(name, |session| session.reading.is_some());
-            if answered && !told {
-                self.tell_removed(name, &ctl);
-                told = true;
+            if answered && !told && last_told.is_none_or(|at| at.elapsed() >= FIRST_READING_EVERY) {
+                last_told = Some(Instant::now());
+                told = self.tell_removed(name, &ctl);
             }
             let poll =
                 self.sessions.with(name, |session| session.pairing.as_ref().and_then(Pairing::poll_ms));

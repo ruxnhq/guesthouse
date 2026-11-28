@@ -2,6 +2,7 @@
 //! keep it there, and moved.
 
 use super::*;
+use guesthouse_remote_view_core::revoked;
 
 /// A folder of the test's own, in which machines are kept, such as a drive of their own.
 fn drive(setup: &Setup) -> PathBuf {
@@ -439,10 +440,11 @@ fn a_link_in_a_machines_folder_stops_a_move() {
     assert!(names(&drive).is_empty());
 }
 
-/// The remote view's switch is the service's, kept at home with the settings: a move takes it
-/// nowhere, and it's on, with its port, after a move out and back and a service that starts again.
+/// The remote view's switch and its list of removed devices are the service's, kept at home with
+/// the settings: a move takes them nowhere, and they're there after a move out and back and a
+/// service that starts again. Deleting the machine takes them with it.
 #[test]
-fn a_moved_machine_keeps_its_remote_view_switch_at_home() {
+fn a_moved_machine_keeps_its_remote_view_switch_and_removed_devices_at_home() {
     let setup = setup("move-view", Pretend::default());
     let service = &setup.service;
     let drive = drive(&setup);
@@ -452,11 +454,16 @@ fn a_moved_machine_keeps_its_remote_view_switch_at_home() {
     let share = Request::Share { name: "win".into(), on: Some(true), pairing: None, pairing_seconds: None };
     assert!(matches!(ask(service, share).as_slice(), [Answer::Share { .. }]));
     let home = setup.root.join("machines").join("win");
+    let phone = "cd".repeat(32);
+    revoked::add(&home, &phone).unwrap();
 
     assert_eq!(ask(service, Request::Move { name: "win".into(), folder: drive.clone() }), [Answer::Ok]);
     wait_for_event(service, "win", "Moved its disks to");
-    assert!(names(&home).contains(&"remote-view.json".to_owned()));
-    assert!(!names(&drive.join("win")).contains(&"remote-view.json".to_owned()));
+    for own in ["remote-view.json", revoked::FILE] {
+        assert!(names(&home).contains(&own.to_owned()), "{own}");
+        assert!(!names(&drive.join("win")).contains(&own.to_owned()), "{own}");
+    }
+    assert_eq!(revoked::removed(&home), std::slice::from_ref(&phone));
     let again = Service::new(Store::new(setup.root.join("machines")), Pretend::default());
     let listed = |service: &Arc<Service<Pretend>>| {
         let machine = &status(service)[0];
@@ -470,4 +477,8 @@ fn a_moved_machine_keeps_its_remote_view_switch_at_home() {
     wait_for_event(service, "win", &format!("Moved its disks to {}", home.display()));
     let again = Service::new(Store::new(setup.root.join("machines")), Pretend::default());
     assert_eq!(listed(&again), (true, Some(7792)));
+    assert_eq!(revoked::removed(&home), [phone]);
+    drop(again);
+    assert_eq!(ask(service, Request::Delete { name: "win".into() }), [Answer::Ok]);
+    assert!(!home.exists());
 }

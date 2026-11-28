@@ -400,6 +400,7 @@ fn machine(name: &str, state: State) -> Machine {
         address: None,
         remote_view: false,
         remote_port: None,
+        console_pipe: None,
     }
 }
 

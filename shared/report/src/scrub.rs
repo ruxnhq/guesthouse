@@ -452,6 +452,11 @@ mod tests {
     fn a_machine_is_taken_after_the_prefix() {
         assert_scrubs(&pat(), "guesthouse-win11 started", "guesthouse-machine started");
         assert_scrubs(&pat(), r"\\.\pipe\guesthouse-work-box-com1", r"\\.\pipe\guesthouse-machine2-com1");
+        assert_scrubs(
+            &pat(),
+            r"\\.\pipe\guesthouse-win11-0123456789abcdef0123456789abcdef-com1",
+            r"\\.\pipe\guesthouse-machine-0123456789abcdef0123456789abcdef-com1",
+        );
         assert_scrubs(&pat(), "Guesthouse-WIN11", "Guesthouse-machine");
         assert_scrubs(&pat(), "guesthouse-win112", "guesthouse-win112");
     }

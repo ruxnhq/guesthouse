@@ -1476,12 +1476,16 @@ impl Main {
             open.window.front();
             return;
         }
+        // Its pipe's name is new each boot, and the service says it once the machine runs.
+        let Some(pipe) = self.machine().and_then(|machine| machine.console_pipe.clone()) else {
+            self.tell(format!("{name}'s console isn't served yet. It's there once {name} runs."), true);
+            return;
+        };
         self.console = None;
         self.console_id += 1;
         let id = self.console_id;
         let window = self.window.clone();
         let title = format!("{name} \u{2014} Console");
-        let pipe = guesthouse_control::console_pipe(&name);
         let opened = Console::open(&pipe, &title, false, true, move |event| {
             let _ = window.tell(Message::Consoled(id, event));
         });
@@ -2360,6 +2364,7 @@ mod tests {
             address: None,
             remote_view: false,
             remote_port: None,
+            console_pipe: None,
         }
     }
 

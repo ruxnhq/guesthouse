@@ -32,8 +32,11 @@ pub enum Guest {
 
 #[derive(Debug, Clone)]
 pub struct Machine {
-    /// HCS's ID for the machine, which also names its serial port's pipe.
+    /// HCS's ID for the machine, which starts its pipes' names.
     pub name: String,
+    /// The random word in this boot's pipe names, a new one each boot
+    /// (`guesthouse_hcs::serial::pipe_tag`).
+    pub pipe_tag: String,
     /// The boot disk, as an absolute path, since HCS resolves nothing.
     pub disk: PathBuf,
     pub memory_mb: u64,
@@ -65,13 +68,13 @@ impl Machine {
 
     /// The host's end of the guest's COM1.
     pub fn serial_pipe(&self) -> String {
-        format!(r"\\.\pipe\{}-com1", self.name)
+        format!(r"\\.\pipe\{}-{}-com1", self.name, self.pipe_tag)
     }
 
     /// The pipe HCS serves the machine's display on, as Remote Desktop: its console, which shows
     /// the firmware, the installer and a boot that's stuck as well as the desktop.
     pub fn console_pipe(&self) -> String {
-        format!(r"\\.\pipe\{}-console", self.name)
+        format!(r"\\.\pipe\{}-{}-console", self.name, self.pipe_tag)
     }
 
     pub fn document(&self) -> ComputeSystem {
@@ -177,6 +180,7 @@ mod tests {
     fn machine() -> Machine {
         Machine {
             name: "guesthouse-test".into(),
+            pipe_tag: "0f1e".into(),
             disk: PathBuf::from(r"D:\vms\test.vhdx"),
             memory_mb: 8192,
             processors: 4,
@@ -240,12 +244,22 @@ mod tests {
     }
 
     #[test]
+    fn each_boots_pipes_are_named_by_its_own_tag() {
+        let one = Machine { pipe_tag: "aa".into(), ..machine() };
+        let two = Machine { pipe_tag: "bb".into(), ..machine() };
+        assert_eq!(one.serial_pipe(), r"\\.\pipe\guesthouse-test-aa-com1");
+        assert_eq!(one.console_pipe(), r"\\.\pipe\guesthouse-test-aa-console");
+        assert_ne!(one.serial_pipe(), two.serial_pipe());
+        assert_ne!(one.console_pipe(), two.console_pipe());
+    }
+
+    #[test]
     fn a_console_is_served_only_to_whom_it_names() {
         let named = Machine { console_access: vec!["S-1-5-21-1-2-3-1001".into()], ..machine() };
         let document = serde_json::to_value(named.document()).unwrap();
         assert_eq!(
             document["VirtualMachine"]["Devices"]["VideoMonitor"]["ConnectionOptions"],
-            json!({"AccessSids": ["S-1-5-21-1-2-3-1001"], "NamedPipe": r"\\.\pipe\guesthouse-test-console"})
+            json!({"AccessSids": ["S-1-5-21-1-2-3-1001"], "NamedPipe": r"\\.\pipe\guesthouse-test-0f1e-console"})
         );
         let none = serde_json::to_value(machine().document()).unwrap();
         assert!(none["VirtualMachine"]["Devices"]["VideoMonitor"].get("ConnectionOptions").is_none());
@@ -298,7 +312,7 @@ mod tests {
             vm["Devices"]["VideoMonitor"],
             json!({"HorizontalResolution": 1024, "VerticalResolution": 768})
         );
-        assert_eq!(vm["Devices"]["ComPorts"]["0"]["NamedPipe"], json!(r"\\.\pipe\guesthouse-test-com1"));
+        assert_eq!(vm["Devices"]["ComPorts"]["0"]["NamedPipe"], json!(r"\\.\pipe\guesthouse-test-0f1e-com1"));
         assert_eq!(vm["SecuritySettings"]["EnableTpm"], json!(true));
     }
 

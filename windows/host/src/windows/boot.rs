@@ -18,7 +18,7 @@ use guesthouse_hcs::hvsock::parse_guid;
 use guesthouse_hcs::network::{self, Endpoint, GUID};
 use guesthouse_hcs::schema::network::{Network, bridged_network_id, bridged_network_name};
 use guesthouse_hcs::schema::{Gpu, ModifySettingRequest, NetworkAdapter};
-use guesthouse_hcs::serial::{OpenError, SerialPort, Server};
+use guesthouse_hcs::serial::{self, OpenError, SerialPort, Server};
 use guesthouse_hcs::system::{self, ComputeSystem};
 use guesthouse_hcs::worker;
 use guesthouse_jail::windows::{Handles, Jail, Jailed};
@@ -164,7 +164,10 @@ fn run(
     } else {
         (None, None)
     };
-    let mut machine = machine(settings, disk, &record, adapter);
+    // The pipes are named afresh each boot, with a random word.
+    let pipe_tag =
+        serial::pipe_tag().map_err(|error| format!("This boot's pipes couldn't be named: {error}"))?;
+    let mut machine = machine(settings, disk, &record, adapter, pipe_tag);
     machine.shares = shares;
     system::ensure_guest_state_file(&machine.guest_state_path()).map_err(|error| error.to_string())?;
     system::ensure_runtime_state_file(&machine.runtime_state_path()).map_err(|error| error.to_string())?;
@@ -185,6 +188,7 @@ fn run(
     sink.note(format!("{} started.", machine.name));
     if !machine.console_access.is_empty() {
         sink.note(format!("Its console is Remote Desktop on {}.", machine.console_pipe()));
+        sink.console(&machine.console_pipe());
     }
     sink.state(State::Running);
 

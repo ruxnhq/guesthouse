@@ -260,6 +260,7 @@ mod tests {
             address: None,
             remote_view: false,
             remote_port: None,
+            console_pipe: None,
         }
     }
 

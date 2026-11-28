@@ -386,6 +386,7 @@ impl<W: Work> Service<W> {
                     address: entry.settings.address.clone(),
                     remote_view: entry.remote_view.values().0,
                     remote_port: entry.remote_view.values().1,
+                    console_pipe: entry.console_pipe.clone(),
                 }
             })
             .collect();
@@ -667,6 +668,7 @@ impl<W: Work> Service<W> {
             entry.state = State::Starting;
             // What the guest said last run isn't where its forwards lead until it says it again.
             entry.run_address = None;
+            entry.console_pipe = None;
         }
         let store = &self.machines.store;
         let disk = store.disk(&name);
@@ -766,6 +768,7 @@ impl<W: Work> Service<W> {
             if let Some(entry) = entries.get_mut(&name) {
                 entry.stop = None;
                 entry.state = State::Off;
+                entry.console_pipe = None;
             }
         });
         Answer::Ok

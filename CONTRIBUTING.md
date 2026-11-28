@@ -84,6 +84,7 @@ Recordings hold guest data. They never go in git. Keep them in `/captures/`, whi
 ## Code
 
 - Small modules with one job. A crate's top comment should say what that job is.
+- Keep a source file under 1000 lines, and around 500 where you can. A check fails a pull request that takes a file past 1000, or makes one that is already past it longer. If you change a file that is over, split it by job in a commit that only moves code.
 - Name your numbers. A bare offset or size should be a constant, unless the test or the line beside it makes it obvious.
 - Comments say why. If a comment says what the next line does, delete it.
 - The message path shouldn't allocate or lock. Measure first, though: `core/tests/no_allocation.rs` and the benchmark will tell you, and a clever change needs a number behind it.

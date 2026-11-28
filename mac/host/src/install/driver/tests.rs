@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 use super::*;
 use crate::install::fake::FakeNetwork;
+use guesthouse_update_check::driver_manifest;
+use guesthouse_update_check::signed::{self, stand_in_key};
 use std::fs;
 
 fn scratch(name: &str) -> PathBuf {
@@ -84,7 +86,7 @@ fn a_package_whose_version_leaves_its_folder_writes_nothing() {
     let manifest = format!(r#"{{"version":"../../outside","files":[{}]}}"#, files.join(","));
     fs::write(published.join(MANIFEST_NAME), manifest).unwrap();
     let downloads = dir.join("support").join("Downloads");
-    assert!(fetch_package(&mut Published(published), &downloads).is_err());
+    assert!(fetch_package(&mut Published { folder: published, sign: true }, &downloads).is_err());
     assert!(!dir.join("support").join("outside").exists(), "nothing is written beside the downloads");
     let _ = fs::remove_dir_all(dir);
 }
@@ -146,15 +148,20 @@ fn the_newest_kept_package_is_the_highest_number_not_the_last_in_the_alphabet() 
     let _ = fs::remove_dir_all(downloads);
 }
 
-/// The file site, as a folder: the files a release published, served at the base URL by name.
-struct Published(PathBuf);
+/// The file site, as a folder: the files a release published, served at the base URL by name, with
+/// the manifest signed with the stand-in key as it is served, as the package's workflow signs it, when
+/// `sign` is set, and as it is in the folder when not.
+struct Published {
+    folder: PathBuf,
+    sign: bool,
+}
 
 impl Published {
     fn path(&self, url: &str) -> Result<PathBuf, FetchError> {
         let name = url
             .strip_prefix(WINDOWS_BASE_URL)
             .ok_or_else(|| FetchError::new(format!("{url} is not under {WINDOWS_BASE_URL}")))?;
-        Ok(self.0.join(name))
+        Ok(self.folder.join(name))
     }
 }
 
@@ -176,7 +183,15 @@ impl Transport for Published {
     }
 
     fn text(&mut self, url: &str) -> Result<String, FetchError> {
-        fs::read_to_string(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))
+        let text = fs::read_to_string(self.path(url)?).map_err(|e| FetchError::new(e.to_string()))?;
+        if !self.sign {
+            return Ok(text);
+        }
+        driver_manifest::sign(&text, MANIFEST_NAME, &stand_in_key().0).map_err(FetchError::new)
+    }
+
+    fn release_keys(&self) -> Vec<&'static str> {
+        vec![stand_in_key().1.as_str()]
     }
 }
 
@@ -228,7 +243,7 @@ fn a_package_the_release_script_made_is_what_the_app_fetches() {
     }
     // The app's own fetch, with the folder standing for the file site.
     let downloads = dir.join("downloads");
-    let folder = fetch_package(&mut Published(published.clone()), &downloads).unwrap();
+    let folder = fetch_package(&mut Published { folder: published.clone(), sign: true }, &downloads).unwrap();
     assert_eq!(package_files(&folder).unwrap().len(), REQUIRED.len());
     assert_eq!(kept_package(&downloads), Some(folder));
     let _ = fs::remove_dir_all(dir);
@@ -282,4 +297,63 @@ fn a_manifest_may_give_each_files_size_and_the_first_ones_did_not() {
     let with = without.replace(r#""sha256":"#, r#""size":123,"sha256":"#);
     let parsed = Manifest::parse(&with).unwrap();
     assert!(parsed.files.iter().all(|e| e.size == Some(123)));
+}
+
+/// A Windows package published in `folder` with this manifest text, its files' bytes their names.
+fn publish(folder: &Path, manifest: impl FnOnce(String) -> String) {
+    fs::create_dir_all(folder).unwrap();
+    let mut files = Vec::new();
+    for name in REQUIRED {
+        fs::write(folder.join(format!("p-{name}")), name).unwrap();
+        let sum = fetch::sha256_of(&folder.join(format!("p-{name}"))).unwrap();
+        files.push(format!(r#"{{"name":"p-{name}","as":"{name}","sha256":"{sum}"}}"#));
+    }
+    let text = format!(r#"{{"version":"0.3.40","files":[{}]}}"#, files.join(","));
+    fs::write(folder.join(MANIFEST_NAME), manifest(text)).unwrap();
+}
+
+#[test]
+fn a_package_no_release_key_signed_is_not_fetched() {
+    let dir = scratch("signed");
+    let (other_seed, _) = signed::new_key().unwrap();
+    let stand_in = &stand_in_key().0;
+    type MakeManifest<'a> = Box<dyn FnOnce(String) -> String + 'a>;
+    let cases: Vec<(&str, MakeManifest)> = vec![
+        ("unsigned", Box::new(|text| text)),
+        (
+            "another-key",
+            Box::new(move |text| driver_manifest::sign(&text, MANIFEST_NAME, &other_seed).unwrap()),
+        ),
+        ("other-package", Box::new(|text| driver_manifest::sign(&text, LINUX.manifest, stand_in).unwrap())),
+        // Signed, then a file and its SHA-256 both changed, so only the signature tells.
+        (
+            "changed",
+            Box::new(|text| {
+                let signed = driver_manifest::sign(&text, MANIFEST_NAME, stand_in).unwrap();
+                let sum = fetch::sha256_of(&dir.join("changed").join("p-install.ps1")).unwrap();
+                fs::write(dir.join("other"), "other bytes").unwrap();
+                let other = fetch::sha256_of(&dir.join("other")).unwrap();
+                signed.replace(&sum, &other)
+            }),
+        ),
+    ];
+    for (case, manifest) in cases {
+        let published = dir.join(case);
+        publish(&published, manifest);
+        if case == "changed" {
+            fs::write(published.join("p-install.ps1"), "other bytes").unwrap();
+        }
+        let downloads = dir.join(format!("downloads-{case}"));
+        let refused =
+            fetch_package(&mut Published { folder: published, sign: false }, &downloads).unwrap_err();
+        assert!(refused.message.contains("release key"), "{case}: {}", refused.message);
+        assert!(!downloads.exists(), "{case}: nothing is downloaded");
+    }
+    // The same package signed with the key the transport takes is fetched.
+    let published = dir.join("good");
+    publish(&published, |text| driver_manifest::sign(&text, MANIFEST_NAME, stand_in).unwrap());
+    let folder =
+        fetch_package(&mut Published { folder: published, sign: false }, &dir.join("downloads")).unwrap();
+    assert_eq!(package_files(&folder).unwrap().len(), REQUIRED.len());
+    let _ = fs::remove_dir_all(dir);
 }

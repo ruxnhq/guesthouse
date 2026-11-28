@@ -9,6 +9,8 @@
 use super::driver;
 use super::fetch::{FetchError, Head, Transport};
 use super::steps::MachineControl;
+use guesthouse_update_check::driver_manifest;
+use guesthouse_update_check::signed::stand_in_key;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
@@ -48,6 +50,11 @@ impl FakeNetwork {
 }
 
 impl Transport for FakeNetwork {
+    /// The stand-in key, which its manifests are signed with: it never reaches the network.
+    fn release_keys(&self) -> Vec<&'static str> {
+        vec![stand_in_key().1.as_str()]
+    }
+
     fn head(&mut self, url: &str) -> Result<Head, FetchError> {
         Ok(Head { length: Some(Self::body(url).len() as u64), ranges: true })
     }
@@ -82,7 +89,9 @@ impl Transport for FakeNetwork {
                     )
                 })
                 .collect();
-            return Ok(format!(r#"{{"version":"{FAKE_DRIVER_VERSION}","files":[{}]}}"#, files.join(",")));
+            let manifest = format!(r#"{{"version":"{FAKE_DRIVER_VERSION}","files":[{}]}}"#, files.join(","));
+            return driver_manifest::sign(&manifest, driver::MANIFEST_NAME, &stand_in_key().0)
+                .map_err(FetchError::new);
         }
         if !url.starts_with("https://cdimage.ubuntu.com/ubuntu/releases/26.04/release/") {
             return Err(FetchError::new(format!("{url} is not somewhere the stand-in knows.")));
@@ -114,6 +123,11 @@ impl FakeSite {
 }
 
 impl Transport for FakeSite {
+    /// The stand-in key, which its manifests are signed with: it never reaches the network.
+    fn release_keys(&self) -> Vec<&'static str> {
+        vec![stand_in_key().1.as_str()]
+    }
+
     fn head(&mut self, url: &str) -> Result<Head, FetchError> {
         if self.no_length {
             return Ok(Head { length: None, ranges: true });
@@ -145,11 +159,13 @@ impl Transport for FakeSite {
     fn text(&mut self, url: &str) -> Result<String, FetchError> {
         if url == format!("{}{}", driver::LINUX_BASE_URL, driver::LINUX.manifest) {
             let name = linux_name(driver::LINUX_SCRIPT);
-            return Ok(format!(
+            let manifest = format!(
                 r#"{{"version":"{FAKE_LINUX_VERSION}","files":[{{"name":"{name}","as":"{}","sha256":"{}"}}]}}"#,
                 driver::LINUX_SCRIPT,
                 sha256_hex(&Self::linux_bytes(&name))
-            ));
+            );
+            return driver_manifest::sign(&manifest, driver::LINUX.manifest, &stand_in_key().0)
+                .map_err(FetchError::new);
         }
         FakeNetwork.text(url)
     }

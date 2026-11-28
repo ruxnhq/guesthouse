@@ -47,6 +47,11 @@ pub trait Transport {
     ) -> Result<(), FetchError>;
     /// A small text file, such as a list of checksums.
     fn text(&mut self, url: &str) -> Result<String, FetchError>;
+    /// The keys (public halves, in hex) a driver package fetched through this has to be signed by: the
+    /// release keys, or for a stand-in that never reaches the network, the key it signs with.
+    fn release_keys(&self) -> Vec<&'static str> {
+        guesthouse_update_check::signed::RELEASE_KEYS.to_vec()
+    }
 }
 
 /// The room the Mac has on the disk that holds `path`, in bytes.

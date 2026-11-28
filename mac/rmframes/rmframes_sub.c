@@ -14,6 +14,7 @@
  * the guest can reach, so never makes us let go of a name of its choosing.
  */
 #include "rmframes_sub.h"
+#include "rmframes_peer.h"
 
 #include <mach/mach.h>
 #include <mach/notify.h>
@@ -48,6 +49,10 @@ struct rmf_sub {
      * from a publisher built before there were several readers. Written on
      * the queue, read from any thread. */
     _Atomic uint32_t number;
+    /* The publisher's process, once a message from it was found to be from
+     * one of ours (rmframes_peer.c); 0 before. Its later messages are taken
+     * by this alone, so the code's signature is checked once. */
+    pid_t sender;
 };
 
 static void send_simple(rmf_sub *sub, mach_msg_header_t *header,
@@ -116,11 +121,31 @@ static void went(rmf_sub *sub)
     }
 }
 
+/* Whether a message on `port` came from the publisher: a process that is
+ * one of ours, and the same one as before. */
+static bool from_publisher(rmf_sub *sub, const mach_msg_audit_trailer_t *trailer)
+{
+    pid_t pid = (pid_t)trailer->msgh_audit.val[AUDIT_TOKEN_PID];
+
+    if (trailer->msgh_trailer_size < sizeof(*trailer) || pid == 0) {
+        return false;
+    }
+    if (sub->sender == 0 && rmf_peer_is_ours(&trailer->msgh_audit)) {
+        sub->sender = pid;
+    }
+    return sub->sender == pid;
+}
+
 /* A message on `port`: the publisher's. */
-static void take_message(rmf_sub *sub, received *buf)
+static void take_message(rmf_sub *sub, received *buf,
+                         const mach_msg_audit_trailer_t *trailer)
 {
     mach_msg_header_t *h = &buf->header;
     bool complex = h->msgh_bits & MACH_MSGH_BITS_COMPLEX;
+
+    if (!from_publisher(sub, trailer)) {
+        return;
+    }
 
     if (h->msgh_id == RMF_MSG_SLOTS) {
         handle_slots(sub, &buf->slots);
@@ -206,7 +231,8 @@ static void do_receive(void *opaque)
             take_notice(sub, &buf, (const mach_msg_audit_trailer_t *)
                         ((uint8_t *)&buf + round_msg(buf.header.msgh_size)));
         } else if (buf.header.msgh_local_port == sub->port) {
-            take_message(sub, &buf);
+            take_message(sub, &buf, (const mach_msg_audit_trailer_t *)
+                         ((uint8_t *)&buf + round_msg(buf.header.msgh_size)));
         }
         /* The surface ports were looked up already; this frees them. */
         mach_msg_destroy(&buf.header);

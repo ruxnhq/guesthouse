@@ -17,13 +17,15 @@
  *
  * Every message is taken by the port it came to. Any process of the user can
  * send to the service port, so only HELLO, RELEASE and BYE are read there,
- * and RELEASE and BYE act only for a reader of the sending process, as the
+ * HELLO only from a process that is one of ours (rmframes_peer.c), and
+ * RELEASE and BYE act only for a reader of the sending process, as the
  * kernel names it. Only the kernel can send to the notify port, so only
  * notices are read there, and a dead-name notice acts only on a name that is
  * a reader's port we asked about, and is dead. Anything else is counted in
  * `ignored`, and the rights it carried are let go.
  */
 #include "rmframes_pub_internal.h"
+#include "rmframes_peer.h"
 
 #include <mach/notify.h>
 #include <stddef.h>
@@ -132,10 +134,13 @@ static bool welcome(rmf_pub *pub, mach_port_t port, pid_t pid)
     return true;
 }
 
-/* A message on the service port: a reader's, or ignored. */
-static void take_message(rmf_pub *pub, received *buf, pid_t pid)
+/* A message on the service port: a reader's, or ignored. A reader is welcome
+ * only from a process that is one of ours (rmframes_peer.c). */
+static void take_message(rmf_pub *pub, received *buf,
+                         const mach_msg_audit_trailer_t *trailer)
 {
     mach_msg_header_t *h = &buf->header;
+    pid_t pid = (pid_t)trailer->msgh_audit.val[AUDIT_TOKEN_PID];
     mach_msg_size_t size = h->msgh_size;
     int index;
 
@@ -151,6 +156,7 @@ static void take_message(rmf_pub *pub, received *buf, pid_t pid)
             buf->hello.version == RMF_VERSION &&
             MACH_MSGH_BITS_REMOTE(h->msgh_bits) == MACH_MSG_TYPE_PORT_SEND &&
             MACH_PORT_VALID(h->msgh_remote_port) &&
+            rmf_peer_is_ours(&trailer->msgh_audit) &&
             welcome(pub, h->msgh_remote_port, pid)) {
             h->msgh_remote_port = MACH_PORT_NULL;   /* ours now */
             return;
@@ -279,8 +285,7 @@ void rmf_pub_receive(void *opaque)
         if (buf.header.msgh_local_port == pub->notify) {
             take_notice(pub, &buf, trailer);
         } else if (buf.header.msgh_local_port == pub->service) {
-            take_message(pub, &buf,
-                         (pid_t)trailer->msgh_audit.val[AUDIT_TOKEN_PID]);
+            take_message(pub, &buf, trailer);
         } else {
             ignore(pub);
         }

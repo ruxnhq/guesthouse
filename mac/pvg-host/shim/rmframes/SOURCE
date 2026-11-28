@@ -1,5 +1,5 @@
 rmframes, the files the graphics process hands its frames to other processes through, as IOSurfaces.
-rmframes.h, rmframes_sub.c and rmframes_sub.h are byte for byte the Mac app's mac/rmframes/.
+rmframes.h, rmframes_sub.c, rmframes_sub.h, rmframes_peer.c and rmframes_peer.h are byte for byte the Mac app's mac/rmframes/.
 rmframes_pub.c, rmframes_pub.h, rmframes_pub_internal.h and rmframes_recv.c are the publishing side, which the app doesn't need.
 All of them are MIT, as each file says.
 The reading side is here for the crate's own test only; the program links the publishing side (rmframes_pub.c and rmframes_recv.c).

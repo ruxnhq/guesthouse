@@ -112,6 +112,11 @@ pub struct InstallInfo {
     /// reason. Left out, weston.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<String>,
+    /// While the guest's installer is running: for how many minutes its disk has written nothing,
+    /// once that is a while. The screen says it under the bar, as a hint that a stopped install and a
+    /// working one differ; it is not an error and goes with the step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_minutes: Option<u64>,
 }
 
 /// A step's usual time, in seconds, for guessing what is left before a pace is known.
@@ -155,6 +160,7 @@ impl InstallInfo {
             account: String::new(),
             disk_gb: None,
             desktop: None,
+            quiet_minutes: None,
         };
         info.refresh();
         info
@@ -214,6 +220,7 @@ impl InstallInfo {
     }
 
     pub fn finish_step(&mut self, step: Step) {
+        self.quiet_minutes = None;
         let state = self.step_mut(step);
         state.status = StepStatus::Done;
         state.progress = Progress { fraction: 1.0, seconds_left: Some(0), ..state.progress };

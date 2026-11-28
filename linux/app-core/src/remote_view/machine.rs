@@ -23,6 +23,7 @@ use crate::gpu_maker::GpuMaker;
 use crate::log::write_log;
 use crate::machine::{Kind, Machine, load, load_all};
 use crate::tasks::{State, status};
+use guesthouse_basics::text::shown_short;
 use guesthouse_daemon::slot::Slot;
 use guesthouse_remote_view_core::ctl::{self, Ack, Words, parse_ack};
 use guesthouse_remote_view_core::encoder_for_maker;
@@ -43,6 +44,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Beside the switch: what pairing has held off and owes back.
 pub const HELD_FILE: &str = "remote-view-held.json";
 /// One `ctl` command in the guest. The agent answers in about 40 ms.
+/// How much of what a guest said goes into the log.
+const GUEST_WORDS_LOGGED: usize = 300;
 const CTL_SECONDS: u64 = 20;
 /// The last line of every `ctl` script [`run_ctl`] sends. The agent closes the connection once a
 /// script ends, and says nothing at all for a token it doesn't take, for a guest whose agent isn't
@@ -185,7 +188,10 @@ pub fn ensure_installed(
         return Err(Failure::new("remoteman's host did not reach Windows. Try again."));
     }
     let said = ask(&install::install_script(&pin.version, encoder), INSTALL_SECONDS);
-    let _ = write_log(context, &format!("remote view: {}: {}", machine.id, said.trim().replace('\n', " | ")));
+    let _ = write_log(
+        context,
+        &format!("remote view: {}: {}", machine.id, shown_short(said.trim(), GUEST_WORDS_LOGGED)),
+    );
     if !said.contains(INSTALLED) {
         return Err(Failure(format!("remoteman's host could not be installed: {}", said.trim())));
     }
@@ -215,8 +221,9 @@ fn updates_off(
     let _ = write_log(
         context,
         &format!(
-            "remote view: {}: remoteman's own update check could not be switched off: {why}",
-            machine.id
+            "remote view: {}: remoteman's own update check could not be switched off: {}",
+            machine.id,
+            shown_short(&why, GUEST_WORDS_LOGGED)
         ),
     );
     false
@@ -374,8 +381,12 @@ pub fn bring_up(
             _ => None,
         });
     if !matches!(parse_ack(&said), Ack::Done(_) | Ack::NotKept(_)) {
-        let _ = write_log(context, &format!("remote view: sharing on: {}", said.trim()));
+        let _ = write_log(
+            context,
+            &format!("remote view: sharing on: {}", shown_short(said.trim(), GUEST_WORDS_LOGGED)),
+        );
     }
+    revoke_removed(context, machine, ask);
     open_helper(context, machine, slot, port, fingerprint)
 }
 
@@ -397,7 +408,7 @@ impl Guest for AgentGuest<'_> {
     }
 
     fn log(&self, line: &str) {
-        let _ = write_log(self.context, &format!("remote view: {line}"));
+        let _ = write_log(self.context, &format!("remote view: {}", shown_short(line, GUEST_WORDS_LOGGED)));
     }
 
     fn held(&self) -> Option<HostWide> {
@@ -500,9 +511,10 @@ pub fn share(
     set_allowed(context, machine, on)?;
     let Some(slot) = running_slot(context, machine) else { return Ok(info(context, machine)) };
     if !on {
+        // The LAN side closes first; the guest hears of it after.
+        close_helper(context, slot);
         step(context, machine, slot, StepEvent::Plain(Event::SwitchOff));
         let _ = run_ctl(context, machine, slot, &ctl::share(false));
-        close_helper(context, slot);
         return Ok(info(context, machine));
     }
     if !was || pid(context, Some(slot)).is_none() || !helper_listening(context, slot) {
@@ -541,7 +553,13 @@ pub fn pair_close(context: &Context, machine: &Machine) -> Result<ShareInfo> {
 
 /// Lets in the device that waits. Its clipboard and files go off as soon as it is seen.
 pub fn pair_accept(context: &Context, machine: &Machine) -> Result<ShareInfo> {
-    act(context, machine, Event::Accept)
+    let waiting = info(context, machine).pending.map(|pending| pending.fingerprint);
+    let shown = act(context, machine, Event::Accept)?;
+    // A device taken in again is no longer one that was removed.
+    if let Some(fingerprint) = waiting {
+        let _ = super::revoked::forget(&machine.folder(context), &fingerprint);
+    }
+    Ok(shown)
 }
 
 /// Turns away the device that waits.
@@ -574,7 +592,33 @@ pub fn device_allow(
 
 /// Stops trusting a device: it is disconnected and has to pair again.
 pub fn device_revoke(context: &Context, machine: &Machine, fingerprint: &str) -> Result<ShareInfo> {
-    device_command(context, machine, Policy::linux().device_revoke(fingerprint))
+    let shown = device_command(context, machine, Policy::linux().device_revoke(fingerprint))?;
+    // The guest keeps its own list, which a snapshot or an import can bring back: this PC's is told
+    // to it at every start.
+    let _ = super::revoked::add(&machine.folder(context), fingerprint);
+    Ok(shown)
+}
+
+/// Tells the guest again to stop trusting each device removed here, and, for a machine just imported,
+/// each device it came with.
+pub(super) fn revoke_removed(context: &Context, machine: &Machine, ask: &dyn Fn(&str, u64) -> String) {
+    let folder = machine.folder(context);
+    let mut each = super::revoked::removed(&folder);
+    if super::revoked::is_fresh(&folder) {
+        if let Reply::Status(status) = parse_reply(&ask(&install::ctl_script(&ctl::status()), CTL_SECONDS)) {
+            for device in &status.devices {
+                if !each.contains(&device.fingerprint) {
+                    each.push(device.fingerprint.clone());
+                }
+            }
+        }
+        super::revoked::clear_fresh(&folder);
+    }
+    for fingerprint in each {
+        if let Ok(words) = Policy::linux().device_revoke(&fingerprint) {
+            let _ = ask(&install::ctl_script(&words), CTL_SECONDS);
+        }
+    }
 }
 
 /// Disconnects the device viewing now. It stays paired.
@@ -639,6 +683,20 @@ mod tests {
             Reply::Status(status) => *status,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn what_the_guest_says_goes_into_the_log_cut_and_on_one_line() {
+        let scratch = Scratch::new();
+        let context = scratch_context(&scratch);
+        let machine = machine(&context, "words", Kind::Windows);
+        let guest = AgentGuest { context: &context, machine: &machine, slot: crate::slots::number(0) };
+        let said = format!("refused\n[2025] fake line\x1b]0;x\x07{}", "z".repeat(4 << 20));
+        guest.log(&said);
+        let log = crate::log::read_log(&context);
+        assert!(log.len() < 2 * GUEST_WORDS_LOGGED, "{}", log.len());
+        assert_eq!(log.trim_end().lines().count(), 1, "{log}");
+        assert!(!log.contains('\x1b'));
     }
 
     #[test]

@@ -20,6 +20,7 @@
 
 use crate::context::Context;
 use crate::failure::Result;
+use crate::guest_end::GuestEnd;
 use crate::log::write_log;
 use crate::machine::Machine;
 use crate::random::random_hex;
@@ -213,15 +214,15 @@ fn take_waiting_after(
     Ok(())
 }
 
-fn answers_to(context: &Context, port: u16, token: &str) -> bool {
-    context.agent.ask(port, token, UP_SCRIPT, ASK_SECONDS).contains(UP)
+fn answers_to(context: &Context, end: &GuestEnd, token: &str) -> bool {
+    context.agent.ask(end, token, UP_SCRIPT, ASK_SECONDS).contains(UP)
 }
 
 /// Moves a running guest to its waiting token, and on to the one owed after it if there is one.
 /// Run as soon as its agent has answered. A throwaway run gets a token of its own here, written
 /// down before the guest is asked, so a change cut short can be found. A change that doesn't
 /// happen is only logged: the old token still works, and the next start tries again.
-pub fn finish_token_change(context: &Context, machine: &Machine, port: u16) {
+pub fn finish_token_change(context: &Context, machine: &Machine, end: &GuestEnd) {
     let run_waiting = waiting_file(context, machine);
     let run_has_one = crate::throwaway::run_token_file(context, machine).exists() || run_waiting.exists();
     if machine.throwaway
@@ -238,8 +239,8 @@ pub fn finish_token_change(context: &Context, machine: &Machine, port: u16) {
         else {
             return;
         };
-        let said = context.agent.ask(port, &old, &change_script(&next), ASK_SECONDS);
-        let note = if !answers_to(context, port, &next) {
+        let said = context.agent.ask(end, &old, &change_script(&next), ASK_SECONDS);
+        let note = if !answers_to(context, end, &next) {
             let words: String =
                 said.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MOST_SAID).collect();
             if !words.is_empty() {
@@ -257,9 +258,9 @@ pub fn finish_token_change(context: &Context, machine: &Machine, port: u16) {
 
 /// The token to ask with when the one in use got no answer: the waiting one, if the guest answers to
 /// it, which is a change cut short after the guest had it. The host takes it then.
-pub fn recovered_token(context: &Context, machine: &Machine, port: u16) -> Option<String> {
+pub fn recovered_token(context: &Context, machine: &Machine, end: &GuestEnd) -> Option<String> {
     let next = waiting_token(context, machine)?;
-    if !answers_to(context, port, &next) {
+    if !answers_to(context, end, &next) {
         return None;
     }
     if let Err(failure) = take_waiting(context, machine, &next) {
@@ -313,7 +314,7 @@ mod tests {
     }
 
     impl GuestAgent for Guest {
-        fn ask(&self, _port: u16, token: &str, script: &str, _seconds: u64) -> String {
+        fn ask(&self, _end: &crate::guest_end::GuestEnd, token: &str, script: &str, _seconds: u64) -> String {
             self.asked.lock().unwrap().push(script.to_owned());
             if *self.gone.lock().unwrap() || *self.token.lock().unwrap() != token {
                 return String::new();
@@ -355,14 +356,14 @@ mod tests {
         let next = waiting_token(&context, &machine).unwrap();
         assert_eq!(fs::metadata(next_token_file(&context, &machine)).unwrap().mode() & 0o777, 0o600);
         assert_ne!(next, "old");
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         assert_eq!(*guest.token.lock().unwrap(), next);
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), next);
         plan_token_change(&context, &machine).unwrap();
         let again = waiting_token(&context, &machine).unwrap();
         plan_token_change(&context, &machine).unwrap();
         assert_eq!(waiting_token(&context, &machine).unwrap(), again, "one already waiting stays");
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         let last = guest.token.lock().unwrap().clone();
         assert!(last != again && last != next, "and another is owed after it");
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), last);
@@ -380,7 +381,7 @@ mod tests {
         let machine = windows_machine(&scratch, &context, "old");
         plan_token_change(&context, &machine).unwrap();
         let next = waiting_token(&context, &machine).unwrap();
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         assert_eq!(*guest.token.lock().unwrap(), next);
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), next);
         let script = change_script("x");
@@ -399,12 +400,12 @@ mod tests {
         let machine = windows_machine(&scratch, &context, "old");
         plan_token_change(&context, &machine).unwrap();
         assert_eq!(refused_note(&context, &machine), None, "nothing is said before it is tried");
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         let note = refused_note(&context, &machine).unwrap();
         assert!(note.starts_with("Its guest refused a new agent token"), "{note}");
         assert!(note.ends_with("ERROR: Access to the path 'C:\\gpupv\\token.txt' is denied."), "{note}");
         context.agent = Guest::with("old", false);
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         assert_eq!(refused_note(&context, &machine), None);
         assert!(!machine.folder(&context).join(REFUSED_FILE).exists());
     }
@@ -417,7 +418,7 @@ mod tests {
         context.agent = guest.clone();
         let machine = windows_machine(&scratch, &context, "old");
         plan_token_change(&context, &machine).unwrap();
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), "old");
         assert!(waiting_token(&context, &machine).is_some(), "the next start tries again");
     }
@@ -431,7 +432,7 @@ mod tests {
         let machine = windows_machine(&scratch, &context, "old");
         plan_token_change(&context, &machine).unwrap();
         let next = waiting_token(&context, &machine).unwrap();
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), "old");
         *guest.gone.lock().unwrap() = false;
         guest.asked.lock().unwrap().clear();
@@ -472,7 +473,7 @@ mod tests {
             // As `guesthouse-vm idle` asks: the token in use gets no answer, so the waiting one is tried.
             assert_eq!(elsewhere.ask_guest(&asked, "'up'", 1, None), "up\n");
         }));
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         let guests = guest.token.lock().unwrap().clone();
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), guests);
         assert_eq!(context.ask_guest(&machine, "'up'", 1, None), "up\n");
@@ -523,7 +524,7 @@ mod tests {
         fs::write(next_token_file(&context, &machine), "middle\n").unwrap();
         plan_token_change(&context, &machine).unwrap();
         assert_eq!(waiting_token(&context, &machine).unwrap(), "middle", "the waiting one stays");
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         let now = guest.token.lock().unwrap().clone();
         assert!(now != "middle" && now != "old", "{now}");
         assert_eq!(fs::read_to_string(machine.token_file(&context)).unwrap().trim(), now);
@@ -539,7 +540,7 @@ mod tests {
         let mut machine = windows_machine(&scratch, &context, "base");
         machine.throwaway = true;
         fs::create_dir_all(crate::throwaway::run_folder(&context, &machine)).unwrap();
-        finish_token_change(&context, &machine, 1);
+        finish_token_change(&context, &machine, &crate::guest_end::GuestEnd::agent(&context, &machine, None));
         let run_token = guest.token.lock().unwrap().clone();
         assert_ne!(run_token, "base");
         *guest.gone.lock().unwrap() = false;

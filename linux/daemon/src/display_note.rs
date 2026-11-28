@@ -67,7 +67,7 @@ pub fn write_note(run_folder: &Path, note: Option<ScreenNote>) -> io::Result<()>
 }
 
 pub fn read_note(run_folder: &Path) -> Option<ScreenNote> {
-    ScreenNote::parse(&fs::read_to_string(run_folder.join(NOTE_FILE)).ok()?)
+    ScreenNote::parse(&crate::note_file::read_capped(&run_folder.join(NOTE_FILE))?)
 }
 
 #[cfg(test)]

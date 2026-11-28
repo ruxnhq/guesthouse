@@ -223,11 +223,15 @@ fn post(prepared: &Prepared) -> Result<String, String> {
         return Err("The report is too big to send. Save it to a file instead.".to_owned());
     }
     let answer = prepared.archive.with_extension("answer");
-    let args =
-        sending::curl_arguments(&report_address(), &prepared.summary.header(), &prepared.archive, &answer);
+    let summary = prepared.summary.header();
+    let _ = fs::remove_file(sending::summary_file(&prepared.archive));
+    sending::write_summary_file(&prepared.archive, &summary)
+        .map_err(|error| format!("The report's summary couldn't be written, so nothing was sent: {error}"))?;
+    let args = sending::curl_arguments(&report_address(), &summary, &prepared.archive, &answer);
     let result = Command::new(system_program("curl.exe")).args(args).creation_flags(NO_WINDOW).output();
     let body = fs::read_to_string(&answer).unwrap_or_default();
     let _ = fs::remove_file(&answer);
+    let _ = fs::remove_file(sending::summary_file(&prepared.archive));
     let output = result.map_err(|error| format!("curl couldn't run, so nothing was sent: {error}"))?;
     sending::read_reply(
         &String::from_utf8_lossy(&output.stdout),

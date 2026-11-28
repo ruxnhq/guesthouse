@@ -79,7 +79,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let run = scratch.path("run");
         fs::create_dir_all(&run).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "first run").unwrap();
         keep_run(&context, &run).unwrap();
         let kept = kept_folder(&context, "w11");
@@ -88,7 +88,7 @@ mod tests {
         // The next run: the first one's daemon output is older than its note.
         let old = fs::File::options().append(true).open(run.join("daemon.out")).unwrap();
         old.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60)).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("qemu.log"), "second run").unwrap();
         keep_run(&context, &run).unwrap();
         assert!(!kept.join("daemon.out").exists(), "the copy before is replaced whole");
@@ -101,7 +101,7 @@ mod tests {
         let context = scratch_context(&scratch);
         let run = scratch.path("run");
         fs::create_dir_all(&run).unwrap();
-        fs::write(run.join(MACHINE_NOTE), "w11").unwrap();
+        crate::run_files::plant_note(&run, MACHINE_NOTE, "w11");
         fs::write(run.join("daemon.out"), "line\n".repeat(MOST_KEPT_BYTES)).unwrap();
         keep_run(&context, &run).unwrap();
         let size = fs::metadata(kept_folder(&context, "w11").join("daemon.out")).unwrap().len();

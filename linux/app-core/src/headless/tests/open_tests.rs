@@ -111,21 +111,22 @@ fn a_machine_that_is_off_is_started_and_then_waited_for() {
         ),
     );
     // The pretend task's work: once it was asked, the machine is there.
-    let (context, machine) = (rig.context.clone(), rig.machine.clone());
+    let (context, machine, port) = (rig.context.clone(), rig.machine.clone(), rig.port);
     let (asked_file, go_file) = (asked.clone(), go.clone());
     let worker = std::thread::spawn(move || {
         for _ in 0..200 {
             if asked_file.exists() {
-                start_process(&context, &machine);
+                let qemu = start_process(&context, &machine, port);
                 fs::write(&go_file, "").unwrap();
-                return;
+                return Some(qemu);
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        None
     });
     let started = RefCell::new(0);
     let (out, result) = open_counting(&rig, r"C:\Windows\notepad.exe", false, &started);
-    worker.join().unwrap();
+    let _qemu = worker.join().unwrap();
     assert_eq!(result, Ok(()), "{out}");
     assert_eq!(fs::read_to_string(&asked).unwrap().trim(), "start work", "the same task `start` runs");
     assert!(out.contains("Office PC is running."), "{out}");

@@ -75,12 +75,19 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    /// Whether this picture lies inside a slot of this size. These numbers can come from a guest, so
-    /// a viewer must ask before it touches a buffer.
+    /// Whether this picture lies inside a slot of this size, with rows at least as long as its width
+    /// at the fewest bytes a pixel takes (four). These numbers can come from a guest, so a viewer
+    /// must ask before it touches a buffer.
     pub fn fits(&self, size: u64) -> bool {
         let rows = u64::from(self.stride).checked_mul(u64::from(self.height));
         let end = rows.and_then(|rows| rows.checked_add(self.offset));
-        self.width > 0 && self.height > 0 && end.is_some_and(|end| end <= size)
+        let row = u64::from(self.width) * 4;
+        self.width > 0
+            && self.height > 0
+            && i32::try_from(self.width).is_ok()
+            && i32::try_from(self.height).is_ok()
+            && row <= u64::from(self.stride)
+            && end.is_some_and(|end| end <= size)
     }
 }
 
@@ -550,5 +557,15 @@ mod tests {
         assert!(!Descriptor { width: 0, ..picture }.fits(exact));
         assert!(!Descriptor { offset: u64::MAX, ..picture }.fits(u64::MAX), "sums must not wrap");
         assert!(!Descriptor { stride: u32::MAX, height: u32::MAX, ..picture }.fits(1 << 40));
+    }
+
+    #[test]
+    fn a_picture_wider_than_its_rows_does_not_fit() {
+        let picture = descriptor();
+        let width = picture.stride / 4;
+        assert!(Descriptor { width, ..picture }.fits(1 << 40));
+        assert!(!Descriptor { width: width + 1, ..picture }.fits(1 << 40));
+        assert!(!Descriptor { width: u32::MAX, ..picture }.fits(u64::MAX));
+        assert!(!Descriptor { width: 1 << 31, stride: u32::MAX, ..picture }.fits(u64::MAX));
     }
 }

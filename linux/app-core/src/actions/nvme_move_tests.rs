@@ -20,7 +20,7 @@ struct Guest {
 }
 
 impl GuestAgent for Guest {
-    fn ask(&self, _port: u16, _token: &str, script: &str, _seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, _token: &str, script: &str, _seconds: u64) -> String {
         self.asked.lock().unwrap().push(script.to_owned());
         let answer = if script == SCRIPT {
             self.readied

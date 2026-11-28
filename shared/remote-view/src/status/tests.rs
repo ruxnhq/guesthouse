@@ -91,3 +91,23 @@ fn a_device_is_found_by_its_fingerprint_in_either_case() {
     assert_eq!(parsed.device("ABCD").unwrap().name, "A");
     assert!(parsed.device("ef").is_none());
 }
+
+#[test]
+fn the_seconds_a_device_waits_are_held_to_an_hour() {
+    let said = |seconds: &str| {
+        status(&format!(
+            r#"{{"pending":{{"name":"P","fingerprint":"{}","code":"1","seconds":{seconds}}}}}"#,
+            "a".repeat(64)
+        ))
+        .pending
+        .unwrap()
+        .seconds
+    };
+    assert_eq!(said("18446744073709551615"), crate::share::MOST_CONFIRM_SECONDS);
+    assert_eq!(said("90"), 90);
+    assert_eq!(said("3601"), crate::share::MOST_CONFIRM_SECONDS);
+    // Seconds the host rule didn't say are the usual wait.
+    let plain =
+        status(&format!(r#"{{"pending":{{"name":"P","fingerprint":"{}","code":"1"}}}}"#, "a".repeat(64)));
+    assert_eq!(plain.pending.unwrap().seconds, crate::share::CONFIRM_SECONDS);
+}

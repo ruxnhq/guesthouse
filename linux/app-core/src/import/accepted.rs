@@ -89,15 +89,24 @@ fn in_folder(path: &Path, folder: &str) -> Option<String> {
     (rest.components().count() == 1).then(|| rest.to_string_lossy().into_owned())
 }
 
+/// Whether `name` can be the machine's OpenCore image or Android data disk: a disk image file, on a
+/// machine that boots what it's given.
+pub(super) fn is_extra_image(carried: &Machine, name: &str) -> bool {
+    carried.kind == crate::machine::Kind::Plain
+        && Path::new(name).extension().is_some_and(|extension| extension == "qcow2")
+        && name != crate::library::DISK_FILE
+}
+
 /// What becomes of the file at `path` in an export whose settings are `carried`, or `None` for one
 /// that's never written.
 pub(super) fn handling(path: &Path, carried: &Machine) -> Option<Handling> {
     let name = path.to_string_lossy();
     let opencore = Path::new(&carried.opencore);
     let opencore_firmware = opencore.parent().map(|folder| folder.join(OPENCORE_FIRMWARE));
+    let extra = |named: &str| !named.is_empty() && is_extra_image(carried, named);
     if [crate::library::DISK_FILE, crate::library::FIRMWARE_FILE].contains(&name.as_ref())
-        || (!carried.opencore.is_empty() && (path == opencore || Some(path) == opencore_firmware.as_deref()))
-        || (!carried.android_data.is_empty() && path == Path::new(&carried.android_data))
+        || (extra(&carried.opencore) && (path == opencore || Some(path) == opencore_firmware.as_deref()))
+        || (extra(&carried.android_data) && path == Path::new(&carried.android_data))
         || in_folder(path, "tpm").is_some()
     {
         return Some(Handling::AsItIs);

@@ -67,7 +67,7 @@ const PROBE_RANDOM_BYTES: usize = 4;
 const SPARE_GIB: f64 = 2.0;
 const SECTOR_BYTES: u64 = 512;
 const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
-const DISK_IN_USE: &str = "Its disk is in use by a VM this app didn't start. Stop that VM first.";
+pub(crate) const DISK_IN_USE: &str = "Its disk is in use by a VM this app didn't start. Stop that VM first.";
 
 /// What a copy is to be, before anything is made.
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +128,25 @@ fn refusal(context: &Context, source: &Machine) -> Option<Failure> {
 pub(crate) fn disk_is_free(disk: &str) -> bool {
     let looked = Command::new("qemu-img").args(["info", "-f", "qcow2", "--output=json", disk]).output();
     looked.is_ok_and(|done| done.status.success())
+}
+
+/// Whether a QEMU or another program has the disk open to write, which qemu-img says by refusing it.
+/// A disk that isn't there, or that qemu-img can't read for another reason, is not in use.
+pub(crate) fn disk_in_use(disk: &str) -> bool {
+    let Ok(looked) = Command::new("qemu-img").args(["info", "-f", "qcow2", "--output=json", disk]).output()
+    else {
+        return false;
+    };
+    !looked.status.success() && String::from_utf8_lossy(&looked.stderr).contains("lock")
+}
+
+/// Says why this machine's files can't go now. A running VM or task still needs them, and so does
+/// another program that has the disk open to write.
+pub(crate) fn removal_problem(context: &Context, machine: &Machine) -> Option<Failure> {
+    let current = status(context, machine);
+    let busy = current.state != State::Off || current.busy;
+    busy.then(|| Failure::new(SHUT_DOWN_FIRST))
+        .or_else(|| disk_in_use(&machine.disk).then(|| Failure::new(DISK_IN_USE)))
 }
 
 /// `path` in the copy's folder, if it was in the original's.

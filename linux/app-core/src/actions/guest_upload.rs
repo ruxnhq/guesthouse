@@ -104,7 +104,13 @@ pub mod stand_in {
     }
 
     impl GuestAgent for FilesGuest {
-        fn ask(&self, _port: u16, _token: &str, script: &str, _seconds: u64) -> String {
+        fn ask(
+            &self,
+            _end: &crate::guest_end::GuestEnd,
+            _token: &str,
+            script: &str,
+            _seconds: u64,
+        ) -> String {
             self.requests.lock().unwrap().push(script.to_owned());
             let piece =
                 Regex::new(r"Open\('([^']+)'.*SetLength\((\d+)\).*FromBase64String\('([^']*)'\)").unwrap();

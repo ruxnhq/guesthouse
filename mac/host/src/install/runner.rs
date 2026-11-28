@@ -43,6 +43,9 @@ pub enum Report {
     Bytes(u64, Option<u64>),
     /// A guess from 0 to 1, for what cannot count: the guest's own installer.
     Fraction(f64),
+    /// How many minutes the guest's disk has written nothing, once that has been a while; none
+    /// while it is being written to. A hint for the person, not an error.
+    Quiet(Option<u64>),
 }
 
 /// A step's way to say how far it has got. It answers whether to go on.
@@ -103,6 +106,7 @@ impl Runner<'_> {
                 match report {
                     Report::Bytes(done, total) => info.progress(step, done, total, now),
                     Report::Fraction(fraction) => info.progress_fraction(step, fraction),
+                    Report::Quiet(minutes) => info.quiet_minutes = minutes,
                 }
                 if told_at.is_none_or(|at| now.saturating_sub(at) >= PROGRESS_EVERY_MS) {
                     told_at = Some(now);

@@ -34,6 +34,14 @@ That leaves QEMU, the libraries it needs, its firmware and licences, and the gra
 
 The graphics process and the guard are s3k000's work.
 
+### The picture before a driver
+
+A guest's firmware and installer show on the device only if the device carries a driver for them: its option ROM. The framework names one (`guesthouse-pvg-host --option-rom` prints where), but it is an x86-64 image and the guests here are arm64, so it is not used. `mac/pvgfb` is our own: a small UEFI driver that puts a framebuffer on the device and publishes it as a Graphics Output Protocol. The app gives it to every machine it installs, Windows or Ubuntu (it is copied into the machine's folder and named by `option_rom` in `machine.json`), so the boot prompt and Setup's pages show, and so does Windows until its driver runs. A machine made from a disk image you chose has one only if you give it one.
+
+### A Windows install
+
+The install step starts the machine with the installer disc and an answer disc. Windows' disc boots only when a key is pressed during the firmware's "Press any key to boot from CD or DVD", so the agent presses the space bar over the machine's control socket for as long as that prompt stands, which the serial log says, and stops when the installer has started. The answer file picks the edition with Microsoft's generic key for it (no product key page) and settles the keyboard and region pages. While Windows installs, the bar only guesses at the time left; when the disk has written nothing for five minutes a line under it says so, as a hint.
+
 See `mac/README.md` for how to build it.
 
 ## Nightly builds
@@ -55,7 +63,7 @@ A nightly is the release's major and minor with the date as the patch (`0.1.2026
 `mac/nightly.sh --helpers FOLDER` puts the programs the app runs inside the app, each signed with the hardened runtime and its own entitlements (`mac/Nightly/entitlements/NAME.entitlements`, none if there is no file). The folder is laid out as the app wants it:
 
 - the programs (`guesthouse-pvg-host`, `qemu-system-aarch64`, `rmhost`) go to `Contents/Helpers`, where the app looks for them first;
-- `Resources/` goes to `Contents/Resources`: QEMU's firmware (`edk2-aarch64-code.fd`, `edk2-aarch64-vars.fd`) and the graphics device's option ROM (`pvgfb.rom`) in `Resources/qemu`, which a QEMU in the app finds beside itself;
+- `Resources/` goes to `Contents/Resources`: QEMU's firmware (`edk2-aarch64-code.fd`, `edk2-aarch64-vars.fd`) and the graphics device's option ROM (`pvgfb.rom`, built by `mac/pvgfb/build.sh`, which the helpers job runs) in `Resources/qemu`, which a QEMU in the app finds beside itself;
 - `Frameworks/` goes to `Contents/Frameworks`: libraries QEMU needs.
 
 `sh mac/rmhost/build.sh --helpers FOLDER` puts `rmhost` in such a folder. QEMU needs the hypervisor entitlement and has its file; the graphics process needs no entitlement, so it has none. `sh qemu/mac/build.sh` and `sh mac/build-pvg-host.sh` put QEMU, its libraries and firmware, and the graphics process in such a folder too.

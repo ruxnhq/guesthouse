@@ -81,8 +81,17 @@ fn bytes(arguments: &glib::Variant, index: usize) -> glib::Bytes {
     arguments.child_value(index).data_as_bytes()
 }
 
+/// How many different counts are kept of what QEMU calls and the sizes it gives.
+const MOST_COUNTS: usize = 64;
+
+fn count(shared: &mut Shared, what: String) {
+    if shared.calls.contains_key(&what) || shared.calls.len() < MOST_COUNTS {
+        *shared.calls.entry(what).or_default() += 1;
+    }
+}
+
 fn note_size(shared: &mut Shared, width: u32, height: u32) {
-    *shared.calls.entry(format!("{width}x{height}")).or_default() += 1;
+    count(shared, format!("{width}x{height}"));
 }
 
 fn on_scanout(shared: &mut Shared, arguments: &glib::Variant) -> Option<()> {
@@ -110,15 +119,27 @@ fn on_scanout_map(shared: &mut Shared, arguments: &glib::Variant, message: &gio:
     let (width, height) = (number(arguments, 2)?, number(arguments, 3)?);
     let (stride, format) = (number(arguments, 4)?, number(arguments, 5)?);
     note_size(shared, width, height);
-    shared.surface = Some(Surface::shared(width, height, stride, format, file, offset.into()));
+    shared.surface = Surface::shared(width, height, stride, format, file, offset.into());
     shared.dirty = true;
     Some(())
+}
+
+/// The most a side of a cursor may be.
+const MOST_CURSOR_SIDE: i32 = 1024;
+
+/// Whether `bytes` hold a cursor of this size, 4 bytes to a pixel.
+fn cursor_fits(width: i32, height: i32, bytes: usize) -> bool {
+    let sides = 1..=MOST_CURSOR_SIDE;
+    sides.contains(&width) && sides.contains(&height) && bytes >= width as usize * height as usize * 4
 }
 
 fn on_cursor_define(shared: &mut Shared, arguments: &glib::Variant) -> Option<()> {
     let (width, height) = (number(arguments, 0)?, number(arguments, 1)?);
     let (hot_x, hot_y) = (number(arguments, 2)?, number(arguments, 3)?);
     let pixels = bytes(arguments, 4).to_vec();
+    if !cursor_fits(width, height, pixels.len()) {
+        return None;
+    }
     shared.cursor = Some(Cursor { width, height, hot_x, hot_y, pixels });
     shared.cursor_changed = true;
     Some(())
@@ -127,7 +148,7 @@ fn on_cursor_define(shared: &mut Shared, arguments: &glib::Variant) -> Option<()
 fn on_call(shared: &Mutex<Shared>, method: &str, arguments: &glib::Variant, message: &gio::DBusMessage) {
     let Ok(mut shared) = shared.lock() else { return };
     let shared = &mut *shared;
-    *shared.calls.entry(method.to_owned()).or_default() += 1;
+    count(shared, method.to_owned());
     match method {
         "Scanout" => on_scanout(shared, arguments),
         "Update" => on_update(shared, arguments),
@@ -262,5 +283,31 @@ impl FrameSource for DbusFrames {
             (cursor.width * BYTES_PER_PIXEL) as usize,
         );
         Some(gdk::Cursor::from_texture(&texture, cursor.hot_x, cursor.hot_y, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cursor_is_kept_only_when_its_bytes_hold_its_size() {
+        assert!(cursor_fits(2, 2, 16));
+        assert!(!cursor_fits(2, 2, 15));
+        assert!(!cursor_fits(0, 2, 16));
+        assert!(!cursor_fits(-1, 2, 16));
+        assert!(!cursor_fits(MOST_CURSOR_SIDE + 1, 1, usize::MAX));
+        assert!(!cursor_fits(i32::MAX, i32::MAX, 16));
+    }
+
+    #[test]
+    fn the_counts_kept_of_what_qemu_calls_are_few() {
+        let mut shared = Shared::default();
+        for size in 0..1000 {
+            note_size(&mut shared, size, 1);
+        }
+        assert_eq!(shared.calls.len(), MOST_COUNTS);
+        note_size(&mut shared, 0, 1);
+        assert_eq!(shared.calls["0x1"], 2, "a size already counted goes on counting");
     }
 }

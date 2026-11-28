@@ -47,10 +47,10 @@ cargo test -p guesthouse-host-mac
 
 - `mac/host/` is the Rust core: machines, the agent, installs, reports, the rules of the app's pages. Swift only draws and calls it through `mac/host/include/guesthouse_core.h`.
 - `App/` is the SwiftUI app, `Agent/` the agent's program, `Shared/` what both use, `Launchd/` the agent's launchd file.
-- `Tests/` are the Swift tests of the app's wording. `rmframes/` is how the graphics process hands the screen to the app as IOSurfaces, MIT.
+- `Tests/` are the Swift tests of the app's wording. `rmframes/` is how the graphics process hands the screen to the app as IOSurfaces, MIT. `pvgfb/` is the UEFI driver that gives a guest's firmware its screen on the graphics device, MIT; the helpers carry it as `pvgfb.rom`.
 
 If you add logic that doesn't touch the system, put it in a shared crate if one has it, or shape it like the other hosts' version first.
 
 ## Licence
 
-GPL-2.0-or-later, see the repo's `LICENSE`. `rmframes/` is MIT. What I took from other projects is in `THIRD-PARTY.md` in the repo's root.
+GPL-2.0-or-later, see the repo's `LICENSE`. `rmframes/` and `pvgfb/` are MIT. What I took from other projects is in `THIRD-PARTY.md` in the repo's root.

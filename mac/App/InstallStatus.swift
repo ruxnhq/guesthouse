@@ -27,6 +27,8 @@ nonisolated struct InstallStatus: Equatable {
     var secondsLeft: Int?
     /// The guest account's name, for saying how to sign in.
     var account: String
+    /// For how many minutes the guest's disk has written nothing, when that has been a while.
+    var quietMinutes: Int?
 
     init?(json: [String: Any]) {
         guard let machine = json["machine"] as? String, let guest = json["guest"] as? String,
@@ -43,6 +45,7 @@ nonisolated struct InstallStatus: Equatable {
         current = json["current"] as? String
         secondsLeft = json["seconds_left"] as? Int
         account = json["account"] as? String ?? ""
+        quietMinutes = json["quiet_minutes"] as? Int
         if let failure = json["failure"] as? [String: Any], let step = failure["step"] as? String {
             self.failure = Failure(
                 step: step, code: failure["code"] as? String,
@@ -66,6 +69,7 @@ nonisolated struct InstallStatus: Equatable {
             parts.append("\(current) \(Int((fraction * 100).rounded()))%")
         }
         if let secondsLeft, state == "running" { parts.append(Self.timeLeft(seconds: secondsLeft)) }
+        if let quietMinutes, state == "running" { parts.append(InstallText.quietHint(minutes: quietMinutes)) }
         if let failure {
             parts.append("stopped at \(failure.step)\(failure.code.map { " (\($0))" } ?? ""): \(failure.reason)")
             parts.append("choices: \(failure.choices.joined(separator: ", "))")

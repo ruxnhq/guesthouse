@@ -19,23 +19,45 @@ pub struct Surface {
     shared: Option<(OwnedFd, u64)>,
 }
 
+/// The most a side of a picture may be.
+pub const MOST_SIDE: u32 = 16_384;
+
+/// The bytes a picture of this size takes, or `None` for a size that has no picture: a side of
+/// nothing or past [`MOST_SIDE`], or rows too short for the width.
+pub fn picture_bytes(width: u32, height: u32, stride: u32) -> Option<usize> {
+    let sides = 1..=MOST_SIDE;
+    let row = (width as usize).checked_mul(BYTES_PER_PIXEL)?;
+    (sides.contains(&width) && sides.contains(&height) && stride as usize >= row)
+        .then(|| (stride as usize).checked_mul(height as usize))
+        .flatten()
+        .filter(|bytes| *bytes <= MOST_SIDE as usize * MOST_SIDE as usize * BYTES_PER_PIXEL)
+}
+
 impl Surface {
     /// `None` for a picture its own data can't hold.
     pub fn new(width: u32, height: u32, stride: u32, format: u32, pixels: Vec<u8>) -> Option<Self> {
-        let size = stride as usize * height as usize;
+        let size = picture_bytes(width, height, stride)?;
         (pixels.len() >= size).then_some(Self { width, height, stride, format, pixels, shared: None })
     }
 
-    pub fn shared(width: u32, height: u32, stride: u32, format: u32, file: OwnedFd, offset: u64) -> Self {
-        let pixels = vec![0; stride as usize * height as usize];
-        Self { width, height, stride, format, pixels, shared: Some((file, offset)) }
+    /// `None` for a size that has no picture.
+    pub fn shared(
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: u32,
+        file: OwnedFd,
+        offset: u64,
+    ) -> Option<Self> {
+        let pixels = vec![0; picture_bytes(width, height, stride)?];
+        Some(Self { width, height, stride, format, pixels, shared: Some((file, offset)) })
     }
 
     /// Copies in a rectangle. One that isn't for this surface is left out, as QEMU sends a whole frame
     /// after any change of surface.
     pub fn write(&mut self, x: i32, y: i32, width: i32, height: i32, stride: u32, data: &[u8]) {
-        let fits_x = x >= 0 && width >= 0 && (x + width) as u32 <= self.width;
-        let fits_y = y >= 0 && height >= 0 && (y + height) as u32 <= self.height;
+        let fits_x = x >= 0 && width >= 0 && i64::from(x) + i64::from(width) <= i64::from(self.width);
+        let fits_y = y >= 0 && height >= 0 && i64::from(y) + i64::from(height) <= i64::from(self.height);
         if !fits_x || !fits_y {
             return;
         }
@@ -111,8 +133,33 @@ mod tests {
     fn shared_memory_is_read_from_its_offset() {
         let file = memfd_create("screen", MemfdFlags::CLOEXEC).unwrap();
         pwrite(&file, &[5; 40], 0).unwrap();
-        let mut surface = Surface::shared(4, 2, 16, PIXMAN_A8R8G8B8, file, 8);
+        let mut surface = Surface::shared(4, 2, 16, PIXMAN_A8R8G8B8, file, 8).unwrap();
         surface.refresh();
         assert_eq!(surface.pixels, [5; 32]);
+    }
+
+    #[test]
+    fn a_size_that_has_no_picture_is_refused_before_anything_is_made() {
+        assert_eq!(picture_bytes(4, 2, 16), Some(32));
+        assert_eq!(picture_bytes(4, 2, 15), None, "rows shorter than the width");
+        assert_eq!(picture_bytes(0, 2, 16), None);
+        assert_eq!(picture_bytes(4, 0, 16), None);
+        assert_eq!(picture_bytes(MOST_SIDE + 1, 1, u32::MAX), None);
+        assert_eq!(picture_bytes(4, MOST_SIDE + 1, 16), None);
+        assert_eq!(picture_bytes(4, MOST_SIDE, u32::MAX), None, "more bytes than the largest picture");
+        assert_eq!(picture_bytes(MOST_SIDE, MOST_SIDE, MOST_SIDE * 4), Some(1 << 30));
+        let file = memfd_create("screen", MemfdFlags::CLOEXEC).unwrap();
+        assert!(Surface::shared(4, 2, 15, PIXMAN_A8R8G8B8, file, 0).is_none());
+        let file = memfd_create("screen", MemfdFlags::CLOEXEC).unwrap();
+        assert!(Surface::shared(1 << 20, 1 << 20, 1 << 22, PIXMAN_A8R8G8B8, file, 0).is_none());
+        assert!(Surface::new(4, 2, 15, PIXMAN_X8R8G8B8, vec![0; 64]).is_none());
+    }
+
+    #[test]
+    fn a_rectangle_at_the_end_of_the_number_line_changes_nothing() {
+        let mut surface = surface();
+        surface.write(i32::MAX, 0, 1, 1, 4, &[7; 4]);
+        surface.write(0, i32::MAX, 1, 1, 4, &[7; 4]);
+        assert_eq!(surface.pixels, [0; 32]);
     }
 }

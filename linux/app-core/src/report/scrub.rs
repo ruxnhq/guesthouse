@@ -13,6 +13,7 @@ use regex::Regex;
 use rustix::process::getuid;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 const HOME_MARK: &str = "~";
 const USER_MARK: &str = "<user>";
@@ -20,6 +21,22 @@ const HOST_MARK: &str = "<host>";
 const UUID_MARK: &str = "<uuid>";
 const MAC_MARK: &str = "<mac>";
 const EMAIL_MARK: &str = "<email>";
+const ADDRESS_MARK: &str = "<ip>";
+const GUEST_USER_MARK: &str = "<guest-user>";
+/// Addresses that are the app's own constants or mean no address: the loopback, "any", and the guest's
+/// own network's.
+const KEPT_ADDRESSES: [&str; 5] = ["127.", "0.0.0.0", "10.0.2.", "::1", "::"];
+/// Account names that are ordinary words, which taken out as a bare word would empty the logs.
+const COMMON_ACCOUNTS: [&str; 9] =
+    ["user", "admin", "administrator", "guest", "test", "windows", "ubuntu", "root", "owner"];
+static IPV4: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\b")
+        .expect("a fixed pattern")
+});
+static IPV6: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b|\b(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?")
+        .expect("a fixed pattern")
+});
 /// The machine a report is about. Any other is this with a number, from 2.
 const MACHINE_MARK: &str = "machine";
 /// IDs that are words the app's own lines use, or that its folders and programs are called. As a bare
@@ -73,7 +90,7 @@ impl Scrubber {
     /// For this PC and this user.
     pub fn for_this_pc(home: &Path) -> Self {
         let host = fs::read_to_string(HOST_NAME_FILE).unwrap_or_default();
-        Self::new(&own_user_name(), host.trim(), home)
+        Self::new(&own_user_name(), host.trim(), home).with_real_name(&own_real_name())
     }
 
     pub fn new(user: &str, host: &str, home: &Path) -> Self {
@@ -97,6 +114,25 @@ impl Scrubber {
         push_rule(&mut rules, UUID_SHAPE, UUID_MARK);
         push_rule(&mut rules, MAC_SHAPE, MAC_MARK);
         Self { rules, home_rules, machines: Vec::new() }
+    }
+
+    /// Takes out the user's own name as the system's list of accounts gives it, wherever it stands as
+    /// words, whatever its case.
+    pub fn with_real_name(mut self, name: &str) -> Self {
+        let name = name.trim();
+        if name.len() >= SHORTEST_BARE_NAME {
+            push_rule(&mut self.rules, &format!(r"(?i)\b{}\b", regex::escape(name)), USER_MARK);
+        }
+        self
+    }
+
+    /// Takes out the account a machine's guest was given, wherever it stands as a word.
+    pub fn with_guest_account(mut self, account: &str) -> Self {
+        let plain = COMMON_ACCOUNTS.iter().any(|common| common.eq_ignore_ascii_case(account));
+        if account.len() >= SHORTEST_BARE_NAME && !plain {
+            push_rule(&mut self.rules, &format!(r"(?i)\b{}\b", regex::escape(account)), GUEST_USER_MARK);
+        }
+        self
     }
 
     /// Takes out these machines' IDs as well: `about`, the machine the report is about, becomes
@@ -131,7 +167,7 @@ impl Scrubber {
         // Machines go after the home folder and before the user name, as an ID can hold the user's
         // name and would otherwise be left half taken out.
         text = self.scrub_machines(&text);
-        apply(rest, &text)
+        scrub_addresses(&apply(rest, &text))
     }
 
     /// Only the machines' IDs, for the tester's own words, which are otherwise sent as they wrote them.
@@ -223,6 +259,35 @@ fn push_rule(rules: &mut Vec<(Regex, String)>, pattern: &str, mark: &str) {
     }
 }
 
+/// Takes network addresses out, but for the ones the app's own lines hold.
+fn scrub_addresses(text: &str) -> String {
+    let swap = |found: &regex::Captures| {
+        let address = &found[0];
+        if KEPT_ADDRESSES.iter().any(|kept| address.starts_with(kept)) {
+            address.to_owned()
+        } else {
+            ADDRESS_MARK.to_owned()
+        }
+    };
+    let text = IPV4.replace_all(text, swap);
+    IPV6.replace_all(&text, swap).into_owned()
+}
+
+/// The user's real name, the first of the comma-separated words in the account's comment field.
+pub fn own_real_name() -> String {
+    let uid = getuid().as_raw().to_string();
+    let accounts = fs::read_to_string(ACCOUNTS_FILE).unwrap_or_default();
+    accounts
+        .lines()
+        .find_map(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            (fields.get(2) == Some(&uid.as_str())).then(|| fields.get(4).copied().unwrap_or_default())
+        })
+        .and_then(|comment| comment.split(',').next())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The account name, from the system's list by this process's user id, which `$USER` can disagree
 /// with under `su` or `sudo`.
 fn own_user_name() -> String {
@@ -242,6 +307,30 @@ mod tests {
     /// A user, a PC and a home that belong to nobody.
     fn scrubber() -> Scrubber {
         Scrubber::new("quillon", "marrowbox", Path::new("/home/quillon"))
+    }
+
+    #[test]
+    fn addresses_go_but_the_apps_own_and_versions_stay() {
+        let text = "bridge 192.168.1.53 and 203.0.113.9, v6 fe80::1c2:3ff:fe4:5 and 2001:db8:0:0:0:0:0:1, \
+                    loopback 127.0.0.1, any 0.0.0.0, guest 10.0.2.2, driver 32.0.15.8097, ::1, at 10:00:01";
+        let scrubbed = scrubber().scrub(text);
+        assert_eq!(
+            scrubbed,
+            "bridge <ip> and <ip>, v6 <ip> and <ip>, loopback 127.0.0.1, any 0.0.0.0, guest 10.0.2.2, \
+             driver 32.0.15.8097, ::1, at 10:00:01"
+        );
+    }
+
+    #[test]
+    fn the_real_name_and_the_guests_account_are_taken_out_as_words() {
+        let scrubber = scrubber().with_real_name("Quill Ontario").with_guest_account("dreamer");
+        let text = "by Quill Ontario, signed in as Dreamer, a dreamer's disk; and the user said";
+        assert_eq!(
+            scrubber.scrub(text),
+            "by <user>, signed in as <guest-user>, a <guest-user>'s disk; and the user said"
+        );
+        let plain = scrubber.with_guest_account("User");
+        assert_eq!(plain.scrub("the User said"), "the User said", "an ordinary word is left");
     }
 
     #[test]

@@ -735,4 +735,6 @@ fn keep_ended_run(context: &Context, action: &str) {
 }
 
 #[cfg(test)]
+mod agent_update_tests;
+#[cfg(test)]
 pub(crate) mod tests;

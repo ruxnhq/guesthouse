@@ -129,7 +129,10 @@ fn an_administrator_sees_and_acts_on_every_machine_and_takes_none() {
 fn old_machine(setup: &Setup, work: impl FnOnce(&Store) -> Pretend) -> (Store, Arc<Service<Pretend>>) {
     let store = setup.service.machines().store.clone();
     store.make("old").unwrap();
-    store.save("old", &Settings::basic(8192, 1, Card::Default)).unwrap();
+    let forwards = vec![Forward { host_port: 8080, guest_port: 80 }];
+    let settings =
+        Settings { address: Some("172.29.1.2".into()), forwards, ..Settings::basic(8192, 1, Card::Default) };
+    store.save("old", &settings).unwrap();
     let service = Service::new(store.clone(), work(&store));
     (store, service)
 }
@@ -198,6 +201,30 @@ fn a_machine_whose_files_name_no_user_needs_an_owner_and_no_account_takes_it_by_
     assert_eq!((kept.owner.as_deref(), kept.memory_mb), (None, 8192));
     // An elevated administrator sees all of it, as waiting, and takes it no more than anyone.
     assert_eq!(listed(&service, AN_ADMINISTRATOR, true), [("old".to_owned(), true, true)]);
+    let one = |user: &str, administrator: bool| match ask_as(&service, user, administrator, Request::Status)
+        .as_slice()
+    {
+        [Answer::Status { machines, .. }] => machines[0].clone(),
+        other => panic!("not a status: {other:?}"),
+    };
+    let all = one(AN_ADMINISTRATOR, true);
+    assert!(all.address.is_some() && !all.forwards.is_empty(), "{all:?}");
+    let only = Machine {
+        shares: Vec::new(),
+        network_mode: NetworkMode::Shared,
+        forwards: Vec::new(),
+        ssh_port: None,
+        folder: PathBuf::new(),
+        problem: None,
+        snapshots: Vec::new(),
+        working: None,
+        address: None,
+        remote_view: false,
+        remote_port: None,
+        console_pipe: None,
+        ..all.clone()
+    };
+    assert_eq!(one(SOMEONE_ELSE, false), only, "what it is and what it's given, and nothing more");
     assert_eq!(store.load()[0].1.owner, None);
     let again = Service::new(store.clone(), Pretend { profiles: two_users(), ..Pretend::default() });
     assert_eq!(listed(&again, USER, false), needs);

@@ -515,8 +515,9 @@ pub struct Machine {
     #[serde(default)]
     pub console_pipe: Option<String>,
     /// Whether it has no owner yet: a machine from before owners that the service couldn't give to
-    /// anyone. Every user at the console sees it, with its name, system and state only, and nothing
-    /// can be done to it but `Assign`, unless they ask elevated.
+    /// anyone. Every user at the console sees it, with its name, system, state and hardware but
+    /// nothing of where it's kept, how it's reached or what it holds, and nothing can be done to it
+    /// but `Assign`, unless they ask elevated.
     #[serde(default)]
     pub needs_owner: bool,
 }

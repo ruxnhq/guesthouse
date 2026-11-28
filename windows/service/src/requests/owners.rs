@@ -8,8 +8,8 @@
 //! account, not the system's, the Administrators group's or another of Windows' own. On a PC that
 //! keeps a profile for one user's account alone, that user takes every machine still waiting at
 //! their first request, saved before it's answered. Otherwise a machine waits for an owner: every
-//! user at the console sees it as one that needs an owner, by its name, system and state only, and
-//! nothing can be done to it until an administrator, asking elevated, gives it to a user with
+//! user at the console sees it as one that needs an owner, by its name, system, state and hardware
+//! only, and nothing can be done to it until an administrator, asking elevated, gives it to a user with
 //! `Assign`. The app asks that from a helper Windows asks the person to allow, for the app's own
 //! user. No account takes a waiting machine by asking. An elevated administrator sees and acts on
 //! every machine. An administrator can also give a machine to another user by changing `owner` in
@@ -152,7 +152,11 @@ impl<W: Work> Service<W> {
     /// Gives `asked`, a machine that needs an owner, to `owner`, an account this PC keeps a profile
     /// for. Only an elevated administrator may.
     pub(super) fn assign(&self, asked: &str, owner: &str, asker: &Asker) -> Answer {
-        let refused = |reason: String| Answer::Refused { reason };
+        let refused = |reason: String| {
+            self.work
+                .log(&format!("{} asked for {asked} to be {owner}'s, and was told: {reason}", asker.user));
+            Answer::Refused { reason }
+        };
         if !asker.administrator {
             return refused("Only an administrator of this PC can give a machine its owner.".into());
         }

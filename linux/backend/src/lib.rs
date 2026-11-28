@@ -336,6 +336,14 @@ pub trait Backend: Sized {
         false
     }
 
+    /// The next address space whose work the host driver saw fault or hang since the core last
+    /// asked: a run the driver ended early, a context it found guilty of a reset, a page fault, or
+    /// a copy channel that had to be replaced. The daemon's own space stands for its own copies.
+    /// The core counts each toward the guest's fault limit, and asks until this answers `None`.
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        None
+    }
+
     /// A hardware queue has gone, so whatever backs it can go too.
     fn close_queue(&mut self, queue: u32);
 

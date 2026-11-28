@@ -11,8 +11,9 @@
 //
 // Escapes come at PASSIVE_LEVEL in the caller's process. Windows lets any
 // process send them, so each one is checked for size and magic, and only
-// administrators may touch the ring by hand, list the live allocations or
-// read the kernel log.
+// administrators may touch the ring by hand, list the live allocations, read
+// the kernel log, or read more than the driver's version and the adapter's
+// presence from INFO and PVG_INFO.
 
 #include "pvg.h"
 
@@ -26,6 +27,15 @@ NTKERNELAPI BOOLEAN SeTokenIsAdmin(PACCESS_TOKEN token);
 static PACCESS_TOKEN effective_token(PSECURITY_SUBJECT_CONTEXT subject)
 {
 	return subject->ClientToken ? subject->ClientToken : subject->PrimaryToken;
+}
+
+// What any process may read: which driver this is. The rest, the display's
+// addresses and sizes and the counters, is for administrators.
+static void fill_info_basics(RUXNWDDM_ADAPTER *a, struct ruxnwddm_escape_info *info)
+{
+	RtlZeroMemory((UCHAR *)info + sizeof(info->header), sizeof(*info) - sizeof(info->header));
+	info->driver_version = RUXNWDDM_DRIVER_VERSION;
+	info->model = a->full ? 2 : 1;
 }
 
 static void fill_info(RUXNWDDM_ADAPTER *a, struct ruxnwddm_escape_info *info)
@@ -100,13 +110,15 @@ static void umd_note(RUXNWDDM_ADAPTER *a, const struct ruxnwddm_escape_note *not
 		L"UmdPresent", L"UmdDraws", L"UmdFailed", L"UmdNote7",
 	};
 	ULONG what = note->what < RUXNWDDM_UMD_NOTES ? note->what : 0;
+	ULONG process = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
 
 	if (InterlockedIncrement(&a->counts.umd_count[what]) <= 4) {
 		ruxnwddm_record_ulong(names[what], note->value);
 		ruxnwddm_record_count(L"UmdNotes");
 	}
 	a->counts.umd_value[what] = note->value;
-	a->counts.umd_process[what] = note->process;
+	// The process is the caller, whatever the note says.
+	a->counts.umd_process[what] = process;
 }
 
 static void fill_pvg_info(RUXNWDDM_ADAPTER *a, struct ruxnwddm_escape_pvg_info *info)
@@ -200,7 +212,10 @@ NTSTATUS ruxnwddm_escape(RUXNWDDM_ADAPTER *a, const DXGKARG_ESCAPE *args)
 	case RUXNWDDM_ESCAPE_INFO:
 		if (size < sizeof(struct ruxnwddm_escape_info))
 			return STATUS_BUFFER_TOO_SMALL;
-		fill_info(a, (struct ruxnwddm_escape_info *)header);
+		if (caller_is_admin())
+			fill_info(a, (struct ruxnwddm_escape_info *)header);
+		else
+			fill_info_basics(a, (struct ruxnwddm_escape_info *)header);
 		status = STATUS_SUCCESS;
 		break;
 	case RUXNWDDM_ESCAPE_RING_START:
@@ -267,7 +282,10 @@ NTSTATUS ruxnwddm_escape(RUXNWDDM_ADAPTER *a, const DXGKARG_ESCAPE *args)
 		if (!info)
 			return STATUS_INSUFFICIENT_RESOURCES;
 		RtlCopyMemory(info, header, sizeof(*header));
-		fill_pvg_info(a, info);
+		// Any process may ask, to find the adapter by the answer's header;
+		// the counters and the processes behind them are for administrators.
+		if (caller_is_admin())
+			fill_pvg_info(a, info);
 		RtlCopyMemory((UCHAR *)header + sizeof(*header), (UCHAR *)info + sizeof(*header),
 			      room - sizeof(*header));
 		ExFreePoolWithTag(info, POOL_TAG_ESCAPE);

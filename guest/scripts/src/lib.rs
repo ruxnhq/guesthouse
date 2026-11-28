@@ -12,6 +12,8 @@
 
 mod agent;
 mod ctl_channel;
+mod display_settings;
+mod driver_certificate;
 mod guest_rights;
 mod host_rules;
 mod nv_files;

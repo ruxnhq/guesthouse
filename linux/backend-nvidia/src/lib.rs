@@ -163,6 +163,8 @@ pub struct NvidiaBackend<R> {
     next_space: u64,
     pub(crate) queues: HashMap<u32, LiveQueue>,
     pub(crate) copier: Option<Copier>,
+    /// Spaces whose work faulted, for the core to count: see [`Backend::take_fault`].
+    pub(crate) faults: std::collections::VecDeque<SpaceId>,
     pub(crate) peek_page: Option<peek::PeekPage>,
     /// Rings named in queues' private data, by queue.
     pub(crate) guest_rings: HashMap<u32, GuestRing>,
@@ -284,6 +286,7 @@ impl<R: Rm> NvidiaBackend<R> {
             next_space: 1,
             queues: HashMap::new(),
             copier: None,
+            faults: std::collections::VecDeque::new(),
             peek_page: None,
             guest_rings: HashMap::new(),
             ring_moves: RingMoves::default(),
@@ -467,6 +470,8 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn destroy_address_space(&mut self, space: SpaceId) {
         self.pool_mirror.forget_space(space);
+        self.ring_moves.forget_space(space);
+        self.local_window.forget_space(space);
         self.sked_pages.forget_space(space);
         if let Some(space) = self.spaces.remove(&space)
             && let Err(error) = self.device.destroy_address_space(&space)
@@ -494,7 +499,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
             log::warn!("the RM refused a map with a page kind ({error}), so it is made without");
             self.device.map(space, &rm::device::Mapping { page_kind: None, ..map }).map_err(memory_error)?;
         }
-        self.ring_moves.mapped(request.memory, request.address);
+        self.ring_moves.mapped(request.space, request.memory, request.address);
         Ok(())
     }
 
@@ -539,10 +544,14 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
         if ring_request::is_ring_request(&self.guest.allocation, private)
             && let Some(memory) = memory
         {
-            let handle = self.device.new_handle();
-            ring_request::answer_with_handle(private, handle);
-            self.ring_moves.answered(memory, handle, size);
-            log::info!("a ring of {size:#x} bytes can be moved to with handle {handle:#x}");
+            match self.device.new_handle() {
+                Ok(handle) => {
+                    ring_request::answer_with_handle(private, handle);
+                    self.ring_moves.answered(memory, handle, size);
+                    log::info!("a ring of {size:#x} bytes can be moved to with handle {handle:#x}");
+                }
+                Err(error) => log::warn!("no handle for a ring to move to: {error}"),
+            }
         }
     }
 
@@ -570,6 +579,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn guest_restarted(&mut self) {
         self.device.guest_clock.restart();
+        self.local_window.clear();
     }
 
     fn adapter_opened(&mut self, guest_adapter_id: u64) {
@@ -578,6 +588,7 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
 
     fn escape(&mut self, process: u32, data: &mut [u8], books: &GuestBooks<'_>) {
         log::debug!("escape {:02x?}, {} bytes", data.get(0x10..0x14), data.len());
+        self.encode_sessions.expire(&mut self.device, std::time::Instant::now());
         let live = self.sensors.as_ref().and_then(|sensors| sensors.latest());
         let facts =
             escape::EscapeFacts { channel_classes: &self.channel_classes, nodes: &self.nodes, books, live };
@@ -653,6 +664,10 @@ impl<R: Rm + OpenRm> Backend for NvidiaBackend<R> {
     fn ring_doorbell(&mut self, queue: u32, doorbell: u64) -> Result<Doorbell, BackendError> {
         self.ring(queue, doorbell);
         Ok(Doorbell::Rung)
+    }
+
+    fn take_fault(&mut self) -> Option<SpaceId> {
+        self.faults.pop_front()
     }
 
     fn close_queue(&mut self, queue: u32) {

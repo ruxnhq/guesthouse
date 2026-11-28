@@ -20,6 +20,14 @@ pub const RING_ROOM_TIMEOUT: Duration = Duration::from_millis(100);
 /// card that stalled for someone else can cost one queue, so one isn't enough to give up on a process.
 /// A fault usually takes all of a process's queues with it, which gets here at once.
 pub const MOST_FAILED_QUEUES: u32 = 2;
+/// How many address updates and CPU waits may wait for their fences at once in a session. A guest
+/// keeps a few in flight per thread, so this is far past what one uses.
+pub const MOST_WAITING: usize = 4096;
+/// How many bytes of operations the waiting address updates may hold between them.
+pub const MOST_WAITING_UPDATE_BYTES: usize = 32 << 20;
+/// How long an update or a CPU wait is looked at again at once. One that waits longer is waiting on
+/// work that takes time, and is looked at with the background's pace.
+pub const LONG_WAIT: Duration = Duration::from_secs(1);
 
 /// (fence address, value).
 pub type Target = (u64, u64);
@@ -56,6 +64,7 @@ pub enum Pending {
         wake_on_any: bool,
         event: u64,
         release: u64,
+        since: Instant,
     },
     Gate {
         queue: u32,
@@ -65,6 +74,7 @@ pub enum Pending {
         value: u64,
         space: SpaceId,
         operations: Vec<u8>,
+        since: Instant,
     },
     /// A submission's reply, held until its queue has room.
     RingRoom {
@@ -92,12 +102,20 @@ pub enum Pending {
 impl Pending {
     /// Whether it is checked again at once. A watch isn't, nor a queue's gate that `resting` says
     /// waits for a doorbell's time to come.
-    fn is_urgent(&self, resting: &impl Fn(u32) -> bool) -> bool {
+    fn is_urgent(&self, resting: &impl Fn(u32) -> bool, now: Instant) -> bool {
         match self {
             Self::Watch { .. } => false,
             Self::Gate { queue } => !resting(*queue),
+            Self::CpuWait { since, .. } | Self::Update { since, .. } => {
+                now.saturating_duration_since(*since) < LONG_WAIT
+            }
             _ => true,
         }
+    }
+
+    /// Whether this is an address update or a CPU wait, which a session holds a limited number of.
+    pub(crate) fn is_fence_wait(&self) -> bool {
+        matches!(self, Self::CpuWait { .. } | Self::Update { .. })
     }
 }
 
@@ -117,10 +135,11 @@ impl Waiting {
         pending: impl Iterator<Item = &'a Pending>,
         copies_waiting: bool,
         resting: impl Fn(u32) -> bool,
+        now: Instant,
     ) -> Self {
         let mut found = if copies_waiting { Self::Urgent } else { Self::Nothing };
         for item in pending {
-            if item.is_urgent(&resting) {
+            if item.is_urgent(&resting, now) {
                 return Self::Urgent;
             }
             found = Self::Background;

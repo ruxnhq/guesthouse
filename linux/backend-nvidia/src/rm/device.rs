@@ -10,11 +10,14 @@ use super::{DmaMap, Handle, Rm, RmError};
 use crate::guest_clock::GuestClock;
 use crate::profile::{GuestControl, HostBranch};
 use guesthouse_backend::{MemoryKind, PciAddress};
+use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
 
 const DEVICE_HANDLE: Handle = 0xC000_0001;
 const SUBDEVICE_HANDLE: Handle = 0xC000_0002;
 const FIRST_OBJECT: Handle = 0xC000_1000;
+/// No handle is made past this one, so the counter never reaches the end of its type.
+const LAST_OBJECT: Handle = 0xFFFF_0000;
 
 /// Which of the host's GPUs the device is: the RM's device instance, which isn't the device file's
 /// number. See [`super::instance`].
@@ -98,6 +101,8 @@ pub struct Device<R> {
     pub doorbell_mapped: bool,
     pub(crate) guest_clock: GuestClock,
     next_handle: Handle,
+    /// Handles the RM has been told to free, oldest first, which are made again before any new one.
+    freed_handles: VecDeque<Handle>,
     sizes: &'static HostBranch,
 }
 
@@ -149,19 +154,31 @@ impl<R: Rm> Device<R> {
             doorbell_mapped: false,
             guest_clock: GuestClock::default(),
             next_handle: FIRST_OBJECT,
+            freed_handles: VecDeque::new(),
             sizes,
         })
     }
 
-    pub fn new_handle(&mut self) -> Handle {
-        let handle = self.next_handle;
-        self.next_handle += 1;
-        handle
+    /// A handle no live object has: the next never used, and once those run out, the one freed
+    /// longest ago. A handle is made again only that late, so nothing that still names an old
+    /// object soon after its free can meet a new one under its number.
+    pub fn new_handle(&mut self) -> Result<Handle, RmError> {
+        if self.next_handle < LAST_OBJECT {
+            let handle = self.next_handle;
+            self.next_handle += 1;
+            return Ok(handle);
+        }
+        self.freed_handles.pop_front().ok_or_else(|| RmError::System("no object handles left".to_owned()))
+    }
+
+    /// The RM freed this object, so its handle may name another.
+    fn handle_freed(&mut self, handle: Handle) {
+        self.freed_handles.push_back(handle);
     }
 
     /// Makes an object, and treats any status but success as failure.
     pub fn alloc(&mut self, parent: Handle, class: u32, params: &mut [u8]) -> Result<Handle, RmError> {
-        let handle = self.new_handle();
+        let handle = self.new_handle()?;
         let status = self.rm.alloc(parent, handle, class, params)?;
         RmError::check(|| format!("class {class:#x}"), status)?;
         Ok(handle)
@@ -243,22 +260,22 @@ impl<R: Rm> Device<R> {
     }
 
     pub fn alloc_host_pages(&mut self, address: u64, size: u64) -> Result<Handle, RmError> {
-        let handle = self.new_handle();
+        let handle = self.new_handle()?;
         self.rm.alloc_host_pages(self.device, handle, address, size)?;
         Ok(handle)
     }
 
     /// Makes a GPU address space covering these ranges. A single range is limited, so there are two.
     pub fn create_address_space(&mut self, ranges: &[(u64, u64)]) -> Result<AddressSpace, RmError> {
-        let handle = self.new_handle();
-        let range = self.new_handle();
+        let handle = self.new_handle()?;
+        let range = self.new_handle()?;
         let mut params = vec![0; self.sizes.address_space_params];
         put_u64(&mut params, ADDRESS_SPACE_PARAM_SIZE, ADDRESS_SPACE_SIZE);
         let status = self.rm.alloc(self.device, handle, VIRTUAL_ADDRESS_SPACE, &mut params)?;
         RmError::check(|| "GPU address space".to_owned(), status)?;
         let mut space = AddressSpace { handle, ranges: Vec::with_capacity(ranges.len()) };
         for (index, &(start, end)) in ranges.iter().enumerate() {
-            let object = if index == 0 { range } else { self.new_handle() };
+            let object = if index == 0 { range } else { self.new_handle()? };
             self.alloc_range(object, handle, start, end - start)?;
             space.ranges.push((start, end, object));
         }
@@ -279,8 +296,11 @@ impl<R: Rm> Device<R> {
     pub fn destroy_address_space(&mut self, space: &AddressSpace) -> Result<(), RmError> {
         for &(_, _, range) in &space.ranges {
             self.rm.free(self.device, range)?;
+            self.handle_freed(range);
         }
-        self.rm.free(self.device, space.handle)
+        self.rm.free(self.device, space.handle)?;
+        self.handle_freed(space.handle);
+        Ok(())
     }
 
     pub fn map(&mut self, space: &AddressSpace, map: &Mapping) -> Result<(), RmError> {
@@ -310,7 +330,9 @@ impl<R: Rm> Device<R> {
     }
 
     pub fn free(&mut self, handle: Handle) -> Result<(), RmError> {
-        self.rm.free(self.device, handle)
+        self.rm.free(self.device, handle)?;
+        self.handle_freed(handle);
+        Ok(())
     }
 
     /// Hands out video memory as a dmabuf, for a consumer on this card to read where it lies.
@@ -344,6 +366,39 @@ mod tests {
 
     fn device() -> Device<FakeRm> {
         Device::open(FakeRm::new(), &HOST_615).unwrap()
+    }
+
+    #[test]
+    fn handles_run_out_with_an_error_and_not_a_panic() {
+        let mut device = device();
+        device.next_handle = LAST_OBJECT - 1;
+        assert_eq!(device.new_handle().unwrap(), LAST_OBJECT - 1);
+        assert!(device.new_handle().is_err());
+        assert!(device.new_handle().is_err());
+    }
+
+    #[test]
+    fn a_freed_handle_is_made_again_oldest_first_once_new_ones_run_out() {
+        let mut device = device();
+        let first = device.alloc_video_memory(0x1000, MemoryKind::PLAIN).unwrap().0;
+        let second = device.alloc_video_memory(0x1000, MemoryKind::PLAIN).unwrap().0;
+        device.free(second).unwrap();
+        device.free(first).unwrap();
+        assert!(device.new_handle().unwrap() > second.max(first), "a new one while there are any");
+        device.next_handle = LAST_OBJECT;
+        assert_eq!(device.new_handle().unwrap(), second);
+        assert_eq!(device.new_handle().unwrap(), first);
+        assert!(device.new_handle().is_err());
+    }
+
+    #[test]
+    fn churn_past_the_ceiling_keeps_working_when_handles_are_freed() {
+        let mut device = device();
+        device.next_handle = LAST_OBJECT - 2;
+        for _ in 0..10 {
+            let memory = device.alloc_video_memory(0x1000, MemoryKind::PLAIN).unwrap().0;
+            device.free(memory).unwrap();
+        }
     }
 
     #[test]

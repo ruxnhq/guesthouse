@@ -67,18 +67,52 @@ impl CopyPlan {
         if self.rows == 0 { start } else { start + (self.rows - 1) * pitch + self.row_bytes }
     }
 
-    /// Moves the rows.
+    /// Moves the rows. The two surfaces may be one buffer, with the rectangles overlapping: the
+    /// target then holds what the source held before the copy.
     ///
     /// # Safety
     /// `source` must be readable for [`Self::source_end`] bytes and `target` writable for
-    /// [`Self::target_end`] bytes, and the two must not overlap.
+    /// [`Self::target_end`] bytes.
     pub unsafe fn run(&self, source: *const u8, target: *mut u8) {
+        if self.rows == 0 || self.row_bytes == 0 {
+            return;
+        }
+        let row_bytes = self.row_bytes as usize;
+        let from = |row: u64| (self.source_start + row * self.source_pitch) as usize;
+        let to = |row: u64| (self.target_start + row * self.target_pitch) as usize;
+        let source_range = source as usize + from(0)..source as usize + self.source_end() as usize;
+        let target_range = target as usize + to(0)..target as usize + self.target_end() as usize;
+        if source_range.start >= target_range.end || target_range.start >= source_range.end {
+            for row in 0..self.rows {
+                // SAFETY: the caller vouches for both ranges, which the plan keeps inside, and the
+                // two do not overlap.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(source.add(from(row)), target.add(to(row)), row_bytes)
+                };
+            }
+            return;
+        }
+        // The rows of one surface are written while others are still to be read, in whatever order
+        // they go, so the source is read whole first.
+        let mut rows = vec![0u8; self.rows as usize * row_bytes];
         for row in 0..self.rows {
-            let from = (self.source_start + row * self.source_pitch) as usize;
-            let to = (self.target_start + row * self.target_pitch) as usize;
-            // SAFETY: the caller vouches for both ranges, which the plan keeps inside.
+            // SAFETY: as above, and `rows` holds a row's bytes at each place.
             unsafe {
-                std::ptr::copy_nonoverlapping(source.add(from), target.add(to), self.row_bytes as usize)
+                std::ptr::copy_nonoverlapping(
+                    source.add(from(row)),
+                    rows.as_mut_ptr().add(row as usize * row_bytes),
+                    row_bytes,
+                )
+            };
+        }
+        for row in 0..self.rows {
+            // SAFETY: as above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    rows.as_ptr().add(row as usize * row_bytes),
+                    target.add(to(row)),
+                    row_bytes,
+                )
             };
         }
     }
@@ -163,6 +197,52 @@ mod tests {
         assert_eq!(&target[0..8], &source[20..28]);
         assert_eq!(&target[20..28], &source[36..44]);
         assert!(target[8..20].iter().all(|&byte| byte == 0));
+    }
+
+    /// The bytes a copy within one buffer leaves, worked out on a copy of the buffer.
+    fn within_one_buffer(
+        width: u32,
+        height: u32,
+        pitch: u32,
+        rect: [i32; 4],
+        to: (i32, i32),
+    ) -> (Vec<u8>, Vec<u8>) {
+        let before: Vec<u8> = (0..pitch * height).map(|byte| (byte % 251) as u8 + 1).collect();
+        let mut buffer = before.clone();
+        let request = copy(shape(width, height, pitch), shape(width, height, pitch), rect, to);
+        let plan = CopyPlan::of(&request).unwrap();
+        let base = buffer.as_mut_ptr();
+        // SAFETY: both ends lie inside the buffer, as the plan's rectangles do.
+        unsafe { plan.run(base.cast_const(), base) };
+        let mut expected = before.clone();
+        for row in 0..(rect[3] - rect[1]) as usize {
+            for byte in 0..(rect[2] - rect[0]) as usize * 4 {
+                let from = (rect[1] as usize + row) * pitch as usize + rect[0] as usize * 4 + byte;
+                let at = (to.1 as usize + row) * pitch as usize + to.0 as usize * 4 + byte;
+                expected[at] = before[from];
+            }
+        }
+        (buffer, expected)
+    }
+
+    #[test]
+    fn rows_copied_down_within_one_buffer_arrive_as_they_were() {
+        let (buffer, expected) = within_one_buffer(4, 5, 16, [0, 0, 4, 4], (0, 1));
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn rows_copied_up_within_one_buffer_arrive_as_they_were() {
+        let (buffer, expected) = within_one_buffer(4, 5, 16, [0, 1, 4, 5], (0, 0));
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn a_rectangle_shifted_a_pixel_within_its_own_rows_arrives_as_it_was() {
+        let (buffer, expected) = within_one_buffer(8, 5, 40, [0, 0, 6, 4], (1, 0));
+        assert_eq!(buffer, expected);
+        let (buffer, expected) = within_one_buffer(8, 5, 40, [2, 0, 8, 4], (1, 1));
+        assert_eq!(buffer, expected);
     }
 
     #[test]

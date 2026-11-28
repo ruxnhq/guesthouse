@@ -17,6 +17,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleExW, GetProcAddress, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW,
 };
 use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
+use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 
 /// NVIDIA's DLL, by the name it has in the driver's folder.
 const REAL_NAME: &str = "nvapi64.dll";
@@ -29,7 +30,6 @@ const STORE_PREFIX: &str = "nv_dispi.inf_amd64_";
 const SETTINGS_KEY: &str = r"SOFTWARE\Guesthouse";
 const LOG_VALUE: &str = "NvapiShimLog";
 const OFF_VALUE: &str = "NvapiShimOff";
-const LOG_FILE: &str = "guesthouse-nvapi-shim.log";
 
 type QueryInterface = unsafe extern "C" fn(u32) -> *mut c_void;
 type GetLogicalGpuInfo = unsafe extern "C" fn(*mut c_void, *mut LogicalGpuData) -> i32;
@@ -49,6 +49,7 @@ struct State {
 static STATE: OnceLock<State> = OnceLock::new();
 static REAL_LOGICAL_GPU_INFO: AtomicUsize = AtomicUsize::new(0);
 static REAL_ADAPTER_ID: AtomicUsize = AtomicUsize::new(0);
+static LOG: Mutex<Option<Option<fs::File>>> = Mutex::new(None);
 static ASKED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
 fn wide(text: &str) -> Vec<u16> {
@@ -66,8 +67,13 @@ fn say(enabled: bool, text: &str) {
     let line = format!("guesthouse nvapi64 [{}]: {text}\n", std::process::id());
     // SAFETY: a zero-terminated wide string.
     unsafe { OutputDebugStringW(wide(&line).as_ptr()) };
-    let file = OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join(LOG_FILE));
-    if let Ok(mut file) = file {
+    let Ok(mut file) = LOG.lock() else { return };
+    let file = file.get_or_insert_with(|| {
+        // A name of this process's own, made new: a file or link already there is left alone.
+        let name = format!("guesthouse-nvapi-shim-{}.log", std::process::id());
+        OpenOptions::new().create_new(true).append(true).open(std::env::temp_dir().join(name)).ok()
+    });
+    if let Some(file) = file {
         let _ = file.write_all(line.as_bytes());
     }
 }
@@ -91,8 +97,15 @@ fn setting(name: &str) -> Option<u32> {
     (error == 0).then_some(data)
 }
 
+/// The system's Windows folder, as Windows itself reports it and not as the process's environment says.
 fn windows_folder() -> String {
-    std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned())
+    let mut buffer = vec![0u16; 512];
+    // SAFETY: the buffer holds as many units as its length says.
+    let length = unsafe { GetSystemWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return r"C:\Windows".to_owned();
+    }
+    String::from_utf16_lossy(&buffer[..length])
 }
 
 /// This DLL's own file, so it never loads itself as NVIDIA's.
@@ -488,5 +501,31 @@ mod d3dkmt {
             unsafe { D3DKMTCloseAdapter(&CloseAdapter { adapter: info.handle }) };
         }
         found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_windows_folder_is_the_systems_and_not_the_environments() {
+        let real = windows_folder();
+        // SAFETY: the only test that touches the environment, and no other thread reads it.
+        unsafe { std::env::set_var("SystemRoot", r"C:\Users\Public\elsewhere") };
+        let after = windows_folder();
+        assert_eq!(real, after);
+        assert!(Path::new(&real).join("System32").is_dir(), "{real}");
+    }
+
+    #[test]
+    fn a_log_file_that_is_already_there_is_left_alone() {
+        let name = format!("guesthouse-nvapi-shim-{}.log", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        fs::write(&path, "planted").unwrap();
+        say(true, "a line");
+        let kept = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        assert_eq!(kept, "planted");
     }
 }

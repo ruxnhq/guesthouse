@@ -160,13 +160,20 @@ impl GpuAddresses {
         Self { guest_only: ranges, ..self }
     }
 
-    /// Whether the guest may map `size` bytes at `address`, an address it chose: in the ranges, or
-    /// wholly in a range only the guest uses.
+    /// How many addresses the guest can be given or place: the ranges this backend hands out,
+    /// and its ranges only the guest uses.
+    pub fn guest_reach(&self) -> u64 {
+        let size = |range: &GpuRange| range.end - range.start;
+        self.hand_out.iter().chain(self.guest_only).map(size).fold(0, u64::saturating_add)
+    }
+
+    /// Whether the guest may map `size` bytes at `address`, an address it chose: wholly in one of
+    /// the ranges, or wholly in a range only the guest uses.
     pub fn guest_may_map(&self, address: u64, size: u64) -> bool {
-        let in_guest_only = |range: &GpuRange| {
+        let wholly_in = |range: &GpuRange| {
             range.contains(address) && address.checked_add(size).is_some_and(|end| end <= range.end)
         };
-        Self::in_a_range(address) || self.guest_only.iter().any(in_guest_only)
+        GPU_RANGES.iter().any(wholly_in) || self.guest_only.iter().any(wholly_in)
     }
 
     /// Takes `size` bytes: what was given back for this use, or new addresses, moving to the next
@@ -304,6 +311,14 @@ impl Default for GpuAddresses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chosen_map_lies_wholly_in_one_range() {
+        let addresses = GpuAddresses::new();
+        assert!(addresses.guest_may_map(0xFFFF_E000, 0x2000));
+        assert!(!addresses.guest_may_map(0xFFFF_F000, 0x2000));
+        assert!(!addresses.guest_may_map(0x1_0000_0000, 0x1000));
+    }
 
     const HOST: AddressUse = AddressUse::Host;
 

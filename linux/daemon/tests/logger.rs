@@ -74,11 +74,11 @@ mod linux {
     }
 
     /// Each line is its level padded to five, a space and the message, with nothing after but the
-    /// line break, and a message's own line breaks are kept as they are. Debug and trace lines are off.
+    /// line break, and a message's own line breaks are written as escapes. Debug and trace lines are off.
     fn a_plain_line_is_its_level_and_its_message() {
         assert_eq!(
             piped("plain"),
-            "ERROR an error\nWARN  a warning\nINFO  some news\nINFO  a message of\ntwo lines\n"
+            "ERROR an error\nWARN  a warning\nINFO  some news\nINFO  a message of\\ntwo lines\n"
         );
     }
 
@@ -101,7 +101,7 @@ mod linux {
         assert_eq!(
             masked,
             "ERROR [    T.TTT] an error\nWARN  [    T.TTT] a warning\nINFO  [    T.TTT] some news\n\
-             INFO  [    T.TTT] a message of\ntwo lines\nDEBUG [    T.TTT] a detail\n"
+             INFO  [    T.TTT] a message of\\ntwo lines\nDEBUG [    T.TTT] a detail\n"
         );
     }
 

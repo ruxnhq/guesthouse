@@ -32,6 +32,26 @@ impl CardWork {
         still_in_flight: usize,
         now: Instant,
     ) -> Vec<String> {
+        self.ban_lines_showing(
+            host,
+            queue,
+            run,
+            (lost_with_it, still_in_flight),
+            now,
+            crate::watch::dumps_on(),
+        )
+    }
+
+    /// [`Self::ban_lines`], with the batch's bytes shown only if `dumps`.
+    fn ban_lines_showing(
+        &mut self,
+        host: &mut dyn HostServices,
+        queue: u32,
+        run: &Run,
+        (lost_with_it, still_in_flight): (usize, usize),
+        now: Instant,
+        dumps: bool,
+    ) -> Vec<String> {
         let Some(space) = self.queues.get(&queue).map(|queue| queue.space) else { return Vec::new() };
         let held_for = run.sent.map_or_else(
             || "for a time not known".to_string(),
@@ -45,7 +65,7 @@ impl CardWork {
              and {still_in_flight} still wait behind it",
             run.fence, run.value
         )];
-        lines.extend(self.batch_lines(host, space, run));
+        lines.extend(self.batch_lines(host, space, run, dumps));
         lines.extend(self.change_lines(space, run));
         lines.extend(self.fault_lines(space));
         lines
@@ -64,8 +84,24 @@ impl CardWork {
     }
 
     /// The batch's dwords in hex, and the buffer it chains to, up to [`MOST_BATCH_BYTES`] in all.
-    fn batch_lines(&mut self, host: &mut dyn HostServices, space: SpaceId, run: &Run) -> Vec<String> {
+    fn batch_lines(
+        &mut self,
+        host: &mut dyn HostServices,
+        space: SpaceId,
+        run: &Run,
+        dumps: bool,
+    ) -> Vec<String> {
         let mut lines = Vec::new();
+        if !dumps {
+            lines.push(format!(
+                "{PREFIX}   the batch at {:#x}, {:#x} bytes; its contents are not logged",
+                run.batch, run.length
+            ));
+            if let Some(chain) = run.chain {
+                lines.push(format!("{PREFIX}   it chains to {chain:#x}"));
+            }
+            return lines;
+        }
         let first = run.length.min(MOST_BATCH_BYTES);
         let cut = if first < run.length { format!(", the first {first:#x} of it") } else { String::new() };
         match self.read_gpu(host, space, run.batch, first) {
@@ -240,13 +276,13 @@ mod tests {
     }
 
     fn lines(rig: &mut Rig, run: &Run) -> Vec<String> {
-        rig.work.ban_lines(
+        rig.work.ban_lines_showing(
             &mut rig.host,
             1,
             run,
-            0,
-            0,
+            (0, 0),
             Instant::now() + std::time::Duration::from_millis(250),
+            true,
         )
     }
 
@@ -264,6 +300,18 @@ mod tests {
         let mut dwords = batch::store_qword(0x9_0000_0123, 1).to_vec();
         dwords.push(batch::BATCH_END);
         dwords
+    }
+
+    #[test]
+    fn a_ban_does_not_write_the_batch_bytes_unless_dumps_are_on() {
+        let mut rig = Rig::new(Stage::Everything);
+        let run = in_flight(&mut rig, &faulting_batch(), 0x77);
+        rig.xe.release_runs();
+        let said = rig.work.ban_lines_showing(&mut rig.host, 1, &run, (0, 0), Instant::now(), false);
+        assert!(said.iter().any(|line| line.contains("0x18 bytes")), "{said:?}");
+        assert!(dumped(&said).is_empty(), "{said:?}");
+        let batch_end = format!("{:08x}", batch::BATCH_END);
+        assert!(said.iter().all(|line| !line.contains(&batch_end)), "{said:?}");
     }
 
     #[test]

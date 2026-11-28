@@ -9,6 +9,7 @@
 //! See [`super::marks`].
 
 use super::choices::{self, Rings};
+use super::limits::MOST_RESCAN_BYTES;
 use super::marks::{Marks, Monitored};
 use super::{CardWork, engines};
 use crate::protocol::command_header::{Header, Length};
@@ -57,12 +58,12 @@ impl Run {
 pub(super) struct Queue {
     pub space: SpaceId,
     /// The xe queue for batches that end, with the timeline its runs signal.
-    ordinary: Option<(u32, u32)>,
+    pub(super) ordinary: Option<(u32, u32)>,
     next_point: u64,
     pub in_flight: VecDeque<Run>,
     /// The xe queue for a ring, in the space's long-running VM, and the last fence value a ring
     /// submission named.
-    ring: Option<u32>,
+    pub(super) ring: Option<u32>,
     ring_fence: Option<(u64, u64)>,
     /// The latest ring submission, and whether its queue's ban has been looked into.
     ring_run: Option<Run>,
@@ -440,6 +441,7 @@ impl CardWork {
     /// leaves out the flushes keying by index alone needs, so its draws would land in the wrong
     /// surfaces without a word. Its queue stops instead, which the guest is told.
     fn new_queue(&mut self, vm: u32, engine: EngineInstance) -> std::io::Result<u32> {
+        self.room_for_queue()?;
         let keying = if engine.class == Engine::RENDER { self.render_keying } else { Keying::BindingIndex };
         self.xe.create_queue(vm, engine, keying).inspect_err(|error| {
             if keying == Keying::BindingTableAndIndex {
@@ -454,7 +456,7 @@ impl CardWork {
 
     /// How a batch ends, read from its last bytes where they lie: a buffer through the CPU's view
     /// of it, guest pages through the core.
-    fn ending(
+    pub(super) fn ending(
         &mut self,
         host: &mut dyn HostServices,
         space: SpaceId,
@@ -471,9 +473,7 @@ impl CardWork {
             // buffer's mapping; if the mapped span itself ends or chains cleanly, the GPU will
             // stop or jump before reaching the end.
             if let Some(mapped) = held.mapped_from(address).filter(|&mapped| length > mapped && mapped >= 4) {
-                let scan_length = mapped.min(1 << 20) & !3;
-                if let Ok(bytes) = self.read_gpu(host, space, address, scan_length) {
-                    let found = batch::ending_at(&bytes, address);
+                if let Some(found) = self.scan_end(host, space, address, mapped, MOST_RESCAN_BYTES) {
                     if matches!(found, Ending::Ends | Ending::Chains(_)) {
                         log::debug!(
                             "intel work: batch at {address:#x} claimed {length:#x} bytes, but {found:?} inside its {mapped:#x}-byte mapping"
@@ -500,29 +500,15 @@ impl CardWork {
                 ReadError::Unreadable => Refused::Unreadable { address: address + skipped },
             })?;
         let found = batch::ending_at(&tail, address + skipped);
-        if found == Ending::RunsOn && length > tail_length {
-            let scan_length = length.min(1 << 20) & !3;
-            if let Ok(bytes) = self.read_gpu(host, space, address, scan_length) {
-                let full = batch::ending_at(&bytes, address);
-                if full != Ending::RunsOn {
-                    return Ok(full);
-                }
-            }
+        if found == Ending::RunsOn
+            && length > tail_length
+            && let Some(full) = self.scan_end(host, space, address, length, MOST_RESCAN_BYTES)
+            && full != Ending::RunsOn
+        {
+            return Ok(full);
         }
         if found == Ending::RunsOn {
-            let dwords: Vec<u32> = tail
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|bytes| u32::from_le_bytes(*bytes))
-                .filter(|&dword| dword != 0)
-                .collect();
-            let last_eight: Vec<String> =
-                dwords.iter().rev().take(8).rev().map(|dword| format!("{dword:08x}")).collect();
-            log::warn!(
-                "intel work: batch at {address:#x} ({length:#x} bytes) tail non-zero dwords: [{}]",
-                last_eight.join(" ")
-            );
+            log::warn!("intel work: batch at {address:#x} ({length:#x} bytes) is not seen to end");
         }
         Ok(found)
     }

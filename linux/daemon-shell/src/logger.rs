@@ -216,9 +216,9 @@ impl Log for StandardError {
         if self.enabled(record.metadata()) {
             match self.started {
                 Some(started) => {
-                    eprintln!("{}", timed_line(started.elapsed(), record.level(), record.args()))
+                    eprintln!("{}", timed_line(started.elapsed(), record.level(), one_line(record.args())))
                 }
-                None => eprintln!("{:<5} {}", record.level(), record.args()),
+                None => eprintln!("{:<5} {}", record.level(), one_line(record.args())),
             }
             self.keep_small();
         }
@@ -254,6 +254,18 @@ fn error_is_a_file() -> bool {
 
 /// A line with the time since the daemon started after its level, so the level stays first. The time
 /// is in seconds to the millisecond, and a fixed width keeps the lines aligned.
+/// A message as one line of the log: control characters, a guest's text among them, are written
+/// as escapes, so nothing in a message starts a line of its own.
+fn one_line(message: &std::fmt::Arguments<'_>) -> String {
+    let text = message.to_string();
+    if !text.chars().any(char::is_control) {
+        return text;
+    }
+    text.chars()
+        .map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() })
+        .collect()
+}
+
 fn timed_line(elapsed: Duration, level: Level, message: impl Display) -> String {
     format!("{level:<5} [{:>9.3}] {message}", elapsed.as_secs_f64())
 }
@@ -335,6 +347,16 @@ impl Log for PrefixedLines {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_stays_on_its_own_line() {
+        let name = "game.exe\nERROR [    1.000] software-desktop on\r\u{1b}[2J";
+        let line = one_line(&format_args!("process 0x40 is guest pid 7, {name}"));
+        assert_eq!(line.lines().count(), 1);
+        assert!(!line.chars().any(char::is_control));
+        assert!(line.contains("game.exe\\nERROR"));
+        assert_eq!(one_line(&format_args!("plain {}", 1)), "plain 1");
+    }
 
     fn log_file(name: &str, bytes: &[u8]) -> File {
         let path = std::env::temp_dir().join(format!("guesthouse-logger-{}-{name}", std::process::id()));

@@ -168,6 +168,16 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_stamped_from_the_future_is_not_used() {
+        let path = temporary("future");
+        let shared = SharedSnapshot::open(&path).unwrap();
+        let later = Snapshot { taken_at: milliseconds_since_epoch() + 60_000, ..now_snapshot() };
+        shared.publish(&later);
+        assert_eq!(shared.latest(), None);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn a_write_cut_short_reads_as_nothing_until_the_next_one() {
         let path = temporary("cut");
         let shared = SharedSnapshot::open(&path).unwrap();

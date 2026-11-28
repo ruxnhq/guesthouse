@@ -426,3 +426,16 @@ fn every_refusal_is_answered_and_counted_however_many_there_are() {
         assert_eq!(session.copies_refused, count);
     }
 }
+
+#[test]
+fn a_copy_is_refused_once_the_guests_gpu_work_has_stopped() {
+    let mut session = session();
+    let (source, target) = (plain(&mut session), plain(&mut session));
+    let own = session.own_space().unwrap();
+    for _ in 0..crate::MOST_FAULTS {
+        session.backend_mut().faults.push_back(own);
+    }
+    session.poll(Instant::now());
+    let request = copy(source, target, [0, 0, 256, 256], [0, 0]);
+    assert_eq!(outcome(&mut session, &request), (UNSUCCESSFUL, 0));
+}

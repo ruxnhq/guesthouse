@@ -23,7 +23,7 @@ use crate::protocol::nodes;
 use crate::protocol::partition;
 use crate::protocol::record::Asked;
 use crate::stage::Withheld;
-use crate::watch::{Hex, PREFIX, Seen, Undecoded, dump, tell};
+use crate::watch::{Hex, PREFIX, Plain, Seen, Undecoded, dump, tell};
 use guesthouse_backend::{RegistryName, Status, VendorQuery, Work, WorkSource};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -100,6 +100,11 @@ pub struct Traffic {
     programs_withheld: HashSet<(String, Withheld)>,
 }
 
+/// How many programs are told apart as refused a driver. Past it, later ones are not listed.
+const MOST_PROGRAMS_KEPT: usize = 1024;
+/// How much of a program's name is kept and logged.
+const MOST_PROGRAM_CHARS: usize = 128;
+
 /// A bool as the lines write it.
 fn bit(value: bool) -> u8 {
     value.into()
@@ -127,7 +132,7 @@ impl Traffic {
         };
         let telling = self.registry.worth_telling((shown, found));
         let answer = if found { "answered" } else { "not-ours" };
-        tell!(telling, "{PREFIX} registry name=\"{shown}\" {answer}");
+        tell!(telling, "{PREFIX} registry name=\"{}\" {answer}", Plain(shown));
     }
 
     pub fn escape(
@@ -329,9 +334,12 @@ impl Traffic {
     /// A program refused a driver at this stage, said once for each program and reason, so a report
     /// shows which programs drew in software.
     pub fn program_withheld(&mut self, program: &str, why: Withheld) {
-        if self.programs_withheld.insert((program.to_owned(), why)) {
-            let program = if program.is_empty() { "unnamed" } else { program };
-            log::info!("{PREFIX} driver-withheld program={program} why=\"{}\"", why.why());
+        let program: String = program.chars().take(MOST_PROGRAM_CHARS).collect();
+        if self.programs_withheld.len() < MOST_PROGRAMS_KEPT
+            && self.programs_withheld.insert((program.clone(), why))
+        {
+            let program = if program.is_empty() { "unnamed" } else { program.as_str() };
+            log::info!("{PREFIX} driver-withheld program=\"{}\" why=\"{}\"", Plain(program), why.why());
         }
     }
 
@@ -500,5 +508,18 @@ mod tests {
         assert_eq!(traffic.submitted.get(&7), Some(&2));
         traffic.queue_closed(7);
         assert!(traffic.submitted.is_empty());
+    }
+
+    #[test]
+    fn programs_listed_as_refused_are_few_and_short() {
+        let mut traffic = Traffic::default();
+        for number in 0..MOST_PROGRAMS_KEPT * 2 {
+            traffic.program_withheld(&format!("program{number}"), Withheld::Direct3d);
+        }
+        assert_eq!(traffic.programs_withheld.len(), MOST_PROGRAMS_KEPT);
+        let long = "a".repeat(MOST_PROGRAM_CHARS * 4);
+        let mut traffic = Traffic::default();
+        traffic.program_withheld(&long, Withheld::Direct3d);
+        assert!(traffic.programs_withheld.iter().all(|(name, _)| name.len() == MOST_PROGRAM_CHARS));
     }
 }

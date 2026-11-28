@@ -37,6 +37,10 @@ jobs:
         run: bash tests/packages/publish-repo.sh
       - name: The Windows graphics driver's sources
         run: sh tests/windows-pvg/check-driver-sources.sh
+      - name: The Android image's signing keys step
+        run: bash tests/android/keys.sh
+      - name: The Linux graphics driver's sources
+        run: sh tests/linux-pvg/check-driver-sources.sh
       - name: Release notes, on a made-up repo
         run: python3 tests/release-notes/test.py
       - name: Credits, with odd titles

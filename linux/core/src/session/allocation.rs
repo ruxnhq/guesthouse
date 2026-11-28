@@ -162,15 +162,19 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         }
         let wanted = shapes.iter().map(|shape| shape.size).fold(0, u64::saturating_add);
         let too_large = shapes.iter().any(|shape| shape.size > ADDRESSES_END);
-        let over_cap = self.config.limits.video_cap.is_some_and(|cap| {
+        (too_large || self.over_video_cap(wanted)).then_some(Status::NO_VIDEO_MEMORY)
+    }
+
+    /// Whether `wanted` more bytes of video memory would pass the guest's cap, if it has one.
+    pub(super) fn over_video_cap(&self, wanted: u64) -> bool {
+        self.config.limits.video_cap.is_some_and(|cap| {
             let used = self.video_in_use();
             let over = used.saturating_add(wanted) > cap;
             if over {
                 log::warn!("{}", cap_warning(cap, used, wanted));
             }
             over
-        });
-        (too_large || over_cap).then_some(Status::NO_VIDEO_MEMORY)
+        })
     }
 
     pub(super) fn create_allocation(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
@@ -200,6 +204,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if request.shared_by_global_handle() {
             // The guest opens it by this from another device, and an open finds resources by handle.
             CreateAllocationAnswer::set_global_share(resource, out);
+            self.global_shares.insert(resource);
         }
         for (index, (entry, shape)) in request.entries().zip(shapes).enumerate() {
             let handle = self.take_handle()?;
@@ -303,6 +308,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         };
         let mut handles: Vec<u32> = request.handles.iter().filter(|handle| !held_elsewhere(handle)).collect();
         handles.extend(self.resources.remove(&resource).unwrap_or_default());
+        self.global_shares.remove(&resource);
         self.run_deferred();
         self.free_allocations(handles);
         Ok(())
@@ -405,6 +411,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         members.retain(|&member| member != handle);
         if members.is_empty() {
             self.resources.remove(&resource);
+            self.global_shares.remove(&resource);
         }
     }
 
@@ -412,9 +419,11 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
     /// resource counts its users.
     pub(super) fn open_resource(&mut self, message: &[u8], out: &mut Vec<u8>) -> Handled {
         let request = OpenResource::parse(message)?;
-        let resource = self.shared_objects.get(&request.shared).copied().unwrap_or(request.shared);
-        match self.resources.get(&resource).filter(|handles| handles.len() >= request.count) {
-            Some(handles) => {
+        let global = Some(request.shared).filter(|shared| self.global_shares.contains(shared));
+        let resource = self.shared_objects.get(&request.shared).copied().or(global);
+        let found = resource.and_then(|resource| Some((resource, self.resources.get(&resource)?)));
+        match found.filter(|(_, handles)| handles.len() >= request.count) {
+            Some((resource, handles)) => {
                 request.answer(resource, &handles[..request.count], out);
                 *self.resource_users.entry(resource).or_insert(1) += 1;
             }

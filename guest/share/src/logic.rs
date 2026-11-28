@@ -225,13 +225,13 @@ pub fn volume_sizes(block_size: u32, blocks: u64, available: u64) -> (u64, u64) 
 }
 
 /// A self-relative security descriptor in SDDL for everything on the share: SYSTEM,
-/// Administrators and Authenticated Users have full control, or on a read-only share
-/// Authenticated Users read and execute only. WinFsp's volume has no ACLs of its own to keep.
+/// Administrators and interactive sign-ins (the people at the machine, not services or network
+/// sign-ins) have full control, or on a read-only share they read and execute only. WinFsp's volume has no ACLs of its own to keep.
 pub fn security_descriptor_sddl(read_only: bool) -> &'static str {
     if read_only {
-        "O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;AU)"
+        "O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFX;;;IU)"
     } else {
-        "O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;AU)"
+        "O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;IU)"
     }
 }
 
@@ -561,8 +561,8 @@ mod tests {
 
     #[test]
     fn the_security_descriptor_is_read_and_execute_only_on_a_read_only_share() {
-        assert!(security_descriptor_sddl(false).contains("(A;;FA;;;AU)"));
-        assert!(security_descriptor_sddl(true).contains("(A;;FRFX;;;AU)"));
+        assert!(security_descriptor_sddl(false).contains("(A;;FA;;;IU)"));
+        assert!(security_descriptor_sddl(true).contains("(A;;FRFX;;;IU)"));
         assert!(security_descriptor_sddl(true).contains("(A;;FA;;;SY)(A;;FA;;;BA)"));
     }
 

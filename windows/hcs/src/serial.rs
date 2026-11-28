@@ -22,6 +22,7 @@ pub struct SerialPort {
 
 impl SerialPort {
     /// Connects to the port's pipe.
+    #[allow(clippy::disallowed_methods)] // a named pipe, not a file on a disk
     pub fn open(pipe: &str) -> io::Result<SerialPort> {
         let pipe = OpenOptions::new().read(true).write(true).custom_flags(FILE_FLAG_OVERLAPPED).open(pipe)?;
         Ok(SerialPort { pipe })

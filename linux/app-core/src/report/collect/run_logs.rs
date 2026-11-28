@@ -47,6 +47,7 @@ pub fn collect(context: &Context, machine: &Machine, request: &Request, found: &
         }
         if let Some(since) = run_of(&folder, &machine.id) {
             found.has_run_logs = true;
+            found.add_file_if_there(&format!("{place}/jail-note"), &crate::jailing::note_path(&folder));
             add_all(found, &place, &folder, &current, "", since);
             found.notes.push(format!(
                 "The logs in {place} are from the run folder, of the run that started at {}.",

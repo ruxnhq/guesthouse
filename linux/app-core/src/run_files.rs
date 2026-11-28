@@ -15,15 +15,14 @@ use std::time::SystemTime;
 
 /// What the host's side of a run leaves: the daemon's output and QEMU's, QEMU's own log, the TPM's,
 /// the Linux GPU device's calls, and the small notes the app and the daemon leave for the machine's
-/// row (written in jailing.rs, daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs
-/// and actions/desktop.rs).
-pub const HOST_LOGS: [&str; 10] = [
+/// row (written in daemon/src/display_note.rs, daemon/src/gpu_note.rs, actions/ubuntu.rs and
+/// actions/desktop.rs). The jail's note is the app's own, in its notes folder: see `jailing.rs`.
+pub const HOST_LOGS: [&str; 9] = [
     daemon::OUTPUT_FILE,
     vm_args::OUTPUT_FILE,
     "qemu.log",
     "swtpm.log",
     "calls.log",
-    "jail-note",
     "display-ring",
     "gpu-stopped",
     "gpu-off-reason",

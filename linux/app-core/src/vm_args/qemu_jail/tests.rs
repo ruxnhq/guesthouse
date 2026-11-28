@@ -194,6 +194,16 @@ fn on_passt_qemu_only_has_the_private_link() {
     assert_eq!(network.tcp_bind, Ports::Only(vec![8080, EPHEMERAL_PORT]));
 }
 
+#[test]
+fn only_a_qemu_whose_user_network_is_the_nat_may_send_pings() {
+    let (_scratch, nat) = jailed(windows(), true);
+    assert!(nat.qemu_command().iter().any(|word| word == "--pings"));
+    let (_scratch, passt) = on_passt(windows(), true);
+    assert!(!passt.qemu_command().iter().any(|word| word == "--pings"));
+    let (_scratch, bridged) = jailed(Machine { network_mode: Mode::Bridged, ..windows() }, false);
+    assert!(!bridged.qemu_command().iter().any(|word| word == "--pings"));
+}
+
 fn held_to_wg0(machine: Machine, jailed_too: bool) -> (Scratch, VmPlan) {
     let (scratch, plan) = jailed(machine, false);
     let through = OnlyThrough { interface: "wg0".into(), ipv6: false };

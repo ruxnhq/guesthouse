@@ -82,7 +82,7 @@ fn daemon_calls() {
 }
 
 fn qemu_calls() {
-    seccomp::install(&filters::qemu(false, false), Threads::This).unwrap();
+    seccomp::install(&filters::qemu(false, false, false), Threads::This).unwrap();
     let traced = unsafe { libc::ptrace(libc::PTRACE_ATTACH, libc::getppid(), 0, 0) };
     assert_eq!((traced, std::io::Error::last_os_error().raw_os_error()), (-1, Some(libc::EPERM)));
     assert_eq!(unsafe { libc::unshare(libc::CLONE_NEWUSER) }, -1);
@@ -174,7 +174,7 @@ fn passt_connection() {
 }
 
 fn qemu_with_no_new_unix_sockets() {
-    seccomp::install(&filters::qemu(true, false), Threads::This).unwrap();
+    seccomp::install(&filters::qemu(true, false, false), Threads::This).unwrap();
     assert!(
         refused(UnixStream::connect("/run/user/1000/bus"))
             || unsafe { *libc::__errno_location() } == libc::EPERM
@@ -185,7 +185,111 @@ fn qemu_with_no_new_unix_sockets() {
     assert!(TcpListener::bind(("127.0.0.1", 0)).is_ok(), "the user network stays");
 }
 
-const CASES: [(&str, fn()); 8] = [
+/// System V's shared memory, queues and semaphores, which no path names.
+fn qemu_shared_memory() {
+    seccomp::install(&filters::qemu(false, false, false), Threads::This).unwrap();
+    let failed = |done: i64| done == -1;
+    unsafe {
+        assert!(failed(libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o600).into()), "shmget");
+        assert!(failed(libc::shmat(0, std::ptr::null(), 0) as i64), "shmat");
+        assert!(failed(libc::msgget(libc::IPC_PRIVATE, libc::IPC_CREAT | 0o600).into()), "msgget");
+        assert!(failed(libc::semget(libc::IPC_PRIVATE, 1, libc::IPC_CREAT | 0o600).into()), "semget");
+    }
+}
+
+/// The calls that change a file by its path, which Landlock doesn't cover. Each is refused on a file
+/// outside the plan, and the ones on a descriptor still work on a file QEMU has open.
+fn qemu_file_metadata() {
+    let folder = folder();
+    let mut plan = Plan::default();
+    plan.grant(Grant::Write, folder.join("mine/file"));
+    landlock::apply(&plan).unwrap();
+    seccomp::install(&filters::qemu(false, false, false), Threads::This).unwrap();
+    let theirs =
+        std::ffi::CString::new(folder.join("theirs/file").into_os_string().into_encoded_bytes()).unwrap();
+    let failed = |done: i64| done == -1;
+    unsafe {
+        assert!(failed(libc::chmod(theirs.as_ptr(), 0o644).into()), "chmod");
+        assert!(failed(libc::fchmodat(libc::AT_FDCWD, theirs.as_ptr(), 0o644, 0).into()), "fchmodat");
+        assert!(
+            failed(libc::syscall(libc::SYS_fchmodat2, libc::AT_FDCWD, theirs.as_ptr(), 0o644, 0)),
+            "fchmodat2"
+        );
+        assert!(failed(libc::chown(theirs.as_ptr(), libc::getuid(), libc::getgid()).into()), "chown");
+        assert!(failed(libc::lchown(theirs.as_ptr(), libc::getuid(), libc::getgid()).into()), "lchown");
+        assert!(failed(libc::utimes(theirs.as_ptr(), std::ptr::null()).into()), "utimes");
+        assert!(
+            failed(libc::utimensat(libc::AT_FDCWD, theirs.as_ptr(), std::ptr::null(), 0).into()),
+            "utimensat"
+        );
+        let (name, value) = (c"user.note", b"x");
+        assert!(
+            failed(libc::setxattr(theirs.as_ptr(), name.as_ptr(), value.as_ptr().cast(), 1, 0).into()),
+            "setxattr"
+        );
+        assert!(
+            failed(libc::lsetxattr(theirs.as_ptr(), name.as_ptr(), value.as_ptr().cast(), 1, 0).into()),
+            "lsetxattr"
+        );
+        assert!(failed(libc::removexattr(theirs.as_ptr(), name.as_ptr()).into()), "removexattr");
+        assert!(failed(libc::truncate(theirs.as_ptr(), 0).into()), "truncate");
+    }
+    let mine = fs::File::options().write(true).open(folder.join("mine/file")).unwrap();
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&mine);
+    assert_eq!(unsafe { libc::fchmod(fd, 0o600) }, 0, "on a descriptor it has");
+    assert!(mine.set_len(0).is_ok(), "ftruncate on a descriptor it has");
+    let theirs = fs::metadata(folder.join("theirs/file")).unwrap();
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&theirs.permissions()) & 0o777, 0o600, "unchanged");
+}
+
+fn makes(family: i32, kind: i32, protocol: i32) -> bool {
+    let made = unsafe { libc::socket(family, kind, protocol) };
+    if made >= 0 {
+        unsafe { libc::close(made) };
+    }
+    made >= 0
+}
+
+/// TCP and UDP for the user network, netlink, and unix sockets for sound; nothing else.
+fn qemu_socket_kinds() {
+    seccomp::install(&filters::qemu(false, false, false), Threads::This).unwrap();
+    use libc::{AF_INET, AF_INET6, AF_NETLINK, AF_PACKET, AF_UNIX, AF_VSOCK, SOCK_CLOEXEC, SOCK_DGRAM};
+    use libc::{SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM};
+    assert!(makes(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0) && makes(AF_INET6, SOCK_STREAM, libc::IPPROTO_TCP));
+    assert!(makes(AF_INET, SOCK_DGRAM, 0) && makes(AF_INET6, SOCK_DGRAM, libc::IPPROTO_UDP));
+    assert!(makes(AF_UNIX, SOCK_STREAM, 0), "for sound");
+    assert!(makes(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, libc::NETLINK_KOBJECT_UEVENT));
+    assert!(
+        !makes(AF_INET, SOCK_STREAM, libc::IPPROTO_SCTP)
+            && !makes(AF_INET6, SOCK_SEQPACKET, libc::IPPROTO_SCTP)
+    );
+    assert!(
+        !makes(AF_INET, SOCK_STREAM, libc::IPPROTO_MPTCP)
+            && !makes(AF_INET, SOCK_DGRAM, libc::IPPROTO_UDPLITE)
+    );
+    assert!(
+        !makes(AF_INET, SOCK_DGRAM, libc::IPPROTO_ICMP) && !makes(AF_INET6, SOCK_DGRAM, libc::IPPROTO_ICMPV6)
+    );
+    assert!(!makes(AF_INET, SOCK_RAW, libc::IPPROTO_RAW));
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EAFNOSUPPORT),
+        "the filter's answer"
+    );
+    assert!(!makes(AF_VSOCK, SOCK_STREAM, 0) && !makes(AF_PACKET, SOCK_DGRAM, 0));
+    let mut pair = [0; 2];
+    assert_eq!(
+        unsafe { libc::socketpair(AF_UNIX, SOCK_DGRAM, 0, pair.as_mut_ptr()) },
+        -1,
+        "no datagram pair"
+    );
+    assert_eq!(unsafe { libc::socketpair(AF_UNIX, SOCK_STREAM, 0, pair.as_mut_ptr()) }, 0);
+}
+
+const CASES: [(&str, fn()); 11] = [
+    ("qemu_file_metadata", qemu_file_metadata),
+    ("qemu_shared_memory", qemu_shared_memory),
+    ("qemu_socket_kinds", qemu_socket_kinds),
     ("qemu_with_no_new_unix_sockets", qemu_with_no_new_unix_sockets),
     ("passt_connection", passt_connection),
     ("bridged_device", bridged_device),
@@ -200,6 +304,8 @@ fn set_up(folder: &Path) {
     for (name, text) in [("mine", "mine"), ("theirs", "theirs")] {
         fs::create_dir_all(folder.join(name)).unwrap();
         fs::write(folder.join(name).join("file"), text).unwrap();
+        let file = folder.join(name).join("file");
+        fs::set_permissions(file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     }
 }
 

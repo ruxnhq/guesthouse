@@ -108,8 +108,13 @@ impl VmPlan {
 
     /// passt does the NAT for a machine on it, outside the jail, so QEMU's own network is the
     /// restricted private link, as for a bridged or restricted machine. Ubuntu's line is NAT.
+    /// Whether QEMU's own user network is the guest's way out, and not the restricted private link.
+    fn user_network_is_nat(&self) -> bool {
+        !self.has_machine_line() || (self.network.mode == Mode::Nat && !self.network.passt)
+    }
+
     fn jail_network(&self) -> Network {
-        let nat = !self.has_machine_line() || (self.network.mode == Mode::Nat && !self.network.passt);
+        let nat = self.user_network_is_nat();
         let mut tcp_bind = self.listened_ports();
         // The user network reaches the shared folder's program through a pair of loopback TCP
         // sockets it makes for each connection, on a port it can't know beforehand.
@@ -310,6 +315,7 @@ impl VmPlan {
             unix_sockets: Vec::new(),
             no_new_unix_sockets: false,
             reads_own_memory: false,
+            pings: false,
             program: Vec::new(),
         };
         let mut words = vec![self.launcher.display().to_string()];
@@ -333,6 +339,7 @@ impl VmPlan {
             unix_sockets: self.unix_sockets(),
             no_new_unix_sockets: self.passes_unix_sockets(),
             reads_own_memory: self.macos_boot().is_some(),
+            pings: self.user_network_is_nat(),
             program: Vec::new(),
         };
         let launcher = jail.launcher.display().to_string();
@@ -346,6 +353,7 @@ impl VmPlan {
                     unix_sockets: Vec::new(),
                     no_new_unix_sockets: false,
                     reads_own_memory: false,
+                    pings: false,
                     program: Vec::new(),
                 };
                 words.push(launcher.clone());

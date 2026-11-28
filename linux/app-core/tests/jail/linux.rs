@@ -159,6 +159,15 @@ fn probe() {
         ("its agent port", TcpListener::bind(("127.0.0.1", port("PROBE_AGENT_PORT"))).is_ok()),
         ("not another port", TcpListener::bind(("127.0.0.1", port("PROBE_OTHER_PORT"))).is_err()),
         ("no new unix socket", unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) } == -1),
+        ("not another file's mode", fs::set_permissions(other.join("disk.qcow2"), mode(0o644)).is_err()),
+        (
+            "no System V memory",
+            unsafe { libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o600) } == -1,
+        ),
+        (
+            "TCP and UDP only",
+            unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, libc::IPPROTO_SCTP) } == -1,
+        ),
         // Six either way: the four monitors, then the daemon's two, or the forwarded GPU's input and
         // frames.
         ("its own unix sockets", (20..26).all(|fd| fs::read_link(format!("/proc/self/fd/{fd}")).is_ok())),
@@ -187,6 +196,10 @@ fn probe() {
         eprintln!("not as it should be: {failed:?}");
         process::exit(1);
     }
+}
+
+fn mode(bits: u32) -> fs::Permissions {
+    std::os::unix::fs::PermissionsExt::from_mode(bits)
 }
 
 fn port(name: &str) -> u16 {

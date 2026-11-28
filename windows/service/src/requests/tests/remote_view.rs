@@ -439,7 +439,8 @@ fn a_device_found_waiting_is_shown_and_nothing_it_said_reaches_a_log() {
     says(service, "");
     assert_eq!(info(share(service, "win", Some(false))).state, ShareState::Off);
     let asked = service.work.remoteman.asked();
-    assert_eq!(asked[4..], ["pair decline", "allow clipboard on", "allow files on", "status"]);
+    let decline = format!("pair decline {PHONE}");
+    assert_eq!(asked[4..], [decline.as_str(), "allow clipboard on", "allow files on", "status"]);
     for line in &asked {
         assert!(!line.starts_with("sharing") && line != "drop" && !line.contains(&viewer()), "{line}");
     }

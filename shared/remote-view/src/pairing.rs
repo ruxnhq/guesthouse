@@ -355,10 +355,14 @@ impl Pairing {
 
     fn accept(&mut self, now: Millis, commands: &mut Commands, refused: &mut Option<String>) {
         match &self.phase {
-            Phase::Waiting(device) => {
-                commands.push(ctl::pair_accept());
-                self.phase = Phase::Accepted(device.clone(), now);
-            }
+            // Named by the fingerprint shown, so only that device is let in.
+            Phase::Waiting(device) => match ctl::pair_accept(&device.pending.fingerprint) {
+                Ok(words) => {
+                    commands.push(words);
+                    self.phase = Phase::Accepted(device.clone(), now);
+                }
+                Err(why) => *refused = Some(why),
+            },
             // Already accepted: pressed twice.
             Phase::Accepted(..) => {}
             _ => *refused = Some(NOBODY_WAITING.to_string()),
@@ -367,11 +371,14 @@ impl Pairing {
 
     /// Turns a waiting device away. `reason` is why, for the one who asked.
     fn decline(&mut self, commands: &mut Commands, refused: &mut Option<String>, reason: CloseReason) {
-        match self.phase {
-            Phase::Waiting(_) => {
-                commands.push(ctl::pair_decline());
-                self.close(reason, None, commands);
-            }
+        match &self.phase {
+            Phase::Waiting(device) => match ctl::pair_decline(&device.pending.fingerprint) {
+                Ok(words) => {
+                    commands.push(words);
+                    self.close(reason, None, commands);
+                }
+                Err(why) => *refused = Some(why),
+            },
             Phase::Accepted(..) => {}
             _ => *refused = Some(NOBODY_WAITING.to_string()),
         }
@@ -392,9 +399,10 @@ impl Pairing {
 
     /// The switch went off, or the program is quitting: nothing is left open or waiting.
     fn end(&mut self, commands: &mut Commands) {
-        match self.phase {
+        match &self.phase {
             Phase::Open(_) => commands.push(ctl::pair_close()),
-            Phase::Waiting(_) => commands.push(ctl::pair_decline()),
+            // A device with no fingerprint to name is left to the host, which refuses it in a minute.
+            Phase::Waiting(device) => commands.extend(ctl::pair_decline(&device.pending.fingerprint)),
             _ => {}
         }
         let was_busy = self.busy();

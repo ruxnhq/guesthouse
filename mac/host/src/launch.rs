@@ -26,6 +26,9 @@ pub const LINUX: &str = "linux";
 /// firmware has no use for booting from the network, and QEMU then needs no `efi-virtio.rom`
 /// from its data folder, which a QEMU copied out of its build folder does not find.
 pub const NETWORK_DEVICE: &str = "virtio-net-pci,netdev=net,romfile=";
+/// QEMU's own NAT, with the Mac's loopback out of the guest's reach: 10.0.2.2 leads to no service on
+/// it. `host-loopback=off` is in qemu/mac/patches/0007-host-loopback.patch.
+pub const NETWORK: &str = "user,id=net,host-loopback=off";
 
 /// The firmware file (QEMU's `-fw_cfg`) a Linux guest reads its scale from: `1` or `2`.
 pub const SCALE_FILE: &str = "opt/com.ruxn.guesthouse/scale";
@@ -180,7 +183,7 @@ pub fn qemu_args(launch: &Launch) -> Vec<String> {
     // Only a Linux machine has a network, and its scale as a file for the guest to read.
     let linux = launch.kind == LINUX;
     if linux {
-        add(&["-netdev", "user,id=net", "-device", NETWORK_DEVICE]);
+        add(&["-netdev", NETWORK, "-device", NETWORK_DEVICE]);
     } else {
         add(&["-nic", "none"]);
     }
@@ -440,7 +443,8 @@ mod tests {
             let nic = want.iter().position(|arg| arg == "-nic").unwrap();
             assert_eq!(want[nic + 1], "none");
             assert_eq!(want[nic + 2], "-rtc");
-            let network = ["-netdev", "user,id=net", "-device", "virtio-net-pci,netdev=net,romfile="];
+            let network =
+                ["-netdev", "user,id=net,host-loopback=off", "-device", "virtio-net-pci,netdev=net,romfile="];
             want.splice(nic..nic + 2, network.map(String::from));
             let rtc = want.iter().position(|arg| arg == "-rtc").unwrap();
             assert_eq!(want[rtc + 1], "base=localtime");

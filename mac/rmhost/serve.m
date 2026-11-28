@@ -91,12 +91,25 @@ static void with_encoder(server *s, void (^fn)(rme *enc))
 
 /* ---- the core's callbacks, on its handler thread ---- */
 
+/* A viewer's name as it can go in one printed line: control bytes and quotes are '?'. */
+static void printable_name(const char *name, char *out, size_t size)
+{
+    size_t at = 0;
+    for (; name && name[at] && at + 1 < size; at++) {
+        unsigned char c = (unsigned char)name[at];
+        out[at] = (c < 0x20 || c == 0x7f || c == '"') ? '?' : (char)c;
+    }
+    out[at] = 0;
+}
+
 static int32_t on_client(void *ctx, const rm_client_info *c, rm_accept *accept)
 {
     server *s = ctx;
     int32_t ok = 0;
+    char name[256];
 
-    printf("rmhost: viewer \"%s\" %ux%u at %u Hz, decoders %s\n", c->name ? c->name : "?",
+    printable_name(c->name ? c->name : "?", name, sizeof(name));
+    printf("rmhost: viewer \"%s\" %ux%u at %u Hz, decoders %s\n", name,
            c->width, c->height, c->refresh, c->decoders ? c->decoders : "?");
     pthread_mutex_lock(&s->lock);
     if (!c->decoders || !strstr(c->decoders, "hevc")) {

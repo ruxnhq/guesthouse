@@ -50,6 +50,12 @@ pub const REFUSED: &[&str] = &[
     "status\u{0}",
     "--port 1 status",
     "ctl status",
+    "pair accept",
+    "pair decline",
+    "pair on 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pair accept 0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pair accept 0123",
+    "pair decline 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 ];
 
 /// Lines a validator must take, which the guest's is tested with too.
@@ -57,8 +63,8 @@ pub const TAKEN: &[&str] = &[
     "status",
     "pair on",
     "pair off",
-    "pair accept",
-    "pair decline",
+    "pair accept 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "pair decline 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "revoke 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     "device 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef allow clipboard off",
     "device 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef allow camera on",

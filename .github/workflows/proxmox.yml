@@ -24,10 +24,10 @@ on:
   schedule:
     - cron: "43 3 * * *"
   pull_request:
-    paths: [qemu/qemu-gpupv.patch, packaging/proxmox/build-pve-qemu-kvm.sh, .github/workflows/proxmox.yml]
+    paths: [qemu/qemu-gpupv.patch, qemu/qemu-host-loopback.patch, packaging/proxmox/build-pve-qemu-kvm.sh, .github/workflows/proxmox.yml]
   push:
     branches: [main]
-    paths: [qemu/qemu-gpupv.patch, packaging/proxmox/build-pve-qemu-kvm.sh, .github/workflows/proxmox.yml]
+    paths: [qemu/qemu-gpupv.patch, qemu/qemu-host-loopback.patch, packaging/proxmox/build-pve-qemu-kvm.sh, .github/workflows/proxmox.yml]
 
 permissions:
   contents: read

@@ -35,7 +35,7 @@ fn a_device_found_waiting_is_taken_over_and_never_closed_under() {
     assert_eq!(view.pending.as_ref().map(|device| device.name.as_str()), Some("Tab"));
     // Even with pairing said to be open as well, nothing is closed while it waits.
     assert!(run.read(&reading(true, Some(pending(KITCHEN, "Tab", 43)), &[(OLD, "Old phone")])).is_empty());
-    assert_eq!(run.event(Event::Accept), ["pair accept"]);
+    assert_eq!(run.event(Event::Accept), [format!("pair accept {KITCHEN}")]);
     let lines = run.read(&reading(false, None, &[(OLD, "Old phone"), (KITCHEN, "Tab")]));
     assert_eq!(lines.len(), 2);
     assert_eq!(run.pairing.view().paired.as_deref(), Some("Tab"));
@@ -46,7 +46,7 @@ fn a_device_waiting_with_the_program_idle_is_taken_over_too() {
     let mut run = Run::idle(plain(), &[]);
     assert!(run.read(&reading(false, Some(pending(KITCHEN, "Tab", 44)), &[])).is_empty());
     assert!(run.pairing.busy());
-    assert_eq!(run.event(Event::Decline), ["pair decline"]);
+    assert_eq!(run.event(Event::Decline), [format!("pair decline {KITCHEN}")]);
 }
 
 #[test]

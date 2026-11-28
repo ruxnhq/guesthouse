@@ -99,6 +99,17 @@ pub fn make_password(context: &Context, machine: &Machine) -> Result<String> {
     make_secret(&machine.password_file(context))
 }
 
+/// The key the machine's shared folder is served under, made the first time. It stays, so an address
+/// the guest keeps, such as a Mac's in Finder, keeps working.
+pub fn share_key(context: &Context, machine: &Machine) -> Result<String> {
+    make_secret(&machine.share_key_file(context))
+}
+
+/// Where the guest finds the machine's shared folder.
+pub fn share_address(key: &str) -> String {
+    format!("http://{}/{key}/", crate::vm_args::SHARE_ADDRESS)
+}
+
 /// A file only this user can read, with a random value that stays.
 fn make_secret(path: &Path) -> Result<String> {
     if !path.exists() {

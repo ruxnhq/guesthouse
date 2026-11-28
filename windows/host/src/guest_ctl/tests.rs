@@ -91,10 +91,10 @@ fn each_request_has_its_own_number_and_an_old_answer_is_not_taken_for_it() {
 fn requests_from_two_threads_go_one_at_a_time_and_each_gets_its_own() {
     let (ctl, _fake) = guest(|id, words| answer_lines(id, 0, words.join(" ").as_bytes()).unwrap());
     let other = ctl.clone();
-    let there = thread::spawn(move || other.ask(&ctl::pair_accept(), LONG));
-    let here = ctl.ask(&ctl::pair_decline(), LONG);
-    assert_eq!(here.unwrap().text, "pair decline");
-    assert_eq!(there.join().unwrap().unwrap().text, "pair accept");
+    let there = thread::spawn(move || other.ask(&ctl::pair_open(), LONG));
+    let here = ctl.ask(&ctl::pair_close(), LONG);
+    assert_eq!(here.unwrap().text, "pair off");
+    assert_eq!(there.join().unwrap().unwrap().text, "pair on");
 }
 
 #[test]

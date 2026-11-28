@@ -107,7 +107,8 @@ fn fingerprint(word: &str) -> bool {
 ///
 /// ```text
 /// status
-/// pair on|off|accept|decline
+/// pair on|off
+/// pair accept|decline FP
 /// revoke FP
 /// device FP allow clipboard|files|sound|mic|camera on|off
 /// device FP view-only on|off
@@ -119,7 +120,8 @@ pub fn allowed(words: &[String]) -> Result<(), String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let fits = match words.as_slice() {
         ["status"] => true,
-        ["pair", what] => ["on", "off", "accept", "decline"].contains(what),
+        ["pair", "on" | "off"] => true,
+        ["pair", "accept" | "decline", fp] => fingerprint(fp),
         ["revoke", fp] => fingerprint(fp),
         ["device", fp, "allow", what, on] => {
             fingerprint(fp) && *what != "input" && PERMISSIONS.contains(what) && ON_OFF.contains(on)

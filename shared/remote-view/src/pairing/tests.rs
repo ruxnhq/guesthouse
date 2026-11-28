@@ -240,7 +240,7 @@ fn accepting_sends_accept_and_then_limits_the_device_when_it_appears() {
     run.read(&reading(true, None, &[(VIEWER, "Guesthouse")]));
     run.read(&reading(false, Some(pending(KITCHEN, "Kitchen tablet", 50)), &[(VIEWER, "Guesthouse")]));
     run.sent.clear();
-    assert_eq!(run.event(Event::Accept), ["pair accept"]);
+    assert_eq!(run.event(Event::Accept), [format!("pair accept {KITCHEN}")]);
     // The device is shown until it is among the devices, so the card does not flicker.
     assert!(run.pairing.view().pending.is_some());
     assert!(run.pairing.busy());
@@ -287,7 +287,7 @@ fn declining_turns_the_device_away_and_that_pairing_is_used_up() {
     run.open(120);
     run.read(&reading(true, None, &[]));
     run.read(&reading(false, Some(pending(KITCHEN, "Kitchen tablet", 50)), &[]));
-    assert_eq!(run.event(Event::Decline), ["pair decline"]);
+    assert_eq!(run.event(Event::Decline), [format!("pair decline {KITCHEN}")]);
     let view = run.pairing.view();
     assert_eq!(view.closed_reason, Some(CloseReason::Declined));
     assert!(!view.open && view.pending.is_none());
@@ -403,7 +403,7 @@ fn stopping_while_a_device_waits_declines_it_and_never_sends_pair_off() {
     run.open(120);
     run.read(&reading(true, None, &[]));
     run.read(&reading(false, Some(pending(KITCHEN, "Tab", 40)), &[]));
-    assert_eq!(run.event(Event::Stop), ["pair decline"]);
+    assert_eq!(run.event(Event::Stop), [format!("pair decline {KITCHEN}")]);
     assert_eq!(run.pairing.view().closed_reason, Some(CloseReason::Asked));
 }
 
@@ -445,7 +445,7 @@ fn the_switch_going_off_or_quitting_leaves_nothing_open_or_waiting() {
         run.open(120);
         run.read(&reading(true, None, &[]));
         run.read(&reading(false, Some(pending(KITCHEN, "Tab", 40)), &[]));
-        assert_eq!(run.event(event), ["pair decline"]);
+        assert_eq!(run.event(event), [format!("pair decline {KITCHEN}")]);
         assert!(!run.pairing.busy());
     }
     let mut unread = Run::new(plain());
@@ -492,4 +492,34 @@ fn owing_more_adds_to_what_is_owed_and_nothing_adds_nothing() {
     pairing.owe(Some(HostWide { clipboard: true, files: false }));
     pairing.owe(Some(HostWide { clipboard: false, files: true }));
     assert_eq!(pairing.held(), Some(HostWide { clipboard: true, files: true }));
+}
+
+#[test]
+fn an_answer_names_the_device_shown_last() {
+    let mut run = Run::idle(plain(), &[]);
+    run.open(120);
+    run.read(&reading(true, None, &[]));
+    run.read(&reading(false, Some(pending(KITCHEN, "Kitchen tablet", 50)), &[]));
+    // Another device took the place before the person answered: the person is shown that one.
+    run.read(&reading(false, Some(pending(PHONE, "Phone", 58)), &[]));
+    assert_eq!(run.pairing.view().pending.unwrap().fingerprint, PHONE);
+    assert_eq!(run.event(Event::Accept), [format!("pair accept {PHONE}")]);
+    // The guest found yet another one waiting and let nobody in: that one is shown, not trusted.
+    run.read(&reading(false, Some(pending(OLD, "Old phone", 59)), &[]));
+    let view = run.pairing.view();
+    assert_eq!(view.pending.unwrap().fingerprint, OLD);
+    assert!(view.paired.is_none() && run.pairing.busy());
+}
+
+#[test]
+fn a_device_with_no_fingerprint_is_never_answered() {
+    let mut run = Run::idle(plain(), &[]);
+    run.open(120);
+    run.read(&reading(true, None, &[]));
+    run.read(&reading(false, Some(pending("Tablet", "Tab", 50)), &[]));
+    for event in [Event::Accept, Event::Decline] {
+        assert!(run.event(event).is_empty());
+        assert_eq!(run.refused.as_deref(), Some(ctl::NOT_A_FINGERPRINT));
+    }
+    assert!(run.event(Event::Shutdown).is_empty());
 }

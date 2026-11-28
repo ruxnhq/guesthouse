@@ -17,6 +17,8 @@ pub(super) const BOOT_LINE: &[u8] = b"BdsDxe: starting";
 pub(super) const BOOTS_FILE: &str = "guesthouse-boots";
 pub(super) const SERIAL_FILE: &str = "serial.log";
 const SHARE_SCRIPT_SECONDS: u64 = 40;
+/// Where `share-start.ps1` has the share's address, which holds the key it is served under.
+const ADDRESS_MARK: &str = "@SHARE_ADDRESS@";
 /// Where the guest keeps what the app puts there, and the account its desktop runs as.
 pub(super) const GUEST_FOLDER: &str = "C:\\gpupv";
 const UPLOAD_SECONDS: u64 = 60;
@@ -178,7 +180,9 @@ pub(super) fn apply_screen(task: &mut Task) -> Result<()> {
 pub fn apply_share(task: &mut Task) -> Result<()> {
     if !task.machine.share.is_empty() {
         task.step("Connecting the shared folder");
-        let script = guest_script(task.context, "share-start.ps1")?;
+        let key = crate::agent::share_key(task.context, &task.machine)?;
+        let address = crate::agent::share_address(&key);
+        let script = guest_script(task.context, "share-start.ps1")?.replace(ADDRESS_MARK, &address);
         if !task.ask_guest(&script, SHARE_SCRIPT_SECONDS).replace("not mapped", "").contains("mapped") {
             task.error = "The shared folder did not reach the guest.".to_owned();
         }

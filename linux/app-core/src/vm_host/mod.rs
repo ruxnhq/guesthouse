@@ -4,6 +4,7 @@
 mod android_stop;
 mod local;
 mod macos_stop;
+mod qemu_probe;
 
 pub use local::{LocalHost, MACHINE_NOTE, last_words, sound_on_this_host};
 

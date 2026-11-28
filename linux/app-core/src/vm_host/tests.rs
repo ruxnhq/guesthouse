@@ -46,7 +46,11 @@ fn pretend_programs(scratch: &Scratch, context: &mut crate::context::Context) ->
         daemon_pid.display()
     );
     scratch.program("bin/guesthouse-daemon", &daemon);
-    let qemu = format!("#!/bin/sh\necho $$ > {}\nexec sleep {PRETEND_LIFE_SECONDS}\n", qemu_pid.display());
+    // It answers the question about its user network as a QEMU of Guesthouse's does, and stops.
+    let qemu = format!(
+        "#!/bin/sh\ncase \"$*\" in *host-loopback=ask*) exit 1;; esac\necho $$ > {}\nexec sleep {PRETEND_LIFE_SECONDS}\n",
+        qemu_pid.display()
+    );
     context.paths.qemu = scratch.program("not-qemu", &qemu);
     context.clock = Arc::new(QuickClock::default());
     (daemon_pid, qemu_pid)
@@ -343,7 +347,7 @@ fn a_jailed_start_runs_qemu_through_the_launcher_with_a_clean_environment() {
     let (daemon, qemu) = pretend_programs(&scratch, &mut context);
     let seen = scratch.path("qemu-environment");
     let qemu_program = format!(
-        "#!/bin/sh\nenv > {}\necho $$ > {}\nexec sleep {PRETEND_LIFE_SECONDS}\n",
+        "#!/bin/sh\ncase \"$*\" in *host-loopback=ask*) exit 1;; esac\nenv > {}\necho $$ > {}\nexec sleep {PRETEND_LIFE_SECONDS}\n",
         seen.display(),
         qemu.display()
     );
@@ -552,6 +556,25 @@ fn a_passt_note_in_the_run_folder_is_never_signalled() {
     let _ = other.kill();
     let _ = other.wait();
     assert!(left_alone, "the process was signalled");
+}
+
+#[test]
+fn a_qemu_without_the_host_loopback_setting_is_asked_and_never_started() {
+    let scratch = Scratch::new();
+    let mut context = scratch_context(&scratch);
+    let marker = scratch.path("qemu-ran");
+    let qemu = format!(
+        "#!/bin/sh\ncase \"$*\" in *host-loopback=ask*) echo \"Invalid parameter 'host-loopback'\" >&2; exit 1;; esac\n\
+         touch {}\n",
+        marker.display()
+    );
+    context.paths.qemu = scratch.program("not-qemu", &qemu);
+    let host = LocalHost::new(&context);
+    let machine = Machine { kind: Kind::Plain, ..Machine::new("vm", "VM", "/d", "/v") };
+    let plan = VmPlan::new(&context, &machine, Boot::Plain { iso: String::new() }, slots::first(), 0);
+    let error = host.start(&plan, &machine).unwrap_err();
+    assert!(error.0.contains("the QEMU that comes with Guesthouse"), "{error}");
+    assert!(!marker.exists(), "the machine's QEMU was started");
 }
 
 #[test]

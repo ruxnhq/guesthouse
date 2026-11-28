@@ -20,6 +20,8 @@ pub(crate) struct Client {
     pub(crate) upstream: UdpSocket,
     /// When the device last sent something, in milliseconds since the relay started.
     last_heard_ms: AtomicU64,
+    /// When its place was made, in milliseconds since the relay started.
+    made_ms: u64,
     up_packets: AtomicU64,
     down_packets: AtomicU64,
     thread: Mutex<Option<JoinHandle<()>>>,
@@ -36,6 +38,12 @@ impl Client {
 
     fn idle(&self, since_start: Duration) -> Duration {
         since_start.saturating_sub(Duration::from_millis(self.last_heard_ms.load(Relaxed)))
+    }
+
+    /// Whether the guest has sent this device nothing in the time it is given to.
+    fn unanswered(&self, since_start: Duration, timeout: Duration) -> bool {
+        self.down_packets.load(Relaxed) == 0
+            && since_start.saturating_sub(Duration::from_millis(self.made_ms)) >= timeout
     }
 }
 
@@ -83,7 +91,8 @@ pub(crate) fn for_peer(shared: &Arc<Shared>, peer: SocketAddr) -> Option<Arc<Cli
     if let Some(client) = table.get(&peer) {
         return Some(Arc::clone(client));
     }
-    if table.len() >= shared.config.max_clients {
+    let from_address = table.keys().filter(|held| held.ip() == peer.ip()).count();
+    if table.len() >= shared.config.max_clients || from_address >= shared.config.max_per_address {
         shared.stats.refused();
         return None;
     }
@@ -103,10 +112,12 @@ pub(crate) fn for_peer(shared: &Arc<Shared>, peer: SocketAddr) -> Option<Arc<Cli
 fn start(shared: &Arc<Shared>, peer: SocketAddr) -> io::Result<Arc<Client>> {
     let upstream = sockets::towards(shared.config.upstream)?;
     upstream.set_read_timeout(Some(LOOK_AGAIN))?;
+    let now_ms = shared.started.elapsed().as_millis() as u64;
     let client = Arc::new(Client {
         peer,
         upstream,
-        last_heard_ms: AtomicU64::new(shared.started.elapsed().as_millis() as u64),
+        last_heard_ms: AtomicU64::new(now_ms),
+        made_ms: now_ms,
         up_packets: AtomicU64::new(0),
         down_packets: AtomicU64::new(0),
         thread: Mutex::new(None),
@@ -123,7 +134,8 @@ fn start(shared: &Arc<Shared>, peer: SocketAddr) -> io::Result<Arc<Client>> {
 }
 
 /// The thread of one device: answers from the guest's port go back to it. When the device has been
-/// quiet for too long it takes itself out of the table and ends.
+/// quiet for too long, or the guest has answered it nothing since its place was made, it takes itself
+/// out of the table and ends.
 ///
 /// A datagram that arrives from the device in the moment between this thread deciding to end and
 /// leaving the table can be lost. That takes the device having been silent for the whole idle time.
@@ -145,7 +157,10 @@ fn carry_out(shared: &Arc<Shared>, client: &Arc<Client>) {
                 if shared.stop.load(Acquire) {
                     return;
                 }
-                if client.idle(shared.started.elapsed()) >= shared.config.idle_timeout {
+                let since_start = shared.started.elapsed();
+                if client.idle(since_start) >= shared.config.idle_timeout
+                    || client.unanswered(since_start, shared.config.unanswered_timeout)
+                {
                     expire(shared, client);
                     return;
                 }

@@ -6,14 +6,16 @@
  *
  * Commands, one per line:
  *   pair open SECONDS   let the next unknown device ask to be let in, for at most SECONDS
- *   pair accept         trust the device that is waiting
- *   pair decline        turn the device that is waiting away
+ *   pair accept FP      trust the device that is waiting, if its fingerprint is FP
+ *   pair decline FP     turn the device that is waiting away, if its fingerprint is FP
  *   pair close          stop pairing; a device that is waiting is declined
  *
  * Lines printed, in this fixed form, for whoever runs rmhost to read:
  *   rmhost: pairing open until UNIX_SECONDS     (0 for -p, which has no time limit)
  *   rmhost: pairing pending JSON                (a device waits; JSON is the core's own)
- *   rmhost: paired FINGERPRINT NAME             (NAME is the rest of the line)
+ *   rmhost: paired FINGERPRINT NAME             (NAME is the rest of the line, with control
+ *                                               characters shown as '?')
+ *   rmhost: another device is waiting now       (pair accept or decline named another one)
  *   rmhost: pairing closed: paired|declined|timeout|asked|other
  *
  * The JSON of `pending` is what rm_host_pending gives and what remoteman's own host shows as
@@ -159,6 +161,20 @@ static void say(NSString *line)
     fflush(stdout);
 }
 
+/* A name as it can go in one printed line: every control character, line ends included, is '?'. */
+static NSString *printable(NSString *name)
+{
+    NSMutableString *line = [NSMutableString stringWithCapacity:name.length];
+    NSCharacterSet *controls = NSCharacterSet.controlCharacterSet;
+    NSCharacterSet *ends = NSCharacterSet.newlineCharacterSet;
+    for (NSUInteger at = 0; at < name.length; at++) {
+        unichar c = [name characterAtIndex:at];
+        bool plain = ![controls characterIsMember:c] && ![ends characterIsMember:c];
+        [line appendString:plain ? [NSString stringWithCharacters:&c length:1] : @"?"];
+    }
+    return line;
+}
+
 static void begin(time_t deadline)
 {
     if (!ctl.open) {
@@ -183,8 +199,8 @@ static void finish(const char *why)
     bool paired = false;
     for (NSDictionary *device in new_devices()) {
         devicectl_new_device(device[@"fingerprint"]);
-        say([NSString stringWithFormat:@"rmhost: paired %@ %@", device[@"fingerprint"],
-                                       device[@"name"] ?: @""]);
+        say([NSString stringWithFormat:@"rmhost: paired %@ %@", printable(device[@"fingerprint"] ?: @""),
+                                       printable(device[@"name"] ?: @"")]);
         paired = true;
     }
     /* Closing pairing declines a device that is still waiting. */
@@ -207,10 +223,20 @@ static void command(NSString *line)
             return;
         }
         begin(time(NULL) + seconds);
-    } else if (words.count == 2 && [words[0] isEqual:@"pair"] &&
+    } else if (words.count == 3 && [words[0] isEqual:@"pair"] &&
                ([words[1] isEqual:@"accept"] || [words[1] isEqual:@"decline"])) {
+        /* The device is named by the fingerprint the app showed, and read again here, straight
+         * before the answer: the answer goes only to that device. */
         bool accept = [words[1] isEqual:@"accept"];
-        if (rm_host_decide(ctl.host, accept)) {
+        NSString *json = nil;
+        NSDictionary *device = waiting(&json);
+        NSString *fp = device[@"fingerprint"];
+        if (!device) {
+            say(@"rmhost: nobody is waiting");
+        } else if (![fp isKindOfClass:NSString.class] ||
+                   ![fp.lowercaseString isEqualToString:words[2].lowercaseString]) {
+            say(@"rmhost: another device is waiting now");
+        } else if (rm_host_decide(ctl.host, accept)) {
             ctl.decided = accept ? 1 : 2;
         } else {
             say(@"rmhost: nobody is waiting");

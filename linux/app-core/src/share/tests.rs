@@ -6,8 +6,19 @@ use std::os::unix::fs::symlink;
 
 type Fields<'a> = &'a [(&'a str, &'a str)];
 
-/// One request, as the guest would send it.
+const KEY: &str = "k3y";
+
+/// One request, as the guest would send it, under the share's key.
 fn request(method: &str, path: &str, fields: Fields, body: &[u8]) -> Vec<u8> {
+    let keyed = |text: &str| text.replacen("http://x/", &format!("http://x/{KEY}/"), 1);
+    let fields: Vec<(&str, String)> = fields.iter().map(|(name, value)| (*name, keyed(value))).collect();
+    let fields: Vec<(&str, &str)> = fields.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let path = if path.starts_with('/') { format!("/{KEY}{path}") } else { path.to_owned() };
+    unkeyed(method, &path, &fields, body)
+}
+
+/// One request as it is written, with or without a key.
+fn unkeyed(method: &str, path: &str, fields: Fields, body: &[u8]) -> Vec<u8> {
     let mut text = format!("{method} {path} HTTP/1.1\r\nHost: x\r\n");
     if !fields.iter().any(|(name, _)| *name == "Content-Length") {
         text += &format!("Content-Length: {}\r\n", body.len());
@@ -20,8 +31,12 @@ fn request(method: &str, path: &str, fields: Fields, body: &[u8]) -> Vec<u8> {
 
 /// Sends requests to the share, and returns each reply's status and body.
 fn dav(root: &Path, requests: &[Vec<u8>]) -> Vec<(u16, Vec<u8>)> {
+    dav_as(root, Access::ReadWrite, requests)
+}
+
+fn dav_as(root: &Path, access: Access, requests: &[Vec<u8>]) -> Vec<(u16, Vec<u8>)> {
     let mut output = Vec::new();
-    Share::new(root).unwrap().serve(Cursor::new(requests.concat()), &mut output).unwrap();
+    Share::new(root, KEY, access).unwrap().serve(Cursor::new(requests.concat()), &mut output).unwrap();
     let mut replies = Vec::new();
     let mut data = &output[..];
     while !data.is_empty() {
@@ -219,7 +234,7 @@ fn a_client_that_asks_is_told_to_go_on() {
     let root = shared(&scratch);
     let mut output = Vec::new();
     let put = request("PUT", "/new.txt", &[("Expect", "100-continue")], b"data");
-    Share::new(&root).unwrap().serve(Cursor::new(put), &mut output).unwrap();
+    Share::new(&root, KEY, Access::ReadWrite).unwrap().serve(Cursor::new(put), &mut output).unwrap();
     assert!(output.starts_with(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201"));
 }
 
@@ -261,4 +276,153 @@ fn a_path_checked_before_a_link_moved_in_stays_inside() {
     folder.files.create(&checked).unwrap();
     assert!(!scratch.path("outer/f").exists(), "nothing may appear outside the folder");
     assert!(root.join("f").exists(), "the link's way up stops at the folder");
+}
+
+/// What the share answers, or `None` if it is still busy after a few seconds.
+fn codes_in_time(root: &Path, requests: Vec<Vec<u8>>) -> Option<Vec<u16>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let root = root.to_owned();
+    std::thread::spawn(move || sender.send(codes(&root, &requests)));
+    receiver.recv_timeout(std::time::Duration::from_secs(5)).ok()
+}
+
+#[test]
+fn only_regular_files_are_opened() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let fifo = root.join("pipe");
+    rustix::fs::mknodat(rustix::fs::CWD, &fifo, rustix::fs::FileType::Fifo, 0o600.into(), 0).unwrap();
+    let requests = vec![
+        request("PUT", "/pipe", &[], b"x"),
+        request("COPY", "/pipe", &[("Destination", "http://x/copied")], b""),
+        get("/pipe"),
+        get("/hello.txt"),
+    ];
+    let answered = codes_in_time(&root, requests).expect("a pipe in the folder must not hold the connection");
+    assert_eq!(answered[2..], [404, 200]);
+    assert!(answered[..2].iter().all(|code| *code >= 400), "{answered:?}");
+    assert!(!root.join("copied").exists());
+}
+
+#[test]
+fn a_link_copied_or_moved_still_leads_inside_the_folder() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    fs::create_dir_all(root.join("sub/deep")).unwrap();
+    symlink("../../hello.txt", root.join("sub/deep/link")).unwrap();
+    let requests = [
+        request("COPY", "/sub/deep/link", &[("Destination", "http://x/copied")], b""),
+        request("MOVE", "/sub/deep/link", &[("Destination", "http://x/moved")], b""),
+        request("COPY", "/sub", &[("Destination", "http://x/top")], b""),
+        request("COPY", "/sub/deep/link", &[("Destination", "http://x/sub/deep/again")], b""),
+        request("MOVE", "/sub", &[("Destination", "http://x/new%20sub")], b""),
+    ];
+    assert_eq!(codes(&root, &requests), [403, 403, 201, 201, 201]);
+    assert!(
+        fs::symlink_metadata(root.join("copied")).is_err()
+            && fs::symlink_metadata(root.join("moved")).is_err()
+    );
+    assert_eq!(fs::read_to_string(root.join("new sub/deep/again")).unwrap(), "hi");
+}
+
+#[test]
+fn a_folder_cannot_be_copied_into_itself_through_a_link() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    symlink("sub", root.join("alias")).unwrap();
+    let copy = request("COPY", "/sub", &[("Destination", "http://x/alias/all")], b"");
+    assert_eq!(codes_in_time(&root, vec![copy]), Some(vec![403]));
+    assert!(!root.join("sub/all").exists());
+}
+
+#[test]
+fn a_quiet_connection_ends() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let (ours, guest) = std::os::unix::net::UnixStream::pair().unwrap();
+    limit_quiet(&ours, std::time::Duration::from_millis(200)).unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ended =
+            Share::new(&root, KEY, Access::ReadWrite).unwrap().serve(io::BufReader::new(&ours), &ours);
+        sender.send(ended.is_ok())
+    });
+    let ended = receiver.recv_timeout(std::time::Duration::from_secs(5));
+    assert_eq!(ended, Ok(true), "a connection that says nothing must end by itself");
+    drop(guest);
+}
+
+#[test]
+fn nothing_is_served_without_the_key() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let requests = [
+        unkeyed("GET", "/hello.txt", &[], b""),
+        unkeyed("GET", "/k3/hello.txt", &[], b""),
+        unkeyed("GET", "/k3yy/hello.txt", &[], b""),
+        unkeyed("GET", "http://x/hello.txt", &[], b""),
+        unkeyed("PUT", "/hello.txt", &[], b"changed"),
+        unkeyed("DELETE", "/sub", &[], b""),
+        unkeyed("MKCOL", "/made", &[], b""),
+        request("MOVE", "/hello.txt", &[("Destination", "/moved.txt")], b""),
+        request("COPY", "/hello.txt", &[("Destination", "http://y/elsewhere/copied.txt")], b""),
+    ];
+    assert_eq!(codes(&root, &requests), [404, 404, 404, 404, 404, 404, 404, 403, 403]);
+    let names = crate::machine::sorted_names(&root);
+    assert_eq!(names, ["hello.txt", "inside.txt", "leak", "leak.txt", "sub"]);
+    assert_eq!(fs::read_to_string(root.join("hello.txt")).unwrap(), "hi");
+    let replies = dav(&root, &[unkeyed("PROPFIND", "/", &[("Depth", "1")], b"")]);
+    let listing = String::from_utf8_lossy(&replies[0].1);
+    assert_eq!(replies[0].0, 207);
+    assert!(!listing.contains("hello") && !listing.contains("sub"), "{listing}");
+}
+
+#[test]
+fn a_listing_gives_addresses_under_the_key() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let replies = dav(&root, &[request("PROPFIND", "/", &[("Depth", "1")], b"")]);
+    let listing = String::from_utf8_lossy(&replies[0].1);
+    assert!(listing.contains("<D:href>/k3y/</D:href>"), "{listing}");
+    assert!(listing.contains("<D:href>/k3y/hello.txt</D:href>"), "{listing}");
+    assert_eq!(
+        dav(&root, &[unkeyed("GET", "http://10.0.2.4/k3y/hello.txt", &[], b"")]),
+        [(200, b"hi".to_vec())]
+    );
+}
+
+#[test]
+fn a_read_only_share_refuses_every_change() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    let requests = [
+        request("PUT", "/hello.txt", &[], b"changed"),
+        request("PUT", "/new.txt", &[], b"new"),
+        request("DELETE", "/hello.txt", &[], b""),
+        request("MKCOL", "/made", &[], b""),
+        request("MOVE", "/hello.txt", &[("Destination", "http://x/moved.txt")], b""),
+        request("COPY", "/hello.txt", &[("Destination", "http://x/copied.txt")], b""),
+        request("LOCK", "/locked.txt", &[], b""),
+        request("LOCK", "/hello.txt", &[], b""),
+        get("/hello.txt"),
+        request("PROPFIND", "/", &[("Depth", "1")], b""),
+    ];
+    let answered: Vec<u16> =
+        dav_as(&root, Access::ReadOnly, &requests).into_iter().map(|reply| reply.0).collect();
+    assert_eq!(answered, [403, 403, 403, 403, 403, 403, 403, 200, 200, 207]);
+    let names = crate::machine::sorted_names(&root);
+    assert_eq!(names, ["hello.txt", "inside.txt", "leak", "leak.txt", "sub"]);
+    assert_eq!(fs::read_to_string(root.join("hello.txt")).unwrap(), "hi");
+}
+
+#[test]
+fn a_key_must_be_given() {
+    let scratch = Scratch::new();
+    let root = shared(&scratch);
+    for key in ["", "a/b", "a b", "%41"] {
+        assert!(Share::new(&root, key, Access::ReadWrite).is_err(), "{key:?}");
+    }
+    assert_eq!(Access::from_word("read-only"), Some(Access::ReadOnly));
+    assert_eq!(Access::from_word(Access::ReadWrite.word()), Some(Access::ReadWrite));
+    assert_eq!(Access::from_word(""), None);
 }

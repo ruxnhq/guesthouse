@@ -184,9 +184,43 @@ pub fn install_script(version: &str, encoder: &str) -> String {
 
 /// The script that runs one `ctl` command: the words are each quoted, never joined unquoted, as a
 /// fingerprint comes from a person's device.
+///
+/// remoteman's host answers whoever waits on a plain `pair accept` or `pair decline`, so for those
+/// with a fingerprint the script reads the waiting device straight before and answers only when it
+/// is that one, and otherwise says [`crate::ctl::ANOTHER_DEVICE_WAITS`]. Any other `pair accept` or
+/// `pair decline` runs nothing.
 pub fn ctl_script(words: &[String]) -> String {
-    let quoted: Vec<String> = words.iter().map(|word| ps(word)).collect();
-    format!("& {} ctl --port {} {}\n", ps(GUEST_HOST), crate::PORT, quoted.join(" "))
+    match words {
+        [pair, answer, fingerprint] if pair == "pair" && (answer == "accept" || answer == "decline") => {
+            match crate::ctl::check_fingerprint(fingerprint) {
+                Ok(fingerprint) => answer_script(answer, &fingerprint),
+                Err(why) => format!("{}\n", ps(&why)),
+            }
+        }
+        [pair, answer, ..] if pair == "pair" && (answer == "accept" || answer == "decline") => {
+            format!("{}\n", ps(crate::ctl::NOT_A_FINGERPRINT))
+        }
+        _ => {
+            let quoted: Vec<String> = words.iter().map(|word| ps(word)).collect();
+            format!("& {} ctl --port {} {}\n", ps(GUEST_HOST), crate::PORT, quoted.join(" "))
+        }
+    }
+}
+
+/// `pair ANSWER` for the device with `fingerprint` only, which is checked to be one already. The
+/// status's first line that opens a JSON object is read, as [`crate::status::parse_reply`] does.
+fn answer_script(answer: &str, fingerprint: &str) -> String {
+    format!(
+        "$waiting = $null\n\
+         $said = @(& {host} ctl --port {port} status | ForEach-Object {{ \"$_\".Trim() }} | Where-Object {{ $_.StartsWith('{{') }})\n\
+         if ($said.Count -gt 0) {{ try {{ $pending = ($said[0] | ConvertFrom-Json).pending; if ($pending) {{ $waiting = [string]$pending.fingerprint }} }} catch {{ }} }}\n\
+         if ($waiting -and $waiting.ToLowerInvariant() -ceq {fingerprint}) {{ & {host} ctl --port {port} pair {answer} }} else {{ {another} }}\n",
+        host = ps(GUEST_HOST),
+        port = crate::PORT,
+        fingerprint = ps(fingerprint),
+        answer = ps(answer),
+        another = ps(crate::ctl::ANOTHER_DEVICE_WAITS),
+    )
 }
 
 /// The guest's fingerprint, from what [`install_script`] said.

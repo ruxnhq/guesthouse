@@ -39,7 +39,8 @@ const SHUT_DOWN_FIRST: &str = "Shut the VM down first.";
 /// snapshot's record is about this PC's starts. See `import/accepted.rs`.
 /// The mark for a second token change stays too, and so does the one for a copy's new identities in
 /// the guest: the import plans its own of both.
-const STAYS_HERE: [&str; 7] = [
+const STAYS_HERE: [&str; 8] = [
+    crate::machine::SHARE_KEY_FILE,
     crate::recipe::CHOSEN_FILE,
     crate::recipe::OUTCOME_FILE,
     crate::scan_exclusions::EXCLUSIONS_FILE,

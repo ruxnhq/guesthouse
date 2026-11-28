@@ -113,7 +113,7 @@ pub const USAGE: &str = "usage: guesthouse-vm COMMAND [MACHINE]
   show MACHINE               its settings
   set MACHINE SETTING VALUE  cores, ram, vram, screen, refresh, network, passt, bridge, only-through,
                              dns, sound, share, window-speed, dlss, start-unjailed, remote-desktop, ssh,
-                             app-windows, remote-view, auto-snapshot
+                             app-windows, remote-view, auto-snapshot, share-read-only
                              throwaway, vendor-id
                              only-through is an interface's name, such as wg0, or off. dns is an
                              IPv4 address, or auto. vendor-id takes retry: a Windows machine kept

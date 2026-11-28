@@ -181,7 +181,7 @@ fetch_qemu() {
     [ "$(git -C "$QEMU_TREE.new" rev-parse HEAD)" = "$QEMU_COMMIT" ] ||
         die "$QEMU_TAG is not the commit it should be"
     git -C "$QEMU_TREE.new" -c user.name=release -c user.email=release@localhost \
-        am -q "$REPO/qemu/qemu-gpupv.patch"
+        am -q "$REPO/qemu/qemu-gpupv.patch" "$REPO/qemu/qemu-host-loopback.patch"
     mv "$QEMU_TREE.new" "$QEMU_TREE"
 }
 

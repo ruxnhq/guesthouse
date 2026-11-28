@@ -24,6 +24,7 @@ pub mod launch;
 pub mod plan;
 mod published;
 mod secure;
+mod super_tap;
 mod view;
 
 use super::frames::FrameRoute;

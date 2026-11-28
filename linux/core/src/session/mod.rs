@@ -236,6 +236,8 @@ pub struct Session<B, M> {
     pub(crate) timings: Timings,
 
     pub(crate) deferred: Vec<Deferred>,
+    /// What the backend last said of its runs, as (sent, ended), for the message or poll at hand.
+    pub(crate) runs_seen: Option<(u64, u64)>,
     pub(crate) pending: Vec<Pending>,
     pub(crate) pending_spare: Vec<Pending>,
     pub(crate) notices: Vec<Notice>,
@@ -320,6 +322,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
             replies: Vec::new(),
             timings: Timings::new(false),
             deferred: Vec::new(),
+            runs_seen: None,
             pending: Vec::new(),
             pending_spare: Vec::new(),
             notices: Vec::new(),
@@ -427,6 +430,7 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         out.clear();
         self.ticket = ticket;
         self.held = false;
+        self.runs_seen = None;
         let command = MessageHeader::parse(message).map(|header| header.command);
         if let Err(failure) = self.dispatch(command, message, out) {
             log::warn!("{command:?} failed: {failure}");

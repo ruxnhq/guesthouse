@@ -24,7 +24,22 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io;
 use std::os::fd::{OwnedFd, RawFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+/// Every run sent to the card from this process, in every space, counted in the order they went, so
+/// that one count covers them all.
+static RUNS_SENT: AtomicU64 = AtomicU64::new(0);
+
+/// How many runs this process has sent to the card.
+pub fn runs_sent() -> u64 {
+    RUNS_SENT.load(Ordering::Relaxed)
+}
+
+/// The number of the run about to be sent.
+fn next_run() -> u64 {
+    RUNS_SENT.fetch_add(1, Ordering::Relaxed) + 1
+}
 
 /// Which buffers a space has taken in, and its mappings of them. Kept apart from the files so the
 /// counting can be tested without a card.
@@ -150,8 +165,13 @@ pub struct SpaceVm {
     fence_ibs: Option<FenceIbs>,
     /// The daemon's copies of the video commands run here, made on first use.
     video_ib: Option<VideoIb>,
-    /// The video runs on the card, and the places in that buffer they hold.
-    video_runs: VideoRuns<Syncobj>,
+    /// The video runs on the card, and the places in that buffer they hold, by their numbers.
+    video_runs: VideoRuns<(u64, Syncobj)>,
+    /// Runs the daemon stopped waiting for, which may still be on the card, by their numbers.
+    given_up: Vec<(u64, Syncobj)>,
+    /// The daemon's own run sent with [`Self::send_after`], until [`Self::end_own`]: its number,
+    /// and another name for what the kernel signals when it retires.
+    own_on_card: Option<(u64, Syncobj)>,
     /// The runs sent without waiting that the kernel hasn't been seen to retire, oldest first.
     on_card: VecDeque<OnCard>,
     /// The fences of runs seen to retire since they were last asked for.
@@ -186,6 +206,7 @@ pub struct GuestFence {
 /// the fence the run writes last.
 #[derive(Debug)]
 struct OnCard {
+    number: u64,
     slot: usize,
     ip_type: u32,
     /// The card's clock in nanoseconds once the run was sent, if it could be read.
@@ -255,6 +276,8 @@ impl SpaceVm {
             fence_ibs: None,
             video_ib: None,
             video_runs: VideoRuns::default(),
+            given_up: Vec::new(),
+            own_on_card: None,
             on_card: VecDeque::new(),
             retired: Vec::new(),
             video_retired: Vec::new(),
@@ -382,6 +405,7 @@ impl SpaceVm {
             return Err(io::Error::other("no buffer for video commands was made here"));
         }
         let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
+        let number = next_run();
         // The guest doesn't say which buffers the work uses, so it may use any mapped here.
         let buffers = self.named_buffers();
         let list = self.buffer_list(&buffers)?;
@@ -399,7 +423,7 @@ impl SpaceVm {
                         "amdgpu won't post a video run's end to an eventfd ({error}), so it is polled"
                     );
                 }
-                self.video_runs.sent(slot, retired, queue, fence, now);
+                self.video_runs.sent(slot, (number, retired), queue, fence, now);
                 Ok(())
             }
             Err(error) => {
@@ -438,11 +462,11 @@ impl SpaceVm {
         }
         let file = &self.file;
         // A sync object that can't be asked about is one the kernel has no run for.
-        let retired = self.video_runs.retire(|signal| signal.signalled(file).unwrap_or(true), now);
+        let retired = self.video_runs.retire(|(_, signal)| signal.signalled(file).unwrap_or(true), now);
         if !retired.is_empty() {
             self.video_last_retired = Some(now);
         }
-        for (signal, run) in retired {
+        for ((_, signal), run) in retired {
             signal.destroy(file);
             self.video_retired.push(run);
         }
@@ -479,6 +503,7 @@ impl SpaceVm {
             }
         }
         let sent = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error));
+        let number = next_run();
         let submitted = sent.and_then(|signal| {
             // As in `submit_and_wait`: any buffer mapped here may be used.
             let buffers = self.books.handles();
@@ -487,7 +512,10 @@ impl SpaceVm {
                     .map(|_| ())
             });
             match submitted {
-                Ok(()) => Ok(Sent::OnCard(signal)),
+                Ok(()) => {
+                    self.own_on_card = Some((number, signal.alias()));
+                    Ok(Sent::OnCard(signal))
+                }
                 Err(error) => {
                     signal.destroy(&self.file);
                     match error.kind() {
@@ -509,7 +537,11 @@ impl SpaceVm {
 
     /// How the daemon's own run from [`Self::send_after`] ended, once it retired or was given up on.
     pub fn end_own(&mut self, signal: Syncobj, retired: bool) -> Ran {
-        signal.destroy(&self.file);
+        let number = self.own_on_card.take().map(|(number, _)| number);
+        match number.filter(|_| !retired) {
+            Some(number) => self.given_up.push((number, signal)),
+            None => signal.destroy(&self.file),
+        }
         match (retired, self.faults.look(&self.file)) {
             (false, _) => Ran::Hung,
             (true, Some(fault)) => Ran::Faulted(fault),
@@ -525,6 +557,7 @@ impl SpaceVm {
         patience: Patience,
     ) -> io::Result<Ran> {
         let signal = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
+        let number = next_run();
         // The guest doesn't say which buffers the work uses, so it may use any mapped here, named by
         // a list the kernel keeps rather than by every handle each time.
         let buffers = self.named_buffers();
@@ -535,14 +568,22 @@ impl SpaceVm {
         let ran = match submitted {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(Ran::Refused),
             Err(error) => Err(step("submitting", error)),
-            Ok(()) => signal
-                .arm_eventfd(&self.file)
-                .map_err(|error| step("arming the eventfd", error))
-                .and_then(|event| run_wait::wait_for_run(&event, patience, ip_type))
-                .map(|waited| match waited {
-                    Waited::Retired { .. } => Ran::Retired,
-                    Waited::Hung => Ran::Hung,
-                }),
+            Ok(()) => {
+                let ran = signal
+                    .arm_eventfd(&self.file)
+                    .map_err(|error| step("arming the eventfd", error))
+                    .and_then(|event| run_wait::wait_for_run(&event, patience, ip_type))
+                    .map(|waited| match waited {
+                        Waited::Retired { .. } => Ran::Retired,
+                        Waited::Hung => Ran::Hung,
+                    });
+                if !matches!(ran, Ok(Ran::Retired)) {
+                    // Not seen to end, so it may still be on the card until the kernel ends it.
+                    self.given_up.push((number, signal));
+                    return ran;
+                }
+                ran
+            }
         };
         signal.destroy(&self.file);
         ran
@@ -595,6 +636,7 @@ impl SpaceVm {
             )));
         }
         let retired = Syncobj::create(&self.file).map_err(|error| step("making a sync object", error))?;
+        let number = next_run();
         // The guest doesn't say which buffers the work uses, so it may use any mapped here, and the
         // fence writers, which are this file's own.
         let buffers = self.named_buffers();
@@ -606,7 +648,7 @@ impl SpaceVm {
         match submitted {
             Ok(_) => {
                 let sent = info::read_gpu_clock(&self.file, self.clock_khz).ok();
-                self.on_card.push_back(OnCard { slot, ip_type, sent, retired, fence: Some(fence) });
+                self.on_card.push_back(OnCard { number, slot, ip_type, sent, retired, fence: Some(fence) });
                 Ok(())
             }
             Err(error) => {
@@ -664,6 +706,26 @@ impl SpaceVm {
     pub fn take_retired(&mut self) -> Vec<GuestFence> {
         self.take_back_slots(true);
         std::mem::take(&mut self.retired)
+    }
+
+    /// The number of the oldest run sent here that the kernel hasn't said has ended, whatever became
+    /// of its queue or of the daemon's wait for it. Runs given up on are let go here once they end.
+    pub fn oldest_on_card(&mut self) -> Option<u64> {
+        // A sync object that can't be asked about is one the kernel has no run for.
+        let file = &self.file;
+        let ended = |signal: &Syncobj| signal.signalled(file).unwrap_or(true);
+        self.given_up.retain(|(_, signal)| {
+            let gone = ended(signal);
+            if gone {
+                signal.destroy(file);
+            }
+            !gone
+        });
+        let guests = self.on_card.iter().filter(|run| !ended(&run.retired)).map(|run| run.number);
+        let video = self.video_runs.on_card().filter(|(_, signal)| !ended(signal)).map(|&(number, _)| number);
+        let given_up = self.given_up.iter().map(|&(number, _)| number);
+        let own = self.own_on_card.iter().filter(|(_, signal)| !ended(signal)).map(|&(number, _)| number);
+        guests.chain(video).chain(given_up).chain(own).min()
     }
 
     /// Forgets the fences of a queue that has gone.
@@ -852,6 +914,8 @@ mod tests {
             fence_ibs: None,
             video_ib: None,
             video_runs: VideoRuns::default(),
+            given_up: Vec::new(),
+            own_on_card: None,
             on_card: VecDeque::new(),
             retired: Vec::new(),
             video_retired: Vec::new(),
@@ -863,6 +927,38 @@ mod tests {
             clock_khz: 100_000,
             lists: BufferList::default(),
         }
+    }
+
+    #[test]
+    fn the_daemons_own_run_is_asked_about_and_let_go_at_its_end() {
+        let mut space = space_without_a_card();
+        assert_eq!(space.oldest_on_card(), None);
+        space.own_on_card = Some((5, Syncobj::made_up(1)));
+        // This file has no kernel behind it, which has no run for the sync object.
+        assert_eq!(space.oldest_on_card(), None, "asked, not kept until the next copy");
+        let _ = space.end_own(Syncobj::made_up(1), true);
+        assert!(space.own_on_card.is_none());
+        assert!(space.given_up.is_empty());
+    }
+
+    #[test]
+    fn a_run_given_up_on_stays_until_the_kernel_lets_it_go() {
+        let mut space = space_without_a_card();
+        space.own_on_card = Some((9, Syncobj::made_up(1)));
+        let _ = space.end_own(Syncobj::made_up(1), false);
+        assert!(space.own_on_card.is_none());
+        assert_eq!(space.given_up.len(), 1, "kept, as the card may still be running it");
+        // This file has no kernel behind it, which has no run for the sync object.
+        assert_eq!(space.oldest_on_card(), None);
+        assert!(space.given_up.is_empty());
+    }
+
+    #[test]
+    fn runs_are_numbered_in_the_order_they_go() {
+        let first = next_run();
+        let second = next_run();
+        assert!(second > first);
+        assert!(runs_sent() >= second);
     }
 
     /// A command buffer where a guest places its own, and one inside the daemon's video buffer.

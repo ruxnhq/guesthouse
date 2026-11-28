@@ -84,7 +84,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         self.backend.process_gone(process);
         if let Some(space) = self.spaces.remove(&process) {
             let action = DeferredAction::CloseSpace(space);
-            self.deferred.push(crate::deferred::Deferred { waits: Vec::new(), action });
+            let runs = self.runs_on_card();
+            self.deferred.push(crate::deferred::Deferred { waits: Vec::new(), runs, action });
         }
     }
 
@@ -297,7 +298,8 @@ impl<B: Backend, M: GuestMemory> Session<B, M> {
         if let Some(queue) = closed {
             // Its progress handle goes with it, as the fence it names is given back.
             self.queue_progress.retain(|_, fence| *fence != queue.fence);
-            self.fences.give_back((queue.fence, queue.fence_gpu_address));
+            // The queue's runs may still write its fence, so the page waits for them like memory.
+            self.defer(DeferredAction::ReturnFence((queue.fence, queue.fence_gpu_address)));
         }
     }
 

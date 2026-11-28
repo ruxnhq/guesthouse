@@ -339,6 +339,19 @@ pub trait Backend: Sized {
     /// A hardware queue has gone, so whatever backs it can go too.
     fn close_queue(&mut self, queue: u32);
 
+    /// How many runs this backend has sent the card so far, counting only work that ends: a mark
+    /// for [`Backend::work_ended`].
+    fn work_sent(&self) -> u64;
+
+    /// How many runs, from the first this backend sent, have all ended by the host driver's own
+    /// word: what the kernel signals, not a fence in guest memory. A run counts until then
+    /// whatever became of it here: given up on, its queue failed or gone, its address space closed.
+    /// The core frees memory, gives guest pages and fence pages back, and closes an address space
+    /// only once this has reached what [`Backend::work_sent`] said when they went. A backend whose
+    /// unmapping and freeing stop the card reaching that memory at once, whatever still runs,
+    /// answers [`Backend::work_sent`].
+    fn work_ended(&mut self) -> u64;
+
     /// Starts copying a finished frame into a staging surface. This must not wait for the copy,
     /// as the message thread serves every other guest thread meanwhile.
     fn start_staging_copy(&mut self, host: &mut dyn HostServices, copy: &StagingCopy) -> StagingStart;

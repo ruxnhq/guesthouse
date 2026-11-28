@@ -201,6 +201,7 @@ mod copy_bounds;
 mod failing;
 mod first_lock;
 mod frame_ring;
+mod freeing;
 mod handles;
 mod indirect;
 

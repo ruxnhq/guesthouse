@@ -14,7 +14,7 @@ Everything below is what that does, and the fallback if a part of it fails.
 
 ## The Linux host
 
-CI builds it from the tag, and makes the GitHub release as a draft. I read the draft and publish it, and the rest follows by itself. Building by hand on my own PC, below that, is the fallback. `SHA256SUMS` isn't signed yet.
+CI builds it from the tag, and makes the GitHub release as a draft. I read the draft and publish it, and the rest follows by itself. Building by hand on my own PC, below that, is the fallback. `SHA256SUMS` lists the hash of each file in the release.
 
 ### From the tag, in CI
 

@@ -73,6 +73,19 @@ These matter more than anything else here, because text inside code is something
 - Nothing leaked or confidential, and nothing an NDA or an agreement with your employer covers.
 - If you aren't sure about something, open an issue and ask before you write it.
 
+## Trust boundaries
+
+House rules for code that touches a guest, a socket, a secret or a release.
+
+- Anything that comes from a guest is untrusted: its messages, its files, its serial port, its disk, its names and its numbers. Check it before it is used, and show it as plain text.
+- A guest's disk on a Windows host is reached only through `guest_volume` in `windows/hcs`, which opens each part of a path relative to the one before, and refuses a link or mount point on the way. Clippy's `disallowed-methods` in the Windows crates' `clippy.toml` fails a build that uses `std::fs` or a path method there, and the `clippy (Windows host)` check runs it.
+- Every read from a guest or a socket is capped. A line is read with `read_capped_line`, and bytes with `read_capped_bytes`, from `guesthouse-basics`. The root `clippy.toml` fails a build that uses `read_line`, `lines`, `read_until` or `split`, and the `clippy` check runs it.
+- No secret goes to a peer before the peer is checked. A token goes only to a peer the code has checked, such as a connection the machine's own QEMU has taken, or a pipe served by the machine's own worker.
+- A folder that SYSTEM or root runs from, or writes into on a user's behalf, is made as that account's own and kept so that nobody else can change it or what is in it. A link in it is not followed.
+- A build holds no secrets. Signing is a separate step, and only that step is given the key. `.github/workflows/mac-nightly.yml`, `release-windows.yml`, `linux-package.yml` and `windows-pvg.yml` are laid out that way, and the release steps check a file's signature against `RELEASE_KEYS` before it is published. [RELEASING.md](RELEASING.md) has the key's rules.
+- Updates are signed. An app takes a release file, or a driver manifest, only when a key in `RELEASE_KEYS` in `shared/update-check` signed it, and checks the download against the SHA-256 in that file. The tests in `shared/update-check` hold this.
+- QEMU drive lines name their format and backing. A `-drive` with a file has `format=`, a disk that is written is a `-blockdev` node, and a node in a format with backing files lists them. `vm_args/drive_rules.rs` holds the rules, and a test per kind of boot runs every line the app builds through them, in the `tests` check.
+
 ## The contributor licence agreement
 
 Your first pull request goes in once you've signed the [contributor licence agreement](CLA.md), by adding a file with your line to [CLA/signers](CLA/signers) in that pull request, as [CLA/README.md](CLA/README.md) says. You keep your copyright. The agreement gives RUXN LLC a licence to your work that isn't tied to the GPL, and RUXN LLC keeps publishing your work under GPL-2.0-or-later. A check on the pull request looks for your file.

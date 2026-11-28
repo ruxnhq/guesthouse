@@ -36,6 +36,12 @@ updates:
     open-pull-requests-limit: 3
     cooldown:
       default-days: 7
+    ignore:
+      # Packaging stays on the oldest Ubuntu a release runs on (GLIBC_CEILING in packaging/build-in-images.sh).
+      - dependency-name: ubuntu
+        directories:
+          - /packaging
+        update-types: [version-update:semver-major]
   - package-ecosystem: npm
     directory: /site
     schedule:

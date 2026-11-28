@@ -20,13 +20,17 @@ use guesthouse_download_core::linux_host::{
     self as rules, CHECKING, CURL_WORDS, GO_ON_WORDS, HEAD_WORD, checked_marker, partial_file,
 };
 
-pub use guesthouse_catalog_core::android::ANDROID_IMAGE_NAME;
+use guesthouse_catalog_core::android::ANDROID_IMAGE_NAME;
 /// Ubuntu's release folder, its checksum list and the disc's name, and the Android image, are in
 /// every host's catalog, `guesthouse_catalog_core`.
 use guesthouse_catalog_core::android::{ANDROID_IMAGE_HOST, ANDROID_IMAGE_SHA256};
 #[cfg(test)]
 use guesthouse_catalog_core::ubuntu_amd64::{UBUNTU_PREFIX, UBUNTU_SUFFIX};
-use guesthouse_catalog_core::ubuntu_amd64::{UBUNTU_RELEASE, UBUNTU_SUMS, newest_server_disc};
+use guesthouse_catalog_core::ubuntu_amd64::{
+    UBUNTU_RELEASE, UBUNTU_SIGNING_FINGERPRINT, UBUNTU_SIGNING_KEY, UBUNTU_SUMS, UBUNTU_SUMS_SIGNATURE,
+    newest_server_disc,
+};
+pub use guesthouse_update_check::openpgp;
 const UBUNTU_FOLDER: &str = "ubuntu";
 
 const ANDROID_FOLDER: &str = "android";
@@ -42,13 +46,18 @@ fn curl() -> Command {
     command
 }
 
-/// A small text file's contents, such as a checksum list.
-pub fn text_at(url: &str) -> Result<String> {
+/// A small file's bytes, such as a checksum list or its signature.
+fn bytes_at(url: &str) -> Result<Vec<u8>> {
     let output = curl().arg(url).output().map_err(|error| Failure(rules::not_started(error)))?;
     if !output.status.success() {
         return Err(Failure(rules::unreadable(url, &said(&output))));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(output.stdout)
+}
+
+/// A small text file's contents, such as a checksum list.
+pub fn text_at(url: &str) -> Result<String> {
+    Ok(String::from_utf8_lossy(&bytes_at(url)?).into_owned())
 }
 
 /// A file's size as its server says it, if it does.
@@ -130,8 +139,17 @@ pub struct UbuntuDisc {
 
 /// The disc an Ubuntu machine would download now: what Ubuntu publishes, and where it's kept here.
 pub fn ubuntu_disc(paths: &Paths) -> Result<UbuntuDisc> {
-    let sums = text_at(&format!("{UBUNTU_RELEASE}{UBUNTU_SUMS}"))?;
-    let (name, sha256) = newest_server_disc(&sums)
+    let sums = bytes_at(&format!("{UBUNTU_RELEASE}{UBUNTU_SUMS}"))?;
+    let signature = bytes_at(&format!("{UBUNTU_RELEASE}{UBUNTU_SUMS_SIGNATURE}"))?;
+    ubuntu_disc_in(paths, &sums, &signature)
+}
+
+/// The disc in Ubuntu's checksum list, once Ubuntu's signing key is found to have signed the list.
+fn ubuntu_disc_in(paths: &Paths, sums: &[u8], signature: &[u8]) -> Result<UbuntuDisc> {
+    openpgp::verify(UBUNTU_SIGNING_KEY, UBUNTU_SIGNING_FINGERPRINT, sums, signature).map_err(|_| {
+        Failure::new("Ubuntu's checksum list isn't signed by Ubuntu's key, so no disc is taken from it.")
+    })?;
+    let (name, sha256) = newest_server_disc(&String::from_utf8_lossy(sums))
         .ok_or_else(|| Failure::new("Ubuntu's release page lists no server disc for 26.04."))?;
     Ok(UbuntuDisc {
         url: format!("{UBUNTU_RELEASE}{name}"),
@@ -181,6 +199,20 @@ pub(crate) mod pins;
 mod tests {
     use super::*;
     use crate::testing::Scratch;
+
+    #[test]
+    fn a_disc_is_taken_only_from_a_list_ubuntu_s_key_signed() {
+        let sums = include_bytes!("../tests/catalog/releases-ubuntu-26.04-SHA256SUMS");
+        let signature = include_bytes!("../tests/catalog/releases-ubuntu-26.04-SHA256SUMS.gpg");
+        let scratch = Scratch::new();
+        let paths = crate::testing::scratch_paths(&scratch);
+        let disc = ubuntu_disc_in(&paths, sums, signature).unwrap();
+        assert_eq!(disc.name, "ubuntu-26.04.1-live-server-amd64.iso");
+        let mut changed = sums.to_vec();
+        changed[0] = b'f';
+        assert!(ubuntu_disc_in(&paths, &changed, signature).is_err());
+        assert!(ubuntu_disc_in(&paths, sums, b"").is_err());
+    }
 
     #[test]
     fn the_newest_server_disc_is_taken_from_ubuntu_s_list() {

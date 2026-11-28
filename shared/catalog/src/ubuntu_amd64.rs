@@ -5,6 +5,11 @@
 /// Ubuntu's release folder for the version the Ubuntu install is made for, and its checksum list.
 pub const UBUNTU_RELEASE: &str = "https://releases.ubuntu.com/26.04/";
 pub const UBUNTU_SUMS: &str = "SHA256SUMS";
+/// The signature beside the list, and the key that signs it: "Ubuntu CD Image Automatic Signing Key
+/// (2012)", as its public key packet, and the fingerprint it has to have.
+pub const UBUNTU_SUMS_SIGNATURE: &str = "SHA256SUMS.gpg";
+pub const UBUNTU_SIGNING_KEY: &[u8] = include_bytes!("ubuntu_cd_signing_key.bin");
+pub const UBUNTU_SIGNING_FINGERPRINT: &str = "843938df228d22f7b3742bc0d94aa3f0efe21092";
 /// The server disc's name begins and ends so, with the point release between.
 pub const UBUNTU_PREFIX: &str = "ubuntu-26.04";
 pub const UBUNTU_SUFFIX: &str = "-live-server-amd64.iso";

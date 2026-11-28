@@ -10,8 +10,8 @@ license.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Ed25519, to check that a release key signed a file. Already in the tree through rcgen.
-ring = { version = "0.17", default-features = false }
+# Ed25519, to check that a release key signed a file, and RSA for a pinned OpenPGP key. Already in the tree through rcgen.
+ring = { version = "0.17", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

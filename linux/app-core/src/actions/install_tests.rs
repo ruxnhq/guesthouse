@@ -60,7 +60,7 @@ struct GrowingGuest {
 }
 
 impl crate::agent::GuestAgent for GrowingGuest {
-    fn ask(&self, _port: u16, _token: &str, _script: &str, _seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, _token: &str, _script: &str, _seconds: u64) -> String {
         let mut left = self.left.lock().unwrap();
         *left = left.saturating_sub(1);
         let size = fs::metadata(&self.disk).unwrap().len();
@@ -334,7 +334,7 @@ fn only_a_lean_machines_disc_has_lean_windows_on_it() {
 struct InstalledGuest;
 
 impl crate::agent::GuestAgent for InstalledGuest {
-    fn ask(&self, _port: u16, _token: &str, script: &str, _seconds: u64) -> String {
+    fn ask(&self, _end: &crate::guest_end::GuestEnd, _token: &str, script: &str, _seconds: u64) -> String {
         match script {
             "is it finished" => "finished",
             DESKTOP_SCRIPT => "3",
@@ -495,13 +495,13 @@ struct ShutdownGuest {
 }
 
 impl crate::agent::GuestAgent for ShutdownGuest {
-    fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+    fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
         self.asked.lock().unwrap().push(script.to_owned());
         if script == "Stop-Computer -Force" {
             let _ = fs::remove_dir_all(&self.process);
             return String::new();
         }
-        InstalledGuest.ask(port, token, script, seconds)
+        InstalledGuest.ask(end, token, script, seconds)
     }
 }
 

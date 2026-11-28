@@ -2,6 +2,7 @@
 //! hero shows the chosen machine at length from the same facts.
 
 use super::Window;
+use super::weight::Weight;
 use crate::rows::{confirm, on_yes, question};
 use adw::prelude::*;
 use guesthouse_app_core::app_windows::open_windows::{OpenProgram, count_text};
@@ -14,6 +15,11 @@ use std::rc::Rc;
 
 const THUMBNAIL_WIDTH: i32 = 112;
 const THUMBNAIL_HEIGHT: i32 = 70;
+/// The same in a sidebar of machines, where a card is one line of a list.
+const COMPACT_THUMBNAIL_WIDTH: i32 = 54;
+const COMPACT_THUMBNAIL_HEIGHT: i32 = 36;
+const COMPACT_ICON_SIZE: i32 = 20;
+const COMPACT_SPACING: i32 = 10;
 const ICON_SIZE: i32 = 40;
 const CARD_SPACING: i32 = 14;
 const TEXT_SPACING: i32 = 3;
@@ -43,6 +49,8 @@ pub struct Shown {
     pub can_stop: bool,
     /// "3 app windows open.", for the card's status line. The hero has its own way to say it.
     pub app_windows: Option<String>,
+    /// How heavily the machine sits in the library just now.
+    pub weight: Weight,
 }
 
 impl Shown {
@@ -58,8 +66,10 @@ impl Shown {
 
 struct Parts {
     card: gtk::Box,
+    row: gtk::Box,
     icon: gtk::Image,
     picture: gtk::Picture,
+    frame: adw::Clamp,
     headline: gtk::Label,
     spinner: gtk::Spinner,
     start: gtk::Button,
@@ -73,6 +83,9 @@ struct Parts {
 pub struct MachineCard {
     window: Window,
     machine: MachineHandle,
+    /// The machine as its file was when the handle was last read from it or saved to it, which says
+    /// what the handle has changed since.
+    known: Rc<RefCell<Machine>>,
     status: Rc<RefCell<Status>>,
     shown: Rc<RefCell<Shown>>,
     parts: Rc<Parts>,
@@ -176,9 +189,10 @@ impl MachineCard {
         card.add_css_class("machine-card");
         card.append(&row);
         card.append(&apps);
-        let parts = Parts { card, icon, picture, headline, spinner, start, show, apps, open_app };
+        let parts = Parts { card, row, icon, picture, frame, headline, spinner, start, show, apps, open_app };
         let this = Self {
             window: window.clone(),
+            known: Rc::new(RefCell::new(machine.clone())),
             machine: Rc::new(RefCell::new(machine)),
             status: Rc::default(),
             shown: Rc::default(),
@@ -203,6 +217,14 @@ impl MachineCard {
 
     pub fn machine(&self) -> MachineHandle {
         self.machine.clone()
+    }
+
+    pub fn known(&self) -> Machine {
+        self.known.borrow().clone()
+    }
+
+    pub fn set_known(&self, machine: Machine) {
+        *self.known.borrow_mut() = machine;
     }
 
     pub fn status(&self) -> Status {
@@ -290,16 +312,14 @@ impl MachineCard {
             can_start: !status.busy && !blocked && !second,
             can_stop: !status.busy,
             app_windows: count_text(&self.open.borrow()),
+            weight: Weight::of(status, installing),
         };
         // This is called each second, and mostly nothing has changed.
         if *self.shown.borrow() == shown {
             return;
         }
         let parts = &self.parts;
-        match &shown.app_windows {
-            Some(count) => parts.headline.set_label(&format!("{} {count}", shown.headline)),
-            None => parts.headline.set_label(&shown.headline),
-        }
+        shown.weight.mark(&parts.card);
         // The card has room for one thing, so the rest is a pointer away.
         let notes = shown.notes.join("\n");
         parts.card.set_tooltip_text((!notes.is_empty()).then_some(notes.as_str()));
@@ -309,12 +329,69 @@ impl MachineCard {
             parts.card.add_css_class("has-notes");
         }
         parts.spinner.set_visible(shown.busy);
-        parts.start.set_label(shown.start_label);
-        parts.start.set_visible(off);
-        parts.start.set_sensitive(shown.can_start);
-        parts.show.set_visible(shown.has_screen());
         *self.shown.borrow_mut() = shown;
+        self.show_headline();
+        self.show_buttons();
         self.window.card_changed(self);
+    }
+
+    /// Whether the card is one line of a sidebar, where the hero beside it has the buttons and the
+    /// app windows, or a card of its own in a rail under the hero.
+    pub fn set_compact(&self, compact: bool) {
+        let parts = &self.parts;
+        if compact {
+            parts.card.add_css_class("compact");
+        } else {
+            parts.card.remove_css_class("compact");
+        }
+        let (width, height, icon, spacing) = if compact {
+            (COMPACT_THUMBNAIL_WIDTH, COMPACT_THUMBNAIL_HEIGHT, COMPACT_ICON_SIZE, COMPACT_SPACING)
+        } else {
+            (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, ICON_SIZE, CARD_SPACING)
+        };
+        parts.icon.set_size_request(width, height);
+        parts.icon.set_pixel_size(icon);
+        parts.frame.set_maximum_size(width);
+        parts.frame.set_tightening_threshold(width);
+        parts.frame.set_height_request(height);
+        parts.row.set_spacing(spacing);
+        parts.headline.set_lines(if compact { 1 } else { 2 });
+        self.show_headline();
+        self.show_buttons();
+    }
+
+    /// The card's line under the name. A card in a sidebar has room for one line, so a machine that
+    /// needs the user or failed says why there, and the rest say how they stand.
+    fn show_headline(&self) {
+        let shown = self.shown.borrow();
+        let line = match (&shown.app_windows, shown.notes.first()) {
+            (_, Some(note))
+                if self.is_compact() && matches!(shown.weight, Weight::Swells | Weight::Spills) =>
+            {
+                note.clone()
+            }
+            // The hero beside it says what the machine is.
+            _ if self.is_compact() => shown.state.name().to_owned(),
+            (Some(count), _) => format!("{} {count}", shown.headline),
+            (None, _) => shown.headline.clone(),
+        };
+        self.parts.headline.set_label(&line);
+    }
+
+    fn is_compact(&self) -> bool {
+        self.parts.card.has_css_class("compact")
+    }
+
+    /// Start, Show Screen and the app windows, on a card with room for them.
+    fn show_buttons(&self) {
+        let parts = &self.parts;
+        let shown = self.shown.borrow();
+        let roomy = !self.is_compact();
+        parts.start.set_label(shown.start_label);
+        parts.start.set_visible(roomy && shown.is_off());
+        parts.start.set_sensitive(shown.can_start);
+        parts.show.set_visible(roomy && shown.has_screen());
+        parts.apps.set_visible(roomy && !self.open.borrow().is_empty());
     }
 
     /// The programs that have app windows open, as the machine's viewer says. The chips are made again
@@ -332,7 +409,7 @@ impl MachineCard {
         if !programs.is_empty() {
             apps.append(&self.parts.open_app);
         }
-        apps.set_visible(!programs.is_empty());
+        apps.set_visible(!programs.is_empty() && !self.is_compact());
         // The hero shows the same chips when this machine is the chosen one.
         self.window.card_changed(self);
     }

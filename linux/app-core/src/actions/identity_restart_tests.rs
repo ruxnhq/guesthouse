@@ -26,12 +26,12 @@ struct Guest {
 }
 
 impl GuestAgent for Guest {
-    fn ask(&self, port: u16, token: &str, script: &str, seconds: u64) -> String {
+    fn ask(&self, end: &crate::guest_end::GuestEnd, token: &str, script: &str, seconds: u64) -> String {
         if self.restarts && script == RESTART_SCRIPT {
             let mut serial = OpenOptions::new().append(true).create(true).open(&self.serial).unwrap();
             serial.write_all(BOOT_LINE).unwrap();
         }
-        self.scripted.ask(port, token, script, seconds)
+        self.scripted.ask(end, token, script, seconds)
     }
 }
 

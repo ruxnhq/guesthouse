@@ -1,0 +1,155 @@
+/* KDE: Plasma's spacing and smaller corners, on top of the palette, the shapes and the app's own
+   widgets. The bar is GTK's own, as GTK 4 can't take KWin's title bar on Wayland: it's slim, and
+   the app's buttons sit in it with KWin's button order. */
+
+headerbar {
+  min-height: 38px;
+  padding: 0 4px;
+  box-shadow: inset 0 -1px @hairline;
+}
+
+button {
+  border-radius: 6px;
+}
+
+button.text-button {
+  padding: 5px 12px;
+  font-weight: normal;
+}
+
+button.suggested-action {
+  font-weight: normal;
+}
+
+list.boxed-list,
+.card,
+.machine-card,
+button.kind-card {
+  border-radius: 8px;
+}
+
+list.boxed-list > row {
+  min-height: 48px;
+}
+
+entry,
+spinbutton,
+dropdown > button,
+row.combo button {
+  border-radius: 5px;
+}
+
+popover > contents {
+  padding: 4px;
+  border-radius: 8px;
+}
+
+popover modelbutton,
+popover listview > row,
+popover list > row {
+  min-height: 30px;
+  border-radius: 4px;
+}
+
+dialog.background,
+floating-sheet > sheet,
+dialog > sheet {
+  border-radius: 10px;
+}
+
+.navigation-sidebar > row {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 5px;
+  font-weight: normal;
+}
+
+.navigation-sidebar > row:selected,
+list.machine-list > row:selected > .machine-card.compact {
+  background: alpha(@accent_bg_color, 0.25);
+  color: @window_fg_color;
+}
+
+/* KWin's buttons: plain glyphs, the close one red under the pointer. */
+window.csd {
+  border-radius: 6px;
+}
+
+windowcontrols > button > image {
+  padding: 5px;
+  background: none;
+}
+
+windowcontrols > button:hover > image {
+  background: alpha(@window_fg_color, 0.12);
+}
+
+/* The library, in Plasma's proportions. */
+.library-sidebar {
+  padding: 6px;
+  background-color: @sidebar_bg_color;
+  box-shadow: inset -1px 0 @hairline;
+}
+
+.library-content {
+  background-color: @view_bg_color;
+}
+
+list.machine-list {
+  background: none;
+}
+
+list.machine-list > row {
+  padding: 0;
+  margin: 1px 0;
+  border-radius: 6px;
+  background: none;
+}
+
+.machine-card.compact {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.machine-card.compact .machine-thumbnail {
+  border-radius: 4px;
+}
+
+.hero.tall > picture {
+  filter: blur(8px);
+  opacity: 0.9;
+}
+
+.hero {
+  border-radius: 8px;
+}
+
+.hero-title {
+  font-size: 28px;
+  letter-spacing: -0.01em;
+}
+
+.state-chip,
+.spec,
+.app-chip,
+.pill-hint {
+  border-radius: 4px;
+}
+
+.machine-card.attention label.caption {
+  color: @warning_color;
+  opacity: 1;
+}
+
+.machine-card.failed label.caption {
+  color: @error_color;
+  opacity: 1;
+}
+
+list.machine-list > row:focus-visible,
+button:focus-visible {
+  outline: 1px solid @accent_color;
+  outline-offset: -1px;
+}

@@ -31,6 +31,7 @@ mod remote_view_notice;
 mod ring;
 mod screen;
 mod screen_frame;
+mod screen_look;
 mod slot_hold;
 mod socket_frames;
 mod stall;
@@ -150,7 +151,7 @@ impl ScreenPage {
         *this.0.monitors.borrow_mut() = Some(Monitors::new(window, &this.0.pill.monitors));
         this.connect();
         // The header bar or the pill from the start, not from the first look at the machine.
-        this.follow_header();
+        this.follow_look();
         this
     }
 
@@ -255,7 +256,7 @@ impl ScreenPage {
             machine.bar_hides()
         };
         self.0.pill.set_hides(hides);
-        self.0.window.save_machine(&self.0.machine.borrow());
+        self.0.window.save_machine(&self.0.machine);
         self.call_header(false);
     }
 
@@ -333,7 +334,7 @@ impl ScreenPage {
             screen.set_overlay(wanted);
         }
         self.0.pill.set_overlay(wanted);
-        self.0.window.save_machine(&self.0.machine.borrow());
+        self.0.window.save_machine(&self.0.machine);
     }
 
     fn on_capture_changed(&self) {

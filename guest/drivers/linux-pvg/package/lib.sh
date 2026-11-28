@@ -9,7 +9,7 @@
 # Our Mesa: KosmicKrisp with the pvg bridge, and Zink. The package is built
 # from this commit unless PVG_MESA_TREE names a tree of one's own.
 PVG_MESA_REPO=https://github.com/ruxnlabs/mesa.git
-PVG_MESA_PIN=ae2c437cab9593e5e6a11176da4dedf283c14d42
+PVG_MESA_PIN=a0b1124a206a9d470da7b9020265ea318619caa7
 
 # Mesa wants wayland-protocols 1.50 and Ubuntu 26.04 has 1.47. The address
 # and the sum are those of Mesa's own subprojects/wayland-protocols.wrap.

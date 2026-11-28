@@ -379,9 +379,13 @@ mod tests {
         let vm = machine(&context, "vm");
         context.make_run_folder(None).unwrap();
         let monitor = context.run_folder(None).join(MAIN_SOCKET);
-        let _listener = std::os::unix::net::UnixListener::bind(&monitor).unwrap();
-        // Its queue full of connections it never took, as a QEMU that has stopped answering leaves it.
+        // A queue of one, so it fills after a few connections whatever the system's limit on queues.
         let address = SocketAddrUnix::new(&monitor).unwrap();
+        let listener =
+            socket_with(AddressFamily::UNIX, SocketType::STREAM, SocketFlags::CLOEXEC, None).unwrap();
+        rustix::net::bind(&listener, &address).unwrap();
+        rustix::net::listen(&listener, 1).unwrap();
+        // Its queue full of connections it never took, as a QEMU that has stopped answering leaves it.
         let mut waiting = Vec::new();
         loop {
             let flags = SocketFlags::CLOEXEC | SocketFlags::NONBLOCK;
@@ -390,6 +394,7 @@ mod tests {
                 break;
             }
             waiting.push(fd);
+            assert!(waiting.len() < 64, "the queue never filled");
         }
         let (done, finished) = std::sync::mpsc::channel();
         let end = GuestEnd::agent(&context, &vm, None);

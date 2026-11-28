@@ -581,8 +581,12 @@ fn button(label: &str) -> gtk::Button {
 /// The pairing row's second line as markup: the code is the guest's, so it is shown as it is written.
 fn pending_text(info: &ShareInfo, left: u64) -> String {
     let code = info.pending.as_ref().map_or("", |pending| pending.code.as_str());
-    glib::markup_escape_text(&format!("{}\n{}", wording::code_time_left(code, left), wording::COMPARE_CODE_LINE))
-        .to_string()
+    glib::markup_escape_text(&format!(
+        "{}\n{}",
+        wording::code_time_left(code, left),
+        wording::COMPARE_CODE_LINE
+    ))
+    .to_string()
 }
 
 #[cfg(test)]

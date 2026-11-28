@@ -114,6 +114,20 @@ fn the_list_has_a_line_for_each_machine_in_columns() {
 }
 
 #[test]
+fn nothing_written_moves_the_cursor_or_writes_to_the_clipboard() {
+    let scratch = Scratch::new();
+    let context = scratch_context(&scratch);
+    let work = make(&context, "work", "Office PC", Kind::Plain);
+    let file = context.paths.log_file();
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, "12:00:00 from a guest \x1b]52;c;QUJD\x07 and \x1b[2J\n").unwrap();
+    let (out, result) = said(&context, &format!("log {}", work.id));
+    assert_eq!(result, Ok(()));
+    assert!(out.contains("from a guest <1b>]52;c;QUJD<07> and <1b>[2J\n"), "{out:?}");
+    assert!(!out.contains('\x1b') && !out.contains('\x07'));
+}
+
+#[test]
 fn an_empty_library_says_so() {
     let scratch = Scratch::new();
     let (out, result) = said(&scratch_context(&scratch), "list");

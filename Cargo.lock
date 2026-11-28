@@ -892,15 +892,15 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-account-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-answers-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-app"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "async-channel",
  "gdk4-wayland",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-app-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-account-core",
  "guesthouse-answers-core",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-app-windows"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-basics",
  "guesthouse-control",
@@ -976,14 +976,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-messages",
 ]
 
 [[package]]
 name = "guesthouse-backend-amd"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-messages",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-intel"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-nvidia"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-nvidia",
@@ -1019,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-backend-standin"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-messages",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-basics"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-card-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-nvidia",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-carry-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1052,18 +1052,18 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-catalog-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-clock-helper"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "guesthouse-control"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-account-core",
  "guesthouse-basics",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-daemon"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-amd",
@@ -1111,35 +1111,35 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-daemon-shell"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "guesthouse-frame-socket"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "rustix",
 ]
 
 [[package]]
 name = "guesthouse-guest-names-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "guesthouse-guest-scripts"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-remote-view-core",
 ]
 
 [[package]]
 name = "guesthouse-guest-share"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-p9",
  "windows-sys 0.61.2",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-hcs"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-hcs-boot"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-hcs",
  "guesthouse-host-windows",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-host-mac"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-account-core",
  "guesthouse-answers-core",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-host-windows"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-account-core",
  "guesthouse-answers-core",
@@ -1200,14 +1200,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-idle-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-basics",
 ]
 
 [[package]]
 name = "guesthouse-installer-windows"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "lzma-rust2",
  "serde",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-jail"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -1229,22 +1229,22 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-messages"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-nvapi-shim"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "guesthouse-p9"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-pvg-host"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-pvg-sys",
  "libc",
@@ -1252,14 +1252,14 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-pvg-sys"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "guesthouse-recipes-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-answers-core",
  "guesthouse-basics",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-relay"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-remote-view-core",
  "libc",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-remote-view-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "rcgen",
  "serde",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-replay"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-backend",
  "guesthouse-backend-standin",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-report-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1312,18 +1312,18 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-sensors"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "guesthouse-serial-words-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-service"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "guesthouse-basics",
  "guesthouse-control",
@@ -1338,11 +1338,11 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-settings-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-snapshot-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1350,11 +1350,11 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-start-checks-core"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-state-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1362,11 +1362,11 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-transport"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "guesthouse-update-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1374,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "guesthouse-window-cells-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",

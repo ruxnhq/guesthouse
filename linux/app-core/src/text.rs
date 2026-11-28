@@ -1,11 +1,6 @@
 //! Small text helpers: shell quoting, QEMU's option values, and base64 for the guest's agent.
 
-pub use guesthouse_basics::text::{base64_decode, base64_encode, shell_quote};
-
-/// QEMU reads a comma as the end of a value, and a file can be called anything.
-pub fn qemu_value(value: &str) -> String {
-    value.replace(',', ",,")
-}
+pub use guesthouse_basics::text::{base64_decode, base64_encode, qemu_value, shell_quote};
 
 #[cfg(test)]
 mod tests {

@@ -20,7 +20,7 @@ ninja -C virgl-build install
 
 git clone --depth 1 --branch v11.1.3 https://gitlab.com/qemu-project/qemu.git
 cd qemu
-git am /path/to/qemu-gpupv.patch
+git am /path/to/qemu-gpupv.patch /path/to/qemu-host-loopback.patch
 mkdir build && cd build
 PKG_CONFIG_PATH="$PWD/../../virgl/lib/pkgconfig" ../configure --target-list=x86_64-softmmu --enable-kvm \
   --enable-slirp --enable-dbus-display --enable-pipewire --audio-drv-list=pipewire --enable-libusb \
@@ -34,6 +34,10 @@ cp hw/misc/nvfwd/nvfwd-sensord ../../virgl/libexec/virgl_render_server .
 You'll need QEMU's usual build dependencies. A release comes with QEMU built, so this is only for building it yourself.
 
 To run this QEMU yourself, with the daemon beside it, see [standalone](../docs/standalone.md).
+
+## The host's loopback
+
+`qemu-host-loopback.patch` gives QEMU's user network a setting, `host-loopback=off`, and the app gives it to every machine on that network. Without it, the guest reaches every service on the host's loopback through 10.0.2.2 and the IPv6 prefix, as QEMU's user network always has. With it, those addresses lead nowhere, the guest's packets to a loopback or unspecified address are dropped, and the rest stays as it was: the internet, DNS through 10.0.2.3, forwards from the host, which still arrive from 10.0.2.2, and the shared folder on 10.0.2.4. It sets libslirp's own `disable_host_loopback`. passt has the same rule, with its loopback mapping off. A release's QEMU has the patch, and so does the macOS part's QEMU, which `packaging/build-macos-part.sh` builds from reims-vgpu's tree. A QEMU without it refuses the setting, and the app then says to use the QEMU that comes with Guesthouse or to turn passt on.
 
 ## The frame viewer patch
 
